@@ -1,0 +1,5 @@
+node_modules/
+research/docs/
+research/src/
+research/mirror-errors.log
+.DS_Store
