@@ -1,5 +1,5 @@
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
-import { type AgentSession, createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { type AgentSession, createAgentSession, type ExtensionUIContext, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 import { createCedia } from "../src/index.ts";
 import { parseRecords } from "../src/telemetry.ts";
 
-async function run(responses: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0], after?: (session: AgentSession) => Promise<void>) {
+async function run(responses: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0], after?: (session: AgentSession) => Promise<void>, ui?: Partial<ExtensionUIContext>) {
   const faux = fauxProvider({ models: [{ id: "faux-priced" }] });
   const telemetryDir = mkdtempSync(join(tmpdir(), "cedia-telemetry-"));
   faux.setResponses(responses);
@@ -25,6 +25,7 @@ async function run(responses: Parameters<ReturnType<typeof fauxProvider>["setRes
   const { session } = await createAgentSession({ cwd, resourceLoader, sessionManager: SessionManager.inMemory(), model: faux.getModel(),
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: false, reserveTokens: 16384, keepRecentTokens: 1 } } as any),
   });
+  if (ui) await session.bindExtensions({ mode: "rpc", uiContext: scriptedUI(ui) });
   await session.prompt("fix it");
   await session.waitForIdle();
   await after?.(session);
@@ -36,6 +37,11 @@ async function run(responses: Parameters<ReturnType<typeof fauxProvider>["setRes
   session.dispose();
   const telemetry = readdirSync(telemetryDir).flatMap((f) => parseRecords(readFileSync(join(telemetryDir, f), "utf8")));
   return { calls: faux.state.callCount, continues: custom("cedia.continue"), reminders: custom("cedia.status-reminder"), nudges: custom("cedia.claim-check"), receipts: custom("cedia.receipt"), toolResults, telemetry };
+}
+
+/** A UI whose dialogs answer from the script; every other UI call is a no-op. */
+function scriptedUI(script: Partial<ExtensionUIContext>): ExtensionUIContext {
+  return new Proxy(script, { get: (target, key) => (target as any)[key] ?? (() => undefined) }) as ExtensionUIContext;
 }
 
 const write = fauxAssistantMessage(fauxToolCall("write", { path: "a.txt", content: "x" }), { stopReason: "toolUse" });
@@ -123,4 +129,34 @@ test("the cedia-tools mapping reaches the model's system prompt", async () => {
   expect(r.calls).toBe(1);
   expect(system).toContain("<cedia-tools>");
   expect(system).toContain("BLOCKED: independent review");
+});
+
+const forcePush = fauxAssistantMessage(fauxToolCall("bash", { command: "git push --force origin main" }), { stopReason: "toolUse" });
+
+test("with a UI, a declined irreversible command is blocked and says the user declined", async () => {
+  const asked: string[] = [];
+  const r = await run([forcePush, fauxAssistantMessage(fauxText("Skipped the push."))], undefined, {
+    confirm: async (_title: string, message: string) => (asked.push(message), false),
+  });
+  expect(asked).toHaveLength(1);
+  expect(asked[0]).toContain("git push --force origin main");
+  expect(r.toolResults[0]).toContain("The user declined: force-push");
+});
+
+test("with a UI, an approved irreversible command runs", async () => {
+  const r = await run([forcePush, fauxAssistantMessage(fauxText("Pushed."))], undefined, { confirm: async () => true });
+  expect(r.toolResults[0]).not.toContain("declined");
+  expect(r.toolResults[0]).toContain("not a git repository");
+});
+
+test("with a UI, AskQuestion returns the chosen option and a typed Other answer", async () => {
+  const ask = fauxAssistantMessage(
+    fauxToolCall("AskQuestion", { questions: [{ question: "Which base?", options: ["pi", "omp"] }, { question: "Budget?", options: ["$20", "$50"] }] }),
+    { stopReason: "toolUse" },
+  );
+  const r = await run([ask, fauxAssistantMessage(fauxText("Noted."))], undefined, {
+    select: async (title: string, options: string[]) => (title === "Which base?" ? "pi" : options.at(-1)),
+    input: async () => "$35",
+  });
+  expect(r.toolResults[0]).toBe("Which base?\n→ pi\n\nBudget?\n→ $35");
 });
