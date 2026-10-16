@@ -45,11 +45,11 @@ Provider layer: pi-ai as is. Add Anthropic `thinking.display: "updates"` through
 
 ## pstack
 
-Install the original pstack from `cursor/plugins/pstack` with `pi install` / the `skills` setting. Do not edit its files. cedia supplies what Cursor supplied:
+`bin/cedia-setup` installs the original pstack (sparse clone of `cursor/plugins` into `~/.cedia/packages/`, fast-forward on rerun) and lists its skills in `~/.cedia/settings.json`. Do not edit its files. Skills whose `name` is a display name (`Poteto Mode`, `Make Bot UI`) are loaded from a regenerated copy in `~/.cedia/skill-fixes/` with only the `name` line set to the directory name, because pi registers names verbatim and `/poteto-mode` would not resolve. pstack wins name collisions with `~/.agents/skills/` (`tdd`, `teach`). cedia supplies what Cursor supplied:
 
 1. `Task` and `AskQuestion` tools with the original names and parameter shapes (`subagent_type`, `run_in_background`, `readonly`, `model`). Adapt the code from pstack-claude's Pi extension (MIT, `pi/*.ts`) rather than writing it from scratch. One child process per subagent via pi's `rpc-entry`, at most 4 concurrent, nesting depth 3 (the deepest layer gets no `Task`), `isolation: "worktree"` under `.cedia/worktrees/`, `readonly` removes `edit` and `write`.
 2. Cursor model names through `pi.registerVirtualModel()`, e.g. `claude-opus-5-5-xhigh` → `anthropic/claude-opus-5-5 @xhigh`, `grok-4.7-xhigh-fast` → `xai/grok-4.7 @xhigh`.
-3. `cedia-tools.md`, injected into the system prompt, mapping Cursor paths and tools to cedia's (`.cursor/rules/pstack-models.mdc` → `~/.cedia/pstack-models.md`, `.cursor/projects/` → `~/.cedia/sessions/`, `.cursor/skills/` → skill dirs).
+3. `prompts/cedia-tools.md`, injected as the `<cedia-tools>` system prompt section on every run (same text each time, so the cached prefix holds), mapping Cursor paths and tools to cedia's (`.cursor/rules/pstack-models.mdc` → `~/.cedia/pstack-models.md`, `.cursor/projects/` → `~/.cedia/sessions/`, `.cursor/skills/` → skill dirs).
 
 The original pstack names only these models: `grok-4.7-xhigh-fast` (code default), `grok-4.7-medium-fast`, `claude-opus-5-5-xhigh` (prose and judgment default), `claude-opus-5-5-medium`, `claude-opus-5-5-max`. The virtual-model table maps all of them to `anthropic/claude-opus-5-5 @medium`. A `cedia/auto` virtual model routes small tasks to Haiku `low` and the rest to Opus `medium`; the scoreboard decides the routing rule. Role overrides live in `~/.cedia/pstack-models.md`, written by pstack's `/setup-pstack`.
 

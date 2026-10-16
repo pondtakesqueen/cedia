@@ -2,7 +2,8 @@ import { type AssistantMessage, StringEnum } from "@earendil-works/pi-ai";
 import { compact, type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { formatAnswers, NO_UI_ANSWER, OTHER } from "./ask.ts";
 import { gateReason } from "./gate.ts";
 import { handoffInstructions, skillName } from "./handoff.ts";
@@ -10,6 +11,8 @@ import { autoTarget, PSTACK_MODELS, type Target } from "./models.ts";
 import { asksForAutonomy, continuation, isSilentToolStep, openTodos, STATUS_REMINDER, type Todo } from "./loop.ts";
 import { crossedBudget, dayFile, parseRecords, type RequestRecord, statusLine, toRecord, totals } from "./telemetry.ts";
 import { claimNudge, detectClaims, emptyLedger, ledgerStatus, markInput, receipt, recordToolResult } from "./trust.ts";
+
+const CEDIA_TOOLS = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../prompts/cedia-tools.md"), "utf8");
 
 const MAX_CLAIM_NUDGES_PER_INPUT = 1;
 const MAX_CONTINUATIONS_PER_INPUT = 2;
@@ -62,6 +65,10 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
     let todos: Todo[] = [];
     const skills = new Set<string>();
     let requestStartedAt = 0;
+
+    pi.on("before_agent_start", (event) => {
+      event.systemPromptOptions.sections = { ...event.systemPromptOptions.sections, "cedia-tools": CEDIA_TOOLS };
+    });
 
     pi.on("input", (event) => {
       markInput(ledger);

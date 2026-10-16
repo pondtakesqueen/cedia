@@ -116,3 +116,11 @@ test("AskQuestion in headless mode tells the model to ask in plain text", async 
   const r = await run([ask, fauxAssistantMessage(fauxText("Which base do you want, pi or omp?"))]);
   expect(r.toolResults[0]).toContain("No one can answer dialogs in this mode");
 });
+
+test("the cedia-tools mapping reaches the model's system prompt", async () => {
+  let system = "";
+  const r = await run([(context: any) => ((system = JSON.stringify(context.messages?.[0] ?? context)), fauxAssistantMessage(fauxText("ok")))]);
+  expect(r.calls).toBe(1);
+  expect(system).toContain("<cedia-tools>");
+  expect(system).toContain("BLOCKED: independent review");
+});

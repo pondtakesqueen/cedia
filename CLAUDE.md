@@ -10,13 +10,15 @@ cedia is a personal coding harness built as a **pi package** (extension + config
 
 - `npm test`: all tests (vitest). One file: `npx vitest run test/trust.test.ts`. One test: add `-t "<name>"`.
 - `npm run typecheck`: `tsc --noEmit`.
+- `./bin/cedia-setup`: install or update the original pstack into `$PI_CODING_AGENT_DIR` (default `~/.cedia`) and fix its display-name skills. Idempotent; try it against `PI_CODING_AGENT_DIR=$(mktemp -d)`.
 - `./bin/cedia`: run cedia (pi + `src/index.ts`) with `PI_CODING_AGENT_DIR=~/.cedia`. In scripts pass `</dev/null` with `--print`, or pi waits on stdin.
 - e2e tests drive the real pi SDK with pi-ai's `fauxProvider` (`test/trust.e2e.test.ts` shows the setup). Bash checks inside them must work offline.
 
 ## Code layout
 
 - `src/index.ts` wires pi hooks; keep logic out of it.
-- `src/trust.ts` is pure: evidence ledger, claim detection, nudge and receipt text. Unit-test it directly.
+- Pure modules, unit-tested directly: `trust.ts` (evidence ledger, claims, receipt), `gate.ts` (irreversible commands), `telemetry.ts`, `loop.ts` (todos, continuation, silence), `handoff.ts`, `ask.ts`, `models.ts` (pstack model names, `cedia/auto`).
+- `prompts/cedia-tools.md` maps pstack's Cursor terms to cedia; update it when a milestone adds a tool it mentions (`Task` in M1, web search in M2).
 
 ## Rules that are easy to get wrong
 

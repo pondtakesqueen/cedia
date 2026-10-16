@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Installs or updates the original pstack and points cedia's settings at its skills. Safe to rerun.
+set -euo pipefail
+
+agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.cedia}"
+checkout="$agent_dir/packages/cursor-plugins"
+skills="$checkout/pstack/skills"
+fixes="$agent_dir/skill-fixes"
+
+mkdir -p "$agent_dir/packages"
+if [ -d "$checkout/.git" ]; then
+  git -C "$checkout" pull --ff-only --quiet
+else
+  git clone --quiet --depth 1 --filter=blob:none --sparse https://github.com/cursor/plugins.git "$checkout"
+  git -C "$checkout" sparse-checkout set pstack
+fi
+
+# pi requires a skill's `name` to equal its directory; a few pstack skills use display names
+# ("Poteto Mode"), which pi registers verbatim, so `/poteto-mode` never resolves. Load a copy
+# with only the name line fixed, and exclude the original.
+node --input-type=module - "$agent_dir/settings.json" "$skills" "$fixes" <<'EOF'
+import { cpSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const [file, skills, fixes] = process.argv.slice(2);
+rmSync(fixes, { recursive: true, force: true });
+const excluded = [];
+for (const dir of readdirSync(skills)) {
+  const skillFile = join(skills, dir, "SKILL.md");
+  if (!existsSync(skillFile)) continue;
+  const text = readFileSync(skillFile, "utf8");
+  const name = /^name:\s*(.+)$/m.exec(text)?.[1].trim();
+  if (!name || name === dir) continue;
+  cpSync(join(skills, dir), join(fixes, dir), { recursive: true });
+  writeFileSync(join(fixes, dir, "SKILL.md"), text.replace(/^name:.*$/m, `name: ${dir}`));
+  excluded.push(`-${skillFile}`);
+}
+const settings = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+const ours = new Set([skills, fixes]);
+const kept = (settings.skills ?? []).filter((s) => !ours.has(s) && !(s.startsWith("-") && s.includes(skills)));
+settings.skills = [...(excluded.length ? [fixes] : []), skills, ...excluded, ...kept];
+writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`);
+console.log(excluded.length ? `fixed names: ${excluded.map((e) => e.split("/").at(-2)).join(", ")}` : "no names to fix");
+EOF
+
+echo "pstack $(git -C "$checkout" log -1 --format=%h) → $skills"
