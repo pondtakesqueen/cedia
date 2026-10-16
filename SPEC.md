@@ -69,8 +69,8 @@ All built as pi extension hooks.
 | 5 tool steps with nothing for the user to read → append "say in a few words what you're doing, then continue". At most 2 per turn. All modes. | `tool_result` + `pi.sendMessage()` |
 | Wrap pasted text in `<pasted_content id="…">` and add the matching system note. | `input` |
 | A new user message during work steers the current task. | pi steering (default) |
-| Compaction writes a handoff: current focus, todos, suggested skills, artifact paths instead of copies, prompt-level redaction. Stored at `~/.cedia/sessions/<id>/handoffs/`. | `session_before_compact` |
-| `/handoff [focus]` uses the same template. | a skill, not a command |
+| Compaction writes a handoff: pi's own checkpoint summary plus open todos, unverified files, suggested skills (from `SKILL.md` reads), artifact paths instead of copies, prompt-level redaction. Stored as pi's compaction entry in the session. | `session_before_compact` → pi's exported `compact()` with the session's `streamSimple` |
+| `/handoff [focus]` triggers the same compaction with a focus. A command instead of the planned skill: the instructions live in `src/handoff.ts`, so a command reuses them with no second copy. | `registerCommand` |
 | `TodoWrite`; plan mode is a readonly permission profile. | `registerTool`, tool exposure |
 
 System prompt: pi's default + pstack. Variants (a base adapted from Grok Build's `prompt.md`, per-family overlays) are experiments that must beat the baseline on the smoke set.

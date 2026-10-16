@@ -1,18 +1,20 @@
 import { fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
-import { createAgentSession, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { type AgentSession, createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { createCedia } from "../src/index.ts";
 import { parseRecords } from "../src/telemetry.ts";
 
-async function run(responses: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0]) {
+async function run(responses: Parameters<ReturnType<typeof fauxProvider>["setResponses"]>[0], after?: (session: AgentSession) => Promise<void>) {
   const faux = fauxProvider({ models: [{ id: "faux-priced" }] });
   const telemetryDir = mkdtempSync(join(tmpdir(), "cedia-telemetry-"));
   faux.setResponses(responses);
   const cwd = mkdtempSync(join(tmpdir(), "cedia-e2e-"));
   writeFileSync(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "true" } }));
+  mkdirSync(join(cwd, "skills/tdd"), { recursive: true });
+  writeFileSync(join(cwd, "skills/tdd/SKILL.md"), "# tdd");
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir: mkdtempSync(join(tmpdir(), "cedia-agent-")),
@@ -20,9 +22,12 @@ async function run(responses: Parameters<ReturnType<typeof fauxProvider>["setRes
     extensionFactories: [(pi) => pi.registerProvider(faux.provider), createCedia({ telemetryDir })],
   });
   await resourceLoader.reload();
-  const { session } = await createAgentSession({ cwd, resourceLoader, sessionManager: SessionManager.inMemory(), model: faux.getModel() });
+  const { session } = await createAgentSession({ cwd, resourceLoader, sessionManager: SessionManager.inMemory(), model: faux.getModel(),
+    settingsManager: SettingsManager.inMemory({ compaction: { enabled: false, reserveTokens: 16384, keepRecentTokens: 1 } } as any),
+  });
   await session.prompt("fix it");
   await session.waitForIdle();
+  await after?.(session);
   const custom = (type: string) =>
     session.messages.filter((m: any) => m.role === "custom" && m.customType === type).map((m: any) => String(m.content));
   const toolResults = session.messages
@@ -86,4 +91,22 @@ test("five silent tool steps in a row get one status reminder", async () => {
   const echo = () => fauxAssistantMessage(fauxToolCall("bash", { command: "echo step" }), { stopReason: "toolUse" });
   const r = await run([...Array.from({ length: 6 }, echo), fauxAssistantMessage(fauxText("Here is where things stand."))]);
   expect(r.reminders).toHaveLength(1);
+});
+
+test("compaction asks pi's summarizer for a handoff with todos, unverified files, skills and focus", async () => {
+  let summaryPrompt = "";
+  const capture = (text: string) => (context: unknown) => {
+    summaryPrompt += JSON.stringify(context);
+    return fauxAssistantMessage(fauxText(text));
+  };
+  const read = fauxAssistantMessage(fauxToolCall("read", { path: "skills/tdd/SKILL.md" }), { stopReason: "toolUse" });
+  await run([todo("pending"), read, write, ...Array.from({ length: 3 }, () => fauxAssistantMessage(fauxText("Paused here."))), capture("summary"), capture("prefix")], (s) =>
+    s.compact("finish the migration").then(() => undefined),
+  );
+  expect(summaryPrompt).toContain("migrate the parser");
+  expect(summaryPrompt).toContain("handoff for a fresh agent");
+  expect(summaryPrompt).toContain("unverified: a.txt");
+  expect(summaryPrompt).toContain("Suggested Skills");
+  expect(summaryPrompt).toContain("tdd");
+  expect(summaryPrompt).toContain("focus on: finish the migration");
 });

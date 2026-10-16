@@ -1,9 +1,10 @@
 import { type AssistantMessage, StringEnum } from "@earendil-works/pi-ai";
-import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { compact, type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gateReason } from "./gate.ts";
+import { handoffInstructions, skillName } from "./handoff.ts";
 import { asksForAutonomy, continuation, isSilentToolStep, openTodos, STATUS_REMINDER, type Todo } from "./loop.ts";
 import { crossedBudget, dayFile, parseRecords, type RequestRecord, statusLine, toRecord, totals } from "./telemetry.ts";
 import { claimNudge, detectClaims, emptyLedger, ledgerStatus, markInput, receipt, recordToolResult } from "./trust.ts";
@@ -47,6 +48,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
     let silentSteps = 0;
     let autonomous = false;
     let todos: Todo[] = [];
+    const skills = new Set<string>();
     let requestStartedAt = 0;
 
     pi.on("input", (event) => {
@@ -99,6 +101,10 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
     });
 
     pi.on("tool_result", (event) => {
+      if (event.toolName === "read" && typeof event.input.path === "string") {
+        const skill = skillName(event.input.path);
+        if (skill) skills.add(skill);
+      }
       const exitCode = (event.structuredContent as { exit_code?: unknown } | undefined)?.exit_code;
       recordToolResult(ledger, event.toolName, event.input, event.isError, exitCode);
     });
@@ -140,6 +146,34 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       if (text) return { entries: [{ type: "custom_message", customType: "cedia.receipt", content: text, display: true }] };
     });
 
+    // ponytail: summarizes with the session's model directly, skipping pi's virtual-model routing for summaries; upgrade when cedia/auto routes summaries elsewhere.
+    pi.on("session_before_compact", async (event, ctx) => {
+      if (!ctx.model) return;
+      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+      if (!auth.ok) return;
+      const instructions = handoffInstructions({
+        openTodos: openTodos(todos),
+        unverified: ledgerStatus(ledger).unverified,
+        skills: [...skills],
+        focus: event.customInstructions,
+      });
+      const stream = (model: Parameters<typeof ctx.modelRegistry.streamSimple>[0], context: Parameters<typeof ctx.modelRegistry.streamSimple>[1], opts?: Parameters<typeof ctx.modelRegistry.streamSimple>[2]) =>
+        ctx.modelRegistry.streamSimple(model, context, opts);
+      try {
+        return { compaction: await compact(event.preparation, ctx.model, auth.apiKey, definedHeaders(auth.headers), instructions, event.signal, ctx.thinkingLevel, stream) };
+      } catch (error) {
+        ctx.ui.notify(`cedia: handoff summary failed (${error instanceof Error ? error.message : String(error)}); using pi's default compaction.`, "warning");
+        return;
+      }
+    });
+
+    pi.registerCommand("handoff", {
+      description: "Compact this session into a handoff for the next focus: /handoff [focus]",
+      handler: async (args, ctx) => {
+        ctx.compact({ customInstructions: args });
+      },
+    });
+
     pi.registerCommand("receipt", {
       description: "Show what cedia recorded since your last message",
       handler: async (_args, ctx) => {
@@ -147,6 +181,10 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       },
     });
   };
+}
+
+function definedHeaders(headers: Record<string, string | null> | undefined): Record<string, string> | undefined {
+  return headers && Object.fromEntries(Object.entries(headers).filter((e): e is [string, string] => e[1] !== null));
 }
 
 function readDay(file: string): RequestRecord[] {
