@@ -23,8 +23,11 @@ async function run(responses: Parameters<ReturnType<typeof fauxProvider>["setRes
   await session.waitForIdle();
   const custom = (type: string) =>
     session.messages.filter((m: any) => m.role === "custom" && m.customType === type).map((m: any) => String(m.content));
+  const toolResults = session.messages
+    .filter((m: any) => m.role === "toolResult")
+    .map((m: any) => m.content.map((c: any) => c.text ?? "").join(""));
   session.dispose();
-  return { calls: faux.state.callCount, nudges: custom("cedia.claim-check"), receipts: custom("cedia.receipt") };
+  return { calls: faux.state.callCount, nudges: custom("cedia.claim-check"), receipts: custom("cedia.receipt"), toolResults };
 }
 
 const write = fauxAssistantMessage(fauxToolCall("write", { path: "a.txt", content: "x" }), { stopReason: "toolUse" });
@@ -45,4 +48,11 @@ test("an edit followed by a passing check settles with a clean receipt and no nu
   expect(r.nudges).toHaveLength(0);
   expect(r.receipts[0]).toMatch(/exit 0/);
   expect(r.receipts[0]).not.toContain("Unverified");
+});
+
+test("an irreversible command is blocked when nobody can approve it", async () => {
+  const push = fauxAssistantMessage(fauxToolCall("bash", { command: "git push --force origin main" }), { stopReason: "toolUse" });
+  const r = await run([push, fauxAssistantMessage(fauxText("I could not push."))]);
+  expect(r.toolResults).toHaveLength(1);
+  expect(r.toolResults[0]).toContain("Blocked without the user's approval: force-push");
 });

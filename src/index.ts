@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { gateReason } from "./gate.ts";
 import { claimNudge, detectClaims, emptyLedger, ledgerStatus, markInput, receipt, recordToolResult } from "./trust.ts";
 
 const MAX_CLAIM_NUDGES_PER_INPUT = 1;
@@ -10,6 +11,19 @@ export default function cedia(pi: ExtensionAPI): void {
   pi.on("input", () => {
     markInput(ledger);
     nudges = 0;
+  });
+
+  pi.on("tool_call", async (event, ctx) => {
+    if (event.toolName !== "bash" || typeof event.input.command !== "string") return;
+    const reason = gateReason(event.input.command);
+    if (!reason) return;
+    if (ctx.hasUI && (await ctx.ui.confirm("cedia: confirm irreversible command", `${event.input.command}\n\n${reason}`))) return;
+    return {
+      block: true,
+      reason: ctx.hasUI
+        ? `The user declined: ${reason}. Do not retry it; continue without it or ask the user how to proceed.`
+        : `Blocked without the user's approval: ${reason}. Nobody can approve it in this mode, so report it as a step the user must run.`,
+    };
   });
 
   pi.on("tool_result", (event) => {
