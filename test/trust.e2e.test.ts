@@ -110,3 +110,9 @@ test("compaction asks pi's summarizer for a handoff with todos, unverified files
   expect(summaryPrompt).toContain("tdd");
   expect(summaryPrompt).toContain("focus on: finish the migration");
 });
+
+test("AskQuestion in headless mode tells the model to ask in plain text", async () => {
+  const ask = fauxAssistantMessage(fauxToolCall("AskQuestion", { questions: [{ question: "Which base?", options: ["pi", "omp"] }] }), { stopReason: "toolUse" });
+  const r = await run([ask, fauxAssistantMessage(fauxText("Which base do you want, pi or omp?"))]);
+  expect(r.toolResults[0]).toContain("No one can answer dialogs in this mode");
+});

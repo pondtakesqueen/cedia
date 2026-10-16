@@ -3,8 +3,10 @@ import { compact, type ExtensionAPI, type ExtensionContext, getAgentDir } from "
 import { Type } from "typebox";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { formatAnswers, NO_UI_ANSWER, OTHER } from "./ask.ts";
 import { gateReason } from "./gate.ts";
 import { handoffInstructions, skillName } from "./handoff.ts";
+import { autoTarget, PSTACK_MODELS, type Target } from "./models.ts";
 import { asksForAutonomy, continuation, isSilentToolStep, openTodos, STATUS_REMINDER, type Todo } from "./loop.ts";
 import { crossedBudget, dayFile, parseRecords, type RequestRecord, statusLine, toRecord, totals } from "./telemetry.ts";
 import { claimNudge, detectClaims, emptyLedger, ledgerStatus, markInput, receipt, recordToolResult } from "./trust.ts";
@@ -13,6 +15,16 @@ const MAX_CLAIM_NUDGES_PER_INPUT = 1;
 const MAX_CONTINUATIONS_PER_INPUT = 2;
 const MAX_STATUS_REMINDERS_PER_INPUT = 2;
 const SILENT_STEPS_BEFORE_REMINDER = 5;
+
+const AskParams = Type.Object({
+  questions: Type.Array(
+    Type.Object({
+      question: Type.String({ description: "One decision the user must make, as a complete question" }),
+      options: Type.Array(Type.String(), { minItems: 2, maxItems: 4, description: "Short, mutually exclusive choices; put a recommended one first" }),
+    }),
+    { minItems: 1, maxItems: 4 },
+  ),
+});
 
 const TodoParams = Type.Object({
   todos: Type.Array(
@@ -77,6 +89,42 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         todos = params.todos;
         const open = openTodos(todos).length;
         return { content: [{ type: "text", text: `${todos.length - open}/${todos.length} completed` }], details: { todos } };
+      },
+    });
+
+    const resolve = (target: Target, ctx: ExtensionContext) => {
+      const model = ctx.modelRegistry.find(target.provider, target.id);
+      if (!model) throw new Error(`cedia: ${target.provider}/${target.id} is not in the model catalog`);
+      return { model, thinkingLevel: target.thinkingLevel };
+    };
+    pi.registerVirtualModel({
+      provider: "cedia",
+      id: "auto",
+      name: "cedia auto (low = Haiku, else Opus)",
+      thinkingLevels: ["low", "medium"],
+      route(request, ctx) {
+        const sticky = request.reason === "retry" ? request.failed : request.reason === "continuation" ? request.previous : undefined;
+        if (sticky) return { model: sticky.model, thinkingLevel: sticky.thinkingLevel ?? "medium" };
+        return resolve(autoTarget(request.thinkingLevel), ctx);
+      },
+    });
+    for (const [id, target] of Object.entries(PSTACK_MODELS)) {
+      pi.registerVirtualModel({ provider: "cedia", id, name: `${id} → ${target.id} @${target.thinkingLevel}`, route: (_request, ctx) => resolve(target, ctx) });
+    }
+
+    pi.registerTool({
+      name: "AskQuestion",
+      label: "Ask",
+      description: "Ask the user 1-4 multiple-choice questions when a decision is genuinely theirs. The user can always type their own answer.",
+      parameters: AskParams,
+      async execute(_id, params, _signal, _onUpdate, ctx) {
+        if (!ctx.hasUI) return { content: [{ type: "text", text: NO_UI_ANSWER }], details: { answered: false } };
+        const answers: (string | undefined)[] = [];
+        for (const q of params.questions) {
+          const choice = await ctx.ui.select(q.question, [...q.options, OTHER]);
+          answers.push(choice === OTHER ? await ctx.ui.input(q.question) : choice);
+        }
+        return { content: [{ type: "text", text: formatAnswers(params.questions, answers) }], details: { answered: true, answers } };
       },
     });
 
