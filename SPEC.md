@@ -67,7 +67,6 @@ All built as pi extension hooks.
 |---|---|
 | Text-only end of turn with open todos → send a continuation naming them, at most 2 in a row. Only in headless mode, `/loop`, or "run until done". | `agent_before_settle` → `continue: true` |
 | 5 tool steps with nothing for the user to read → append "say in a few words what you're doing, then continue". At most 2 per turn. All modes. | `tool_result` + `pi.sendMessage()` |
-| Wrap pasted text in `<pasted_content id="…">` and add the matching system note. | `input` |
 | A new user message during work steers the current task. | pi steering (default) |
 | Compaction writes a handoff: pi's own checkpoint summary plus open todos, unverified files, suggested skills (from `SKILL.md` reads), artifact paths instead of copies, prompt-level redaction. Stored as pi's compaction entry in the session. | `session_before_compact` → pi's exported `compact()` with the session's `streamSimple` |
 | `/handoff [focus]` triggers the same compaction with a focus. A command instead of the planned skill: the instructions live in `src/handoff.ts`, so a command reuses them with no second copy. | `registerCommand` |
@@ -93,6 +92,7 @@ Each of these waits for a measured trigger:
 - Custom provider adapters: when pi-ai blocks a needed feature.
 - Shell-command hooks: when the first hook is needed.
 - Cross-session memory: when the same context has to be repeated across sessions.
+- `<pasted_content>` tagging: pi's editor expands paste markers (`[paste #1 +40 lines]`, only for pastes over 10 lines or 1,000 chars) before the `input` hook fires, so pasted text is indistinguishable from typed text. Revisit when pi exposes paste spans on `input`, or if cedia ever replaces pi's editor.
 - Automations (benny): dropped; use `cedia -p` + cron if ever needed.
 
 ## Scoreboard
