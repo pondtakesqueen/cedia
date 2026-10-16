@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
+export PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.cedia}"
+exec "$root/node_modules/.bin/pi" --extension "$root/src/index.ts" "$@"

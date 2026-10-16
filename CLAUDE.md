@@ -4,7 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-cedia is a personal coding harness built as a **pi package** (extension + config) on `@earendil-works/pi-coding-agent` pinned to `1.3.0`, launched by `bin/cedia` (runs `pi` with `PI_CODING_AGENT_DIR=~/.cedia`). It is not a fork and has no CLI wrapper. `SPEC.md` holds every settled decision and the milestone order; read it before changing scope. No code exists yet; M0 is next.
+cedia is a personal coding harness built as a **pi package** (extension + config) on `@earendil-works/pi-coding-agent` pinned to `1.3.0`, launched by `bin/cedia` (runs `pi` with `PI_CODING_AGENT_DIR=~/.cedia`). It is not a fork and has no CLI wrapper. `SPEC.md` holds every settled decision and the milestone order; read it before changing scope. M0 is in progress: the evidence ledger, claim check and receipt exist.
+
+## Commands
+
+- `npm test`: all tests (vitest). One file: `npx vitest run test/trust.test.ts`. One test: add `-t "<name>"`.
+- `npm run typecheck`: `tsc --noEmit`.
+- `./bin/cedia`: run cedia (pi + `src/index.ts`) with `PI_CODING_AGENT_DIR=~/.cedia`. In scripts pass `</dev/null` with `--print`, or pi waits on stdin.
+- e2e tests drive the real pi SDK with pi-ai's `fauxProvider` (`test/trust.e2e.test.ts` shows the setup). Bash checks inside them must work offline.
+
+## Code layout
+
+- `src/index.ts` wires pi hooks; keep logic out of it.
+- `src/trust.ts` is pure: evidence ledger, claim detection, nudge and receipt text. Unit-test it directly.
 
 ## Rules that are easy to get wrong
 
