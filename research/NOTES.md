@@ -82,5 +82,26 @@ Excluded on purpose: `tanbiralam/claude-code` (leaked proprietary source) and le
 - OpenAI: user instructions outrank skills; when a skill causes a pause, name the SKILL.md and quote the line.
 - All three: new user messages during work steer the current task instead of replacing it.
 
+## Trust-related designs (read 2026-10-16)
+
+### Goal loops with a separate judge
+- Claude Code `/goal <condition>`: after every turn a fresh model judges the condition from the transcript only (it runs no commands), keeps going until met, judged impossible, or a must-fix error. Conditions should name one measurable end state, the check that proves it, and constraints. `docs/claude-code/goal.md`
+- Grok Build goal mode (Apache-2.0), `src/grok-build/crates/codegen/xai-grok-shell/src/session/templates/`:
+  - `goal_planner_prompt.md`: runs once, writes a plan file of grouped acceptance criteria and a task checklist; the plan is the single source of truth for "done".
+  - `goal_verifier_prompt.md`: adversarial verifier, not the author, tries to refute; defaults to `refuted: true` when uncertain. Kind lenses: `goal_verifier_kind_lens_code_change.md` (read current files, run code, cite `path:line` or transcripts), `_analysis.md` (every claim must cite checkable evidence), `_research.md` (open each cited source).
+  - `goal_verifier_resume_prompt.md`: same verifier re-checks only the delta after a fix.
+  - `goal_strategist_prompt.md`: after several failed rounds flagging different gaps, recommends one structural change.
+  - `goal_task_discipline.md`: narration must be paired with the tool call; no asking permission to continue in-flight work.
+  - `goal_summarizer_prompt.md`: writes the closing message only after verification.
+
+### Approval classifiers
+- All three vendors gate tool calls with a classifier: Claude Code auto mode (deny/ask rules run first, classifier blocks irreversible, destructive, or out-of-environment actions; trusts cwd and the repo's remotes by default) `docs/claude-code/auto-mode-config.md`; Codex auto-review / guardian `docs/codex/agent-approvals-security.md`, policy text `src/codex/codex-rs/prompts/templates/guardian/policy.md` (Apache-2.0); Grok Build `src/grok-build/crates/codegen/xai-grok-workspace/templates/auto_mode_classifier_system_prompt.md` (15 lines, Apache-2.0: hard-wait vs clearable tiers, only harness-recorded user turns and decisions authorize, judge what the action does, not names).
+
+### Review
+- Claude Code ultrareview: multi-agent review where every finding is independently reproduced before it is reported. `docs/claude-code/ultrareview.md`
+
+### Checkpoints
+- Claude Code checkpointing does not track files changed by Bash or external edits. `docs/claude-code/checkpointing.md`. cedia's shadow-git snapshot covers both.
+
 ## Not yet read in depth
 Claude Code, Codex and Grok Build feature pages (subagents, hooks, permissions, sandbox, checkpoints, plan mode, memory). Read the matching pages from all three when each milestone starts.

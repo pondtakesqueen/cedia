@@ -1,6 +1,23 @@
 # cedia spec
 
-cedia is a personal coding harness built as a pi package. It runs the original pstack (`cursor/plugins/pstack`) on Claude, GPT and Grok, and it must score at least as well as plain pi on the same model before it replaces pi as the daily driver.
+cedia is a personal coding harness built as a pi package. It runs the original pstack (`cursor/plugins/pstack`) on Claude, GPT and Grok. The goal is a harness the user can trust: every "done" is backed by evidence the harness itself recorded, and cedia is good enough on the user's own work that no other harness is worth reaching for, proven by a scoreboard against Claude Code, Codex, Grok Build, opencode and oh-my-pi.
+
+## Trust
+
+Trust comes from the harness's records, never from the model's self-report.
+
+| Mechanism | What it does | Milestone |
+|---|---|---|
+| Evidence ledger | Records every file change (edit, write, and bash commands that touch the tree) and every check command after it, with exit code and output tail. | M0 |
+| Claim check | A turn that claims done, fixed or passing while the ledger shows changes after the last passing check, or that narrates an action ("ran the tests") with no matching tool call, gets one continuation: do it, or say plainly what is unverified. At most 1 per turn. | M0 |
+| Receipt footer | Append a footer generated from the ledger to the final message: files changed, checks run with exit codes, what was not verified. The model does not write it. `/receipt` shows the full ledger. | M0 |
+| Irreversible-action gate | Fixed deny/ask list (force-push, deploy, broad `rm -rf`, publishing, sending messages) pauses for the user in every mode, enforced by `tool_call`. | M0 |
+| Gate classifier | Ambiguous commands go to Haiku `low` with a prompt adapted from Grok Build's `auto_mode_classifier_system_prompt.md`. Only harness-recorded user turns authorize. | M1 |
+| Visible failures | Tool errors and retries are shown verbatim; nothing is retried silently. | M0 |
+| Goal mode | `/goal <outcome>`: acceptance criteria written to a plan file → work → the harness runs the stated check itself → a readonly adversarial verifier in a fresh context tries to refute it → fix and re-verify only the delta. Adapt only the planner and the code-change verifier lens from Grok Build; the receipt replaces its summarizer. | M1 |
+| Reproduced findings | A reviewer finding is shown only with evidence that reruns (`path:line` or command output). | M1 |
+
+**Bounds.** Every loop has a hard cap and ends with an honest report, never with silent extra work: continuation 2, claim check 1, status reminder 2 per turn; goal mode 3 verify rounds, then stop and report what is met and what is not.
 
 Decisions were settled in a grilling session on 2026-10-16. Evidence and source paths are in `research/NOTES.md`.
 
@@ -16,7 +33,7 @@ Decisions were settled in a grilling session on 2026-10-16. Evidence and source 
 
 | Vendor | Route | Use |
 |---|---|---|
-| Anthropic | API key (`ANTHROPIC_API_KEY`) only | Default session model: `claude-haiku-5-5` at effort `low` |
+| Anthropic | API key (`ANTHROPIC_API_KEY`) only | Small tasks: `claude-haiku-5-5` @`low`. Everything else, including pstack roles: `claude-opus-5-5` @`medium` |
 | OpenAI | Sign in with ChatGPT via pi-ai provider `openai-chatgpt` (dynamic client, `ext_agent_host_id`) | Plan usage, no per-token cost |
 | xAI | API key (`XAI_API_KEY`) | `grok-4.7` |
 
@@ -34,7 +51,7 @@ Install the original pstack from `cursor/plugins/pstack` with `pi install` / the
 2. Cursor model names through `pi.registerVirtualModel()`, e.g. `claude-opus-5-5-xhigh` → `anthropic/claude-opus-5-5 @xhigh`, `grok-4.7-xhigh-fast` → `xai/grok-4.7 @xhigh`.
 3. `cedia-tools.md`, injected into the system prompt, mapping Cursor paths and tools to cedia's (`.cursor/rules/pstack-models.mdc` → `~/.cedia/pstack-models.md`, `.cursor/projects/` → `~/.cedia/sessions/`, `.cursor/skills/` → skill dirs).
 
-The original pstack names only these models: `grok-4.7-xhigh-fast` (code default), `grok-4.7-medium-fast`, `claude-opus-5-5-xhigh` (prose and judgment default), `claude-opus-5-5-medium`, `claude-opus-5-5-max`. The virtual-model table covers exactly these. Role overrides live in `~/.cedia/pstack-models.md`, written by pstack's `/setup-pstack`.
+The original pstack names only these models: `grok-4.7-xhigh-fast` (code default), `grok-4.7-medium-fast`, `claude-opus-5-5-xhigh` (prose and judgment default), `claude-opus-5-5-medium`, `claude-opus-5-5-max`. The virtual-model table maps all of them to `anthropic/claude-opus-5-5 @medium`. A `cedia/auto` virtual model routes small tasks to Haiku `low` and the rest to Opus `medium`; the scoreboard decides the routing rule. Role overrides live in `~/.cedia/pstack-models.md`, written by pstack's `/setup-pstack`.
 
 Claude Code keeps using pstack-claude; cedia does not touch it.
 
@@ -60,8 +77,8 @@ System prompt: pi's default + pstack. Variants (a base adapted from Grok Build's
 
 ## Milestones
 
-- **M0.** pstack installed and its translation layer (`AskQuestion`, virtual models, `cedia-tools.md`), M0 behaviors, cost guard, smoke set and baseline.
-- **M1.** `Task` subagents with a time-budget line (`elapsed 340s / 1200s`) on messages to children.
+- **M0.** Trust mechanisms marked M0 above, per-request telemetry (input, output, cache read, cache write, $, wall time from each vendor's `usage`), scoreboard runner, pstack and its translation layer (`AskQuestion`, virtual models, `cedia-tools.md`), M0 behaviors, cost guard.
+- **M1.** Goal mode, gate classifier, reproduced findings, `Task` subagents with a time-budget line (`elapsed 340s / 1200s`) on messages to children.
 - **M2.** MCP, LSP diagnostics after edit, `WebFetch` (ours) and web search through each vendor's server tool.
 - **M3.** Sandbox: macOS Seatbelt plus allow/deny rules.
 - **M4.** Checkpoints: shadow git under `~/.cedia/checkpoints/` with `/undo`.
@@ -72,18 +89,42 @@ Read the matching Claude Code, Codex and Grok Build docs and source at the start
 
 Each of these waits for a measured trigger:
 
-- Per-family edit tool and model capability registry: when GPT or Grok edits fail noticeably more than Claude on the smoke set.
-- Custom provider adapters / server-side compaction: when pi-ai blocks a needed feature.
+- Model capability registry: when a second per-family difference has been accepted.
+- Custom provider adapters: when pi-ai blocks a needed feature.
 - Shell-command hooks: when the first hook is needed.
 - Cross-session memory: when the same context has to be repeated across sessions.
 - Automations (benny): dropped; use `cedia -p` + cron if ever needed.
+
+## Scoreboard
+
+The scoreboard is the product's core. Every change is a hillclimb step (pstack's hillclimb playbook): one hypothesis, before/after on the scoreboard, one commit per accepted win.
+
+| Metric | Source |
+|---|---|
+| False-done rate (most important) | tasks where cedia said done but the grader failed |
+| Review precision | reviewer findings that reproduce / findings shown |
+| Task pass rate | user's own tasks (8-10) + Terminal-Bench smoke set |
+| Cache hit | `cache_read / total input` per request |
+| Cost | $ per passed task |
+| Speed | wall time per task |
+| Stability | crashes and hangs per 100 tasks |
+| Unconfirmed irreversible actions | must be 0 |
+
+Harnesses compared weekly on the same tasks and models: cedia, plain pi, Claude Code, Codex, Grok Build, opencode, oh-my-pi (all have a headless mode). Their token spend counts toward the budget.
+
+"Good enough to stop looking": cedia wins or ties every row on the user's tasks and is within 5% of the best on Terminal-Bench.
+
+First experiments, A/B on the scoreboard:
+1. Handoff compaction vs each vendor's server compaction (cache hit, pass rate).
+2. Per-family edit tool (`apply_patch` for GPT and Grok, string replace for Claude) vs pi's `edit` for all.
+3. Cache discipline: all tools declared from turn one, no system prompt edits mid-session, `clear_at` reminders, per-message effort changes, `prompt_cache_key`, Anthropic 1-hour TTL.
 
 ## Eval
 
 - Smoke set: 8 Terminal-Bench tasks spread over bug fix, feature, refactor, long-running and multi-file work. Run on the default model after each prompt or tool change, on all three families weekly. Set the per-run budget after the first measured run.
 - Baseline: plain pi on the same model every run; Claude Code and Codex periodically.
 - Tests for cedia itself: vitest for pure logic, headless e2e with pi-ai's `faux` provider for `Task`, `AskQuestion`, handoff and the continuation rules.
-- Done for M0: smoke score ≥ plain pi on the same model, and one full week of daily use without switching back.
+- Done for M0: the scoreboard runs end to end against every listed harness and cedia is ≥ plain pi on every row.
 
 ## Licenses
 
