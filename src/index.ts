@@ -1,12 +1,27 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { type ExtensionAPI, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { type AssistantMessage, StringEnum } from "@earendil-works/pi-ai";
+import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gateReason } from "./gate.ts";
+import { asksForAutonomy, continuation, isSilentToolStep, openTodos, STATUS_REMINDER, type Todo } from "./loop.ts";
 import { crossedBudget, dayFile, parseRecords, type RequestRecord, statusLine, toRecord, totals } from "./telemetry.ts";
 import { claimNudge, detectClaims, emptyLedger, ledgerStatus, markInput, receipt, recordToolResult } from "./trust.ts";
 
 const MAX_CLAIM_NUDGES_PER_INPUT = 1;
+const MAX_CONTINUATIONS_PER_INPUT = 2;
+const MAX_STATUS_REMINDERS_PER_INPUT = 2;
+const SILENT_STEPS_BEFORE_REMINDER = 5;
+
+const TodoParams = Type.Object({
+  todos: Type.Array(
+    Type.Object({
+      content: Type.String({ description: "What to do, in the imperative" }),
+      status: StringEnum(["pending", "in_progress", "completed"] as const),
+    }),
+    { description: "The complete list; it replaces the previous one" },
+  ),
+});
 
 export interface CediaOptions {
   telemetryDir?: string;
@@ -27,11 +42,47 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
     const ledger = emptyLedger();
     const sessionRecords: RequestRecord[] = [];
     let nudges = 0;
+    let continuations = 0;
+    let reminders = 0;
+    let silentSteps = 0;
+    let autonomous = false;
+    let todos: Todo[] = [];
     let requestStartedAt = 0;
 
-    pi.on("input", () => {
+    pi.on("input", (event) => {
       markInput(ledger);
-      nudges = 0;
+      nudges = continuations = reminders = silentSteps = 0;
+      autonomous = asksForAutonomy(event.text);
+    });
+
+    const restoreTodos = (ctx: ExtensionContext) => {
+      todos = [];
+      for (const entry of ctx.sessionManager.getBranch()) {
+        if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "TodoWrite") {
+          todos = (entry.message.details as { todos?: Todo[] } | undefined)?.todos ?? todos;
+        }
+      }
+    };
+    pi.on("session_start", (_event, ctx) => restoreTodos(ctx));
+    pi.on("session_tree", (_event, ctx) => restoreTodos(ctx));
+
+    pi.registerTool({
+      name: "TodoWrite",
+      label: "Todos",
+      description: "Track the steps of multi-step work. Send the complete list every time; mark an item in_progress before starting it and completed as soon as it is done.",
+      parameters: TodoParams,
+      async execute(_id, params) {
+        todos = params.todos;
+        const open = openTodos(todos).length;
+        return { content: [{ type: "text", text: `${todos.length - open}/${todos.length} completed` }], details: { todos } };
+      },
+    });
+
+    pi.on("turn_end", () => {
+      if (silentSteps < SILENT_STEPS_BEFORE_REMINDER || reminders >= MAX_STATUS_REMINDERS_PER_INPUT) return;
+      silentSteps = 0;
+      reminders++;
+      return { entries: [{ type: "custom_message", customType: "cedia.status-reminder", content: STATUS_REMINDER, display: false }] };
     });
 
     pi.on("tool_call", async (event, ctx) => {
@@ -58,6 +109,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
 
     pi.on("message_end", (event, ctx) => {
       if (event.message.role !== "assistant") return;
+      silentSteps = isSilentToolStep(event.message.content) ? silentSteps + 1 : 0;
       const at = now();
       const record = toRecord(event.message as AssistantMessage, ctx.sessionManager.getSessionId(), Date.now() - requestStartedAt, at);
       const file = join(telemetryDir, dayFile(at));
@@ -71,13 +123,18 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       if (crossedBudget(before, today.costUsd, budgetUsd)) ctx.ui.notify(`cedia: today's spend passed $${budgetUsd} ($${today.costUsd.toFixed(2)}).`, "warning");
     });
 
-    pi.on("agent_before_settle", (event) => {
+    pi.on("agent_before_settle", (event, ctx) => {
       if (event.outcome !== "completed") return;
       const status = ledgerStatus(ledger);
       const nudge = nudges < MAX_CLAIM_NUDGES_PER_INPUT ? claimNudge(status, detectClaims(lastAssistantText(event.context.llmMessages))) : undefined;
       if (nudge) {
         nudges++;
         return { continue: true, entries: [{ type: "custom_message", customType: "cedia.claim-check", content: nudge, display: true }] };
+      }
+      const open = openTodos(todos);
+      if (open.length && (autonomous || !ctx.hasUI) && continuations < MAX_CONTINUATIONS_PER_INPUT) {
+        continuations++;
+        return { continue: true, entries: [{ type: "custom_message", customType: "cedia.continue", content: continuation(open), display: true }] };
       }
       const text = receipt(status);
       if (text) return { entries: [{ type: "custom_message", customType: "cedia.receipt", content: text, display: true }] };

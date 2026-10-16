@@ -30,7 +30,7 @@ async function run(responses: Parameters<ReturnType<typeof fauxProvider>["setRes
     .map((m: any) => m.content.map((c: any) => c.text ?? "").join(""));
   session.dispose();
   const telemetry = readdirSync(telemetryDir).flatMap((f) => parseRecords(readFileSync(join(telemetryDir, f), "utf8")));
-  return { calls: faux.state.callCount, nudges: custom("cedia.claim-check"), receipts: custom("cedia.receipt"), toolResults, telemetry };
+  return { calls: faux.state.callCount, continues: custom("cedia.continue"), reminders: custom("cedia.status-reminder"), nudges: custom("cedia.claim-check"), receipts: custom("cedia.receipt"), toolResults, telemetry };
 }
 
 const write = fauxAssistantMessage(fauxToolCall("write", { path: "a.txt", content: "x" }), { stopReason: "toolUse" });
@@ -65,4 +65,25 @@ test("every model request is written to the day's telemetry file", async () => {
   expect(r.telemetry).toHaveLength(r.calls);
   expect(r.telemetry.every((t) => t.model === "faux-priced" && t.input + t.cacheRead > 0 && typeof t.costUsd === "number")).toBe(true);
   expect(r.telemetry[1].cacheRead, "the second request reuses the cached prefix").toBeGreaterThan(0);
+});
+
+const todo = (status: "pending" | "completed") =>
+  fauxAssistantMessage(fauxToolCall("TodoWrite", { todos: [{ content: "migrate the parser", status }] }), { stopReason: "toolUse" });
+
+test("headless runs with open todos continue at most twice", async () => {
+  const r = await run([todo("pending"), ...Array.from({ length: 4 }, () => fauxAssistantMessage(fauxText("Working on it.")))]);
+  expect(r.continues).toHaveLength(2);
+  expect(r.continues[0]).toContain("- migrate the parser");
+  expect(r.calls).toBe(4);
+});
+
+test("completed todos do not trigger a continuation", async () => {
+  const r = await run([todo("completed"), fauxAssistantMessage(fauxText("All set."))]);
+  expect(r.continues).toHaveLength(0);
+});
+
+test("five silent tool steps in a row get one status reminder", async () => {
+  const echo = () => fauxAssistantMessage(fauxToolCall("bash", { command: "echo step" }), { stopReason: "toolUse" });
+  const r = await run([...Array.from({ length: 6 }, echo), fauxAssistantMessage(fauxText("Here is where things stand."))]);
+  expect(r.reminders).toHaveLength(1);
 });
