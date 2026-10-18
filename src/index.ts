@@ -1,7 +1,7 @@
 import { type AssistantMessage, StringEnum } from "@earendil-works/pi-ai";
 import { compact, type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -589,6 +589,11 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         }
         if (goalState.active) stopGoal(goalState);
         startGoal(goalState, trimmed, ledger.entries.length);
+        try {
+          const dir = join(ctx.cwd ?? process.cwd(), ".cedia");
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(join(dir, "goal.md"), `# Goal\n\n${trimmed}\n\nSet: ${new Date().toISOString()}\n`, "utf8");
+        } catch {}
         ctx.ui.notify(`cedia: goal set — ${trimmed}`, "info");
         pi.sendMessage({ customType: "cedia.goal", content: `Goal: ${trimmed}. Work on it, then run the check that proves it.`, display: true }, { triggerTurn: true });
       },
