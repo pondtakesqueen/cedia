@@ -1,0 +1,11 @@
+{
+  "id": "refactor-extract",
+  "category": "refactor",
+  "prompt": "Extract the repeated validation logic in src/user.js into a helper function `validate(name)` that returns true if name is non-empty string. Use it in both createUser and updateUser. Run 'node test.js' to verify.",
+  "setup": {
+    "src/user.js": "function createUser(name) {\n  if (!name || typeof name !== 'string' || name.trim() === '') throw new Error('invalid');\n  return { name };\n}\nfunction updateUser(u, name) {\n  if (!name || typeof name !== 'string' || name.trim() === '') throw new Error('invalid');\n  u.name = name;\n  return u;\n}\nmodule.exports = { createUser, updateUser };\n",
+    "test.js": "const { createUser, updateUser } = require('./src/user');\nconst u = createUser('alice');\nif (u.name !== 'alice') { console.error('FAIL create'); process.exit(1); }\nconst u2 = updateUser(u, 'bob');\nif (u2.name !== 'bob') { console.error('FAIL update'); process.exit(1); }\ntry { createUser(''); process.exit(1); } catch (e) {}\nconsole.log('PASS');\n"
+  },
+  "verify": "node test.js",
+  "expectedExitCode": 0
+}

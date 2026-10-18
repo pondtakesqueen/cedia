@@ -1,0 +1,11 @@
+{
+  "id": "longrunning",
+  "category": "long-running",
+  "prompt": "Implement a pipeline in src/pipeline.js: parseCSV(text) splits by newline and comma into rows of arrays; transform(rows) uppercases all strings; validate(rows) returns true if all rows have the same column count. Export all three. Run 'node test.js' to verify.",
+  "setup": {
+    "src/pipeline.js": "module.exports = {};\n",
+    "test.js": "const { parseCSV, transform, validate } = require('./src/pipeline');\nconst rows = parseCSV('a,b\\nc,d');\nif (JSON.stringify(rows) !== JSON.stringify([['a','b'],['c','d']])) { console.error('FAIL parse', rows); process.exit(1); }\nconst t = transform(rows);\nif (JSON.stringify(t) !== JSON.stringify([['A','B'],['C','D']])) { console.error('FAIL transform', t); process.exit(1); }\nif (!validate(rows)) { console.error('FAIL validate'); process.exit(1); }\nif (validate([['a','b'],['c']])) { console.error('FAIL validate bad'); process.exit(1); }\nconsole.log('PASS');\n"
+  },
+  "verify": "node test.js",
+  "expectedExitCode": 0
+}

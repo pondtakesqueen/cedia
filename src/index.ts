@@ -1,16 +1,34 @@
 import { type AssistantMessage, StringEnum } from "@earendil-works/pi-ai";
 import { compact, type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatAnswers, NO_UI_ANSWER, OTHER } from "./ask.ts";
+import { classifyCommand } from "./classifier.ts";
 import { gateReason } from "./gate.ts";
 import { handoffInstructions, skillName } from "./handoff.ts";
+import { emptyGoalState, goalStatus, startGoal, stopGoal, verifyGoal } from "./goal.ts";
 import { autoTarget, PSTACK_MODELS, type Target } from "./models.ts";
+import { emptyCompactionTracker, onCompact, onTurnStart, shouldCompact } from "./compaction.ts";
+import { approveDomain, checkConsent, probeEgress, summarizeContent } from "./webfetch_consent.ts";
+import { getDiagnostics, formatDiagnostics, getHover, getDefinition } from "./lsp.ts";
+import { emptyReadState, isStale, recordRead, wasRead } from "./readstate.ts";
+import { memoryDelete, memoryList, memoryRead, memorySearch, memoryWrite } from "./memory.ts";
+import { applyPatch } from "./applypatch.ts";
+import { checkpointDir, createCheckpoint, initCheckpoint, undoCheckpoint } from "./checkpoint.ts";
+import { diagnose } from "./diagnostics.ts";
+import { defaultSandboxConfig, wrapCommand } from "./sandbox.ts";
+import { extractDomain, fetchUrl, isDenied } from "./webfetch.ts";
+import { searchWeb } from "./websearch.ts";
+import { REVIEW_PROMPT, parseFindings, verifyFinding, formatFindings } from "./review.ts";
+import { AgentRunner } from "./task/agents.ts";
+import { registerAgentTools } from "./task/agent-tools.ts";
+import { defaultSettings, DEPTH_FLAG } from "./task/config.ts";
 import { asksForAutonomy, continuation, isSilentToolStep, openTodos, STATUS_REMINDER, type Todo } from "./loop.ts";
 import { crossedBudget, dayFile, parseRecords, type RequestRecord, statusLine, toRecord, totals } from "./telemetry.ts";
-import { claimNudge, detectClaims, emptyLedger, ledgerStatus, markInput, receipt, recordToolResult } from "./trust.ts";
+import { claimNudge, detectClaims, emptyLedger, ledgerStatus, markInput, receipt, recordBashChanges, recordToolResult } from "./trust.ts";
 
 const CEDIA_TOOLS = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../prompts/cedia-tools.md"), "utf8");
 
@@ -19,11 +37,20 @@ const MAX_CONTINUATIONS_PER_INPUT = 2;
 const MAX_STATUS_REMINDERS_PER_INPUT = 2;
 const SILENT_STEPS_BEFORE_REMINDER = 5;
 
+const AskOption = Type.Union([
+  Type.String(),
+  Type.Object({
+    label: Type.String(),
+    description: Type.Optional(Type.String()),
+  }),
+]);
 const AskParams = Type.Object({
   questions: Type.Array(
     Type.Object({
       question: Type.String({ description: "One decision the user must make, as a complete question" }),
-      options: Type.Array(Type.String(), { minItems: 2, maxItems: 4, description: "Short, mutually exclusive choices; put a recommended one first" }),
+      options: Type.Array(AskOption, { minItems: 2, maxItems: 4, description: "Choices; put a recommended one first" }),
+      multiSelect: Type.Optional(Type.Boolean({ description: "Allow selecting multiple options" })),
+      recommended: Type.Optional(Type.Integer({ minimum: 0, description: "Index of the recommended option (0-based)" })),
     }),
     { minItems: 1, maxItems: 4 },
   ),
@@ -55,13 +82,32 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
   const now = options.now ?? (() => new Date());
 
   return (pi) => {
+    let taskRunner: AgentRunner | undefined;
+    let cpDir: string | undefined;
     const ledger = emptyLedger();
+    const sandboxConfig = defaultSandboxConfig();
+    const bashSnapshots = new Map<string, string[]>();
+    const goalState = emptyGoalState();
+    const readState = emptyReadState();
+    const compactionTracker = emptyCompactionTracker();
+    let turnStartedAt = 0;
+    let firstAssistantAt = 0;
+    const gitChangedPaths = (cwd?: string): string[] | undefined => {
+      try {
+        const out = execSync("git status --porcelain", { cwd: cwd ?? process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+        return out.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => l.replace(/^[ MADRCU?!]{1,2}\s+/, "").replace(/^"(.*)"$/, "$1"));
+      } catch {
+        return undefined;
+      }
+    };
+    const recentReads: string[] = [];
     const sessionRecords: RequestRecord[] = [];
     let nudges = 0;
     let continuations = 0;
     let reminders = 0;
     let silentSteps = 0;
     let autonomous = false;
+    let planMode = false;
     let todos: Todo[] = [];
     const skills = new Set<string>();
     let requestStartedAt = 0;
@@ -84,7 +130,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         }
       }
     };
-    pi.on("session_start", (_event, ctx) => restoreTodos(ctx));
+    pi.on("session_start", (_event, ctx) => { restoreTodos(ctx); try { cpDir = initCheckpoint(ctx.cwd, ctx.sessionManager.getSessionId()); } catch {} });
     pi.on("session_tree", (_event, ctx) => restoreTodos(ctx));
 
     pi.registerTool({
@@ -128,13 +174,174 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         if (!ctx.hasUI) return { content: [{ type: "text", text: NO_UI_ANSWER }], details: { answered: false } };
         const answers: (string | undefined)[] = [];
         for (const q of params.questions) {
-          const choice = await ctx.ui.select(q.question, [...q.options, OTHER]);
-          answers.push(choice === OTHER ? await ctx.ui.input(q.question) : choice);
+          const labels = q.options.map((o) => (typeof o === "string" ? o : o.label));
+          const display = labels.map((label, i) => (i === q.recommended ? `${label} (Recommended)` : label));
+          if (q.multiSelect) {
+            const picked: string[] = [];
+            let more = true;
+            while (more) {
+            const choice = await ctx.ui.select(`${q.question} (select one; choose "Done" when finished)`, [...display, "Done", OTHER]);
+            if (!choice) { more = false; continue; }
+            if (choice === "Done") { more = false; continue; }
+            if (choice === OTHER) { const t = await ctx.ui.input(q.question); if (t) picked.push(t); more = false; continue; }
+            const label = labels[display.indexOf(choice.replace(" (Recommended)", ""))];
+            if (label && !picked.includes(label)) picked.push(label);
+            }
+            answers.push(picked.length ? picked.join(", ") : undefined);
+          } else {
+            const choice = await ctx.ui.select(q.question, [...display, OTHER]);
+            if (!choice) { answers.push(undefined); continue; }
+            answers.push(choice === OTHER ? await ctx.ui.input(q.question) : labels[display.indexOf(choice.replace(" (Recommended)", ""))]);
+          }
         }
-        return { content: [{ type: "text", text: formatAnswers(params.questions, answers) }], details: { answered: true, answers } };
+        const formatQuestions = params.questions.map((q) => ({ question: q.question, options: q.options.map((o) => (typeof o === "string" ? o : o.label)) }));
+        return { content: [{ type: "text", text: formatAnswers(formatQuestions, answers) }], details: { answered: true, answers } };
+      },
+    });
+    pi.registerTool({
+      name: "WebFetch",
+      label: "WebFetch",
+      description: "Fetch a URL and return its content as markdown. Use for reading web pages, documentation, and articles.",
+      parameters: Type.Object({ url: Type.String({ description: "The URL to fetch" }) }),
+      async execute(_id, params) {
+        const denyDomains = (process.env.CEDIA_WEBFETCH_DENY_DOMAINS ?? "").split(",").map((d) => d.trim()).filter(Boolean);
+        const allowDomains = (process.env.CEDIA_WEBFETCH_ALLOW_DOMAINS ?? "").split(",").map((d) => d.trim()).filter(Boolean);
+        const consent = checkConsent(params.url, denyDomains, allowDomains);
+        if (!consent.allowed) {
+          return { content: [{ type: "text", text: `Blocked: ${consent.reason}` }], details: { url: params.url, title: undefined }, isError: true };
+        }
+        // Egress probe
+        const reachable = await probeEgress(params.url);
+        if (!reachable) {
+          return { content: [{ type: "text", text: `Blocked: ${params.url} is not reachable.` }], details: { url: params.url, title: undefined }, isError: true };
+        }
+        try {
+          const result = await fetchUrl(params.url);
+          // Second deny check (after redirect)
+          const finalConsent = checkConsent(result.url, denyDomains, allowDomains);
+          if (!finalConsent.allowed) {
+            return { content: [{ type: "text", text: `Blocked after redirect: ${finalConsent.reason}` }], details: { url: result.url, title: undefined }, isError: true };
+          }
+          // Approve domain for future (shared read consent)
+          approveDomain(consent.domain);
+          const content = summarizeContent(result.content);
+          const title = result.title ? `# ${result.title}\n\n` : "";
+          return { content: [{ type: "text", text: `${title}${content}` }], details: { url: result.url, title: result.title } };
+        } catch (e) {
+          return { content: [{ type: "text", text: `Error fetching ${params.url}: ${e instanceof Error ? e.message : String(e)}` }], details: { url: params.url, title: undefined }, isError: true };
+        }
+      },
+    });
+    pi.registerTool({
+      name: "WebSearch",
+      label: "WebSearch",
+      description: "Search the web for information. Returns titles, URLs, and snippets.",
+      parameters: Type.Object({ query: Type.String({ description: "The search query" }) }),
+      async execute(_id, params) {
+        try {
+          const result = await searchWeb(params.query);
+          const lines: string[] = [];
+          if (result.abstract) lines.push(result.abstract, "");
+          for (const r of result.results) {
+            lines.push(`- ${r.title}`);
+            lines.push(`  ${r.url}`);
+            if (r.snippet && r.snippet !== r.title) lines.push(`  ${r.snippet.slice(0, 200)}`);
+          }
+          if (lines.length === 0) lines.push("No results found.");
+          return { content: [{ type: "text", text: lines.join("\n") }], details: { query: params.query, count: result.results.length } };
+        } catch (e) {
+          return { content: [{ type: "text", text: `Error searching: ${e instanceof Error ? e.message : String(e)}` }], details: { query: params.query, count: 0 }, isError: true };
+        }
+      },
+    });
+    pi.registerTool({
+      name: "ApplyPatch",
+      label: "ApplyPatch",
+      description: "Apply a patch in apply_patch format (*** Begin Patch / *** Update File: / *** Add File: / *** Delete File: / *** End Patch). Use for multi-file edits.",
+      parameters: Type.Object({ patch: Type.String({ description: "The patch in apply_patch format" }) }),
+      async execute(_id, params, _signal, _onUpdate, ctx) {
+        const result = applyPatch(params.patch, ctx.cwd);
+        if (!result.ok) {
+          return { content: [{ type: "text", text: `Patch failed: ${result.error}\nApplied: ${result.applied.join(", ")}` }], details: { applied: result.applied }, isError: true };
+        }
+        return { content: [{ type: "text", text: `Patch applied: ${result.applied.join(", ")}` }], details: { applied: result.applied } };
       },
     });
 
+    pi.registerTool({
+      name: "memory_write",
+      label: "MemoryWrite",
+      description: "Write a fact to cross-session memory. Persists across sessions.",
+      parameters: Type.Object({ key: Type.String({ description: "Memory key" }), content: Type.String({ description: "Content to store" }) }),
+      async execute(_id, params) {
+        memoryWrite(params.key, params.content);
+        return { content: [{ type: "text", text: `Stored memory: ${params.key}` }], details: { key: params.key } };
+      },
+    });
+    pi.registerTool({
+      name: "memory_read",
+      label: "MemoryRead",
+      description: "Read a fact from cross-session memory.",
+      parameters: Type.Object({ key: Type.String({ description: "Memory key" }) }),
+      async execute(_id, params) {
+        const content = memoryRead(params.key);
+        if (content === undefined) return { content: [{ type: "text", text: `No memory found for: ${params.key}` }], details: { key: params.key, found: false } };
+        return { content: [{ type: "text", text: content }], details: { key: params.key, found: true } };
+      },
+    });
+    pi.registerTool({
+      name: "memory_list",
+      label: "MemoryList",
+      description: "List all stored memory keys.",
+      parameters: Type.Object({}),
+      async execute() {
+        const keys = memoryList();
+        return { content: [{ type: "text", text: keys.length ? keys.join("\n") : "No memories stored." }], details: { keys } };
+      },
+    });
+    pi.registerTool({
+      name: "memory_search",
+      label: "MemorySearch",
+      description: "Search cross-session memory by keyword. Returns matching keys and snippets.",
+      parameters: Type.Object({ query: Type.String({ description: "Search query" }) }),
+      async execute(_id, params) {
+        const results = memorySearch(params.query);
+        if (results.length === 0) return { content: [{ type: "text", text: "No matching memories." }], details: { count: 0 } };
+        const lines = results.map((r) => `${r.key}: ${r.snippet}`);
+        return { content: [{ type: "text", text: lines.join("\n") }], details: { count: results.length } };
+      },
+    });
+    pi.registerTool({
+      name: "lsp_hover",
+      label: "LSPHover",
+      description: "Get hover information for a symbol at a specific position in a file. Requires an LSP server (e.g., rust-analyzer).",
+      parameters: Type.Object({ path: Type.String(), line: Type.Integer({ minimum: 1 }), character: Type.Integer({ minimum: 1 }) }),
+      async execute(_id, params) {
+        try {
+          const result = await getHover(params.path, params.line, params.character, process.cwd());
+          if (!result) return { content: [{ type: "text", text: "No hover information available." }], details: {} };
+          return { content: [{ type: "text", text: result.contents }], details: {} };
+        } catch (e) {
+          return { content: [{ type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` }], details: {}, isError: true };
+        }
+      },
+    });
+    pi.registerTool({
+      name: "lsp_definition",
+      label: "LSPDefinition",
+      description: "Go to definition of a symbol at a specific position in a file. Requires an LSP server.",
+      parameters: Type.Object({ path: Type.String(), line: Type.Integer({ minimum: 1 }), character: Type.Integer({ minimum: 1 }) }),
+      async execute(_id, params) {
+        try {
+          const result = await getDefinition(params.path, params.line, params.character, process.cwd());
+          if (!result || result.length === 0) return { content: [{ type: "text", text: "No definition found." }], details: {} };
+          const text = result.map((l: any) => `${l.uri}:${l.range.start.line + 1}`).join("\n");
+          return { content: [{ type: "text", text }], details: {} };
+        } catch (e) {
+          return { content: [{ type: "text", text: `Error: ${e instanceof Error ? e.message : String(e)}` }], details: {}, isError: true };
+        }
+      },
+    });
     pi.on("turn_end", () => {
       if (silentSteps < SILENT_STEPS_BEFORE_REMINDER || reminders >= MAX_STATUS_REMINDERS_PER_INPUT) return;
       silentSteps = 0;
@@ -143,9 +350,46 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
     });
 
     pi.on("tool_call", async (event, ctx) => {
+      if (planMode && ["edit", "write", "ApplyPatch", "bash", "Task", "memory_write"].includes(event.toolName)) {
+        return { block: true, reason: "cedia: plan mode is read-only; /plan off to allow edits." };
+      }
+      if (event.toolName === "bash" && typeof event.input.command === "string") {
+        const before = gitChangedPaths((ctx as any).cwd ?? process.cwd());
+        if (before) bashSnapshots.set(event.toolCallId, before);
+      }
+      if (event.toolName === "bash" && typeof event.input.command === "string" && sandboxConfig.enabled) {
+        event.input.command = wrapCommand(event.input.command, (ctx as any).cwd ?? process.cwd(), sandboxConfig);
+      }
+      if ((event.toolName === "edit" || event.toolName === "write") && cpDir) {
+        try { createCheckpoint(cpDir, process.cwd(), `before ${event.toolName}`); } catch {}
+      }
+      if ((event.toolName === "edit" || event.toolName === "write") && typeof event.input.path === "string") {
+        const path = event.input.path;
+        if (existsSync(path) && (!wasRead(readState, path) || isStale(readState, path))) {
+          return {
+            block: true,
+            reason: !wasRead(readState, path)
+              ? "File has not been read yet. Read it first before writing to it."
+              : "File content has changed since it was last read. Read it again before attempting to write it.",
+          };
+        }
+      }
       if (event.toolName !== "bash" || typeof event.input.command !== "string") return;
       const reason = gateReason(event.input.command);
-      if (!reason) return;
+      if (!reason) {
+        const cmd = event.input.command;
+        const needsClassify = /\b(rm|rmdir|git\s+push|curl|wget|chmod|chown|mv|cp)\b/.test(cmd);
+        if (needsClassify) {
+          const result = await classifyCommand(cmd, ctx.modelRegistry, "");
+          if (result.shouldBlock) {
+            return {
+              block: true,
+              reason: `cedia classifier: ${result.reason}. Do not retry it; continue without it or ask the user how to proceed.`,
+            };
+          }
+        }
+        return;
+      }
       if (ctx.hasUI && (await ctx.ui.confirm("cedia: confirm irreversible command", `${event.input.command}\n\n${reason}`))) return;
       return {
         block: true,
@@ -155,24 +399,69 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       };
     });
 
-    pi.on("tool_result", (event) => {
+    pi.on("tool_result", async (event) => {
       if (event.toolName === "read" && typeof event.input.path === "string") {
-        const skill = skillName(event.input.path);
+        const p = event.input.path;
+        const skill = skillName(p);
         if (skill) skills.add(skill);
+        const idx = recentReads.indexOf(p);
+        if (idx !== -1) recentReads.splice(idx, 1);
+        recentReads.unshift(p);
+        if (recentReads.length > 10) recentReads.length = 10;
+        recordRead(readState, p);
+      }
+      if ((event.toolName === "edit" || event.toolName === "write") && typeof event.input.path === "string") {
+        // Try LSP diagnostics first
+        try {
+          const lspResult = await getDiagnostics(event.input.path, process.cwd());
+          if (lspResult && lspResult.diagnostics.length > 0) {
+            const diagText = formatDiagnostics(lspResult);
+            const existing = Array.isArray(event.content) ? event.content : [];
+            return { content: [...existing, { type: "text" as const, text: `\n\nLSP Diagnostics (${lspResult.server}):\n${diagText}` }] };
+          }
+        } catch {
+          // LSP unavailable
+        }
+        // Fallback: tsc/eslint
+        const diag = diagnose(event.input.path, process.cwd());
+        if (diag && diag.output) {
+          const existing = Array.isArray(event.content) ? event.content : [];
+          return { content: [...existing, { type: "text" as const, text: `\n\nDiagnostics (${diag.command}):\n${diag.output}` }] };
+        }
       }
       const exitCode = (event.structuredContent as { exit_code?: unknown } | undefined)?.exit_code;
       recordToolResult(ledger, event.toolName, event.input, event.isError, exitCode);
+      if (event.toolName === "bash" && typeof event.input.command === "string") {
+        const before = bashSnapshots.get(event.toolCallId);
+        bashSnapshots.delete(event.toolCallId);
+        const after = gitChangedPaths(process.cwd());
+        if (before && after) {
+          const beforeSet = new Set(before);
+          const changed = after.filter((p) => !beforeSet.has(p));
+          if (changed.length) recordBashChanges(ledger, changed);
+        }
+      }
     });
-
+    pi.on("turn_start", (event) => {
+      turnStartedAt = event.timestamp || Date.now();
+      onTurnStart(compactionTracker);
+      firstAssistantAt = 0;
+    });
     pi.on("message_start", (event) => {
-      if (event.message.role === "assistant") requestStartedAt = Date.now();
+      if (event.message.role === "assistant") {
+        requestStartedAt = Date.now();
+        if (!firstAssistantAt) firstAssistantAt = requestStartedAt;
+      }
     });
 
     pi.on("message_end", (event, ctx) => {
       if (event.message.role !== "assistant") return;
       silentSteps = isSilentToolStep(event.message.content) ? silentSteps + 1 : 0;
       const at = now();
-      const record = toRecord(event.message as AssistantMessage, ctx.sessionManager.getSessionId(), Date.now() - requestStartedAt, at);
+      const ms = turnStartedAt ? Date.now() - turnStartedAt : Date.now() - requestStartedAt;
+      const ttftMs = turnStartedAt && firstAssistantAt ? firstAssistantAt - turnStartedAt : undefined;
+      const record = toRecord(event.message as AssistantMessage, ctx.sessionManager.getSessionId(), ms, ttftMs, at);
+      if (firstAssistantAt) firstAssistantAt = 0;
       const file = join(telemetryDir, dayFile(at));
       const before = totals(readDay(file)).costUsd;
       mkdirSync(telemetryDir, { recursive: true });
@@ -184,7 +473,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       if (crossedBudget(before, today.costUsd, budgetUsd)) ctx.ui.notify(`cedia: today's spend passed $${budgetUsd} ($${today.costUsd.toFixed(2)}).`, "warning");
     });
 
-    pi.on("agent_before_settle", (event, ctx) => {
+    pi.on("agent_before_settle", async (event, ctx) => {
       if (event.outcome !== "completed") return;
       const status = ledgerStatus(ledger);
       const nudge = nudges < MAX_CLAIM_NUDGES_PER_INPUT ? claimNudge(status, detectClaims(lastAssistantText(event.context.llmMessages))) : undefined;
@@ -197,6 +486,48 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         continuations++;
         return { continue: true, entries: [{ type: "custom_message", customType: "cedia.continue", content: continuation(open), display: true }] };
       }
+      if (goalState.active) {
+        const recentEntries = ledger.entries.slice(goalState.lastCheckIndex);
+        const lastCheck = [...recentEntries].reverse().find((e): e is Extract<typeof e, { kind: "check" }> => e.kind === "check");
+
+        if (!lastCheck) {
+          return { continue: true, entries: [{ type: "custom_message", customType: "cedia.goal", content: `Goal: ${goalState.outcome}. No check has run yet. Run the check that proves your goal, then continue.`, display: true }] };
+        }
+
+        if (lastCheck.exitCode !== 0) {
+          return { continue: true, entries: [{ type: "custom_message", customType: "cedia.goal", content: `Goal: ${goalState.outcome}. Check failed (exit ${lastCheck.exitCode}): ${lastCheck.command}. Fix and retry.`, display: true }] };
+        }
+
+        if (goalState.round >= 3) {
+          stopGoal(goalState);
+          const r = receipt(status);
+          return { entries: [{ type: "custom_message", customType: "cedia.goal", content: `Goal not fully met after 3 verify rounds.\n${r ?? ""}`, display: true }] };
+        }
+
+        const changedFiles = status.changed;
+        const lastText = lastAssistantText(event.context.llmMessages);
+        const verifyResult = await verifyGoal(
+          goalState.outcome,
+          lastCheck.command,
+          lastCheck.exitCode,
+          changedFiles,
+          lastText,
+          ctx.modelRegistry,
+          ctx.model,
+        );
+
+        if (!verifyResult.refuted) {
+          stopGoal(goalState);
+          const r = receipt(status);
+          return { entries: [{ type: "custom_message", customType: "cedia.goal", content: `Goal met ✓\n${r ?? ""}`, display: true }] };
+        }
+
+        goalState.round++;
+        goalState.lastCheckIndex = ledger.entries.length;
+        const gaps = verifyResult.gaps.length ? verifyResult.gaps.map((g) => `- ${g}`).join("\n") : "(none listed)";
+        return { continue: true, entries: [{ type: "custom_message", customType: "cedia.goal", content: `Goal: ${goalState.outcome}. Verifier refuted (round ${goalState.round}/3): ${verifyResult.reason}\nGaps:\n${gaps}\nFix these and re-run the check.`, display: true }] };
+      }
+
       const text = receipt(status);
       if (text) return { entries: [{ type: "custom_message", customType: "cedia.receipt", content: text, display: true }] };
     });
@@ -204,6 +535,11 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
     // ponytail: summarizes with the session's model directly, skipping pi's virtual-model routing for summaries; upgrade when cedia/auto routes summaries elsewhere.
     pi.on("session_before_compact", async (event, ctx) => {
       if (!ctx.model) return;
+      const compactCheck = shouldCompact(compactionTracker);
+      if (!compactCheck.allow) {
+        ctx.ui.notify(`cedia: ${compactCheck.reason}`, "warning");
+        return;
+      }
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
       if (!auth.ok) return;
       const instructions = handoffInstructions({
@@ -211,11 +547,14 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         unverified: ledgerStatus(ledger).unverified,
         skills: [...skills],
         focus: event.customInstructions,
+        recentFiles: recentReads.slice(0, 5),
       });
       const stream = (model: Parameters<typeof ctx.modelRegistry.streamSimple>[0], context: Parameters<typeof ctx.modelRegistry.streamSimple>[1], opts?: Parameters<typeof ctx.modelRegistry.streamSimple>[2]) =>
         ctx.modelRegistry.streamSimple(model, context, opts);
       try {
-        return { compaction: await compact(event.preparation, ctx.model, auth.apiKey, definedHeaders(auth.headers), instructions, event.signal, ctx.thinkingLevel, stream) };
+        const result = await compact(event.preparation, ctx.model, auth.apiKey, definedHeaders(auth.headers), instructions, event.signal, ctx.thinkingLevel, stream);
+        onCompact(compactionTracker);
+        return { compaction: result };
       } catch (error) {
         ctx.ui.notify(`cedia: handoff summary failed (${error instanceof Error ? error.message : String(error)}); using pi's default compaction.`, "warning");
         return;
@@ -234,6 +573,93 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       handler: async (_args, ctx) => {
         ctx.ui.notify(receipt(ledgerStatus(ledger)) ?? "Nothing changed and no checks ran since your last message.", "info");
       },
+    });
+    pi.registerCommand("goal", {
+      description: "Run in goal mode: /goal <outcome>, /goal off, or /goal (status)",
+      handler: async (args, ctx) => {
+        const trimmed = (args ?? "").trim();
+        if (trimmed === "off") {
+          stopGoal(goalState);
+          ctx.ui.notify("cedia: goal mode off.", "info");
+          return;
+        }
+        if (!trimmed) {
+          ctx.ui.notify(`cedia: ${goalStatus(goalState)}`, "info");
+          return;
+        }
+        if (goalState.active) stopGoal(goalState);
+        startGoal(goalState, trimmed, ledger.entries.length);
+        ctx.ui.notify(`cedia: goal set — ${trimmed}`, "info");
+        pi.sendMessage({ customType: "cedia.goal", content: `Goal: ${trimmed}. Work on it, then run the check that proves it.`, display: true }, { triggerTurn: true });
+      },
+    });
+    pi.registerCommand("review", {
+      description: "Review the codebase: /review [path]. Findings shown only with verified evidence.",
+      handler: async (args, ctx) => {
+        if (!taskRunner) {
+          ctx.ui.notify("cedia: Task runner not available.", "error");
+          return;
+        }
+        const target = (args ?? "").trim() || ".";
+        ctx.ui.notify("cedia: starting review…", "info");
+        const started = taskRunner.start(
+          { description: "review codebase", prompt: `${REVIEW_PROMPT}\n\nReview the codebase at ${target}. Report findings with evidence.`, subagent_type: "general-purpose", run_in_background: false } as any,
+          ctx,
+        );
+        const record = await taskRunner.wait(started.agent.id);
+        const text = record.finalText ?? "";
+        const findings = parseFindings(text);
+        const verified = findings.map((f) => verifyFinding(f, ctx.cwd));
+        const report = formatFindings(verified);
+        ctx.ui.notify(report, "info");
+      },
+    });
+    pi.registerCommand("checkpoint", {
+      description: "Create a checkpoint: /checkpoint [message]",
+      handler: async (args, ctx) => {
+        if (!cpDir) {
+          try { cpDir = initCheckpoint(ctx.cwd, ctx.sessionManager.getSessionId()); } catch (e) {
+            ctx.ui.notify(`cedia: checkpoint init failed: ${e instanceof Error ? e.message : String(e)}`, "error");
+            return;
+          }
+        }
+        const msg = (args ?? "").trim() || `checkpoint ${new Date().toISOString()}`;
+        const ok = createCheckpoint(cpDir, ctx.cwd, msg);
+        ctx.ui.notify(ok ? `cedia: checkpoint created (${msg})` : "cedia: checkpoint failed (nothing to commit?)", ok ? "info" : "warning");
+      },
+    });
+    pi.registerCommand("undo", {
+      description: "Undo to the last checkpoint",
+      handler: async (_args, ctx) => {
+        if (!cpDir) {
+          ctx.ui.notify("cedia: no checkpoint directory.", "error");
+          return;
+        }
+        const ok = undoCheckpoint(cpDir, ctx.cwd);
+        ctx.ui.notify(ok ? "cedia: undone to previous checkpoint." : "cedia: nothing to undo.", ok ? "info" : "warning");
+      },
+    });
+
+    pi.registerCommand("plan", {
+      description: "Read-only plan mode: /plan on | off | status",
+      handler: async (args, ctx) => {
+        const trimmed = (args ?? "").trim().toLowerCase();
+        if (trimmed === "on") { planMode = true; ctx.ui.notify("cedia: plan mode on (read-only).", "info"); return; }
+        if (trimmed === "off") { planMode = false; ctx.ui.notify("cedia: plan mode off.", "info"); return; }
+        ctx.ui.notify(`cedia: plan mode ${planMode ? "on" : "off"}.`, "info");
+      },
+    });
+
+    const settings = defaultSettings(() => Number(pi.getFlag(DEPTH_FLAG)) || 0);
+    const runner = new AgentRunner(pi, settings);
+    taskRunner = runner;
+    if ((Number(pi.getFlag(DEPTH_FLAG)) || 0) < 3) registerAgentTools(pi, runner);
+    const onExit = () => runner.signalAll();
+    process.on("exit", onExit);
+    pi.on("session_start", (_event, ctx) => runner.restore(ctx.sessionManager.getEntries()));
+    pi.on("session_shutdown", async () => {
+      process.off("exit", onExit);
+      await runner.stopAll();
     });
   };
 }

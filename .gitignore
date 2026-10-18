@@ -3,3 +3,8 @@ research/docs/
 research/src/
 research/mirror-errors.log
 .DS_Store
+
+# local artifacts
+cc-re/
+results*.jsonl
+research/baseline*.jsonl

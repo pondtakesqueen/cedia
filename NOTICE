@@ -1,0 +1,7 @@
+cedia adapts code from the following sources:
+
+- pstack-claude (MIT) — pi/ subagent machinery adapted into src/task/ (agents.ts, agent-tools.ts, child.ts, worktree.ts, agent-text.ts, sleep-wait.ts, config.ts). Copyright (c) pstack-claude authors.
+- Grok Build (Apache-2.0) — auto_mode_classifier_system_prompt.md, goal_*_prompt.md adapted for gate classifier and goal mode.
+- Codex (Apache-2.0) — compaction prompt and model capability registry concepts.
+
+Claude Code (no license) — read only for understanding; no code copied.

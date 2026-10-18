@@ -1,0 +1,12 @@
+{
+  "id": "refactor-rename",
+  "category": "refactor",
+  "prompt": "Rename the function `compute` to `calculate` in src/math.js and update all references in src/app.js and test.js. Run 'node test.js' to verify.",
+  "setup": {
+    "src/math.js": "function compute(a, b) { return a + b; }\nmodule.exports = { compute };\n",
+    "src/app.js": "const { compute } = require('./math');\nmodule.exports = { run: (a, b) => compute(a, b) };\n",
+    "test.js": "const { run } = require('./src/app');\nif (run(2, 3) !== 5) { console.error('FAIL:', run(2, 3)); process.exit(1); }\nconsole.log('PASS');\n"
+  },
+  "verify": "node test.js",
+  "expectedExitCode": 0
+}

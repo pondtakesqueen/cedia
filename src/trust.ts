@@ -51,6 +51,13 @@ export function recordToolResult(ledger: Ledger, toolName: string, input: Record
   }
 }
 
+
+/** Record file paths that a bash command changed (interim until M4 shadow-git). */
+export function recordBashChanges(ledger: Ledger, paths: readonly string[]): void {
+  for (const p of paths) {
+    if (typeof p === "string" && p.trim()) ledger.entries.push({ kind: "change", path: p.trim() });
+  }
+}
 export function ledgerStatus(ledger: Ledger): LedgerStatus {
   const recent = ledger.entries.slice(ledger.inputMark);
   const lastPass = ledger.entries.findLastIndex((e) => e.kind === "check" && e.exitCode === 0);

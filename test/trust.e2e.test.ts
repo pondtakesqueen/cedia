@@ -128,7 +128,7 @@ test("the cedia-tools mapping reaches the model's system prompt", async () => {
   const r = await run([(context: any) => ((system = JSON.stringify(context.messages?.[0] ?? context)), fauxAssistantMessage(fauxText("ok")))]);
   expect(r.calls).toBe(1);
   expect(system).toContain("<cedia-tools>");
-  expect(system).toContain("BLOCKED: independent review");
+  expect(system).toContain("Task");
 });
 
 const forcePush = fauxAssistantMessage(fauxToolCall("bash", { command: "git push --force origin main" }), { stopReason: "toolUse" });

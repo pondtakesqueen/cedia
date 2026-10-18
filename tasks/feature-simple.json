@@ -1,0 +1,11 @@
+{
+  "id": "feature-simple",
+  "category": "feature",
+  "prompt": "Add a `double(n)` function to src/math.js that returns n * 2. Export it alongside `add`. Run 'node test.js' to verify.",
+  "setup": {
+    "src/math.js": "function add(a, b) { return a + b; }\nmodule.exports = { add };\n",
+    "test.js": "const { add, double } = require('./src/math');\nif (add(1, 2) !== 3) { console.error('FAIL add'); process.exit(1); }\nif (typeof double !== 'function' || double(5) !== 10) { console.error('FAIL double'); process.exit(1); }\nconsole.log('PASS');\n"
+  },
+  "verify": "node test.js",
+  "expectedExitCode": 0
+}

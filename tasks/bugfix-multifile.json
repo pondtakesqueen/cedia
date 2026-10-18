@@ -1,0 +1,12 @@
+{
+  "id": "bugfix-multifile",
+  "category": "bug-fix",
+  "prompt": "Fix the import in src/app.js — it requires './helper' but the file is named 'helpers.js'. Fix the require path. Run 'node test.js' to verify.",
+  "setup": {
+    "src/helpers.js": "function greet(name) { return 'Hello, ' + name; }\nmodule.exports = { greet };\n",
+    "src/app.js": "const { greet } = require('./helper');\nmodule.exports = { run: (name) => greet(name) };\n",
+    "test.js": "const { run } = require('./src/app');\nif (run('world') !== 'Hello, world') { console.error('FAIL:', run('world')); process.exit(1); }\nconsole.log('PASS');\n"
+  },
+  "verify": "node test.js",
+  "expectedExitCode": 0
+}

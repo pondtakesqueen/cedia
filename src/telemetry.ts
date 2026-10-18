@@ -11,6 +11,7 @@ export interface RequestRecord {
   cacheWrite: number;
   costUsd: number;
   ms: number;
+  ttftMs?: number;
   stopReason: string;
 }
 
@@ -20,7 +21,7 @@ export interface Totals {
   cacheHit: number | undefined;
 }
 
-export function toRecord(message: AssistantMessage, session: string, ms: number, now: Date): RequestRecord {
+export function toRecord(message: AssistantMessage, session: string, ms: number, ttftMs: number | undefined, now: Date): RequestRecord {
   const u = message.usage;
   return {
     ts: now.toISOString(),
@@ -33,6 +34,7 @@ export function toRecord(message: AssistantMessage, session: string, ms: number,
     cacheWrite: u.cacheWrite,
     costUsd: u.cost.total,
     ms,
+    ttftMs,
     stopReason: message.stopReason,
   };
 }

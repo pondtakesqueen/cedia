@@ -1,0 +1,11 @@
+{
+  "id": "feature-module",
+  "category": "feature",
+  "prompt": "Create src/validator.js exporting `isEmail(str)` that returns true if str contains '@' and a '.' after the '@'. Create test.js that tests it. Run 'node test.js' to verify.",
+  "setup": {
+    "src/placeholder.js": "module.exports = {};\n",
+    "test.js": "const { isEmail } = require('./src/validator');\nif (typeof isEmail !== 'function') { console.error('FAIL: isEmail not a function'); process.exit(1); }\nif (!isEmail('a@b.com')) { console.error('FAIL: valid email rejected'); process.exit(1); }\nif (isEmail('nope')) { console.error('FAIL: invalid accepted'); process.exit(1); }\nif (isEmail('a@b')) { console.error('FAIL: no dot accepted'); process.exit(1); }\nconsole.log('PASS');\n"
+  },
+  "verify": "node test.js",
+  "expectedExitCode": 0
+}

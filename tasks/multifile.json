@@ -1,0 +1,11 @@
+{
+  "id": "multifile",
+  "category": "multi-file",
+  "prompt": "Create src/logger.js exporting `log(msg)` that prints '[LOG] ' + msg. Create src/app.js that requires logger and exports `run()` which calls log('started') and returns 'ok'. Run 'node test.js' to verify.",
+  "setup": {
+    "src/placeholder.js": "module.exports = {};\n",
+    "test.js": "const { run } = require('./src/app');\nlet output = '';\nconst origLog = console.log;\nconsole.log = (msg) => { output += msg + '\\n'; };\nconst r = run();\nconsole.log = origLog;\nif (r !== 'ok') { console.error('FAIL run:', r); process.exit(1); }\nif (!output.includes('[LOG] started')) { console.error('FAIL log:', output); process.exit(1); }\nconsole.log('PASS');\n"
+  },
+  "verify": "node test.js",
+  "expectedExitCode": 0
+}

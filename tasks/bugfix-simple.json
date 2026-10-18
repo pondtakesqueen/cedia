@@ -1,0 +1,11 @@
+{
+  "id": "bugfix-simple",
+  "category": "bug-fix",
+  "prompt": "Fix the bug in src/utils.js where `last()` returns the wrong element. It should return the last element of the array. Run 'node test.js' to verify.",
+  "setup": {
+    "src/utils.js": "function last(arr) {\n  return arr[arr.length - 2];\n}\nmodule.exports = { last };\n",
+    "test.js": "const { last } = require('./src/utils');\nif (last([1,2,3]) !== 3) { console.error('FAIL: expected 3, got', last([1,2,3])); process.exit(1); }\nif (last(['a']) !== 'a') { console.error('FAIL single'); process.exit(1); }\nconsole.log('PASS');\n"
+  },
+  "verify": "node test.js",
+  "expectedExitCode": 0
+}

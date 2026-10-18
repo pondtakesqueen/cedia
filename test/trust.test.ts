@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { claimNudge, detectClaims, emptyLedger, isCheckCommand, ledgerStatus, markInput, receipt, recordToolResult } from "../src/trust.ts";
+import { claimNudge, detectClaims, emptyLedger, isCheckCommand, ledgerStatus, markInput, receipt, recordBashChanges, recordToolResult } from "../src/trust.ts";
 
 describe("isCheckCommand", () => {
   test.each(["npm test", "npm run lint", "npx vitest run", "cargo test -p core", "pytest -q", "go test ./..."])("%s is a check", (cmd) => {
@@ -40,6 +40,17 @@ describe("ledger", () => {
     const status = ledgerStatus(ledger);
     expect(status.changed).toEqual(["new.ts"]);
     expect(status.unverified).toEqual(["old.ts", "new.ts"]);
+  });
+  test("bash changes are recorded from git status diff", () => {
+    const ledger = emptyLedger();
+    recordBashChanges(ledger, ["src/a.ts", "src/b.ts"]);
+    expect(ledgerStatus(ledger).changed).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+
+  test("recordBashChanges ignores blank entries", () => {
+    const ledger = emptyLedger();
+    recordBashChanges(ledger, ["", "  ", "x.ts"]);
+    expect(ledgerStatus(ledger).changed).toEqual(["x.ts"]);
   });
 });
 
