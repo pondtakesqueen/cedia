@@ -12,6 +12,7 @@ Sources read on 2026-10-16. Mirrored docs live in `docs/` (refresh with `./mirro
 | `src/codex` (openai/codex) | Rust | Apache-2.0 |
 | `src/grok-build` (xai-org/grok-build) | Rust | Apache-2.0 |
 | `src/claude-code` (anthropics/claude-code) | plugins, examples | no license: read only, copy nothing |
+| `src/claude-code-harness` | Claude Code 2.1.292 binary RE docs (01–07 + closings-A–D, README map) | no license: read only, copy nothing |
 
 Excluded on purpose: `tanbiralam/claude-code` (leaked proprietary source) and leaked Cursor prompts.
 
@@ -96,6 +97,9 @@ Excluded on purpose: `tanbiralam/claude-code` (leaked proprietary source) and le
 
 ### Approval classifiers
 - All three vendors gate tool calls with a classifier: Claude Code auto mode (deny/ask rules run first, classifier blocks irreversible, destructive, or out-of-environment actions; trusts cwd and the repo's remotes by default) `docs/claude-code/auto-mode-config.md`; Codex auto-review / guardian `docs/codex/agent-approvals-security.md`, policy text `src/codex/codex-rs/prompts/templates/guardian/policy.md` (Apache-2.0); Grok Build `src/grok-build/crates/codegen/xai-grok-workspace/templates/auto_mode_classifier_system_prompt.md` (15 lines, Apache-2.0: hard-wait vs clearable tiers, only harness-recorded user turns and decisions authorize, judge what the action does, not names).
+- Binary-derived mechanics, Claude Code 2.1.292 (`src/claude-code-harness/`, read-only, no license): the classifier runs in two stages, a cheap yes/no block check (~64 tokens) that escalates to full reasoning (~8k) only on "yes"; parse failures and errors deny; 3 consecutive or 20 total denials fall back to a user prompt (headless: abort). Deny/ask rules always run before the classifier, and content ask-rules hold even in bypass mode. Pipeline order is hooks → deny → ask → tool-level permission check → bypass → allow. `05-permissions-hooks.md`, `closings-C.md`
+- Same source: after compaction the harness does not re-send standing instructions; it relies on the request-time prepended message. cedia's compaction-handoff should likewise avoid duplicating standing instructions in the handoff. `closings-C.md` (06-Q4)
+- Same source: settings merge unions arrays (dedup, never replace) with strictest-wins on managed keys; large tool results are persisted to the session dir with only a small preview pointer entering context. `closings-D.md` (07-Q1), `02-tools-a.md`, `06-context-memory.md`
 
 ### Review
 - Claude Code ultrareview: multi-agent review where every finding is independently reproduced before it is reported. `docs/claude-code/ultrareview.md`
