@@ -25,6 +25,8 @@ if (harness === "cedia" && !process.env.ANTHROPIC_API_KEY && !model) {
 }
 const CEDIA_BIN = resolve(process.cwd(), "bin/cedia");
 const PI_BIN = "/Users/pond/cedia-cli/node_modules/.bin/pi";
+const CLAUDE_BIN = "claude";
+const OPENCODE_BIN = "opencode";
 
 function runCommand(cmd, cwd, timeout = 120000) {
   const start = Date.now();
@@ -50,12 +52,29 @@ function runTask(task, h) {
   }
 
   // Run harness
-  const bin = h === "cedia" ? CEDIA_BIN : PI_BIN;
-  const env = h === "cedia" ? { ...process.env } : { ...process.env, PI_CODING_AGENT_DIR: process.env.HOME + "/.pi/agent" };
+  let bin, cmdArgs, env;
+  if (h === "cedia") {
+    bin = CEDIA_BIN;
+    env = { ...process.env };
+    cmdArgs = ["-p", task.prompt];
+    if (model) cmdArgs.push("--model", model);
+  } else if (h === "claude") {
+    bin = CLAUDE_BIN;
+    env = { ...process.env };
+    cmdArgs = ["-p", task.prompt];
+  } else if (h === "opencode") {
+    bin = OPENCODE_BIN;
+    env = { ...process.env };
+    cmdArgs = ["run", task.prompt];
+    if (model) cmdArgs.push("--model", model);
+  } else {
+    bin = PI_BIN;
+    env = { ...process.env, PI_CODING_AGENT_DIR: process.env.HOME + "/.pi/agent" };
+    cmdArgs = ["-p", task.prompt];
+    if (model) cmdArgs.push("--model", model);
+  }
   const prompt = task.prompt;
   const start = Date.now();
-  const cmdArgs = ["-p", prompt];
-  if (model) cmdArgs.push("--model", model);
   const run = spawnSync(bin, cmdArgs, { cwd, encoding: "utf8", timeout: 300000, env, stdio: ["ignore", "pipe", "pipe"] });
   result.wallMs = Date.now() - start;
   result.output = (run.stdout ?? "").slice(-2000);
