@@ -655,6 +655,16 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       },
     });
 
+    pi.registerCommand("sandbox", {
+      description: "Toggle sandbox: /sandbox on | off | status",
+      handler: async (args, ctx) => {
+        const trimmed = (args ?? "").trim().toLowerCase();
+        if (trimmed === "on") { sandboxConfig.enabled = true; ctx.ui.notify("cedia: sandbox on.", "info"); return; }
+        if (trimmed === "off") { sandboxConfig.enabled = false; ctx.ui.notify("cedia: sandbox off.", "info"); return; }
+        ctx.ui.notify(`cedia: sandbox ${sandboxConfig.enabled ? "on" : "off"}.`, "info");
+      },
+    });
+
     const settings = defaultSettings(() => Number(pi.getFlag(DEPTH_FLAG)) || 0);
     const runner = new AgentRunner(pi, settings);
     taskRunner = runner;
