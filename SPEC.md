@@ -23,7 +23,7 @@ Decisions were settled in a grilling session on 2026-10-16. Evidence and source 
 
 ## Shape
 
-- cedia is one pi package (extension + config) plus `bin/cedia`, which runs `pi` with `PI_CODING_AGENT_DIR=~/.cedia`. No CLI wrapper and no fork.
+- cedia is one pi package (extension + config) plus thin CLI wrappers (`bin/cedia`, `bin/cedia-update`) that exec `pi` with `PI_CODING_AGENT_DIR=~/.cedia`. No fork.
 - Base: `@earendil-works/pi-coding-agent`, pinned to exactly `1.3.0`. Bump by hand after the smoke set passes.
 - TypeScript on Node, installed with `npm link`.
 - Config and sessions: `~/.cedia/` and project `.cedia/`.
