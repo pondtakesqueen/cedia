@@ -2,19 +2,22 @@ import type { SearchParams, SearchResponse } from "./websearch.ts";
 import { formatScraperQuery, type QuerySyntax } from "./websearch-query.ts";
 
 export interface SearchProvider {
-  readonly id: "duckduckgo" | "xai" | "relaxed";
+  readonly id: "tavily" | "duckduckgo" | "xai" | "relaxed";
   readonly label: string;
   isAvailable(): boolean | Promise<boolean>;
   search(params: SearchParams): Promise<SearchResponse>;
 }
 
-const DUCKDUCKGO_URL = "https://html.duckduckgo.com/html/";
-const DUCKDUCKGO_TIMEOUT_MS = 15000;
-const DUCKDUCKGO_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+const TAVILY_URL = "https://api.tavily.com/search";
+const TAVILY_TIMEOUT_MS = 30000;
+const TAVILY_MAX_RESULTS = 10;
 const XAI_URL = "https://api.x.ai/v1/responses";
 const XAI_MODEL = "grok-4-1-fast-non-reasoning";
 const XAI_TIMEOUT_MS = 30000;
 const MAX_RESULTS = 10;
+const DUCKDUCKGO_URL = "https://html.duckduckgo.com/html/";
+const DUCKDUCKGO_TIMEOUT_MS = 15000;
+const DUCKDUCKGO_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 export class DuckDuckGoProvider implements SearchProvider {
   readonly id = "duckduckgo" as const;
   readonly label = "DuckDuckGo";
@@ -42,6 +45,74 @@ export class DuckDuckGoProvider implements SearchProvider {
         throw new Error("DuckDuckGo blocked the request with a bot-detection challenge; results unavailable from this network");
       }
       return { query: params.query, provider: "duckduckgo", sources: parseDuckDuckGoHtml(html) };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+}
+
+interface TavilyResultItem {
+  title?: string;
+  url?: string;
+  content?: string;
+}
+
+/** Keyed provider. No key means unavailable, skipped by the chain, never an error. */
+export class TavilyProvider implements SearchProvider {
+  readonly id = "tavily" as const;
+  readonly label = "Tavily";
+
+  private apiKey: string;
+
+  constructor(apiKey: string = process.env.TAVILY_API_KEY ?? "") {
+    this.apiKey = apiKey;
+  }
+
+  isAvailable(): boolean {
+    return this.apiKey.trim().length > 0;
+  }
+
+  async search(params: SearchParams): Promise<SearchResponse> {
+    if (!this.apiKey.trim()) throw new Error("TAVILY_API_KEY is not set");
+    const parsed = params.parsedQuery;
+    const includeDomains = [...new Set([...(params.allowedDomains ?? []), ...(parsed?.sites ?? [])])].slice(0, 10);
+    const excludeDomains = [...new Set([...(params.blockedDomains ?? []), ...(parsed?.excludedSites ?? [])])].slice(0, 10);
+    const body: Record<string, unknown> = {
+      query: params.query,
+      search_depth: "basic",
+      max_results: TAVILY_MAX_RESULTS,
+      include_answer: "advanced",
+      include_raw_content: false,
+    };
+    if (includeDomains.length > 0) body.include_domains = includeDomains;
+    if (excludeDomains.length > 0) body.exclude_domains = excludeDomains;
+    if (parsed?.after) body.start_date = parsed.after;
+    if (parsed?.before) body.end_date = parsed.before;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TAVILY_TIMEOUT_MS);
+    try {
+      const res = await fetch(TAVILY_URL, {
+        method: "POST",
+        signal: params.signal ?? controller.signal,
+        headers: { Authorization: `Bearer ${this.apiKey.trim()}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.status === 401 || res.status === 403) throw new Error(`Tavily auth failed (${res.status}); check TAVILY_API_KEY`);
+      if (!res.ok) throw new Error(`Tavily error (${res.status})`);
+      const data = (await res.json()) as { answer?: string; results?: TavilyResultItem[] };
+      const sources: SearchResponse["sources"] = [];
+      for (const r of data.results ?? []) {
+        if (sources.length >= TAVILY_MAX_RESULTS) break;
+        if (!r.url || !/^https?:\/\//.test(r.url)) continue;
+        const title = (r.title ?? r.url).slice(0, 100);
+        sources.push({ title, url: r.url, snippet: r.content?.slice(0, 300) });
+      }
+      return {
+        query: params.query,
+        provider: "tavily",
+        answer: data.answer?.trim() || undefined,
+        sources,
+      };
     } finally {
       clearTimeout(timer);
     }

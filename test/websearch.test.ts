@@ -8,7 +8,7 @@ import {
   toLegacyResults,
   toSources,
 } from "../src/websearch.ts";
-import { parseDuckDuckGoHtml, relaxQuery } from "../src/websearch-providers.ts";
+import { parseDuckDuckGoHtml, relaxQuery, TavilyProvider } from "../src/websearch-providers.ts";
 import type { SearchProvider } from "../src/websearch-providers.ts";
 
 function stubProvider(
@@ -146,5 +146,24 @@ describe("parseDuckDuckGoHtml", () => {
   });
   test("skips non http hrefs", () => {
     expect(parseDuckDuckGoHtml('<a class="result__a" href="//duckduckgo.com/l/?uddg=x">x</a>')).toEqual([]);
+  });
+});
+
+describe("TavilyProvider", () => {
+  test("unavailable without key", () => {
+    expect(new TavilyProvider("").isAvailable()).toBe(false);
+  });
+  test("available with key", () => {
+    expect(new TavilyProvider("k").isAvailable()).toBe(true);
+  });
+  test("throws when searching without key", async () => {
+    await expect(new TavilyProvider("").search({ query: "x" })).rejects.toThrow("TAVILY_API_KEY");
+  });
+  test("chain tries tavily first when available", async () => {
+    const t = new TavilyProvider("k");
+    t.search = async (params) => ({ query: params.query, provider: "tavily", answer: "a", sources: [{ title: "t", url: "https://example.com" }] });
+    const { response } = await searchChain("q", { providers: [t] });
+    expect(response.provider).toBe("tavily");
+    expect(response.answer).toBe("a");
   });
 });

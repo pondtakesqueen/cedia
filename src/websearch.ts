@@ -1,6 +1,6 @@
 import { URL } from "node:url";
 import { applyQueryConstraints, formatScraperQuery, parseSearchQuery } from "./websearch-query.ts";
-import { DuckDuckGoProvider, RelaxedQueryProvider, XaiProvider, type SearchProvider } from "./websearch-providers.ts";
+import { DuckDuckGoProvider, RelaxedQueryProvider, TavilyProvider, XaiProvider, type SearchProvider } from "./websearch-providers.ts";
 
 export interface SearchResult {
   title: string;
@@ -14,7 +14,7 @@ export interface LegacySearchResponse {
   abstract?: string;
 }
 
-export type SearchProviderId = "duckduckgo" | "xai" | "relaxed" | "none";
+export type SearchProviderId = "tavily" | "duckduckgo" | "xai" | "relaxed" | "none";
 
 export interface SearchSource {
   title: string;
@@ -49,7 +49,7 @@ export interface ProviderFailure {
   error: unknown;
 }
 
-export const DEFAULT_PROVIDERS: readonly SearchProvider[] = [new DuckDuckGoProvider(), new XaiProvider(), new RelaxedQueryProvider()];
+export const DEFAULT_PROVIDERS: readonly SearchProvider[] = [new TavilyProvider(), new DuckDuckGoProvider(), new XaiProvider(), new RelaxedQueryProvider()];
 
 function failureMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
