@@ -2,12 +2,12 @@ import { type AssistantMessage, StringEnum } from "@earendil-works/pi-ai";
 import { compact, type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatAnswers, NO_UI_ANSWER, OTHER } from "./ask.ts";
 import { classifyCommand } from "./classifier.ts";
-import { gateReason } from "./gate.ts";
 import { handoffInstructions, skillName } from "./handoff.ts";
 import { emptyGoalState, goalStatus, startGoal, stopGoal, verifyGoal } from "./goal.ts";
 import { autoTarget, PSTACK_MODELS, type Target } from "./models.ts";
@@ -17,12 +17,13 @@ import { getDiagnostics, formatDiagnostics, getHover, getDefinition } from "./ls
 import { emptyReadState, isStale, recordRead, wasRead } from "./readstate.ts";
 import { memoryDelete, memoryList, memoryRead, memorySearch, memoryWrite } from "./memory.ts";
 import { applyPatch } from "./applypatch.ts";
-import { checkpointDir, createCheckpoint, initCheckpoint, undoCheckpoint } from "./checkpoint.ts";
+import { checkpointDir, createCheckpoint, forkCheckpoint, initCheckpoint, listCheckpoints, undoCheckpoint } from "./checkpoint.ts";
 import { diagnose } from "./diagnostics.ts";
 import { defaultSandboxConfig, wrapCommand } from "./sandbox.ts";
 import { extractDomain, fetchUrl, isDenied } from "./webfetch.ts";
 import { formatAllFailures, formatSearchResponse, searchChain, type SearchSource } from "./websearch.ts";
 import { REVIEW_PROMPT, formatQuorum, parseFindings, quorumFindings } from "./review.ts";
+import { gateReason, isAlwaysAllowed } from "./gate.ts";
 import { approvalFor, loadHookRules, matchHooks, parseApprovalPolicy, parseSandboxMode, runHook } from "./hooks.ts";
 import { AgentRunner } from "./task/agents.ts";
 import { registerAgentTools, type AgentParams } from "./task/agent-tools.ts";
@@ -385,21 +386,8 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         }
       }
       if (event.toolName !== "bash" || typeof event.input.command !== "string") return;
+      if (isAlwaysAllowed(event.input.command)) return;
       const reason = gateReason(event.input.command);
-      if (!reason) {
-        const cmd = event.input.command;
-        const needsClassify = /\b(rm|rmdir|git\s+push|curl|wget|chmod|chown|mv|cp)\b/.test(cmd);
-        if (!noClassifier && needsClassify) {
-          const result = await classifyCommand(cmd, ctx.modelRegistry, lastUserText);
-          if (result.shouldBlock) {
-            return {
-              block: true,
-              reason: `cedia classifier: ${result.reason}. Do not retry it; continue without it or ask the user how to proceed.`,
-            };
-          }
-        }
-        return;
-      }
       const verdict = approvalFor(approvalPolicy, ctx.hasUI);
       if (verdict === "allow") return;
       if (verdict === "confirm" && (await ctx.ui.confirm("cedia: confirm irreversible command", `${event.input.command}\n\n${reason}`))) return;
@@ -669,7 +657,23 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         ctx.ui.notify(ok ? "cedia: undone to previous checkpoint." : "cedia: nothing to undo.", ok ? "info" : "warning");
       },
     });
-
+    pi.registerCommand("fork", {
+      description: "Fork session from a checkpoint: /fork [commit] (lists when empty)",
+      handler: async (args, ctx) => {
+        if (!cpDir) {
+          ctx.ui.notify("cedia: no checkpoint directory.", "error");
+          return;
+        }
+        const target = (args ?? "").trim();
+        if (!target) {
+          const list = listCheckpoints(cpDir).slice(0, 10).map((l) => `\n- ${l.slice(0, 12)} ${l.slice(14, 80)}`).join("");
+          ctx.ui.notify(list ? `cedia: checkpoints:${list}\n/fork <hash> to branch from one.` : "cedia: no checkpoints yet.", "info");
+          return;
+        }
+        const forked = forkCheckpoint(cpDir, target, randomUUID());
+        ctx.ui.notify(forked ? `cedia: forked at ${target}. Shadow at ${forked}. Open a new session in a fresh cwd synced from it to continue the branch.` : "cedia: fork failed (bad commit?).", forked ? "info" : "error");
+      },
+    });
     pi.registerCommand("plan", {
       description: "Read-only plan mode: /plan on | off | status",
       handler: async (args, ctx) => {

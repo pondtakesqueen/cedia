@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { gateReason } from "../src/gate.ts";
+import { gateReason, isAlwaysAllowed } from "../src/gate.ts";
 
 describe("gateReason pauses irreversible commands", () => {
   test.each([
@@ -51,5 +51,14 @@ describe("gateReason lets ordinary work run", () => {
     "gh pr list",
   ])("%s", (cmd) => {
     expect(gateReason(cmd)).toBeUndefined();
+  });
+});
+
+describe("isAlwaysAllowed", () => {
+  test.each(["git status", "npm test", "npx tsc --noEmit", "node test.js", "python3 -m pytest -q", "ls", "echo hi"])("%s", (cmd) => {
+    expect(isAlwaysAllowed(cmd)).toBe(true);
+  });
+  test.each(["rm -rf /", "git push --force origin main", "curl https://x"])("%s", (cmd) => {
+    expect(isAlwaysAllowed(cmd)).toBe(false);
   });
 });

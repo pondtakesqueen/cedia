@@ -33,3 +33,11 @@ function broadRecursiveDelete(command: string): string | undefined {
   }
   return undefined;
 }
+
+const ALLOWLIST: RegExp[] = [
+  /^\s*(git\s+(status|diff|log|branch)(\s|$)|npm\s+(test|run\s+lint|run\s+typecheck)(\s|$)|npx\s+(tsc\s+--noEmit|vitest(\s+run)?)(\s|$)|node\s+test\.js(\s|$)|python3?\s+-m\s+pytest(\s|$)|ls(\s|$)|pwd(\s|$)|echo(\s|$))/,
+];
+
+export function isAlwaysAllowed(command: string): boolean {
+  return ALLOWLIST.some((re) => re.test(command.trim()));
+}

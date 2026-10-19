@@ -12,7 +12,7 @@ You are running in cedia, a harness built on pi. Skills from pstack were written
 | `.cursor/projects/` transcripts | `~/.cedia/sessions/` — one JSONL file per session; the first line is a `session` header, later lines are entries with `id` and `parentId`. Follow `parentId` back from the last entry for the conversation that happened. Read only the current workspace's directory. |
 | `.cursor/skills/`, `~/.cursor/skills/` | `.agents/skills/` and `~/.agents/skills/` |
 | LSP | `lsp_hover`, `lsp_definition` tools. Requires an LSP server (rust-analyzer for Rust). |
-| web search | `WebSearch` tool (DuckDuckGo). For vendor-native search: Anthropic web search beta, OpenAI web search, xAI web search are available via the model's built-in tools when using those providers. For known URLs use `WebFetch`. |
+| web search | `WebSearch` tool (Tavily first, DuckDuckGo fallback). Supports `allowed_domains`, `blocked_domains`, `recency`, `limit`. For known URLs use `WebFetch`. |
 | per-family edit | For GPT/Grok models, prefer `ApplyPatch` (unified diff). For Claude, prefer `edit` (string replace). Both are available. |
 
 cedia also records evidence itself: a receipt of changed files and checks follows your final message, and claims of "done" or "tests pass" are checked against what actually ran.

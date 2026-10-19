@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -52,5 +52,31 @@ export function checkpointCount(dir: string): number {
     return parseInt(out.trim(), 10) || 0;
   } catch {
     return 0;
+  }
+}
+export function listCheckpoints(dir: string): string[] {
+  try {
+    const out = execSync("git log --format=%H:::%s", { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return out.split("\n").map((l) => l.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export function forkCheckpoint(dir: string, commit: string, newSessionId: string): string | undefined {
+  try {
+    const target = join(homedir(), ".cedia", "checkpoints", newSessionId);
+    mkdirSync(target, { recursive: true });
+    if (!existsSync(`${target}/.git`)) {
+      execSync("git init", { cwd: target, stdio: "ignore" });
+      execSync('git config user.email "cedia@localhost"', { cwd: target, stdio: "ignore" });
+      execSync('git config user.name "cedia"', { cwd: target, stdio: "ignore" });
+    }
+    const hash = execFileSync("git", ["rev-parse", commit], { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    execSync(`git fetch "${dir}" ${hash}`, { cwd: target, stdio: "ignore" });
+    execSync("git checkout -f FETCH_HEAD", { cwd: target, stdio: "ignore" });
+    return target;
+  } catch {
+    return undefined;
   }
 }
