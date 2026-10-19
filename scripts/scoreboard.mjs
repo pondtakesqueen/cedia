@@ -38,9 +38,25 @@ function runCommand(cmd, cwd, timeout = 120000) {
   }
 }
 
+// Budget ledger (adapted from harness2 core/ledger.py, Apache-2.0).
+// Per task: exactly 1 rollout (the harness run) + 1 session (the verify).
+// Identity: R = N tasks, P = N tasks. A row that breaks it means the runner
+// retried, skipped, or double counted, and the summary must fail loudly.
+function ledgerEntry(kind, label, ms) {
+  return { kind, label, ms };
+}
+
+function checkLedgerIdentity(entries, taskCount) {
+  const rollouts = entries.filter((e) => e.kind === "rollout").length;
+  const sessions = entries.filter((e) => e.kind === "session").length;
+  if (rollouts !== taskCount || sessions !== taskCount) {
+    throw new Error(`budget identity broken: R=${rollouts} (want ${taskCount}), P=${sessions} (want ${taskCount})`);
+  }
+}
+
 function runTask(task, h) {
   const cwd = mkdtempSync(join(tmpdir(), `scoreboard-${task.id}-`));
-  const result = { id: task.id, category: task.category, harness: h, ts: new Date().toISOString() };
+  const result = { id: task.id, category: task.category, harness: h, ts: new Date().toISOString(), ledger: [] };
 
   // Setup workspace
   if (task.setup) {
@@ -77,6 +93,7 @@ function runTask(task, h) {
   const start = Date.now();
   const run = spawnSync(bin, cmdArgs, { cwd, encoding: "utf8", timeout: 300000, env, stdio: ["ignore", "pipe", "pipe"] });
   result.wallMs = Date.now() - start;
+  result.ledger.push(ledgerEntry("rollout", `${task.id}:harness`, result.wallMs));
   result.output = (run.stdout ?? "").slice(-2000);
   result.stderr = (run.stderr ?? "").slice(-500);
   result.exitCode = run.status ?? 1;
@@ -86,6 +103,7 @@ function runTask(task, h) {
   result.claimedDone = claimedDone;
 
   // Run verification
+  const verifyStart = Date.now();
   if (task.verify) {
     const verify = runCommand(task.verify.split(" "), cwd);
     result.verifyExitCode = verify.exitCode;
@@ -94,6 +112,7 @@ function runTask(task, h) {
   } else {
     result.passed = run.status === 0;
   }
+  result.ledger.push(ledgerEntry("session", `${task.id}:verify`, Date.now() - verifyStart));
 
   // False-done: claimed done but verify failed
   result.falseDone = claimedDone && !result.passed;
@@ -122,6 +141,9 @@ for (const task of tasks) {
 const out = results.map((r) => JSON.stringify(r)).join("\n") + "\n";
 writeFileSync(outPath, out);
 console.log(`\nResults written to ${outPath}`);
+
+// Budget identity: one rollout + one verify session per task.
+checkLedgerIdentity(results.flatMap((r) => r.ledger ?? []), results.length);
 
 // Summary
 const passed = results.filter((r) => r.passed).length;
