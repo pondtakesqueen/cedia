@@ -27,6 +27,7 @@ const CEDIA_BIN = resolve(process.cwd(), "bin/cedia");
 const PI_BIN = "/Users/pond/cedia-cli/node_modules/.bin/pi";
 const CLAUDE_BIN = "claude";
 const OPENCODE_BIN = "opencode";
+const OMP_BIN = "/Users/pond/Library/Application Support/Tern/omp/bin/omp";
 
 function splitCommand(cmd) {
   const parts = [];
@@ -102,6 +103,11 @@ function runTask(task, h) {
     bin = CLAUDE_BIN;
     env = { ...process.env };
     cmdArgs = ["-p", task.prompt];
+  } else if (h === "omp") {
+    bin = OMP_BIN;
+    env = { ...process.env };
+    cmdArgs = ["-p", task.prompt, "--cwd", cwd];
+    if (model) cmdArgs.push("--model", model);
   } else if (h === "opencode") {
     bin = OPENCODE_BIN;
     env = { ...process.env };
