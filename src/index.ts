@@ -358,11 +358,14 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       return { entries: [{ type: "custom_message", customType: "cedia.status-reminder", content: STATUS_REMINDER, display: false }] };
     });
 
+    const noClassifier = process.env.CEDIA_NO_CLASSIFIER === "1";
+    const noLsp = process.env.CEDIA_NO_LSP === "1";
+    const noSnapshot = process.env.CEDIA_NO_SNAPSHOT === "1";
     pi.on("tool_call", async (event, ctx) => {
       if (planMode && ["edit", "write", "ApplyPatch", "bash", "Task", "memory_write"].includes(event.toolName)) {
         return { block: true, reason: "cedia: plan mode is read-only; /plan off to allow edits." };
       }
-      if (event.toolName === "bash" && typeof event.input.command === "string") {
+      if (!noSnapshot && event.toolName === "bash" && typeof event.input.command === "string") {
         const before = gitChangedPaths((ctx as any).cwd ?? process.cwd());
         if (before) bashSnapshots.set(event.toolCallId, before);
       }
@@ -388,7 +391,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       if (!reason) {
         const cmd = event.input.command;
         const needsClassify = /\b(rm|rmdir|git\s+push|curl|wget|chmod|chown|mv|cp)\b/.test(cmd);
-        if (needsClassify) {
+        if (!noClassifier && needsClassify) {
           const result = await classifyCommand(cmd, ctx.modelRegistry, lastUserText);
           if (result.shouldBlock) {
             return {
@@ -419,7 +422,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         if (recentReads.length > 10) recentReads.length = 10;
         recordRead(readState, p);
       }
-      if ((event.toolName === "edit" || event.toolName === "write") && typeof event.input.path === "string") {
+      if (!noLsp && (event.toolName === "edit" || event.toolName === "write") && typeof event.input.path === "string") {
         // Try LSP diagnostics first
         try {
           const lspResult = await getDiagnostics(event.input.path, process.cwd());
@@ -440,7 +443,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       }
       const exitCode = (event.structuredContent as { exit_code?: unknown } | undefined)?.exit_code;
       recordToolResult(ledger, event.toolName, event.input, event.isError, exitCode);
-      if (event.toolName === "bash" && typeof event.input.command === "string") {
+      if (!noSnapshot && event.toolName === "bash" && typeof event.input.command === "string") {
         const before = bashSnapshots.get(event.toolCallId);
         bashSnapshots.delete(event.toolCallId);
         const after = gitChangedPaths(process.cwd());
@@ -449,6 +452,8 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
           const changed = after.filter((p) => !beforeSet.has(p));
           if (changed.length) recordBashChanges(ledger, changed);
         }
+      } else if (event.toolName === "bash" && typeof event.input.command === "string") {
+        bashSnapshots.delete(event.toolCallId);
       }
     });
     pi.on("turn_start", (event) => {
