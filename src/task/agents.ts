@@ -12,7 +12,11 @@ import type { AgentParams } from "./agent-tools.ts";
 import { alive, type ChildExit, PiChild, terminateGroup } from "./child.ts";
 import { DEPTH_FLAG, GENERAL_PURPOSE, loadAgentTypes, PSTACK_STATE_DIR, readSheet, resolveModel, type Settings } from "./config.ts";
 import { ensureWorktree, planWorktree, settleWorktree, type Worktree, worktreeSchema } from "./worktree.ts";
+import { timeBudgetLine } from "./timebudget.ts";
 
+// Budget clock the child sees in its own system prompt. send_message already
+// carries a live line per message; this one fixes the starting point.
+const CHILD_BUDGET_MS = 1200000;
 const ENTRY_TYPE = "cedia-agents";
 // Claude Code lets agents nest three layers below the main session and withholds
 // the Agent tool at the third.
@@ -247,11 +251,12 @@ export class AgentRunner {
   // Pi appends a path it cannot find as the prompt text itself.
   private ensureSystemPrompt(identity: AgentIdentity): void {
     const file = identity.systemPromptFile;
-    if (!file || existsSync(file)) return;
+    if (!file) return;
     const body = loadAgentTypes(this.settings).get(identity.subagentType)?.body;
     if (!body) throw new Error(`Agent ${identity.id} has lost its system prompt file, and its type "${identity.subagentType}" no longer provides one.`);
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, body, { mode: 0o600 });
+    const budget = timeBudgetLine(new Date(identity.startedAt).getTime(), CHILD_BUDGET_MS);
+    writeFileSync(file, `${body}\n\n[Time budget: ${budget} from this agent's start. The parent is notified at completion.]`, { mode: 0o600 });
   }
 
   private finish(identity: AgentIdentity, run: Run, exit: ChildExit): EndedRecord {
