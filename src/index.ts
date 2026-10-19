@@ -657,6 +657,36 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         ctx.ui.notify(ok ? "cedia: undone to previous checkpoint." : "cedia: nothing to undo.", ok ? "info" : "warning");
       },
     });
+    pi.registerCommand("commit", {
+      description: "Stage all and commit: /commit [message]",
+      handler: async (args, ctx) => {
+        const msg = (args ?? "").trim();
+        if (!msg) {
+          ctx.ui.notify("cedia: usage /commit <message>.", "warning");
+          return;
+        }
+        try {
+          execSync("git add -A", { cwd: ctx.cwd, stdio: "ignore" });
+          execSync(`git commit -m ${JSON.stringify(msg)}`, { cwd: ctx.cwd, stdio: "ignore" });
+          ctx.ui.notify(`cedia: committed (${msg.slice(0, 60)}).`, "info");
+        } catch (e) {
+          ctx.ui.notify(`cedia: commit failed (${e instanceof Error ? e.message.split("\n")[0] : String(e)}).`, "error");
+        }
+      },
+    });
+    pi.registerCommand("pr", {
+      description: "Push and open a PR: /pr [title]",
+      handler: async (args, ctx) => {
+        const title = (args ?? "").trim() || "cedia changes";
+        try {
+          execSync("git push -u origin HEAD", { cwd: ctx.cwd, stdio: "ignore", timeout: 60000 });
+          const url = execSync(`gh pr create --fill --title ${JSON.stringify(title)}`, { cwd: ctx.cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 60000 }).trim();
+          ctx.ui.notify(url ? `cedia: PR opened ${url}` : "cedia: PR created.", "info");
+        } catch (e) {
+          ctx.ui.notify(`cedia: PR failed (${e instanceof Error ? e.message.split("\n")[0] : String(e)}). Push manually if upstream is missing.`, "error");
+        }
+      },
+    });
     pi.registerCommand("fork", {
       description: "Fork session from a checkpoint: /fork [commit] (lists when empty)",
       handler: async (args, ctx) => {
