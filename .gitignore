@@ -8,3 +8,6 @@ research/mirror-errors.log
 cc-re/
 results*.jsonl
 research/baseline*.jsonl
+research/baseline-hillclimb.txt
+research/cc-re-map.md
+.pi/
