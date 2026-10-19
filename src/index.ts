@@ -243,12 +243,15 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10, description: "Max sources to return" })),
         allowed_domains: Type.Optional(Type.Array(Type.String(), { description: "Only include results from these domains" })),
         blocked_domains: Type.Optional(Type.Array(Type.String(), { description: "Never include results from these domains" })),
+        recency: Type.Optional(Type.Union([Type.Literal("day"), Type.Literal("week"), Type.Literal("month"), Type.Literal("year")], { description: "Only results from this time window" })),
       }),
       async execute(_id, params) {
         try {
           const { response, failures } = await searchChain(params.query, {
             allowedDomains: params.allowed_domains,
             blockedDomains: params.blocked_domains,
+            recency: params.recency,
+            limit: params.limit,
           });
           const limited: SearchSource[] =
             typeof params.limit === "number" ? response.sources.slice(0, params.limit) : response.sources;

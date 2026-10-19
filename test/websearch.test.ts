@@ -167,3 +167,21 @@ describe("TavilyProvider", () => {
     expect(response.answer).toBe("a");
   });
 });
+
+describe("chain recency and limit", () => {
+  test("passes recency and limit to provider", async () => {
+    let seen: any;
+    const t = {
+      id: "tavily",
+      label: "t",
+      isAvailable: () => true,
+      search: async (params: any) => {
+        seen = params;
+        return { query: params.query, provider: "tavily", sources: [{ title: "t", url: "https://example.com" }] };
+      },
+    } as any;
+    await searchChain("q", { providers: [t], recency: "week", limit: 3 });
+    expect(seen.recency).toBe("week");
+    expect(seen.limit).toBe(3);
+  });
+});

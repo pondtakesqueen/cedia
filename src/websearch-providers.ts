@@ -64,8 +64,8 @@ export class TavilyProvider implements SearchProvider {
 
   private apiKey: string;
 
-  constructor(apiKey: string = process.env.TAVILY_API_KEY ?? "") {
-    this.apiKey = apiKey;
+  constructor(apiKey: string | undefined = process.env.TAVILY_API_KEY) {
+    this.apiKey = apiKey ?? "";
   }
 
   isAvailable(): boolean {
@@ -77,10 +77,11 @@ export class TavilyProvider implements SearchProvider {
     const parsed = params.parsedQuery;
     const includeDomains = [...new Set([...(params.allowedDomains ?? []), ...(parsed?.sites ?? [])])].slice(0, 10);
     const excludeDomains = [...new Set([...(params.blockedDomains ?? []), ...(parsed?.excludedSites ?? [])])].slice(0, 10);
+    const limit = params.limit !== undefined ? Math.min(Math.max(Math.floor(params.limit), 1), TAVILY_MAX_RESULTS) : TAVILY_MAX_RESULTS;
     const body: Record<string, unknown> = {
       query: params.query,
       search_depth: "basic",
-      max_results: TAVILY_MAX_RESULTS,
+      max_results: limit,
       include_answer: "advanced",
       include_raw_content: false,
     };
@@ -88,6 +89,7 @@ export class TavilyProvider implements SearchProvider {
     if (excludeDomains.length > 0) body.exclude_domains = excludeDomains;
     if (parsed?.after) body.start_date = parsed.after;
     if (parsed?.before) body.end_date = parsed.before;
+    if (params.recency && !parsed?.after && !parsed?.before) body.time_range = params.recency;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TAVILY_TIMEOUT_MS);
     try {
@@ -194,8 +196,8 @@ export class XaiProvider implements SearchProvider {
   readonly label = "xAI";
   private apiKey: string;
 
-  constructor(apiKey: string = process.env.XAI_API_KEY ?? "") {
-    this.apiKey = apiKey;
+  constructor(apiKey: string | undefined = process.env.XAI_API_KEY) {
+    this.apiKey = apiKey ?? "";
   }
 
   isAvailable(): boolean {

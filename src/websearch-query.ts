@@ -28,6 +28,8 @@ export interface StructuredQuery {
   hasConstraints: boolean;
 }
 
+export type ParsedQuery = StructuredQuery;
+
 export interface QuerySyntax {
   phrases?: boolean;
   negation?: boolean;

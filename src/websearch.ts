@@ -1,5 +1,5 @@
 import { URL } from "node:url";
-import { applyQueryConstraints, formatScraperQuery, parseSearchQuery } from "./websearch-query.ts";
+import { applyQueryConstraints, formatScraperQuery, parseSearchQuery, type ParsedQuery } from "./websearch-query.ts";
 import { DuckDuckGoProvider, RelaxedQueryProvider, TavilyProvider, XaiProvider, type SearchProvider } from "./websearch-providers.ts";
 
 export interface SearchResult {
@@ -40,8 +40,11 @@ export interface SearchParams {
   query: string;
   allowedDomains?: string[];
   blockedDomains?: string[];
+  recency?: "day" | "week" | "month" | "year";
+  limit?: number;
+  maxTokens?: number;
   signal?: AbortSignal;
-  parsedQuery?: ReturnType<typeof parseSearchQuery>;
+  parsedQuery?: ParsedQuery;
 }
 
 export interface ProviderFailure {
@@ -120,6 +123,9 @@ export async function searchChain(
   opts?: {
     allowedDomains?: readonly string[];
     blockedDomains?: readonly string[];
+    recency?: "day" | "week" | "month" | "year";
+    limit?: number;
+    maxTokens?: number;
     signal?: AbortSignal;
     providers?: readonly SearchProvider[];
   },
@@ -140,7 +146,7 @@ export async function searchChain(
     let response: SearchResponse;
     try {
       const engineQuery = provider.id === "duckduckgo" || provider.id === "relaxed" ? formatScraperQuery(query, parsed) : query;
-      response = await provider.search({ query: engineQuery, allowedDomains: allowed, blockedDomains: blocked, signal: opts?.signal, parsedQuery: parsed });
+      response = await provider.search({ query: engineQuery, allowedDomains: allowed, blockedDomains: blocked, recency: opts?.recency, limit: opts?.limit, maxTokens: opts?.maxTokens, signal: opts?.signal, parsedQuery: parsed });
     } catch (error) {
       failures.push({ provider: { id: provider.id, label: provider.label }, error });
       continue;
