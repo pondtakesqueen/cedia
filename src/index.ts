@@ -23,8 +23,9 @@ import { defaultSandboxConfig, wrapCommand } from "./sandbox.ts";
 import { extractDomain, fetchUrl, isDenied } from "./webfetch.ts";
 import { formatAllFailures, formatSearchResponse, searchChain, type SearchSource } from "./websearch.ts";
 import { REVIEW_PROMPT, parseFindings, verifyFinding, formatFindings } from "./review.ts";
+import { approvalFor, loadHookRules, matchHooks, parseApprovalPolicy, parseSandboxMode, runHook } from "./hooks.ts";
 import { AgentRunner } from "./task/agents.ts";
-import { registerAgentTools } from "./task/agent-tools.ts";
+import { registerAgentTools, type AgentParams } from "./task/agent-tools.ts";
 import { defaultSettings, DEPTH_FLAG } from "./task/config.ts";
 import { asksForAutonomy, continuation, isSilentToolStep, openTodos, STATUS_REMINDER, type Todo } from "./loop.ts";
 import { crossedBudget, dayFile, parseRecords, type RequestRecord, statusLine, toRecord, totals } from "./telemetry.ts";
@@ -364,29 +365,23 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
     const noClassifier = process.env.CEDIA_NO_CLASSIFIER === "1";
     const noLsp = process.env.CEDIA_NO_LSP === "1";
     const noSnapshot = process.env.CEDIA_NO_SNAPSHOT === "1";
+    const approvalPolicy = parseApprovalPolicy(process.env.CEDIA_APPROVAL);
+    const sandboxMode = parseSandboxMode(process.env.CEDIA_SANDBOX_MODE);
+    if (sandboxMode !== "off") sandboxConfig.enabled = sandboxMode === "full" || sandboxMode === "read-only";
+    const hookRules = loadHookRules();
     pi.on("tool_call", async (event, ctx) => {
       if (planMode && ["edit", "write", "ApplyPatch", "bash", "Task", "memory_write"].includes(event.toolName)) {
         return { block: true, reason: "cedia: plan mode is read-only; /plan off to allow edits." };
       }
-      if (!noSnapshot && event.toolName === "bash" && typeof event.input.command === "string") {
-        const before = gitChangedPaths((ctx as any).cwd ?? process.cwd());
-        if (before) bashSnapshots.set(event.toolCallId, before);
-      }
-      if (event.toolName === "bash" && typeof event.input.command === "string" && sandboxConfig.enabled) {
-        event.input.command = wrapCommand(event.input.command, (ctx as any).cwd ?? process.cwd(), sandboxConfig);
-      }
-      if ((event.toolName === "edit" || event.toolName === "write") && cpDir) {
-        try { createCheckpoint(cpDir, process.cwd(), `before ${event.toolName}`); } catch {}
-      }
-      if ((event.toolName === "edit" || event.toolName === "write") && typeof event.input.path === "string") {
-        const path = event.input.path;
-        if (existsSync(path) && (!wasRead(readState, path) || isStale(readState, path))) {
-          return {
-            block: true,
-            reason: !wasRead(readState, path)
-              ? "File has not been read yet. Read it first before writing to it."
-              : "File content has changed since it was last read. Read it again before attempting to write it.",
-          };
+      const cwd = ctx.cwd ?? process.cwd();
+      const toolName: string = event.toolName;
+      for (const rule of matchHooks(hookRules, "pre_tool", toolName)) {
+        const decided = runHook(rule, { tool: toolName, input: JSON.stringify(event.input).slice(0, 2000), cwd });
+        if (decided.decision === "deny") {
+          return { block: true, reason: `cedia hook denied ${toolName}: ${decided.reason ?? "no reason"}. Do not retry it; continue without it or ask the user how to proceed.` };
+        }
+        if (decided.decision === "ask" && approvalFor(approvalPolicy, ctx.hasUI) === "block") {
+          return { block: true, reason: `cedia hook requests approval for ${toolName}: ${decided.reason ?? "no reason"}. Nobody can approve it in this mode, so report it as a step the user must run.` };
         }
       }
       if (event.toolName !== "bash" || typeof event.input.command !== "string") return;
@@ -405,12 +400,14 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         }
         return;
       }
-      if (ctx.hasUI && (await ctx.ui.confirm("cedia: confirm irreversible command", `${event.input.command}\n\n${reason}`))) return;
+      const verdict = approvalFor(approvalPolicy, ctx.hasUI);
+      if (verdict === "allow") return;
+      if (verdict === "confirm" && (await ctx.ui.confirm("cedia: confirm irreversible command", `${event.input.command}\n\n${reason}`))) return;
       return {
         block: true,
-        reason: ctx.hasUI
+        reason: verdict === "confirm"
           ? `The user declined: ${reason}. Do not retry it; continue without it or ask the user how to proceed.`
-          : `Blocked without the user's approval: ${reason}. Nobody can approve it in this mode, so report it as a step the user must run.`,
+          : `Blocked by approval policy (${approvalPolicy}): ${reason}. Nobody can approve it in this mode, so report it as a step the user must run.`,
       };
     });
 
@@ -625,7 +622,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         const target = (args ?? "").trim() || ".";
         ctx.ui.notify("cedia: starting review…", "info");
         const started = taskRunner.start(
-          { description: "review codebase", prompt: `${REVIEW_PROMPT}\n\nReview the codebase at ${target}. Report findings with evidence.`, subagent_type: "general-purpose", run_in_background: false } as any,
+          { description: "review codebase", prompt: `${REVIEW_PROMPT}\n\nReview the codebase at ${target}. Report findings with evidence.`, subagent_type: "general-purpose", run_in_background: false } satisfies AgentParams,
           ctx,
         );
         const record = await taskRunner.wait(started.agent.id);
