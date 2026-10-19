@@ -28,10 +28,34 @@ const PI_BIN = "/Users/pond/cedia-cli/node_modules/.bin/pi";
 const CLAUDE_BIN = "claude";
 const OPENCODE_BIN = "opencode";
 
+function splitCommand(cmd) {
+  const parts = [];
+  let cur = "";
+  let quote = "";
+  for (const ch of cmd) {
+    if (quote) {
+      if (ch === quote) quote = "";
+      else cur += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === " " || ch === "\t") {
+      if (cur) {
+        parts.push(cur);
+        cur = "";
+      }
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) parts.push(cur);
+  return parts;
+}
+
 function runCommand(cmd, cwd, timeout = 120000) {
+  const argv = Array.isArray(cmd) ? cmd : splitCommand(cmd);
   const start = Date.now();
   try {
-    const result = spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: "utf8", timeout, stdio: ["ignore", "pipe", "pipe"] });
+    const result = spawnSync(argv[0], argv.slice(1), { cwd, encoding: "utf8", timeout, stdio: ["ignore", "pipe", "pipe"] });
     return { stdout: result.stdout ?? "", stderr: result.stderr ?? "", exitCode: result.status ?? 1, ms: Date.now() - start, timedOut: result.signal === "SIGTERM" };
   } catch (e) {
     return { stdout: "", stderr: e.message, exitCode: 1, ms: Date.now() - start, timedOut: false };
@@ -105,7 +129,7 @@ function runTask(task, h) {
   // Run verification
   const verifyStart = Date.now();
   if (task.verify) {
-    const verify = runCommand(task.verify.split(" "), cwd);
+    const verify = runCommand(task.verify, cwd);
     result.verifyExitCode = verify.exitCode;
     result.verifyOutput = verify.stdout.slice(-500);
     result.passed = verify.exitCode === (task.expectedExitCode ?? 0);
