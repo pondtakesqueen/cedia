@@ -27,6 +27,8 @@ describe("gateReason pauses irreversible commands", () => {
     "curl -X POST https://hooks.slack.com/services/x",
     "bash -c 'git push -f'",
     "bash -c 'rm -rf ~'",
+    "GIT PUSH --FORCE",
+    "rm -rf /tmp/../",
     "echo 'git push --force'",
   ])("%s", (cmd) => {
     expect(gateReason(cmd)).toBeDefined();

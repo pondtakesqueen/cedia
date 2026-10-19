@@ -11,10 +11,12 @@ const RULES: [RegExp, string][] = [
 ];
 
 const BROAD_PATH = /^(\/|~|\$HOME|\$\{HOME\}|\.|\.\.|\*|\.\/\*)$|^(\/|~|\$HOME)\/[^/\s]*\/?$/;
+const PARENT_TRAVERSAL = /(^|[/\s])\.\.(?=[/\s]|$)/;
 
 export function gateReason(command: string): string | undefined {
-  for (const [pattern, reason] of RULES) if (pattern.test(command)) return reason;
-  return broadRecursiveDelete(command);
+  const lower = command.toLowerCase();
+  for (const [pattern, reason] of RULES) if (pattern.test(command) || pattern.test(lower)) return reason;
+  return broadRecursiveDelete(command) ?? broadRecursiveDelete(lower);
 }
 
 function broadRecursiveDelete(command: string): string | undefined {
@@ -27,7 +29,7 @@ function broadRecursiveDelete(command: string): string | undefined {
     const recursive = /-[a-zA-Z]*r|--recursive/i.test(flags);
     const force = /-[a-zA-Z]*f|--force/.test(flags);
     const targets = args.filter((a) => !a.startsWith("-"));
-    if (recursive && force && targets.some((t) => BROAD_PATH.test(t))) return "recursive delete of a broad path";
+    if (recursive && force && targets.some((t) => BROAD_PATH.test(t) || PARENT_TRAVERSAL.test(t))) return "recursive delete of a broad path";
   }
   return undefined;
 }
