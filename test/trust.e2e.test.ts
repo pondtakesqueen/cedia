@@ -52,7 +52,7 @@ test("claiming done after an unchecked edit gets exactly one nudge, then a recei
   expect(r.nudges).toHaveLength(1);
   expect(r.nudges[0]).toContain("a.txt");
   expect(r.receipts).toHaveLength(1);
-  expect(r.receipts[0]).toContain("Unverified: `a.txt`");
+  expect(r.receipts[0]).toContain("1 unverified");
 });
 
 test("an edit followed by a passing check settles with a clean receipt and no nudge", async () => {
@@ -60,8 +60,8 @@ test("an edit followed by a passing check settles with a clean receipt and no nu
   const r = await run([write, check, fauxAssistantMessage(fauxText("Done, tests pass."))]);
   expect(r.calls).toBe(3);
   expect(r.nudges).toHaveLength(0);
-  expect(r.receipts[0]).toMatch(/exit 0/);
-  expect(r.receipts[0]).not.toContain("Unverified");
+  expect(r.receipts[0]).toContain("1 checks");
+  expect(r.receipts[0]).not.toContain("unverified");
 });
 
 test("an irreversible command is blocked when nobody can approve it", async () => {

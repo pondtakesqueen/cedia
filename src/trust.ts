@@ -83,8 +83,13 @@ export function claimNudge(status: LedgerStatus, claims: Claims): string | undef
   return undefined;
 }
 
-export function receipt(status: LedgerStatus): string | undefined {
+export function receipt(status: LedgerStatus, full = false): string | undefined {
   if (status.changed.length === 0 && status.checks.length === 0) return undefined;
+  if (!full) {
+    const bits = [`${status.changed.length} changed`, `${status.checks.length} checks`];
+    if (status.unverified.length) bits.push(`${status.unverified.length} unverified`);
+    return `**Receipt** (${bits.join(", ")}) — /receipt for detail`;
+  }
   const lines = ["**Receipt** (recorded by cedia)"];
   lines.push(`- Changed: ${status.changed.length ? status.changed.map((p) => `\`${p}\``).join(", ") : "nothing"}`);
   lines.push(...status.checks.map((c) => `- Check \`${c.command}\` → exit ${c.exitCode}`));

@@ -411,7 +411,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       };
     });
 
-    pi.on("tool_result", async (event) => {
+    pi.on("tool_result", async (event, ctx) => {
       if (event.toolName === "read" && typeof event.input.path === "string") {
         const p = event.input.path;
         const skill = skillName(p);
@@ -454,6 +454,15 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         }
       } else if (event.toolName === "bash" && typeof event.input.command === "string") {
         bashSnapshots.delete(event.toolCallId);
+      }
+      const postCwd = ctx.cwd ?? process.cwd();
+      for (const rule of matchHooks(hookRules, "post_tool", event.toolName)) {
+        const text = Array.isArray(event.content) ? event.content.map((b) => ("text" in b && typeof b.text === "string" ? b.text : "")).join("\n").slice(0, 2000) : "";
+        const decided = runHook(rule, { tool: event.toolName, input: text, cwd: postCwd });
+        if (decided.decision === "deny") {
+          const existing = Array.isArray(event.content) ? event.content : [];
+          return { content: [...existing, { type: "text" as const, text: `\n\ncedia hook flagged ${event.toolName} result: ${decided.reason ?? "no reason"}` }] };
+        }
       }
     });
     pi.on("turn_start", (event) => {
@@ -585,7 +594,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
     pi.registerCommand("receipt", {
       description: "Show what cedia recorded since your last message",
       handler: async (_args, ctx) => {
-        ctx.ui.notify(receipt(ledgerStatus(ledger)) ?? "Nothing changed and no checks ran since your last message.", "info");
+        ctx.ui.notify(receipt(ledgerStatus(ledger), true) ?? "Nothing changed and no checks ran since your last message.", "info");
       },
     });
     pi.registerCommand("goal", {

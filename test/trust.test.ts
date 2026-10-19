@@ -85,9 +85,12 @@ describe("receipt", () => {
     expect(receipt({ changed: [], checks: [], unverified: [] })).toBeUndefined();
   });
   test("lists changes, checks with exit codes, and unverified files", () => {
-    const text = receipt({ changed: ["a.ts"], checks: [{ kind: "check", command: "npm test", exitCode: 1 }], unverified: ["a.ts"] });
+    const text = receipt({ changed: ["a.ts"], checks: [{ kind: "check", command: "npm test", exitCode: 1 }], unverified: ["a.ts"] }, true);
     expect(text).toContain("`a.ts`");
     expect(text).toContain("`npm test` → exit 1");
     expect(text).toContain("Unverified: `a.ts`");
+  });
+  test("short form fits one line with counts", () => {
+    expect(receipt({ changed: ["a.ts"], checks: [{ kind: "check", command: "npm test", exitCode: 0 }], unverified: [] })).toBe("**Receipt** (1 changed, 1 checks) — /receipt for detail");
   });
 });
