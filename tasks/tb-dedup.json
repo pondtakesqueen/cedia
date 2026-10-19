@@ -1,0 +1,11 @@
+{
+  "id": "tb-dedup",
+  "category": "feature",
+  "prompt": "Add a `dedup(items)` function in solution.py that removes duplicates while preserving order. Run 'python3 -m pytest test_solution.py -q' to verify.",
+  "setup": {
+    "solution.py": "def dedup(items):\n    raise NotImplementedError\n",
+    "test_solution.py": "from solution import dedup\n\ndef test_basic():\n    assert dedup([1, 2, 2, 3, 1]) == [1, 2, 3]\n\ndef test_empty():\n    assert dedup([]) == []\n\ndef test_no_dup():\n    assert dedup([1, 2, 3]) == [1, 2, 3]\n"
+  },
+  "verify": "python3 -m pytest test_solution.py -q",
+  "expectedExitCode": 0
+}
