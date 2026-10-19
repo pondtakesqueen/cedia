@@ -1,4 +1,5 @@
 import type { SearchParams, SearchResponse } from "./websearch.ts";
+import { formatScraperQuery, type QuerySyntax } from "./websearch-query.ts";
 
 export interface SearchProvider {
   readonly id: "duckduckgo" | "xai" | "relaxed";
@@ -9,6 +10,7 @@ export interface SearchProvider {
 
 const DUCKDUCKGO_URL = "https://html.duckduckgo.com/html/";
 const DUCKDUCKGO_TIMEOUT_MS = 15000;
+const DUCKDUCKGO_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 const XAI_URL = "https://api.x.ai/v1/responses";
 const XAI_MODEL = "grok-4-1-fast-non-reasoning";
 const XAI_TIMEOUT_MS = 30000;
@@ -25,15 +27,20 @@ export class DuckDuckGoProvider implements SearchProvider {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DUCKDUCKGO_TIMEOUT_MS);
     try {
-      const body = new URLSearchParams({ q: params.query });
+      const syntax: QuerySyntax = { phrases: true, negation: true, or: true, site: true, inUrl: true, inTitle: true, inText: true, filetype: true, dateRange: false };
+      const engineQuery = formatScraperQuery(params.query, params.parsedQuery, syntax);
+      const body = new URLSearchParams({ q: engineQuery, kl: "us-en", b: "" });
       const res = await fetch(DUCKDUCKGO_URL, {
         method: "POST",
         signal: params.signal ?? controller.signal,
-        headers: { "User-Agent": "cedia/1.0", "Content-Type": "application/x-www-form-urlencoded" },
+        headers: { "User-Agent": DUCKDUCKGO_UA, "Content-Type": "application/x-www-form-urlencoded", Referer: "https://html.duckduckgo.com/" },
         body: body.toString(),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`DuckDuckGo HTML error (${res.status})`);
       const html = await res.text();
+      if (html.includes("anomaly-modal") || html.includes("anomaly.js")) {
+        throw new Error("DuckDuckGo blocked the request with a bot-detection challenge; results unavailable from this network");
+      }
       return { query: params.query, provider: "duckduckgo", sources: parseDuckDuckGoHtml(html) };
     } finally {
       clearTimeout(timer);

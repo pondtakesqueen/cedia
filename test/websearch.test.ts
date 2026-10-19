@@ -88,6 +88,21 @@ describe("searchChain", () => {
     expect(response.sources).toEqual([]);
     expect(formatAllFailures(failures)).toBe("All web search providers failed (duckduckgo: down; xai: no key)");
   });
+  test("reports dropped constraints instead of dead search", async () => {
+    const p = stubProvider("duckduckgo", {
+      sources: [{ title: "a", url: "https://github.com/x" }],
+    });
+    const { response, dropped } = await searchChain("site:nowhere.example pi", { providers: [p] });
+    expect(response.provider).toBe("duckduckgo");
+    expect(response.sources.map((s) => s.title)).toEqual(["a"]);
+    expect(dropped.join(" ")).toContain("site:nowhere.example");
+  });
+  test("falls back to relaxed provider without constraints before giving up", async () => {
+    const p = stubProvider("relaxed", { sources: [{ title: "a", url: "https://example.com" }] });
+    const { response } = await searchChain("site:nowhere.example pi", { providers: [p] });
+    expect(response.provider).toBe("relaxed");
+    expect(response.sources.map((s) => s.title)).toEqual(["a"]);
+  });
   test("domain filter applies to chain results", async () => {
     const p = stubProvider("duckduckgo", {
       sources: [

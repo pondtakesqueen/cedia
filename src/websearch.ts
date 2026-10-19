@@ -1,4 +1,5 @@
 import { URL } from "node:url";
+import { applyQueryConstraints, formatScraperQuery, parseSearchQuery } from "./websearch-query.ts";
 import { DuckDuckGoProvider, RelaxedQueryProvider, XaiProvider, type SearchProvider } from "./websearch-providers.ts";
 
 export interface SearchResult {
@@ -40,6 +41,7 @@ export interface SearchParams {
   allowedDomains?: string[];
   blockedDomains?: string[];
   signal?: AbortSignal;
+  parsedQuery?: ReturnType<typeof parseSearchQuery>;
 }
 
 export interface ProviderFailure {
@@ -121,9 +123,10 @@ export async function searchChain(
     signal?: AbortSignal;
     providers?: readonly SearchProvider[];
   },
-): Promise<{ response: SearchResponse; failures: ProviderFailure[] }> {
+): Promise<{ response: SearchResponse; failures: ProviderFailure[]; dropped: string[] }> {
   const allowed = normalizeDomains(opts?.allowedDomains);
   const blocked = normalizeDomains(opts?.blockedDomains);
+  const parsed = parseSearchQuery(query);
   const providers = opts?.providers ?? DEFAULT_PROVIDERS;
   const failures: ProviderFailure[] = [];
   for (const provider of providers) {
@@ -136,20 +139,27 @@ export async function searchChain(
     if (!available) continue;
     let response: SearchResponse;
     try {
-      response = await provider.search({ query, allowedDomains: allowed, blockedDomains: blocked, signal: opts?.signal });
+      const engineQuery = provider.id === "duckduckgo" || provider.id === "relaxed" ? formatScraperQuery(query, parsed) : query;
+      response = await provider.search({ query: engineQuery, allowedDomains: allowed, blockedDomains: blocked, signal: opts?.signal, parsedQuery: parsed });
     } catch (error) {
       failures.push({ provider: { id: provider.id, label: provider.label }, error });
       continue;
     }
-    const filtered: SearchSource[] = applyDomainFilter(response.sources, allowed, blocked);
+    const mapped = response.sources.map((s) => ({ title: s.title, url: s.url, snippet: s.snippet }));
+    const constrained = parsed.hasConstraints ? applyQueryConstraints(mapped, parsed) : { sources: mapped, dropped: [] as string[] };
+    const filtered: SearchSource[] = applyDomainFilter(constrained.sources, allowed, blocked);
     const usable: SearchResponse = { ...response, query, sources: filtered };
-    if (isUsable(usable)) return { response: usable, failures };
+    if (isUsable(usable)) return { response: usable, failures, dropped: constrained.dropped };
+    if (provider.id === "relaxed") {
+      const fallback: SearchResponse = { ...response, query, sources: applyDomainFilter(mapped, allowed, blocked) };
+      if (isUsable(fallback)) return { response: fallback, failures, dropped: constrained.dropped };
+    }
     failures.push({
       provider: { id: provider.id, label: provider.label },
       error: new Error("no usable results"),
     });
   }
-  return { response: { query, provider: "none", sources: [] }, failures };
+  return { response: { query, provider: "none", sources: [] }, failures, dropped: [] };
 }
 
 export async function searchWeb(query: string): Promise<LegacySearchResponse> {
