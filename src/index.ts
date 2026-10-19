@@ -553,6 +553,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
 
       const text = receipt(status);
       if (text) return { entries: [{ type: "custom_message", customType: "cedia.receipt", content: text, display: true }] };
+      return;
     });
 
     // ponytail: summarizes with the session's model directly, skipping pi's virtual-model routing for summaries; upgrade when cedia/auto routes summaries elsewhere.
