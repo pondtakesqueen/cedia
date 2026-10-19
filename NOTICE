@@ -5,3 +5,5 @@ cedia adapts code from the following sources:
 - Codex (Apache-2.0) — compaction prompt and model capability registry concepts.
 
 Claude Code (no license) — read only for understanding; no code copied.
+
+- oh-my-pi (MIT) — web search chain shape (ordered providers with availability checks, accumulated failures, shared response envelope) adapted into src/websearch.ts and src/websearch-providers.ts. Provider request code was not copied.

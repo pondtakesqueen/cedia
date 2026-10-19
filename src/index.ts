@@ -21,7 +21,7 @@ import { checkpointDir, createCheckpoint, initCheckpoint, undoCheckpoint } from 
 import { diagnose } from "./diagnostics.ts";
 import { defaultSandboxConfig, wrapCommand } from "./sandbox.ts";
 import { extractDomain, fetchUrl, isDenied } from "./webfetch.ts";
-import { searchWeb } from "./websearch.ts";
+import { formatAllFailures, formatSearchResponse, searchChain, type SearchSource } from "./websearch.ts";
 import { REVIEW_PROMPT, parseFindings, verifyFinding, formatFindings } from "./review.ts";
 import { AgentRunner } from "./task/agents.ts";
 import { registerAgentTools } from "./task/agent-tools.ts";
@@ -235,20 +235,27 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
     pi.registerTool({
       name: "WebSearch",
       label: "WebSearch",
-      description: "Search the web for information. Returns titles, URLs, and snippets.",
-      parameters: Type.Object({ query: Type.String({ description: "The search query" }) }),
+      description: "Search the web for information. Returns an answer with sources when available, else titles, URLs, and snippets.",
+      parameters: Type.Object({
+        query: Type.String({ description: "The search query" }),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 10, description: "Max sources to return" })),
+        allowed_domains: Type.Optional(Type.Array(Type.String(), { description: "Only include results from these domains" })),
+        blocked_domains: Type.Optional(Type.Array(Type.String(), { description: "Never include results from these domains" })),
+      }),
       async execute(_id, params) {
         try {
-          const result = await searchWeb(params.query);
-          const lines: string[] = [];
-          if (result.abstract) lines.push(result.abstract, "");
-          for (const r of result.results) {
-            lines.push(`- ${r.title}`);
-            lines.push(`  ${r.url}`);
-            if (r.snippet && r.snippet !== r.title) lines.push(`  ${r.snippet.slice(0, 200)}`);
+          const { response, failures } = await searchChain(params.query, {
+            allowedDomains: params.allowed_domains,
+            blockedDomains: params.blocked_domains,
+          });
+          const limited: SearchSource[] =
+            typeof params.limit === "number" ? response.sources.slice(0, params.limit) : response.sources;
+          const text = formatSearchResponse({ ...response, sources: limited });
+          const details = { query: params.query, count: limited.length, provider: response.provider };
+          if (response.sources.length === 0 && !response.answer) {
+            return { content: [{ type: "text", text: `${text}\n\nSearch failures: ${formatAllFailures(failures)}` }], details };
           }
-          if (lines.length === 0) lines.push("No results found.");
-          return { content: [{ type: "text", text: lines.join("\n") }], details: { query: params.query, count: result.results.length } };
+          return { content: [{ type: "text", text }], details };
         } catch (e) {
           return { content: [{ type: "text", text: `Error searching: ${e instanceof Error ? e.message : String(e)}` }], details: { query: params.query, count: 0 }, isError: true };
         }
