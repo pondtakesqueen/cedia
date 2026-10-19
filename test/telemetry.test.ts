@@ -22,6 +22,7 @@ test("parseRecords skips blank and torn lines", () => {
 
 test("statusLine shows session, today, the budget breach, and cache", () => {
   expect(statusLine({ costUsd: 1.234, cacheHit: 0.876 }, { costUsd: 21, cacheHit: 0.5 }, 20)).toBe("$1.23 session · $21.00 today (over $20) · cache 88%");
+  expect(statusLine({ costUsd: 1, cacheHit: 1 }, { costUsd: 2, cacheHit: 1 }, 20, "opencode-go/beam-free")).toBe("$1.00 session · $2.00 today · cache 100% · opencode-go/beam-free");
 });
 
 test("crossedBudget fires once, on the request that crosses", () => {

@@ -62,10 +62,11 @@ export function parseRecords(jsonl: string): RequestRecord[] {
   });
 }
 
-export function statusLine(session: Totals, today: Totals, budgetUsd: number): string {
+export function statusLine(session: Totals, today: Totals, budgetUsd: number, model?: string): string {
   const cache = session.cacheHit === undefined ? "cache –" : `cache ${Math.round(session.cacheHit * 100)}%`;
   const over = today.costUsd >= budgetUsd ? ` (over $${budgetUsd})` : "";
-  return `$${session.costUsd.toFixed(2)} session · $${today.costUsd.toFixed(2)} today${over} · ${cache}`;
+  const modelPart = model ? ` · ${model}` : "";
+  return `$${session.costUsd.toFixed(2)} session · $${today.costUsd.toFixed(2)} today${over} · ${cache}${modelPart}`;
 }
 
 export function crossedBudget(beforeUsd: number, afterUsd: number, budgetUsd: number): boolean {

@@ -483,7 +483,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       sessionRecords.push(record);
       const today = totals(readDay(file));
       if (!ctx.hasUI) return;
-      ctx.ui.setStatus("cedia", statusLine(totals(sessionRecords), today, budgetUsd));
+      ctx.ui.setStatus("cedia", statusLine(totals(sessionRecords), today, budgetUsd, ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined));
       if (crossedBudget(before, today.costUsd, budgetUsd)) ctx.ui.notify(`cedia: today's spend passed $${budgetUsd} ($${today.costUsd.toFixed(2)}).`, "warning");
     });
 
