@@ -113,3 +113,42 @@ export function formatFindings(findings: VerifiedFinding[]): string {
   }
   return lines.join("\n");
 }
+
+function findingKey(f: Finding): string {
+  return `${f.type}:${f.evidence.trim().toLowerCase()}`;
+}
+
+export interface QuorumFinding extends VerifiedFinding {
+  agents: number;
+  total: number;
+}
+
+export function quorumFindings(reports: Finding[][], cwd: string): QuorumFinding[] {
+  const total = reports.length;
+  const byKey = new Map<string, { finding: Finding; agents: Set<number> }>();
+  reports.forEach((findings, agent) => {
+    for (const f of findings) {
+      const entry = byKey.get(findingKey(f));
+      if (entry) entry.agents.add(agent);
+      else byKey.set(findingKey(f), { finding: f, agents: new Set([agent]) });
+    }
+  });
+  const out: QuorumFinding[] = [];
+  for (const { finding, agents } of byKey.values()) {
+    if (agents.size < 2) continue;
+    const verified = verifyFinding(finding, cwd);
+    if (!verified.verified) continue;
+    out.push({ ...verified, agents: agents.size, total });
+  }
+  return out;
+}
+
+export function formatQuorum(findings: QuorumFinding[]): string {
+  if (findings.length === 0) return "No corroborated findings.";
+  const lines = [`**Corroborated findings (${findings.length}):**`];
+  for (const f of findings) {
+    lines.push(`- ${f.description} (${f.agents}/${f.total} agents)`);
+    lines.push(`  Evidence: \`${f.evidence}\` → ${f.evidenceOutput.slice(0, 100)}`);
+  }
+  return lines.join("\n");
+}

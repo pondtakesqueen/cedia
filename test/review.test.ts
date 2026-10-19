@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { formatFindings, parseFindings, verifyFinding } from "../src/review.ts";
+import { formatFindings, formatQuorum, parseFindings, quorumFindings, verifyFinding } from "../src/review.ts";
 
 describe("parseFindings", () => {
   test("parses file evidence", () => {
@@ -71,4 +71,28 @@ describe("formatFindings", () => {
   test("no findings", () => {
     expect(formatFindings([])).toBe("No findings.");
   });
+});
+describe("quorumFindings", () => {
+  test("keeps verified findings seen by at least two agents", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rv-q-"));
+    try {
+      writeFileSync(join(dir, "a.ts"), "x\n");
+      writeFileSync(join(dir, "b.ts"), "y\n");
+      const a = { description: "x", evidence: "a.ts:1", type: "file" } as const;
+      const b = { description: "solo", evidence: "b.ts:1", type: "file" } as const;
+      const out = quorumFindings([[a, b], [a]], dir);
+      expect(out.map((f) => f.evidence)).toEqual(["a.ts:1"]);
+      expect(out[0].agents).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  test("drops unverified quorum", () => {
+    const a = { description: "missing", evidence: "src/nope.ts:99", type: "file" } as const;
+    expect(quorumFindings([[a], [a]], ".")).toEqual([]);
+  });
+});
+
+test("formatQuorum names agent counts", () => {
+  expect(formatQuorum([])).toBe("No corroborated findings.");
 });

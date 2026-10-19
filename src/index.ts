@@ -22,7 +22,7 @@ import { diagnose } from "./diagnostics.ts";
 import { defaultSandboxConfig, wrapCommand } from "./sandbox.ts";
 import { extractDomain, fetchUrl, isDenied } from "./webfetch.ts";
 import { formatAllFailures, formatSearchResponse, searchChain, type SearchSource } from "./websearch.ts";
-import { REVIEW_PROMPT, parseFindings, verifyFinding, formatFindings } from "./review.ts";
+import { REVIEW_PROMPT, formatQuorum, parseFindings, quorumFindings } from "./review.ts";
 import { approvalFor, loadHookRules, matchHooks, parseApprovalPolicy, parseSandboxMode, runHook } from "./hooks.ts";
 import { AgentRunner } from "./task/agents.ts";
 import { registerAgentTools, type AgentParams } from "./task/agent-tools.ts";
@@ -628,18 +628,19 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
           ctx.ui.notify("cedia: Task runner not available.", "error");
           return;
         }
+        const runner: NonNullable<typeof taskRunner> = taskRunner;
         const target = (args ?? "").trim() || ".";
-        ctx.ui.notify("cedia: starting review…", "info");
-        const started = taskRunner.start(
-          { description: "review codebase", prompt: `${REVIEW_PROMPT}\n\nReview the codebase at ${target}. Report findings with evidence.`, subagent_type: "general-purpose", run_in_background: false } satisfies AgentParams,
-          ctx,
+        ctx.ui.notify("cedia: starting review (3 agents)…", "info");
+        const reviewers = [0, 1, 2].map((n) =>
+          runner.start(
+            { description: `review codebase ${n + 1}/3`, prompt: `${REVIEW_PROMPT}\n\nReview the codebase at ${target}. Report findings with evidence.`, subagent_type: "general-purpose", run_in_background: true } satisfies AgentParams,
+            ctx,
+          ),
         );
-        const record = await taskRunner.wait(started.agent.id);
-        const text = record.finalText ?? "";
-        const findings = parseFindings(text);
-        const verified = findings.map((f) => verifyFinding(f, ctx.cwd));
-        const report = formatFindings(verified);
-        ctx.ui.notify(report, "info");
+        const texts = await Promise.all(reviewers.map(async (r) => (await runner.wait(r.agent.id)).finalText ?? ""));
+        const reports = texts.map(parseFindings);
+        const quorum = quorumFindings(reports, ctx.cwd);
+        ctx.ui.notify(formatQuorum(quorum), "info");
       },
     });
     pi.registerCommand("checkpoint", {
