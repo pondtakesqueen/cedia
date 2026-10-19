@@ -38,19 +38,19 @@ export async function classifyCommand(
   registry: ModelRegistry,
   userContext: string,
 ): Promise<ClassifyResult> {
-  const model = registry.find("anthropic", "claude-haiku-5-5");
+  const model = registry.find("anthropic", "claude-haiku-5-5") ?? registry.find("opencode-go", "claude-haiku-5-5");
   if (!model) {
-    return { shouldBlock: false, reason: "classifier skipped: no haiku model", stage: "unavailable" };
+    return { shouldBlock: true, reason: "classifier unavailable: no model, blocking to stay safe", stage: "unavailable" };
   }
   const auth = await registry.getApiKeyAndHeaders(model);
   if (!auth.ok) {
-    return { shouldBlock: false, reason: "classifier skipped: no auth", stage: "unavailable" };
+    return { shouldBlock: true, reason: "classifier unavailable: no auth, blocking to stay safe", stage: "unavailable" };
   }
 
   const context = {
     systemPrompt: SYSTEM_PROMPT,
     messages: [
-      { role: "user" as const, content: [{ type: "text" as const, text: `User context:\n${userContext}\n\nProposed command:\n${command}\n\nShould this be blocked?` }], timestamp: Date.now() },
+      { role: "user" as const, content: [{ type: "text" as const, text: `User context:\n${userContext || "(none recorded)"}\n\nProposed command:\n${command}\n\nShould this be blocked?` }], timestamp: Date.now() },
     ],
   };
 

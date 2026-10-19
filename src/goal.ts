@@ -58,7 +58,7 @@ export async function verifyGoal(
   registry: ModelRegistry,
   model: Model<any> | undefined,
 ): Promise<VerifyResult> {
-  const m = model ?? registry.find("anthropic", "claude-haiku-5-5");
+  const m = model ?? registry.find("anthropic", "claude-haiku-5-5") ?? registry.find("opencode-go", "claude-haiku-5-5");
   if (!m) {
     return { refuted: true, reason: "verifier unavailable: no model", gaps: ["no model available"] };
   }

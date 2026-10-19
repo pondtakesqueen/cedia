@@ -116,10 +116,12 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
       event.systemPromptOptions.sections = { ...event.systemPromptOptions.sections, "cedia-tools": CEDIA_TOOLS };
     });
 
+    let lastUserText = "";
     pi.on("input", (event) => {
       markInput(ledger);
       nudges = continuations = reminders = silentSteps = 0;
       autonomous = asksForAutonomy(event.text);
+      lastUserText = event.text;
     });
 
     const restoreTodos = (ctx: ExtensionContext) => {
@@ -387,7 +389,7 @@ export function createCedia(options: CediaOptions = {}): (pi: ExtensionAPI) => v
         const cmd = event.input.command;
         const needsClassify = /\b(rm|rmdir|git\s+push|curl|wget|chmod|chown|mv|cp)\b/.test(cmd);
         if (needsClassify) {
-          const result = await classifyCommand(cmd, ctx.modelRegistry, "");
+          const result = await classifyCommand(cmd, ctx.modelRegistry, lastUserText);
           if (result.shouldBlock) {
             return {
               block: true,
