@@ -251,7 +251,7 @@ export class AgentRunner {
   // Pi appends a path it cannot find as the prompt text itself.
   private ensureSystemPrompt(identity: AgentIdentity): void {
     const file = identity.systemPromptFile;
-    if (!file) return;
+    if (!file || existsSync(file)) return;
     const body = loadAgentTypes(this.settings).get(identity.subagentType)?.body;
     if (!body) throw new Error(`Agent ${identity.id} has lost its system prompt file, and its type "${identity.subagentType}" no longer provides one.`);
     mkdirSync(dirname(file), { recursive: true });
