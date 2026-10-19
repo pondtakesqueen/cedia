@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# cedia-update: update pstack skills, pi packages, and pi core in order.
+# Usage: ./bin/cedia-update [--core] [--smoke]
+#   (no flags)  pstack skills + pi packages only (safe, no core change)
+#   --core      also update pi core via `pi update`, then typecheck + tests
+#   --smoke     also run the 7-task scoreboard after a core update (slow)
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+
+echo "== 1/3 pstack skills =="
+./bin/cedia-setup
+
+echo "== 2/3 pi packages =="
+PI_CODING_AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.cedia}" \
+  ./node_modules/.bin/pi update 2>&1 | tail -3
+
+if [[ "${1:-}" != "--core" && "${2:-}" != "--core" ]]; then
+  echo "done (core pinned at $(node -p "require('./node_modules/@earendil-works/pi-coding-agent/package.json').version")). Use --core to update pi itself."
+  exit 0
+fi
+
+echo "== 3/3 pi core =="
+npm install --save-exact "@earendil-works/pi-coding-agent@latest" "@earendil-works/pi-ai@latest" 2>&1 | tail -2
+npm run typecheck
+npm test 2>&1 | grep -E "Test Files|Tests"
+
+if [[ "${1:-}" == "--smoke" || "${2:-}" == "--smoke" ]]; then
+  echo "== smoke set (7 tasks, cedia vs pi) =="
+  node scripts/scoreboard.mjs --harness cedia --tasks tasks --out /tmp/results-update-cedia.jsonl --model "${CEDIA_MODEL:-opencode-go/beam-free}"
+  node scripts/scoreboard.mjs --harness pi --tasks tasks --out /tmp/results-update-pi.jsonl --model "${CEDIA_MODEL:-opencode-go/beam-free}"
+fi
+echo "done."
