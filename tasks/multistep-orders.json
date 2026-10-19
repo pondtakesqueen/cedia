@@ -1,0 +1,11 @@
+{
+  "id": "multistep-orders",
+  "category": "multi-step",
+  "prompt": "In shop.js implement three functions: `addOrder(id, amount)` appends {id, amount, status: 'pending'}; `payOrder(id)` sets status to 'paid' or throws 'not found'; `totalPaid()` returns the sum of paid amounts. All three must be exported. Run 'node test.js' to verify.",
+  "setup": {
+    "shop.js": "const orders = [];\nfunction addOrder(id, amount) { throw new Error(\"not implemented\"); }\nfunction payOrder(id) { throw new Error(\"not implemented\"); }\nfunction totalPaid() { throw new Error(\"not implemented\"); }\nmodule.exports = { addOrder, payOrder, totalPaid };\n",
+    "test.js": "const s = require('./shop');\ns.addOrder('a', 100);\ns.addOrder('b', 50);\nif (s.totalPaid() !== 0) { console.error('FAIL unpaid total'); process.exit(1); }\ns.payOrder('a');\nif (s.totalPaid() !== 100) { console.error('FAIL paid total'); process.exit(1); }\nlet threw = false;\ntry { s.payOrder('zzz'); } catch (e) { threw = /not found/.test(e.message); }\nif (!threw) { console.error('FAIL missing throws'); process.exit(1); }\ns.payOrder('b');\nif (s.totalPaid() !== 150) { console.error('FAIL final total'); process.exit(1); }\nconsole.log('PASS');\n"
+  },
+  "verify": "node test.js",
+  "expectedExitCode": 0
+}

@@ -90,7 +90,7 @@ Each of these waits for a measured trigger:
 
 - Model capability registry: when a second per-family difference has been accepted.
 - Custom provider adapters: when pi-ai blocks a needed feature.
-- Shell-command hooks: when the first hook is needed.
+- Shell-command hooks: implemented via `CEDIA_HOOKS` (pre_tool and post_tool), `src/hooks.ts`. Trigger met by user request, not by evidence.
 - Cross-session memory: when the same context has to be repeated across sessions.
 - `<pasted_content>` tagging: pi's editor expands paste markers (`[paste #1 +40 lines]`, only for pastes over 10 lines or 1,000 chars) before the `input` hook fires, so pasted text is indistinguishable from typed text. Revisit when pi exposes paste spans on `input`, or if cedia ever replaces pi's editor.
 - Automations (benny): dropped; use `cedia -p` + cron if ever needed.

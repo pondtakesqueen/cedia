@@ -1,0 +1,11 @@
+{
+  "id": "migrate-registry",
+  "category": "migration",
+  "prompt": "Migrate the legacy user registry in data.js: each entry {name, email} must become {id, name, email, active}. Assign id starting from 1 in order, set active true for entries with valid email (contains @), false otherwise. Keep the exported function `load()` returning the array and add `migrate()` that returns the migrated array without mutating the original. Run 'node test.js' to verify.",
+  "setup": {
+    "data.js": "const users = [\n  { name: \"ann\", email: \"ann@x.com\" },\n  { name: \"bob\", email: \"no-mail\" },\n  { name: \"cid\", email: \"cid@y.org\" }\n];\nfunction load() { return users; }\nfunction migrate() { throw new Error(\"not implemented\"); }\nmodule.exports = { load, migrate };\n",
+    "test.js": "const { load, migrate } = require('./data');\nconst before = JSON.stringify(load());\nconst out = migrate();\nif (!Array.isArray(out) || out.length !== 3) { console.error('FAIL length'); process.exit(1); }\nif (out[0].id !== 1 || out[0].active !== true || out[0].name !== 'ann') { console.error('FAIL row0', JSON.stringify(out[0])); process.exit(1); }\nif (out[1].id !== 2 || out[1].active !== false) { console.error('FAIL row1', JSON.stringify(out[1])); process.exit(1); }\nif (out[2].id !== 3 || out[2].active !== true) { console.error('FAIL row2'); process.exit(1); }\nif (JSON.stringify(load()) !== before) { console.error('FAIL mutated'); process.exit(1); }\nconsole.log('PASS');\n"
+  },
+  "verify": "node test.js",
+  "expectedExitCode": 0
+}
