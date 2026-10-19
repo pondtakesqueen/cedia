@@ -68,7 +68,7 @@ test("an irreversible command is blocked when nobody can approve it", async () =
   const push = fauxAssistantMessage(fauxToolCall("bash", { command: "git push --force origin main" }), { stopReason: "toolUse" });
   const r = await run([push, fauxAssistantMessage(fauxText("I could not push."))]);
   expect(r.toolResults).toHaveLength(1);
-  expect(r.toolResults[0]).toContain("Blocked without the user's approval: force-push");
+  expect(r.toolResults[0]).toContain("Blocked by approval policy (ask): force-push");
 });
 
 test("every model request is written to the day's telemetry file", async () => {
