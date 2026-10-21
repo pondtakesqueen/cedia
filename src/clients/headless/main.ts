@@ -3,6 +3,7 @@ import { runPrompt } from '../../core/loop/run.ts';
 import { preamble, BASE_SYSTEM } from '../../core/prompts.ts';
 import { resolveModel } from '../../core/providers/catalog.ts';
 import type { FauxStep } from '../../core/providers/faux.ts';
+import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { SessionLog, sessionPath } from '../../core/session/log.ts';
 import { bashTool } from '../../core/tools/bash.ts';
@@ -23,7 +24,8 @@ export type HeadlessArgs = {
 
 export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
   const model = resolveModel(args.model);
-  if (model.wire !== 'faux' && !process.env[model.auth.env]) throw new Error(`${model.ref} needs ${model.auth.env} in the environment`);
+  const keyNote = missingKeyNote(model);
+  if (keyNote) process.stderr.write(keyNote + '\n');
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? (JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) as FauxStep[]) : undefined;
   const id = crypto.randomUUID();
   const log = SessionLog.create({ id, path: args.noSessionFile ? null : sessionPath(args.cwd, id) });

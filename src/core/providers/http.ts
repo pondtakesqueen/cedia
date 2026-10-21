@@ -8,6 +8,12 @@ export function authHeaders(model: ModelSpec, env: Record<string, string | undef
   return model.auth.scheme === 'x-api-key' ? { 'x-api-key': key } : { authorization: `Bearer ${key}` };
 }
 
+// Credentials may also be added by an egress proxy (cloud network secrets), so a missing key is a note, not an error.
+export function missingKeyNote(model: ModelSpec, env: Record<string, string | undefined> = process.env): string | undefined {
+  if (model.wire === 'faux' || env[model.auth.env]) return undefined;
+  return `cedia: ${model.auth.env} is not set; sending ${model.ref} requests without credentials, expecting a proxy to add them`;
+}
+
 const RETRYABLE: AttemptErrorCode[] = ['rate_limit', 'overloaded', 'network', 'timeout', 'server'];
 export const isRetryable = (e: AttemptError) => RETRYABLE.includes(e.code);
 

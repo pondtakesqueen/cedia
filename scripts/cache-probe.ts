@@ -9,6 +9,7 @@ import { runPrompt } from '../src/core/loop/run.ts';
 import { BASE_SYSTEM, preamble } from '../src/core/prompts.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider } from '../src/core/providers/faux.ts';
+import { missingKeyNote } from '../src/core/providers/http.ts';
 import { providerFor } from '../src/core/providers/index.ts';
 import { SessionLog, sessionPath } from '../src/core/session/log.ts';
 import { bashTool } from '../src/core/tools/bash.ts';
@@ -17,7 +18,8 @@ import { readTool } from '../src/core/tools/read.ts';
 const { values } = parseArgs({ options: { model: { type: 'string' }, turns: { type: 'string', default: '20' }, runs: { type: 'string', default: '3' } } });
 if (!values.model) throw new Error('--model is required');
 const model = resolveModel(values.model);
-if (model.wire !== 'faux' && !process.env[model.auth.env]) throw new Error(`${model.ref} needs ${model.auth.env}`);
+const keyNote = missingKeyNote(model);
+if (keyNote) console.error(keyNote);
 const turns = Number(values.turns);
 
 const runs = [];
