@@ -101,8 +101,9 @@ async function collect(provider: Provider, req: WireRequest, signal: AbortSignal
   const start = performance.now();
   try {
     for await (const ev of provider.stream(req, signal)) {
-      // Time to the first generated token, not to the message-start event a provider sends right away.
-      if (ev.type.endsWith('_delta') || ev.type === 'done') timing.ttftMs ??= Math.round(performance.now() - start);
+      // Time until the provider starts streaming. Hidden thinking (Anthropic's default display) streams no text,
+      // so the first visible token would count thinking as latency and leave it out of the decode rate.
+      timing.ttftMs ??= Math.round(performance.now() - start);
       timing.ms = Math.round(performance.now() - start);
       onStream?.(ev);
       if (ev.type === 'error') return { ok: false, error: ev.error };
