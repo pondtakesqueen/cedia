@@ -1,0 +1,28 @@
+{
+  "id": "real-slop-guard",
+  "category": "real-repo",
+  "source": "cedia commit 7009c5a (Slop guard and detected checks), redone from its parent",
+  "repo": {
+    "base": "51742e8073c8d8fd6e5ba9f244c80f9f2d37e61c",
+    "target": "7009c5a52d624eb95a94ade745a3d730c684d1d4",
+    "tests": [
+      "test/slop.test.ts"
+    ],
+    "exclude": [
+      "evals/results",
+      "evals/baseline"
+    ],
+    "edits": [
+      {
+        "path": "test/headless.test.ts",
+        "old": "test.skipIf(!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin')",
+        "new": "test.skipIf(Boolean(process.env.SANDBOX_RUNTIME) || (!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin'))",
+        "why": "The agent's commands already run in the OS sandbox, which cannot open another inside it; verify runs outside it, where this test still runs."
+      }
+    ]
+  },
+  "prompt": "Implement this change in cedia, the repository you are in (a coding harness in TypeScript on Bun; AGENTS.md and SPEC.md describe it).\n\n<change>\nSlop guard and detected checks\n\nAt a done claim cedia scans the run's own changes (snapshot patch, or edit and write calls) for shortcuts that make work look done: tests deleted, weakened or skipped, silenced checks, swallowed errors, as any, not-implemented stubs. One reminder lists them; the receipt and evidence carry what is left as flags. --unlock slop-check turns it off.\n\nWith no declared check, cedia finds the repo's test command and gates on it softly: one reminder, never a refusal.\n</change>\n\nThe tests in `test/slop.test.ts` were written for this change and say what it must do. Make them pass without changing them, and keep the whole `bun test` suite passing.",
+  "verify": "bun test",
+  "timeoutSec": 1200,
+  "budgetUsd": 1.5
+}

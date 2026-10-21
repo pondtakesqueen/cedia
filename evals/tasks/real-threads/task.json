@@ -1,0 +1,28 @@
+{
+  "id": "real-threads",
+  "category": "real-repo",
+  "source": "cedia commit 8d44c2a (Threads: auto handoff, recall, and threads that message each other), redone from its parent",
+  "repo": {
+    "base": "6f57f5734d5e7cd5cc3778c9695a38bc5daf1adf",
+    "target": "8d44c2a41b3528ad9522cdb95158e089ebac980c",
+    "tests": [
+      "test/threads.test.ts"
+    ],
+    "exclude": [
+      "evals/results",
+      "evals/baseline"
+    ],
+    "edits": [
+      {
+        "path": "test/headless.test.ts",
+        "old": "test.skipIf(!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin')",
+        "new": "test.skipIf(Boolean(process.env.SANDBOX_RUNTIME) || (!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin'))",
+        "why": "The agent's commands already run in the OS sandbox, which cannot open another inside it; verify runs outside it, where this test still runs."
+      }
+    ]
+  },
+  "prompt": "Implement this change in cedia, the repository you are in (a coding harness in TypeScript on Bun; AGENTS.md and SPEC.md describe it).\n\n<change>\nThreads: auto handoff, recall, and threads that message each other\n\nEvery headless run is a thread of its project (~/.cedia/projects/<slug>/threads/<id>.jsonl, append-only). When a writer session's context passes --handoff-at (default half the window, at most 150k, below any long-context price) and has doubled since its first reply, it writes a handoff note while its prefix is still cached, and a new session of the thread starts from the task and the note. Nothing is edited, the old log stays searchable with the recall tool, and the done gate still wants a check after inherited writes.\n\n--thread <id> goes on with a thread: in its last session when the model matches, otherwise in a new session that starts from the latest note or result. The threads, read_thread and message_thread tools let a session see and message the project's other threads; messages arrive as a logged reminder at the next turn boundary. cedia threads lists, shows and sends.\n</change>\n\nThe tests in `test/threads.test.ts` were written for this change and say what it must do. Make them pass without changing them, and keep the whole `bun test` suite passing.",
+  "verify": "bun test",
+  "timeoutSec": 1200,
+  "budgetUsd": 1.5
+}

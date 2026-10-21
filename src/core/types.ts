@@ -156,6 +156,8 @@ export type HeadlessResult = {
   result: string;
   evidence?: Evidence;
   timing?: Timing;
+  // Tokens in the largest context one reply saw (the request plus the reply); across sessions, the largest.
+  peakContext?: number;
   // The plan the writer was given, and the review of its change (see core/trust/review.ts).
   plan?: Step;
   review?: Step & { verdict: 'approve' | 'changes' | 'unclear'; fixed: boolean };

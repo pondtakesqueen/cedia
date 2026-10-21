@@ -182,6 +182,8 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   let handoff: 0 | 1 | 2 | 'off' = 0;
   const wallStart = performance.now();
   const timing = { modelMs: 0, ttftMs: 0, decodeMs: 0, toolMs: 0, retryMs: 0 };
+  // The largest context any reply of this run saw: what handoff and sub-threads are meant to keep down.
+  let peakContext = 0;
 
   // The slop guard reads this run's changes: the patch between its first and latest snapshot, or the edit and
   // write calls when snapshots are off.
@@ -215,6 +217,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       result: result ?? lastText,
       ...(hasEvidence ? { evidence: ev } : {}),
       timing: summarizeTiming(performance.now() - wallStart, timing, usage.output),
+      ...(peakContext ? { peakContext } : {}),
     };
   };
 
@@ -290,6 +293,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
     log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: got.blocks, stop: got.stop, usage: got.usage });
     usage = addUsage(usage, got.usage);
+    peakContext = Math.max(peakContext, contextSize(got.usage));
     cost += costUsd(model, got.usage, now());
     const text = got.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
     if (text) lastText = text;
@@ -321,11 +325,14 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       // Hand off at a turn boundary, while the whole prefix is still cached: the note costs one cheap turn.
       // The size is the last reply's usage plus chars/4 for the results just added. The context must also have
       // doubled since the session's first reply, so a session that starts large (a long note, a big task) does
-      // not hand off again straight away.
+      // not hand off again straight away. And the session must have changed a file itself: a note cannot carry
+      // what was read, so a session that only read would leave its successor to read it all again (in the repo
+      // evals, sessions that handed off before any change did exactly that, five in a row on one run).
       const added = log.events.slice(before).reduce((n, e) => n + (e.kind === 'tool_result' ? Math.ceil(e.output.text.length / 4) : 0), 0);
       const size = contextSize(got.usage) + added;
       const first = log.events.find((e): e is EventOf<'assistant'> => e.kind === 'assistant')!;
-      if (handoff === 0 && opts.handoffAt !== undefined && size >= opts.handoffAt && size >= 2 * contextSize(first.usage)) {
+      const changedHere = () => ledgerEntries(log.events.slice(runStart), checks, opts.cwd).some((e) => e.kind === 'write' && e.path !== undefined);
+      if (handoff === 0 && opts.handoffAt !== undefined && size >= opts.handoffAt && size >= 2 * contextSize(first.usage) && changedHere()) {
         handoff = 1;
         log.append({ kind: 'reminder', as: 'user', text: HANDOFF_PROMPT });
       }
