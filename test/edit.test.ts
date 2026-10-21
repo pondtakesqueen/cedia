@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyEdit, editTool, writeTool } from '../src/core/tools/edit.ts';
+import { applyEdit, editsOf, editTool, writeTool } from '../src/core/tools/edit.ts';
 
 const cwd = mkdtempSync(join(tmpdir(), 'cedia-edit-'));
 const ctx = { cwd, signal: new AbortController().signal };
@@ -45,6 +45,26 @@ describe('edit and write tools', () => {
     const ok = await editTool.run({ path: 'crlf.txt', edits: [{ old_text: 'one\ntwo', new_text: '1\n2' }, { old_text: '2', new_text: 'II' }] }, ctx);
     expect(ok.isError).toBe(false);
     expect(readFileSync(p, 'utf8')).toBe('1\r\nII\r\nthree\r\n');
+  });
+
+  // The shapes Haiku 5.5 sent in 179 of 418 edit calls in the eval logs.
+  test('takes old_text and new_text at the top level, and edits as a string', async () => {
+    const one = [{ old_text: 'a', new_text: 'b' }];
+    expect(editsOf({ path: 'f', old_text: 'a', new_text: 'b' })).toEqual(one);
+    expect(editsOf({ path: 'f', old_text: 'a', new_text: 'b', replace_all: true })).toEqual([{ ...one[0]!, replace_all: true }]);
+    expect(editsOf({ path: 'f', edits: '[{"old_text">a', new_text: 'b' })).toEqual(one);
+    expect(editsOf({ path: 'f', edits: JSON.stringify(one) })).toEqual(one);
+    expect(editsOf({ path: 'f', edits: '[{"old_text">a' })).toEqual({ error: expect.stringContaining('not a string') });
+    expect(editsOf({ path: 'f', edits: '[{oops' })).toEqual({ error: expect.stringContaining('not a string') });
+    expect(editsOf({ path: 'f' })).toEqual({ error: expect.stringContaining('edits is required') });
+    expect(editsOf({ path: 'f', edits: [] })).toEqual({ error: 'edits is empty' });
+    expect(editsOf({ path: 'f', edits: [{ old_text: 'a' }] })).toEqual({ error: 'edits[0] needs old_text and new_text strings' });
+
+    const p = join(cwd, 'flat.txt');
+    writeFileSync(p, 'const port = 80;\n');
+    expect((await editTool.run({ path: 'flat.txt', old_text: '80', new_text: '8080' }, ctx)).isError).toBe(false);
+    expect((await editTool.run({ path: 'flat.txt', edits: '[{"old_text">8080', new_text: '9090' }, ctx)).isError).toBe(false);
+    expect(readFileSync(p, 'utf8')).toBe('const port = 9090;\n');
   });
 
   test('write creates parents and reports created or replaced', async () => {

@@ -1,4 +1,5 @@
 import type { SessionEvent } from '../types.ts';
+import { editsOf } from '../tools/edit.ts';
 
 // The slop guard reads what a run changed and flags the shortcuts an agent takes to look done: tests weakened,
 // skipped or deleted, checks silenced, errors swallowed, types escaped, stubs left in place. Each finding is a
@@ -76,7 +77,8 @@ export function changesFromCalls(events: SessionEvent[]): FileChange[] {
     const path = String(i.input.path ?? '');
     if (i.tool === 'write') out.push({ path, added: lines(i.input.content), removed: [], deleted: false });
     else {
-      const edits = Array.isArray(i.input.edits) ? (i.input.edits as Record<string, unknown>[]) : [];
+      const found = editsOf(i.input);
+      const edits = 'error' in found ? [] : found;
       out.push({ path, added: edits.flatMap((x) => lines(x.new_text)), removed: edits.flatMap((x) => lines(x.old_text)), deleted: false });
     }
   }
