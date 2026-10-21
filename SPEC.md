@@ -21,6 +21,10 @@ The full plan, with the comparison against other harnesses and the review it wen
 | Guards | The deny list plus `secret-path` (credential stores, for every tool) and `secret-redaction`. Only the user lifts one, by name: `--unlock <guard>` or `permissions.unlock` in `~/.cedia/settings.json`. Never a repo, an allow rule or the model. cedia's prompt adds no content rules of its own. `context` in `~/.cedia/settings.json` (a string or lines) is the user's standing context, sent in the first user turn of every session as `<user_context>`; a repo cannot set it |
 | Privacy | No telemetry: cedia talks only to the model provider. Secrets in tool output (known token formats, private keys, dotenv/JSON/URL passwords) are replaced with `[cedia:redacted]` before the result is logged or sent, and a write carrying the placeholder is denied. `--privacy no-training` (default) refuses `dataPolicy: trains` models outside public repos; `zdr` allows only zero-data-retention models. flags > `CEDIA_PRIVACY` > user settings; a repo may set `zdr` but never loosen it |
 | Edit tool | `edits[]` with tiered matching; `apply_patch` for GPT; edit mode chosen per model from eval results |
+| Projects and threads | A project is a working directory; every headless run is a thread of it (`~/.cedia/projects/<slug>/threads/<id>.jsonl`, append-only, so two cedia processes can write one without locks). `--thread <id>` goes on with a thread: in its last session when the model is the same, otherwise in a new session that starts from its latest handoff note or result. `cedia threads [list|show|send|archive]`. Modeled on Claude Projects' threads (each starts from the project's files, instructions and memory; threads run in parallel and can be resolved), built from the public docs and from using it, nothing reverse-engineered |
+| Handoff | Instead of compacting, a writer session whose context passes `handoffAt` (flag `--handoff-at`, `handoffAt` in user settings; default half the window, at most 150k, and below any long-context price) and has doubled since its first reply is asked for a handoff note at the next turn boundary, while its prefix is still cached. A new session of the thread starts from the task and that note; it has `parentSession`, inherits the changed files for the done gate, and gets a `recall` tool that searches the earlier sessions' full logs. Nothing is edited, so thinking signatures and caches stay valid, and nothing is lost. At most 8 per run |
+| Sub-threads | The writer's `spawn{task, kind}` tool hands self-contained work to a child session with a fresh context; only its report (at most 4k characters) comes back. The model names the kind and cedia decides how it runs: `explore` is read-only on the `swarm` model (the code model under `zdr`) and runs in parallel; `work` may write, on the writer's model under the run's policy, sandbox and checks, alone and between two snapshots, so the parent's ledger records its changes. A child is its own thread with a `parent`, archives itself when it succeeds, stays listed when it fails, and cannot spawn. `--spawn on|off`, `--swarm <ref>` |
+| Thread messages | `threads`, `read_thread` and `message_thread` tools (present when the project has another thread): a message is appended to the other thread's file and shown to it as a logged reminder at its next turn boundary, or when it is resumed. `message_thread` is `write_workspace`, so read-only sessions cannot send. The user sends with `cedia threads send` |
 | Compaction | Claude: server-side context editing and on-demand compaction (`compact-2026-09-04`), or a client-side summary of the whole history with thinking stripped; never client-side tool-result clearing or keep-tail, because Claude 5.5-family thinking signatures bind the unedited prefix. Chat Completions and Responses: client side, clear old tool results first, then summarize. Segments stay grep-able |
 | Session | Append-only JSONL tree; a `request` event before every model call so each request can be rebuilt from the log. Header values are never logged: names plus value hashes only |
 | Protocol | JSONL over stdio; ACP later |
@@ -39,7 +43,7 @@ Clients (TUI, headless `-p`, eval runner) talk to the core over one protocol. In
 src/
   cli.ts
   core/        no UI; tested with a faux provider
-    loop/ session/ context/ providers/ tools/ safety/ trust/ skills/ hooks.ts roles.ts
+    loop/ session/ context/ providers/ tools/ safety/ trust/ project/ skills/ hooks.ts roles.ts
   protocol/    command and event types + JSONL codec
   clients/     tui/ headless/
 evals/         tasks/, run.ts, baseline/
@@ -47,7 +51,7 @@ evals/         tasks/, run.ts, baseline/
 
 Rule enforced by a test: `src/core` and `src/protocol` never import from `src/clients`.
 
-Session files live at `~/.cedia/sessions/<project-slug>/<id>.jsonl`. The first line is a `session` event `{cwd, parentSession?, role, createdAt}`. The leaf is the last event; a fork is a new file whose first event's `parentId` points into the source.
+Session files live at `~/.cedia/sessions/<project-slug>/<id>.jsonl`. The first line is a `session` event `{cwd, parentSession?, thread?, role, createdAt}`. The leaf is the last event; a fork is a new file whose first event's `parentId` points into the source.
 
 ## Core shapes
 
@@ -84,11 +88,23 @@ type AttemptError = {
 // Headless result. Exit code 0 only on 'success'.
 type HeadlessResult = {
   type: 'result';
-  subtype: 'success' | 'error_max_turns' | 'error_max_budget_usd' | 'error_during_execution' | 'interrupted' | 'error_unverified_claim';
+  // 'handoff' ends a session, never a run: the client goes on in a new session of the thread.
+  subtype: 'success' | 'error_max_turns' | 'error_max_budget_usd' | 'error_during_execution' | 'interrupted' | 'error_unverified_claim' | 'handoff';
   sessionId: string; numTurns: number; usage: Usage; costUsd: number; cacheHitRatio: number; result: string; evidence?: Evidence;
   timing?: Timing; plan?: Step; review?: Step & { verdict: 'approve' | 'changes' | 'unclear'; fixed: boolean };
+  thread?: string; sessions?: string[]; subthreads?: number;
 };
 type Step = { model: string; via: 'cedia' | 'claude-code'; sessionId: string; costUsd?: number };
+
+// A thread file is append-only JSONL; the thread is the fold of its events (core/project/threads.ts).
+type ThreadEvent = { at: string } & (
+  | { kind: 'open'; title: string; task: string; parent?: string }
+  | { kind: 'session'; sessionId: string; model: string; role: string; why: 'start' | 'resume' | 'handoff' | 'quota'; path?: string }
+  | { kind: 'handoff'; sessionId: string; note: string }
+  | { kind: 'message'; id: string; from: string; text: string } // from: a thread id or 'user'
+  | { kind: 'delivered'; ids: string[]; sessionId: string }
+  | { kind: 'state'; state: 'working' | 'done' | 'failed' | 'stopped'; result?: string }
+  | { kind: 'archived'; archived: boolean });
 
 // Per-model facts the adapters and the loop branch on.
 type ModelCapabilities = {
@@ -149,7 +165,7 @@ Claude 5.5-family models also bind thinking signatures to the prefix, so any his
 | `plan` | judgment and prose, hardest tasks, how explainer, why synthesizer, reflect judgment | Claude top-tier, effort medium |
 | `code` | feature/refactoring, bug-fix, perf-issue, hillclimb, how explorer, why investigators | DeepSeek V4.1 Flash, fallback Haiku 5.5 |
 | `smol` | classifier, `/goal` judge, input repair, titles, commit messages | Haiku 5.5 |
-| `swarm` | swarm workers, reflect tooling | beam-free, then DeepSeek V4.1 Flash |
+| `swarm` | swarm workers, explore sub-threads, reflect tooling | beam-free, then DeepSeek V4.1 Flash |
 | `panel` | arena, architect, interrogate, cross-judge | Claude + DeepSeek V4 Pro; Muse only on public repos |
 | `advisor` | reviews the `code` role each turn (from oh-my-pi) | Claude, low effort, read-only |
 

@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildMessages, sessionHeader } from '../context/build.ts';
+import { contextSize, HANDOFF_NO_TOOLS, HANDOFF_PROMPT } from '../project/handoff.ts';
 import { hash } from '../hash.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
@@ -58,6 +59,14 @@ export type RunOptions = {
   // Picks up from a session that stopped partway (the fallback after a spent quota). Its changed files count as
   // writes at the start of this run, so the done gate still wants a passing check after them.
   continues?: { sessionId: string; changed: string[] };
+  // The thread the session belongs to (core/project/threads.ts).
+  thread?: string;
+  // Once a turn leaves the context at this many tokens, the session writes a handoff note and ends with subtype
+  // 'handoff'; the client goes on in a new session (core/project/handoff.ts). Absent means never.
+  handoffAt?: number;
+  // Messages from other threads, shown as a reminder at each turn boundary. `delivered` runs after the reminder
+  // is logged, so a crash in between shows a message twice rather than never.
+  inbox?: { pending(): { ids: string[]; text: string } | undefined; delivered(ids: string[]): void };
   effort?: Effort;
   ttl?: '5m' | '1h';
   maxTurns?: number;
@@ -153,6 +162,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       system: opts.system,
       tools: toolDefs(tools),
       ...(opts.continues ? { parentSession: opts.continues.sessionId } : {}),
+      ...(opts.thread ? { thread: opts.thread } : {}),
     });
   const header = sessionHeader(log.events);
 
@@ -168,6 +178,8 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const entries = () => [...inherited, ...ledgerEntries(log.events.slice(runStart), checks, opts.cwd)];
   let nudged = false;
   const snap: { tree?: string } = {};
+  // 0: working; 1: asked for the note; 2: asked again after a tool call; 'off': gave up on handing off.
+  let handoff: 0 | 1 | 2 | 'off' = 0;
   const wallStart = performance.now();
   const timing = { modelMs: 0, ttftMs: 0, decodeMs: 0, toolMs: 0, retryMs: 0 };
 
@@ -221,6 +233,11 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     if (signal.aborted) return finish('interrupted', 'aborted');
     if (turns >= maxTurns) return finish('error_max_turns', 'max_turns');
     turns++;
+    const mail = handoff === 0 ? opts.inbox?.pending() : undefined;
+    if (mail) {
+      log.append({ kind: 'reminder', as: 'user', text: mail.text });
+      opts.inbox!.delivered(mail.ids);
+    }
 
     const req: WireRequest = {
       model,
@@ -280,6 +297,17 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     const calls = got.blocks.filter((b): b is Extract<AssistantBlock, { type: 'tool_use' }> => b.type === 'tool_use');
     const overBudget = opts.maxBudgetUsd !== undefined && cost >= opts.maxBudgetUsd;
 
+    if (handoff === 1 || handoff === 2) {
+      if (!calls.length && text.trim()) return finish('handoff', 'handoff', text.trim());
+      for (const c of calls) log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: HANDOFF_NO_TOOLS, isError: true } });
+      if (handoff === 1 && !overBudget) {
+        handoff = 2;
+        continue;
+      }
+      // No note: this session goes on with its own context.
+      handoff = 'off';
+      if (calls.length) continue;
+    }
     if (calls.length) {
       if (overBudget || signal.aborted) {
         for (const c of calls)
@@ -287,8 +315,20 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
         return overBudget ? finish('error_max_budget_usd', 'budget') : finish('interrupted', 'aborted');
       }
       const toolStart = performance.now();
+      const before = log.events.length;
       await runTools(calls, byName, opts, signal, log, snap);
       timing.toolMs += performance.now() - toolStart;
+      // Hand off at a turn boundary, while the whole prefix is still cached: the note costs one cheap turn.
+      // The size is the last reply's usage plus chars/4 for the results just added. The context must also have
+      // doubled since the session's first reply, so a session that starts large (a long note, a big task) does
+      // not hand off again straight away.
+      const added = log.events.slice(before).reduce((n, e) => n + (e.kind === 'tool_result' ? Math.ceil(e.output.text.length / 4) : 0), 0);
+      const size = contextSize(got.usage) + added;
+      const first = log.events.find((e): e is EventOf<'assistant'> => e.kind === 'assistant')!;
+      if (handoff === 0 && opts.handoffAt !== undefined && size >= opts.handoffAt && size >= 2 * contextSize(first.usage)) {
+        handoff = 1;
+        log.append({ kind: 'reminder', as: 'user', text: HANDOFF_PROMPT });
+      }
       continue;
     }
     if (overBudget) return finish('error_max_budget_usd', 'budget');

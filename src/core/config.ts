@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { GUARDS, PERMISSION_SETTINGS, type Guard, type PermissionSetting, type Policy } from './safety/policy.ts';
 import { DEFAULT_DOMAINS, SANDBOX_SETTINGS, type SandboxSetting } from './safety/sandbox.ts';
+import { defaultHandoffAt } from './project/handoff.ts';
 import { FALLBACKS, resolveModel } from './providers/catalog.ts';
 import { secretPaths } from './safety/secrets.ts';
 import type { ModelSpec, PrivacyLevel } from './types.ts';
@@ -18,7 +19,11 @@ export type Settings = {
   fallback?: Record<string, string>;
   // The model for each role: an alias or ref, `claude-code[:<model>]` for plan and review, or "none". User
   // settings only: a repo must not pick what the user pays for.
-  roles?: { plan?: string; code?: string; review?: string };
+  roles?: { plan?: string; code?: string; review?: string; swarm?: string };
+  // Whether writer sessions get the spawn tool for sub-threads (default true). User settings only.
+  spawn?: boolean;
+  // Tokens of context at which a session hands off to a new one, or "off". User settings only.
+  handoffAt?: number | 'off';
 };
 
 // How a plan or review role runs: in cedia on a catalog model, or through the user's own Claude Code CLI.
@@ -91,10 +96,29 @@ export function loadFallback(model: ModelSpec, flag?: string): ModelSpec | undef
   return fallback.ref === model.ref ? undefined : fallback;
 }
 
+// Sub-threads: flag > user settings > on.
+export function loadSpawn(flag?: string): boolean {
+  if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--spawn must be on or off: ${flag}`);
+  return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).spawn ?? true);
+}
+
+// When a writer session hands off: flag > user settings > half the window, capped (core/project/handoff.ts).
+export function loadHandoffAt(model: ModelSpec, flag?: string): number | undefined {
+  const raw = flag ?? readSettings(join(cediaHome(), 'settings.json')).handoffAt;
+  if (raw === undefined) return defaultHandoffAt(model);
+  if (raw === 'off') return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1000) throw new Error(`handoff-at must be a token count of at least 1000, or off: ${raw}`);
+  return n;
+}
+
 // Roles: flags > CEDIA_MODEL (code only) > user settings > defaults (code: deepseek; plan and review: off).
 // `claude-code` alone means opus for plan and sonnet for review. The writer always runs in cedia, where its
 // writes go through the policy, the sandbox and the done gate.
-export function loadRoles(flags: { plan?: string; code?: string; review?: string } = {}, env = process.env): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice } {
+export function loadRoles(
+  flags: { plan?: string; code?: string; review?: string; swarm?: string } = {},
+  env = process.env,
+): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice; swarm: ModelSpec } {
   const user = readSettings(join(cediaHome(), 'settings.json')).roles ?? {};
   const codeRef = flags.code ?? env.CEDIA_MODEL ?? user.code ?? 'deepseek';
   if (/^claude-code\b/.test(codeRef)) throw new Error('the code role runs in cedia, where its writes are checked; use claude-code for plan or review');
@@ -105,7 +129,9 @@ export function loadRoles(flags: { plan?: string; code?: string; review?: string
   };
   const plan = role(flags.plan ?? user.plan, 'opus');
   const review = role(flags.review ?? user.review, 'sonnet');
-  return { code: resolveModel(codeRef), ...(plan ? { plan } : {}), ...(review ? { review } : {}) };
+  // Explore sub-threads: free and fast on the Go plan, and it keeps prompts without training on them.
+  const swarm = resolveModel(flags.swarm ?? user.swarm ?? 'beam');
+  return { code: resolveModel(codeRef), ...(plan ? { plan } : {}), ...(review ? { review } : {}), swarm };
 }
 
 // Declared checks for the done gate. Declaring a check grants nothing, so a repo may declare its own.

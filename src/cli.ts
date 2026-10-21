@@ -2,8 +2,10 @@ import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
 import { GUARDS } from './core/safety/policy.ts';
+import { cediaHome } from './core/config.ts';
+import { threadLine, threadsDir, ThreadStore } from './core/project/threads.ts';
 import { lintSession } from './core/session/lint.ts';
-import { SessionLog } from './core/session/log.ts';
+import { projectSlug, SessionLog } from './core/session/log.ts';
 import type { Effort } from './core/types.ts';
 
 const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on stdin)
@@ -26,17 +28,27 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
                                (default: settings, then deepseek -> Haiku 5.5 on the Claude API)
       --review <ref>           the review role, after the done gate passes: a model, claude-code[:<model>]
                                (default sonnet there), or none. Changes it asks for go back to the writer once
+      --spawn <on|off>         let the writer hand self-contained work to sub-threads (default: settings, on)
+      --swarm <ref>            the model explore sub-threads run on (default: roles.swarm in settings, beam)
+      --thread <id>            go on with a thread of this project instead of opening a new one
+      --handoff-at <n|off>     hand off to a new session of the thread once the context reaches n tokens
+                               (default: settings, then half the window, at most 150k)
       --check <command>        declared check for the done gate, e.g. 'bun test'; repeatable
       --sandbox <s>            auto | on | off: OS sandbox for bash (default: $CEDIA_SANDBOX, settings, auto)
       --allow-domain <host>    let sandboxed commands reach this host; repeatable
       --no-session-file        keep the session log in memory only
 
        cedia lint-session <file.jsonl>...   check session logs against the trust invariants
+       cedia threads [--all] [--cwd <dir>]  list this project's threads (--all: archived ones too)
+       cedia threads show <id>              a thread's task, state, sessions, handoff note, result and messages
+       cedia threads send <id> <text>       leave a message the thread sees at its next turn
+       cedia threads archive|unarchive <id> hide a thread from the list, or bring it back
 
 models: ${Object.keys(ALIASES).join(', ')}`;
 
 export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'lint-session') return lintFiles(argv.slice(1));
+  if (argv[0] === 'threads') return threads(argv.slice(1));
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -54,6 +66,10 @@ export async function main(argv: string[]): Promise<number> {
       unlock: { type: 'string', multiple: true },
       privacy: { type: 'string' },
       fallback: { type: 'string' },
+      thread: { type: 'string' },
+      spawn: { type: 'string' },
+      swarm: { type: 'string' },
+      'handoff-at': { type: 'string' },
       review: { type: 'string' },
       plan: { type: 'string' },
       check: { type: 'string', multiple: true },
@@ -94,6 +110,10 @@ export async function main(argv: string[]): Promise<number> {
       ...(values.unlock ? { unlock: values.unlock } : {}),
       ...(values.privacy ? { privacy: values.privacy } : {}),
       ...(values.fallback ? { fallback: values.fallback } : {}),
+      ...(values.thread ? { thread: values.thread } : {}),
+      ...(values.spawn ? { spawn: values.spawn } : {}),
+      ...(values.swarm ? { swarm: values.swarm } : {}),
+      ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
       ...(values.review ? { review: values.review } : {}),
       ...(values.plan ? { plan: values.plan } : {}),
       ...(values.check ? { checks: values.check } : {}),
@@ -120,6 +140,45 @@ function lintFiles(files: string[]): number {
     if (findings.length) bad++;
   }
   return bad ? 1 : 0;
+}
+
+function threads(argv: string[]): number {
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' }, all: { type: 'boolean' } } });
+  const store = new ThreadStore(threadsDir(cediaHome(), projectSlug(values.cwd ?? process.cwd())));
+  const [cmd = 'list', id, ...rest] = positionals;
+  try {
+    if (cmd === 'list') {
+      const all = store.list().filter((t) => values.all || !t.archived);
+      console.log(all.length ? all.map(threadLine).join('\n') : 'no threads in this project');
+      return 0;
+    }
+    if (cmd === 'show' && id) {
+      const t = store.read(id);
+      const lines = [`${t.id}  ${t.state}  ${t.title}`, '', t.task, ''];
+      for (const s of t.sessions) lines.push(`session ${s.sessionId}  ${s.model}  ${s.why}${s.path ? `  ${s.path}` : ''}`);
+      if (t.handoff) lines.push('', `handoff from ${t.handoff.sessionId}:`, t.handoff.note);
+      if (t.result) lines.push('', 'result:', t.result);
+      for (const m of t.messages) lines.push('', `message from ${m.from} at ${m.at}${t.pending.includes(m) ? ' (not seen yet)' : ''}:`, m.text);
+      console.log(lines.join('\n'));
+      return 0;
+    }
+    if ((cmd === 'archive' || cmd === 'unarchive') && id) {
+      if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
+      store.append(id, { kind: 'archived', archived: cmd === 'archive' });
+      console.log(`${cmd}d ${id}`);
+      return 0;
+    }
+    if (cmd === 'send' && id && rest.length) {
+      store.send(id, 'user', rest.join(' '));
+      console.log(`sent to ${id}`);
+      return 0;
+    }
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 1;
+  }
+  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | archive <id> | unarchive <id>] [--cwd <dir>]');
+  return 2;
 }
 
 if (import.meta.main) process.exit(await main(process.argv.slice(2)));

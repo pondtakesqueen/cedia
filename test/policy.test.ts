@@ -227,11 +227,12 @@ describe('settings', () => {
       expect(() => loadFallback(flash, 'nope')).toThrow('unknown model');
 
       // Roles: flags > CEDIA_MODEL (code) > user settings > defaults; claude-code only for plan and review.
-      expect(loadRoles({}, {})).toEqual({ code: flash });
-      writeFileSync(join(home, 'settings.json'), JSON.stringify({ roles: { plan: 'claude-code', code: 'anthropic/claude-haiku-5-5', review: 'sonnet' } }));
-      expect(loadRoles({}, {})).toEqual({ plan: { via: 'claude-code', model: 'opus' }, code: resolveModel('anthropic/claude-haiku-5-5'), review: { via: 'cedia', model: resolveModel('sonnet') } });
+      const beam = resolveModel('beam');
+      expect(loadRoles({}, {})).toEqual({ code: flash, swarm: beam });
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ roles: { plan: 'claude-code', code: 'anthropic/claude-haiku-5-5', review: 'sonnet', swarm: 'deepseek' } }));
+      expect(loadRoles({}, {})).toEqual({ plan: { via: 'claude-code', model: 'opus' }, code: resolveModel('anthropic/claude-haiku-5-5'), review: { via: 'cedia', model: resolveModel('sonnet') }, swarm: flash });
       expect(loadRoles({}, { CEDIA_MODEL: 'beam' }).code.ref).toBe('opencode-go/beam-free');
-      expect(loadRoles({ code: 'deepseek', plan: 'none', review: 'claude-code:fable' }, { CEDIA_MODEL: 'beam' })).toEqual({ code: flash, review: { via: 'claude-code', model: 'fable' } });
+      expect(loadRoles({ code: 'deepseek', plan: 'none', review: 'claude-code:fable', swarm: 'beam' }, { CEDIA_MODEL: 'beam' })).toEqual({ code: flash, review: { via: 'claude-code', model: 'fable' }, swarm: beam });
       expect(() => loadRoles({ code: 'claude-code:opus' }, {})).toThrow('the code role runs in cedia');
       // A repo cannot pick roles.
       writeFileSync(join(repo, '.cedia', 'settings.json'), JSON.stringify({ roles: { code: 'opus' } }));
