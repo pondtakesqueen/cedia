@@ -1,13 +1,14 @@
 node_modules/
+.DS_Store
+
+# research corpus (re-download with research/mirror-docs.sh)
 research/docs/
 research/src/
 research/mirror-errors.log
-.DS_Store
 
-# local artifacts
+# never commit reverse-engineered material
 cc-re/
-results*.jsonl
-research/baseline*.jsonl
-research/baseline-hillclimb.txt
 research/cc-re-map.md
-.pi/
+
+# eval output (baselines worth keeping go in evals/baseline/)
+results*.jsonl
