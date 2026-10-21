@@ -5,6 +5,7 @@ import { hash } from '../hash.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
 import { decide, READ_ONLY_POLICY, type Policy } from '../safety/policy.ts';
+import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
 import { evidence, ledgerEntries, verified } from '../trust/ledger.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
@@ -41,6 +42,10 @@ export type RunOptions = {
   permission?: Policy;
   // Declared checks (task or repo). The done gate counts only these, never a command the model picked.
   checks?: string[];
+  // Puts bash inside the OS sandbox; absent means unsandboxed.
+  wrap?: (command: string) => Promise<string>;
+  // Shadow-git snapshots around every writing call; absent means changed files come from edit/write only.
+  snapshots?: Snapshots;
   role?: string;
   effort?: Effort;
   ttl?: '5m' | '1h';
@@ -123,6 +128,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   let runStart = log.events.length;
   const entries = () => ledgerEntries(log.events.slice(runStart), checks);
   let nudged = false;
+  const snap: { tree?: string } = {};
 
   const finish = (subtype: ResultSubtype, reason: TurnEndReason, result?: string): HeadlessResult => {
     log.append({ kind: 'turn_end', reason, ...(reason === 'aborted' ? { cause: 'user' as const } : {}) });
@@ -211,7 +217,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
           log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: 'not run: the session stopped', isError: true } });
         return overBudget ? finish('error_max_budget_usd', 'budget') : finish('interrupted', 'aborted');
       }
-      await runTools(calls, byName, opts, signal, log);
+      await runTools(calls, byName, opts, signal, log, snap);
       continue;
     }
     if (overBudget) return finish('error_max_budget_usd', 'budget');
@@ -240,6 +246,7 @@ async function runTools(
   opts: RunOptions,
   signal: AbortSignal,
   log: SessionLog,
+  snap: { tree?: string },
 ) {
   type Job = { callId: string; spec: ToolSpec; input: Record<string, unknown>; parallel: boolean };
   const results = new Map<string, EventOf<'tool_result'>['output'] & { status: EventOf<'tool_result'>['status'] }>();
@@ -263,11 +270,28 @@ async function runTools(
   }
   const run = async (j: Job) => {
     try {
-      const out = await j.spec.run(j.input, { cwd: opts.cwd, signal });
+      const out = await j.spec.run(j.input, { cwd: opts.cwd, signal, ...(opts.wrap ? { wrap: opts.wrap } : {}) });
       results.set(j.callId, { ...out, status: signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed' });
     } catch (e) {
       results.set(j.callId, { status: 'failed', text: `tool crashed: ${(e as Error).message}`, isError: true });
     }
+  };
+  // A writing call runs between two snapshots, so the log names every file it changed.
+  const runWriting = async (j: Job) => {
+    const snapshots = opts.snapshots;
+    if (snapshots && !snap.tree) {
+      const base = snapshots.take();
+      if (base) {
+        snap.tree = base;
+        log.append({ kind: 'snapshot', tree: base, changed: [] });
+      }
+    }
+    await run(j);
+    if (!snapshots || !snap.tree) return;
+    const after = snapshots.take();
+    if (!after) return;
+    log.append({ kind: 'snapshot', tree: after, callId: j.callId, changed: snapshots.diff(snap.tree, after) });
+    snap.tree = after;
   };
   let pool: Job[] = [];
   for (const j of jobs) {
@@ -275,7 +299,7 @@ async function runTools(
     else {
       await Promise.all(pool.map(run));
       pool = [];
-      await run(j);
+      await runWriting(j);
     }
   }
   await Promise.all(pool.map(run));

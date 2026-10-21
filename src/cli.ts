@@ -17,6 +17,8 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --allow <rule>           allow a call, e.g. 'bash(bun test*)' or 'edit(src/*)'; repeatable
       --deny <rule>            deny a call; repeatable. The built-in deny list always applies
       --check <command>        declared check for the done gate, e.g. 'bun test'; repeatable
+      --sandbox <s>            auto | on | off: OS sandbox for bash (default: $CEDIA_SANDBOX, settings, auto)
+      --allow-domain <host>    let sandboxed commands reach this host; repeatable
       --no-session-file        keep the session log in memory only
 
        cedia lint-session <file.jsonl>...   check session logs against the trust invariants
@@ -40,6 +42,8 @@ export async function main(argv: string[]): Promise<number> {
       allow: { type: 'string', multiple: true },
       deny: { type: 'string', multiple: true },
       check: { type: 'string', multiple: true },
+      sandbox: { type: 'string' },
+      'allow-domain': { type: 'string', multiple: true },
       'no-session-file': { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -73,6 +77,8 @@ export async function main(argv: string[]): Promise<number> {
       ...(values.allow ? { allow: values.allow } : {}),
       ...(values.deny ? { deny: values.deny } : {}),
       ...(values.check ? { checks: values.check } : {}),
+      ...(values.sandbox ? { sandbox: values.sandbox } : {}),
+      ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),
     });
     if (result.subtype !== 'success' && format === 'text') console.error(`cedia: ${result.subtype}`);
     return result.subtype === 'success' ? 0 : 1;
