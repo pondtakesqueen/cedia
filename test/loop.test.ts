@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CONTINUE_AFTER_LIMIT, runPrompt, type RunOptions } from '../src/core/loop/run.ts';
+import { CONTINUE_AFTER_LIMIT, EMPTY_REPLY, runPrompt, type RunOptions } from '../src/core/loop/run.ts';
 import { FAUX_MODEL, resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, text, toolUse, type FauxStep } from '../src/core/providers/faux.ts';
 import { lintSession } from '../src/core/session/lint.ts';
@@ -345,5 +345,83 @@ describe('loop', () => {
       expect(res.subtype).toBe('success');
       expect(res.evidence).toBeUndefined();
     });
+  });
+});
+
+// Malformed turns Claude Code's changelog records hanging or misreporting (2.1.183, 2.1.251, 2.1.274, 2.1.281,
+// 2.1.286). Each one ends inside the turn limit, keeps every tool_use paired, and says what happened.
+describe('malformed turns', () => {
+  const thinking = (t: string) => ({ type: 'thinking' as const, text: t, opaque: 'sig' });
+
+  test('a reply with only thinking is not an answer: one reminder, then the run fails', async () => {
+    const { log, opts } = setup([{ blocks: [toolUse('c1', 'read', { path: 'a.txt' })] }, { blocks: [thinking('hmm')] }, { blocks: [text('it says alpha')] }]);
+    const res = await runPrompt(opts, 'what is in a.txt');
+    expect(res).toMatchObject({ subtype: 'success', result: 'it says alpha' });
+    expect(of(log.events, 'reminder').map((r) => r.text)).toEqual([EMPTY_REPLY]);
+    expectPaired(log.events);
+
+    const empty = setup([{ blocks: [text('looking')], stop: 'max_tokens' }, { blocks: [thinking('hmm')] }, { blocks: [] }]);
+    const failed = await runPrompt(empty.opts, 'go');
+    expect(failed.subtype).toBe('error_during_execution');
+    expect(failed.result).toContain('without a reply');
+    expect(of(empty.log.events, 'turn_end')[0]!.reason).toBe('error');
+    expectPaired(empty.log.events);
+  });
+
+  test('a refusal is not a success', async () => {
+    const { opts } = setup([{ blocks: [text('I will not do that.')], stop: 'refusal' }]);
+    expect(await runPrompt(opts, 'go')).toMatchObject({ subtype: 'error_during_execution', result: 'I will not do that.' });
+    const silent = setup([{ blocks: [], stop: 'refusal' }]);
+    expect((await runPrompt(silent.opts, 'go')).result).toContain('declined');
+  });
+
+  test('a tool that returns something other than text, or throws a non-Error, still gets a string result', async () => {
+    const odd = (name: string, run: () => Promise<unknown>) => ({ name, description: name, schema: { type: 'object' }, effect: 'read' as const, replay: 'safe' as const, run: run as never });
+    const tools = [
+      odd('object', async () => ({ text: { rows: [1, 2] }, isError: false })),
+      odd('nothing', async () => undefined),
+      odd('throws', async () => {
+        throw 'plain string';
+      }),
+    ];
+    const { log, opts } = setup([{ blocks: [toolUse('c1', 'object', {}), toolUse('c2', 'nothing', {}), toolUse('c3', 'throws', {})] }, { blocks: [text('ok')] }], { tools });
+    expect((await runPrompt(opts, 'go')).subtype).toBe('success');
+    const results = of(log.events, 'tool_result');
+    for (const r of results) expect(typeof r.output.text).toBe('string');
+    expect(results.map((r) => [r.status, r.output.text])).toEqual([
+      ['completed', '{"rows":[1,2]}'],
+      ['failed', 'tool returned no output'],
+      ['failed', 'tool crashed: plain string'],
+    ]);
+    expectPaired(log.events);
+  });
+
+  test('two calls that share an id run once and get one result', async () => {
+    const { log, opts } = setup([{ blocks: [toolUse('dup', 'bash', { command: 'echo one' }), toolUse('dup', 'bash', { command: 'echo two' })] }, { blocks: [text('ok')] }]);
+    await runPrompt(opts, 'go');
+    const results = of(log.events, 'tool_result');
+    expect(results).toHaveLength(1);
+    expect(results[0]!.output.text).toContain('one');
+    expect(results[0]!.output.text).toContain('shared this id');
+    expect(of(log.events, 'tool_intent')).toHaveLength(1);
+    expect(lintSession(log.events)).toEqual([]);
+  });
+
+  test('a tool name longer than any tool gets a short not-run result and the run goes on', async () => {
+    const long = 'x'.repeat(300);
+    const { log, opts } = setup([{ blocks: [toolUse('c1', long, {})] }, { blocks: [text('ok')] }]);
+    expect((await runPrompt(opts, 'go')).subtype).toBe('success');
+    const r = of(log.events, 'tool_result')[0]!;
+    expect(r.status).toBe('not_started');
+    expect(r.output.text.length).toBeLessThan(200);
+    expectPaired(log.events);
+  });
+
+  test('unparseable calls alternating with cut-off replies stop at the turn limit', async () => {
+    const cut: FauxStep = () => ({ blocks: [{ type: 'tool_use', id: `c${Math.random()}`, name: 'read', input: {}, inputError: 'tool call was cut off by the output limit' }], stop: 'max_tokens' });
+    const long: FauxStep = { blocks: [text('...')], stop: 'max_tokens' };
+    const { log, opts } = setup([cut, long, cut, long, cut, long, cut, long], { maxTurns: 5 });
+    expect(await runPrompt(opts, 'go')).toMatchObject({ subtype: 'error_max_turns', numTurns: 5 });
+    expectPaired(log.events);
   });
 });

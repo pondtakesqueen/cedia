@@ -30,6 +30,7 @@ import {
   type SessionEvent,
   type StopReason,
   type StreamEvent,
+  type ToolOutput,
   type TurnEndReason,
   type Usage,
   type WireRequest,
@@ -82,6 +83,10 @@ export type RunOptions = {
 };
 
 export const CONTINUE_AFTER_LIMIT = 'Your previous reply was cut off by the output limit. Continue exactly where it stopped.';
+
+// A reply with no text and no tool call (thinking only, or nothing at all) ends no task: an earlier turn's text
+// would otherwise stand as the result.
+export const EMPTY_REPLY = 'Your last reply had no text and no tool call. Go on with the task, or reply with what you found or did.';
 
 export const unverifiedReminder = (checks: string[]) =>
   `cedia has no record of a declared check passing since your last change, so the task is not done yet. A check counts only when the whole bash command is ${checks.map((c) => `\`${c}\``).join(' or ')} (a leading \`cd\` to the working directory is fine; pipes, \`;\` or other commands are not). Run it that way now, fix what fails, then report.`;
@@ -187,6 +192,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const inherited = (opts.continues?.changed ?? []).map((path) => ({ kind: 'write' as const, at: 0, tool: 'parent', path }));
   const entries = () => [...inherited, ...ledgerEntries(log.events.slice(runStart), checks, opts.cwd)];
   let nudged = false;
+  let emptyNudged = false;
   const snap: { tree?: string } = {};
   // 0: working; 1: asked for the note; 2: asked again after a tool call; 'off': gave up on handing off.
   let handoff: 0 | 1 | 2 | 'off' = 0;
@@ -309,7 +315,11 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     const text = got.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
     if (text) lastText = text;
 
-    const calls = got.blocks.filter((b): b is Extract<AssistantBlock, { type: 'tool_use' }> => b.type === 'tool_use');
+    const all = got.blocks.filter((b): b is Extract<AssistantBlock, { type: 'tool_use' }> => b.type === 'tool_use');
+    // A call that repeats an earlier call's id is not run: the wire pairs results by id, so only one can answer.
+    const calls = all.filter((c, i) => all.findIndex((d) => callIdOf(d) === callIdOf(c)) === i);
+    const shared = new Set(all.filter((c) => !calls.includes(c)).map(callIdOf));
+    if (calls.length || text.trim()) emptyNudged = false;
     const overBudget = opts.maxBudgetUsd !== undefined && cost >= opts.maxBudgetUsd;
 
     if (handoff === 1 || handoff === 2) {
@@ -331,7 +341,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       }
       const toolStart = performance.now();
       const before = log.events.length;
-      await runTools(calls, byName, opts, signal, log, snap);
+      await runTools(calls, byName, opts, signal, log, snap, shared);
       timing.toolMs += performance.now() - toolStart;
       // Hand off at a turn boundary, while the whole prefix is still cached: the note costs one cheap turn.
       // The size is the last reply's usage plus chars/4 for the results just added. The context must also have
@@ -355,6 +365,14 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     if (overBudget) return finish('error_max_budget_usd', 'budget');
     if (got.stop === 'max_tokens') {
       log.append({ kind: 'reminder', as: 'user', text: CONTINUE_AFTER_LIMIT });
+      continue;
+    }
+    // A refusal ends the run as a failure, whatever the ledger holds.
+    if (got.stop === 'refusal') return finish('error_during_execution', 'error', text || `${model.ref} declined to go on with this task`);
+    if (!text.trim()) {
+      if (emptyNudged) return finish('error_during_execution', 'error', `${model.ref} ended its turn twice without a reply`);
+      emptyNudged = true;
+      log.append({ kind: 'reminder', as: 'user', text: EMPTY_REPLY });
       continue;
     }
     // Slop guard: one reminder naming what looks like a shortcut; the model fixes it or explains it.
@@ -395,6 +413,7 @@ async function runTools(
   signal: AbortSignal,
   log: SessionLog,
   snap: { tree?: string },
+  shared: Set<string>,
 ) {
   type Job = { callId: string; spec: ToolSpec; input: Record<string, unknown>; parallel: boolean };
   const results = new Map<string, EventOf<'tool_result'>['output'] & { status: EventOf<'tool_result'>['status'] }>();
@@ -403,7 +422,7 @@ async function runTools(
     const callId = callIdOf(c);
     const spec = byName.get(c.name);
     if (c.inputError) results.set(callId, { status: 'not_started', text: `not run: ${c.inputError}`, isError: true });
-    else if (!spec) results.set(callId, { status: 'not_started', text: `not run: unknown tool "${c.name}"`, isError: true });
+    else if (!spec) results.set(callId, { status: 'not_started', text: `not run: unknown tool "${c.name.length > 64 ? `${c.name.slice(0, 64)}…` : c.name}"`, isError: true });
     else {
       const d = decide(opts.permission ?? READ_ONLY_POLICY, spec, c.input, opts.cwd);
       log.append({ kind: 'permission', callId, tool: c.name, ...d });
@@ -418,10 +437,10 @@ async function runTools(
   }
   const run = async (j: Job) => {
     try {
-      const out = await j.spec.run(j.input, { cwd: opts.cwd, signal, ...(opts.wrap ? { wrap: opts.wrap } : {}) });
+      const out = asOutput(await j.spec.run(j.input, { cwd: opts.cwd, signal, ...(opts.wrap ? { wrap: opts.wrap } : {}) }));
       results.set(j.callId, { ...out, status: signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed' });
     } catch (e) {
-      results.set(j.callId, { status: 'failed', text: `tool crashed: ${(e as Error).message}`, isError: true });
+      results.set(j.callId, { status: 'failed', text: `tool crashed: ${e instanceof Error ? e.message : String(e)}`, isError: true });
     }
   };
   // A writing call runs between two snapshots, so the log names every file it changed.
@@ -458,9 +477,19 @@ async function runTools(
   for (const c of calls) {
     const callId = callIdOf(c);
     const { status, ...output } = results.get(callId)!;
+    if (shared.has(callId)) output.text += `\n[cedia: more than one call in your reply shared this id; only the first ran. Call the others again if you need them.]`;
     const r = redact ? redactSecrets(output.text) : { text: output.text, count: 0 };
     log.append({ kind: 'tool_result', callId, status, output: r.count ? { ...output, text: r.text, redacted: r.count } : output });
   }
+}
+
+// What a tool hands back, as the wire needs it: a tool that returns nothing or an object for text (an MCP tool,
+// say) still gets a string result, so the next request is not refused.
+function asOutput(out: unknown): ToolOutput {
+  if (!out || typeof out !== 'object') return { text: 'tool returned no output', isError: true };
+  const o = out as Partial<ToolOutput> & { text?: unknown };
+  const text = typeof o.text === 'string' ? o.text : o.text === undefined || o.text === null ? '(no output)' : (JSON.stringify(o.text) ?? String(o.text));
+  return { ...o, text, isError: o.isError === true };
 }
 
 // Read-only calls of one turn run together, at most this many at a time.
