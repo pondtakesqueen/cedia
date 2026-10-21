@@ -1,0 +1,7 @@
+{
+  "id": "hard-ledger",
+  "category": "feature",
+  "source": "cedia src/core/trust/ledger.ts (matchCheck, ledgerEntries, evidence, verified)",
+  "prompt": "Implement the four functions in ledger.ts: the evidence ledger that decides, from a coding agent's session log alone, which files it changed and whether a declared check passed after its last change. The comments give every rule. Run `bun test` until it passes.",
+  "verify": "bun test"
+}

@@ -3,14 +3,19 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { GUARDS, PERMISSION_SETTINGS, type Guard, type PermissionSetting, type Policy } from './safety/policy.ts';
 import { DEFAULT_DOMAINS, SANDBOX_SETTINGS, type SandboxSetting } from './safety/sandbox.ts';
+import { FALLBACKS, resolveModel } from './providers/catalog.ts';
 import { secretPaths } from './safety/secrets.ts';
-import type { PrivacyLevel } from './types.ts';
+import type { ModelSpec, PrivacyLevel } from './types.ts';
 
 export type Settings = {
   permissions?: { mode?: PermissionSetting; allow?: string[]; deny?: string[]; unlock?: Guard[] };
   checks?: string[];
   sandbox?: { mode?: SandboxSetting; allowedDomains?: string[] };
   privacy?: PrivacyLevel;
+  // Standing facts about the user and their work, sent at the start of every session. User settings only.
+  context?: string | string[];
+  // Model (alias or ref) -> the model to continue on when its quota runs out, or "none". User settings only.
+  fallback?: Record<string, string>;
 };
 
 export const cediaHome = () => process.env.CEDIA_HOME ?? join(homedir(), '.cedia');
@@ -62,11 +67,51 @@ export function loadPrivacy(cwd: string, flag?: string, env = process.env): Priv
 }
 const PRIVACY_LEVELS: PrivacyLevel[] = ['no-training', 'zdr'];
 
+// The user's standing context. A repo's settings cannot set it: a cloned repo must not speak as the user.
+export function loadContext(): string | undefined {
+  const c = readSettings(join(cediaHome(), 'settings.json')).context;
+  const text = Array.isArray(c) ? c.join('\n') : c;
+  return text?.trim() || undefined;
+}
+
+// The model a session continues on when `model`'s quota runs out: flag > user settings > the built-in FALLBACKS.
+// "none" turns it off. A repo cannot set it, since the fallback is usually paid per token.
+export function loadFallback(model: ModelSpec, flag?: string): ModelSpec | undefined {
+  const user = readSettings(join(cediaHome(), 'settings.json')).fallback ?? {};
+  const fromUser = Object.entries(user).find(([k]) => resolveModel(k).ref === model.ref)?.[1];
+  const ref = flag ?? fromUser ?? FALLBACKS[model.ref];
+  if (!ref || ref === 'none') return undefined;
+  const fallback = resolveModel(ref);
+  return fallback.ref === model.ref ? undefined : fallback;
+}
+
 // Declared checks for the done gate. Declaring a check grants nothing, so a repo may declare its own.
 export function loadChecks(cwd: string, flags: string[] = []): string[] {
   const user = readSettings(join(cediaHome(), 'settings.json')).checks ?? [];
   const project = readSettings(join(cwd, '.cedia', 'settings.json')).checks ?? [];
   return [...new Set([...flags, ...project, ...user])];
+}
+
+// With no declared checks, the repo's own test command, so the done gate still asks for evidence. Detected
+// checks are soft: the gate reminds once but never refuses, since the repo's tests may already fail.
+export function detectChecks(cwd: string): string[] {
+  const has = (f: string) => existsSync(join(cwd, f));
+  if (has('package.json')) {
+    let scripts: Record<string, string> = {};
+    try {
+      scripts = (JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
+    } catch {
+      return [];
+    }
+    const pm = has('bun.lock') || has('bun.lockb') ? 'bun' : has('pnpm-lock.yaml') ? 'pnpm' : has('yarn.lock') ? 'yarn' : 'npm';
+    const test = scripts.test && !/no test specified/.test(scripts.test) ? [pm === 'bun' ? 'bun run test' : `${pm} test`] : [];
+    return test.length ? test : has('bun.lock') || has('bunfig.toml') ? ['bun test'] : [];
+  }
+  if (has('Cargo.toml')) return ['cargo test'];
+  if (has('go.mod')) return ['go test ./...'];
+  if (has('Makefile') && /^test:/m.test(readFileSync(join(cwd, 'Makefile'), 'utf8'))) return ['make test'];
+  if ((has('pyproject.toml') || has('pytest.ini') || has('setup.cfg')) && (has('tests') || has('test'))) return ['pytest'];
+  return [];
 }
 
 // Sandbox: flags > CEDIA_SANDBOX > user settings > auto. Network grants come from the user only, never the repo.

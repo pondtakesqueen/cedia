@@ -9,6 +9,8 @@ const ANTHROPIC = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_AUTH = { env: 'ANTHROPIC_API_KEY', altEnv: 'CEDIA_ANTHROPIC_API_KEY', scheme: 'x-api-key' } as const;
 const GO = 'https://opencode.ai/inference/go';
 const GO_AUTH = { env: 'OPENCODE_API_KEY', scheme: 'bearer' } as const;
+const DEEPSEEK = 'https://api.deepseek.com/chat/completions';
+const DEEPSEEK_AUTH = { env: 'DEEPSEEK_API_KEY', scheme: 'bearer' } as const;
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 const claudeCaps: ModelCapabilities = {
@@ -76,19 +78,35 @@ const go = (id: string, wire: ModelSpec['wire'], price: ModelSpec['price'], extr
   ...extra,
 });
 
+const deepseekFlashPrice = { ...p(0.3, 1.2, 0.006), offPeak: { ...p(0.15, 0.6, 0.003), isOffPeak: deepseekOffPeak } };
 const haikuPrice = { ...p(0.1, 0.5, 0.01, 0.125), above: { tokens: 100_000, price: p(0.5, 2.5, 0.05, 0.625) } };
 
 export const CATALOG: ModelSpec[] = [
   claude('claude-fable-5-1', p(10, 50, 0.25, 12.5)),
   claude('claude-opus-5-5', p(4, 20, 0.2, 5)),
+  // Fast mode (research preview, Claude API only): up to 2.5x output tokens per second at 2x the price.
+  claude('claude-opus-5-5', p(8, 40, 0.4, 10), { ref: 'anthropic/claude-opus-5-5-fast', speed: 'fast', headers: { 'anthropic-beta': 'fast-mode-2026-02-01' } }),
   claude('claude-sonnet-5-5', p(2, 10, 0.2, 2.5), { defaultEffort: 'high' }),
   claude('claude-haiku-5-5', haikuPrice),
   go('claude-haiku-5-5', 'anthropic-messages', haikuPrice, { maxOutput: 128_000, dataPolicy: 'retained', defaultEffort: 'medium' }),
-  go('deepseek-v4.1-flash', 'chat-completions', { ...p(0.3, 1.2, 0.006), offPeak: { ...p(0.15, 0.6, 0.003), isOffPeak: deepseekOffPeak } }),
+  go('deepseek-v4.1-flash', 'chat-completions', deepseekFlashPrice),
   go('deepseek-v4-pro', 'chat-completions', { ...p(1.32, 3.96, 0.044), offPeak: { ...p(0.66, 1.98, 0.022), isOffPeak: deepseekOffPeak } }),
   go('beam-free', 'chat-completions', p(0, 0, 0), { dataPolicy: 'retained' }),
   go('muse-spark-1.3-contributor', 'openai-responses', p(0.1, 0.2, 0.002), { dataPolicy: 'trains' }),
   go('grok-4.7', 'openai-responses', { ...p(2, 6, 0.5), above: { tokens: 200_000, price: p(4, 12, 1) } }, { dataPolicy: 'retained', caps: { ...responsesCaps, effortLevels: ['low', 'medium', 'high', 'xhigh'] } }),
+  // DeepSeek's own API, paid per token. Its privacy policy lists training as a use of inputs with no opt-out for
+  // the API, so it counts as `trains` and runs only in public repos.
+  {
+    ref: 'deepseek/deepseek-v4.1-flash',
+    id: 'deepseek-v4.1-flash',
+    wire: 'chat-completions',
+    url: DEEPSEEK,
+    auth: DEEPSEEK_AUTH,
+    maxOutput: 32_000,
+    price: deepseekFlashPrice,
+    dataPolicy: 'trains',
+    caps: chatCaps,
+  },
 ];
 
 export const FAUX_MODEL: ModelSpec = {
@@ -104,12 +122,17 @@ export const FAUX_MODEL: ModelSpec = {
   caps: { ...chatCaps, contextWindow: 200_000 },
 };
 
+// A second scripted model, so tests can follow a fallback offline. It reads the same script as faux.
+export const FAUX_FALLBACK: ModelSpec = { ...FAUX_MODEL, ref: 'faux/fallback', id: 'fallback' };
+
 export const ALIASES: Record<string, string> = {
   opus: 'anthropic/claude-opus-5-5',
+  'opus-fast': 'anthropic/claude-opus-5-5-fast',
   fable: 'anthropic/claude-fable-5-1',
   sonnet: 'anthropic/claude-sonnet-5-5',
   haiku: 'opencode-go/claude-haiku-5-5',
   deepseek: 'opencode-go/deepseek-v4.1-flash',
+  'deepseek-api': 'deepseek/deepseek-v4.1-flash',
   'deepseek-pro': 'opencode-go/deepseek-v4-pro',
   beam: 'opencode-go/beam-free',
   muse: 'opencode-go/muse-spark-1.3-contributor',
@@ -117,9 +140,16 @@ export const ALIASES: Record<string, string> = {
   faux: 'faux/scripted',
 };
 
+// Where a session goes when its model's plan or balance runs out. Off the Go plan, so its quota does not apply,
+// and kept from training: Haiku 5.5 on the Claude API passed as many hard evals as Go's DeepSeek Flash for less.
+export const FALLBACKS: Record<string, string> = {
+  'opencode-go/deepseek-v4.1-flash': 'anthropic/claude-haiku-5-5',
+};
+
 export function resolveModel(ref: string): ModelSpec {
   const full = ALIASES[ref] ?? ref;
   if (full === FAUX_MODEL.ref) return FAUX_MODEL;
+  if (full === FAUX_FALLBACK.ref) return FAUX_FALLBACK;
   const m = CATALOG.find((c) => c.ref === full);
   if (!m) throw new Error(`unknown model "${ref}". Known: ${[...Object.keys(ALIASES), ...CATALOG.map((c) => c.ref)].join(', ')}`);
   return m;

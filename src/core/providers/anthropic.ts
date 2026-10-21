@@ -54,6 +54,7 @@ export function anthropicBody(req: WireRequest): JsonObject {
     messages: anthropicMessages(req.messages, req.model.caps.midConversationSystem),
     cache_control: { type: 'ephemeral', ...ttl },
     ...(req.effort ? { output_config: { effort: req.effort } } : {}),
+    ...(req.model.speed ? { speed: req.model.speed } : {}),
   };
 }
 

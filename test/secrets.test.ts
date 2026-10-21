@@ -21,6 +21,8 @@ test('known token formats are replaced wherever they appear', () => {
 test('a private key block goes whole, even when the output was cut before its end', () => {
   expect(r('a\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----\nz')).toBe(`a\n${REDACTED}\nz`);
   expect(r('-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA')).toBe(REDACTED);
+  const two = '-----BEGIN EC PRIVATE KEY-----\nAAA\n-----END EC PRIVATE KEY-----\nkeep me\n-----BEGIN EC PRIVATE KEY-----\nBBB\n-----END EC PRIVATE KEY-----';
+  expect(redactSecrets(two)).toEqual({ text: `${REDACTED}\nkeep me\n${REDACTED}`, count: 2 });
 });
 
 test('dotenv, JSON, YAML and URL secrets keep their names', () => {

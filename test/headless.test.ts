@@ -91,6 +91,41 @@ describe('cedia -p (offline, faux)', () => {
     expect(lines.filter((l) => l.type === 'event').map((l) => l.event.kind)).toEqual(['session', 'reminder', 'user', 'request', 'attempt', 'assistant', 'turn_end']);
   });
 
+  test('a spent quota continues in a new session on the fallback, which must still verify the first one\'s changes', () => {
+    const quota = { error: { code: 'quota', status: 402, message: 'Insufficient Balance' } };
+    const args = ['-p', 'make f.txt say good', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'grep -q good f.txt', '--fallback', 'faux/fallback'];
+    const sessions = (home: string) => {
+      const root = join(home, 'sessions');
+      const [project] = readdirSync(root);
+      return readdirSync(join(root, project!)).map((f) => ({ id: f.replace(/\.jsonl$/, ''), events: SessionLog.load(join(root, project!, f)).events }));
+    };
+    const head = (events: SessionEvent[]) => events[0] as Extract<SessionEvent, { kind: 'session' }>;
+
+    // The fallback session claims done without a check: the first session's write still needs one.
+    const lazy = cedia([call('c1', 'echo good > f.txt'), quota, reply('done'), reply('done')], args);
+    expect(JSON.parse(lazy.out)).toMatchObject({ subtype: 'error_unverified_claim', evidence: { changed: ['f.txt'], unverified: ['f.txt'] } });
+    expect(lazy.err).toContain('faux/scripted is out of quota; continuing on faux/fallback in a new session');
+
+    const ok = cedia([call('c1', 'echo good > f.txt'), quota, call('c2', 'grep -q good f.txt'), reply('done')], args);
+    const result = JSON.parse(ok.out);
+    expect(result).toMatchObject({ subtype: 'success', numTurns: 4, evidence: { changed: ['f.txt'], unverified: [] } });
+    const logs = sessions(ok.home);
+    expect(logs).toHaveLength(2);
+    const second = logs.find((l) => head(l.events).parentSession)!;
+    const first = logs.find((l) => l !== second)!;
+    expect(head(first.events).model).toBe('faux/scripted');
+    expect(head(second.events)).toMatchObject({ model: 'faux/fallback', parentSession: first.id });
+    expect(result.sessionId).toBe(second.id);
+    // The model learns about the hand-over from a logged reminder, not from anything unlogged.
+    expect(second.events.some((e) => e.kind === 'reminder' && e.text.includes('stopped partway through this task when its quota ran out'))).toBe(true);
+  });
+
+  test('the DeepSeek API fallback is refused in a repo not marked public', () => {
+    const r = cedia([{ error: { code: 'quota', status: 429, message: 'usage limit reached' } }], ['-p', 'x', '--output-format', 'json', '--fallback', 'deepseek-api']);
+    expect(r.code).toBe(1);
+    expect(JSON.parse(r.out).result).toContain('deepseek/deepseek-v4.1-flash trains on prompts');
+  });
+
   test('a missing key is a note, since a proxy may add credentials; the alternate name counts', () => {
     expect(missingKeyNote(resolveModel('opus'), {})).toContain('ANTHROPIC_API_KEY (or CEDIA_ANTHROPIC_API_KEY) is not set');
     expect(missingKeyNote(resolveModel('opus'), { ANTHROPIC_API_KEY: 'k' })).toBeUndefined();

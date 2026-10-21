@@ -2,9 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { anthropicBody, anthropicProvider, parseAnthropic } from '../src/core/providers/anthropic.ts';
-import { costUsd, deepseekOffPeak, resolveModel } from '../src/core/providers/catalog.ts';
+import { costUsd, deepseekOffPeak, FALLBACKS, resolveModel } from '../src/core/providers/catalog.ts';
 import { chatBody, chatProvider, chatUsage, parseChat } from '../src/core/providers/chat.ts';
-import { classifyStatus, USER_AGENT } from '../src/core/providers/http.ts';
+import { classifyStatus, isRetryable, USER_AGENT } from '../src/core/providers/http.ts';
 import { parseResponses, responsesBody, responsesProvider } from '../src/core/providers/responses.ts';
 import { readSse, streamFromString } from '../src/core/providers/sse.ts';
 import type { Message, StreamEvent, WireRequest } from '../src/core/types.ts';
@@ -139,6 +139,11 @@ describe('request bodies', () => {
     expect(b.system).toEqual([{ type: 'text', text: 'SYS', cache_control: { type: 'ephemeral' } }]);
     expect(b.cache_control).toEqual({ type: 'ephemeral' });
     expect(b.output_config).toEqual({ effort: 'medium' });
+    expect(b.speed).toBeUndefined();
+    const fast = resolveModel('opus-fast');
+    expect(anthropicBody(req('opus-fast')) as any).toMatchObject({ model: 'claude-opus-5-5', speed: 'fast' });
+    expect(fast.headers).toEqual({ 'anthropic-beta': 'fast-mode-2026-02-01' });
+    expect(fast.price.output).toBe(2 * resolveModel('opus').price.output);
     expect(b.messages[1].content[0]).toEqual({ type: 'thinking', thinking: 'hmm', signature: 'sig' });
     // The mid-conversation note becomes a reminder in the same user turn as the tool result.
     expect(b.messages[2].content.map((c: any) => c.type)).toEqual(['tool_result', 'text']);
@@ -201,6 +206,19 @@ describe('http', () => {
     expect(classifyStatus(400, 'prompt is too long: 1200000 tokens').code).toBe('context_length');
     expect(classifyStatus(400, 'bad').code).toBe('bad_request');
     expect(classifyStatus(503, '').code).toBe('server');
+    // A spent plan or balance is not a per-minute limit: it never retries, and a fallback may pick the task up.
+    expect(classifyStatus(402, '{"error":{"message":"Insufficient Balance"}}').code).toBe('quota');
+    expect(classifyStatus(429, '{"error":{"message":"You have reached your usage limit for this period"}}').code).toBe('quota');
+    expect(classifyStatus(429, 'slow down').code).toBe('rate_limit');
+    expect(isRetryable(classifyStatus(402, ''))).toBe(false);
+  });
+
+  test("DeepSeek's own API counts as training on prompts; the quota fallback is Haiku on the Claude API", () => {
+    const api = resolveModel('deepseek-api');
+    expect(api).toMatchObject({ id: 'deepseek-v4.1-flash', url: 'https://api.deepseek.com/chat/completions', dataPolicy: 'trains', auth: { env: 'DEEPSEEK_API_KEY' } });
+    expect(api.price).toEqual(resolveModel('deepseek').price);
+    const fallback = resolveModel(FALLBACKS[resolveModel('deepseek').ref]!);
+    expect(fallback).toMatchObject({ ref: 'anthropic/claude-haiku-5-5', url: 'https://api.anthropic.com/v1/messages', dataPolicy: 'retained' });
   });
 });
 

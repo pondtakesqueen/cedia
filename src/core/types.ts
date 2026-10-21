@@ -26,7 +26,8 @@ export type PrivacyLevel = 'no-training' | 'zdr';
 export type ToolEffect = 'read' | 'write_workspace' | 'exec' | 'network';
 
 export type AttemptErrorCode =
-  | 'rate_limit' | 'overloaded' | 'auth' | 'bad_request' | 'network' | 'timeout' | 'server' | 'context_length';
+  | 'rate_limit' | 'overloaded' | 'auth' | 'bad_request' | 'network' | 'timeout' | 'server' | 'context_length'
+  | 'quota'; // the plan's usage limit or the account balance ran out: waiting seconds will not help
 export type AttemptError = { code: AttemptErrorCode; status?: number; retryAfterMs?: number; message: string };
 
 export type ToolDef = { name: string; description: string; schema: JsonObject };
@@ -46,9 +47,10 @@ type EventBody =
       ttl?: '5m' | '1h';
       headers: Record<string, string>; // header name -> hash of the value, never the value
     }
-  | { kind: 'attempt'; requestId: EventId; n: number; error?: AttemptError }
+  // ttftMs: until the provider starts streaming; ms: the whole attempt.
+  | { kind: 'attempt'; requestId: EventId; n: number; error?: AttemptError; ttftMs?: number; ms?: number }
   | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage }
-  | { kind: 'snapshot'; tree: string; callId?: string; changed: string[] } // shadow-git tree after a writing call
+  | { kind: 'snapshot'; tree: string; callId?: string; changed: string[]; ms?: number } // shadow-git tree after a writing call
   | { kind: 'permission'; callId: string; tool: string; decision: 'allow' | 'deny'; rule: string; reason?: string }
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
   | { kind: 'tool_result'; callId: string; status: EffectStatus; output: ToolOutput }
@@ -95,6 +97,9 @@ export type ModelSpec = {
   defaultEffort?: Effort;
   price: Price & { offPeak?: Price & { isOffPeak: (d: Date) => boolean }; above?: { tokens: number; price: Price } };
   dataPolicy: 'zdr' | 'retained' | 'trains';
+  // Anthropic fast mode: the same model decoding up to 2.5x faster at a premium price. Its own catalog entry,
+  // because a speed change invalidates the prompt cache and changes the price.
+  speed?: 'fast';
   caps: ModelCapabilities;
 };
 
@@ -131,7 +136,8 @@ export type Provider = {
   stream(req: WireRequest, signal: AbortSignal): AsyncIterable<StreamEvent>;
 };
 
-export type Evidence = { changed: string[]; checks: { command: string; exitCode: number }[]; unverified: string[] };
+// flags: what the slop guard found in this run's changes (see core/trust/slop.ts).
+export type Evidence = { changed: string[]; checks: { command: string; exitCode: number }[]; unverified: string[]; flags?: string[] };
 
 export type ResultSubtype =
   | 'success' | 'error_max_turns' | 'error_max_budget_usd' | 'error_during_execution' | 'interrupted' | 'error_unverified_claim';
@@ -146,7 +152,13 @@ export type HeadlessResult = {
   cacheHitRatio: number;
   result: string;
   evidence?: Evidence;
+  timing?: Timing;
 };
+
+// Where a run's wall time went. outputTokPerSec is the model's decode rate: output tokens (thinking included)
+// over streaming time. harnessMs is everything that was neither the model nor a tool: cedia's own overhead.
+// retryMs is time spent waiting to retry a failed provider call.
+export type Timing = { wallMs: number; modelMs: number; ttftMs: number; toolMs: number; retryMs: number; harnessMs: number; outputTokPerSec: number };
 
 export function addUsage(a: Usage, b: Usage): Usage {
   return {

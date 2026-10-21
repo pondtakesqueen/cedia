@@ -23,9 +23,12 @@ const WRAPPERS = new Map<string, Wrapper>([
 const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
 
 // Splits on ; & | && || newlines, subshells, $( ) and backticks outside quotes, then into words.
-// Returns null for unbalanced quotes.
+// Heredoc bodies are data, except for the $( ) and backtick substitutions an unquoted delimiter lets run.
+// Returns null for unbalanced quotes or substitutions.
 export function simpleCommands(command: string): string[][] | null {
   const out: string[][] = [];
+  const fromHeredocs: string[][] = [];
+  const heredocs: { delim: string; quoted: boolean; dash: boolean }[] = [];
   let words: string[] = [];
   let cur = '';
   let has = false;
@@ -53,6 +56,35 @@ export function simpleCommands(command: string): string[][] | null {
       cur += command[++i];
     } else if (ch === '&' && (command[i - 1] === '>' || command[i + 1] === '>')) {
       cur += ch; // 2>&1 and &> are redirections, not background jobs
+    } else if (ch === '<' && command[i + 1] === '<' && command[i + 2] !== '<') {
+      endWord();
+      const head = /^<<(-?)[ \t]*(?:'([^']*)'|"([^"]*)"|\\?([^\s;&|<>()]+))/.exec(command.slice(i));
+      if (!head) return null;
+      const delim = head[2] ?? head[3] ?? head[4]!;
+      heredocs.push({ delim, quoted: head[4] === undefined || head[0].includes('\\'), dash: head[1] === '-' });
+      i += head[0].length - 1;
+    } else if (ch === '\n' && heredocs.length) {
+      endCommand();
+      // Bodies start on the next line, one after another, each ended by a line that is its delimiter.
+      for (const h of heredocs.splice(0)) {
+        let body = '';
+        while (i + 1 < command.length) {
+          const end = command.indexOf('\n', i + 1);
+          const line = command.slice(i + 1, end < 0 ? command.length : end);
+          i = end < 0 ? command.length : end;
+          if ((h.dash ? line.replace(/^\t+/, '') : line) === h.delim) break;
+          body += line + '\n';
+        }
+        if (!h.quoted) {
+          const subs = substitutions(body);
+          if (!subs) return null;
+          for (const sub of subs) {
+            const inner = simpleCommands(sub);
+            if (!inner) return null;
+            fromHeredocs.push(...inner);
+          }
+        }
+      }
     } else if (SEPARATORS.has(ch) || (ch === '$' && command[i + 1] === '(')) {
       endCommand();
     } else if (/\s/.test(ch)) {
@@ -61,7 +93,33 @@ export function simpleCommands(command: string): string[][] | null {
   }
   if (quote) return null;
   endCommand();
-  return out.flatMap(expand);
+  return [...out.flatMap(expand), ...fromHeredocs];
+}
+
+// The $( ) and backtick substitutions in text the shell expands (an unquoted heredoc body). Null when one is
+// not closed.
+function substitutions(text: string): string[] | null {
+  const subs: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '\\') i++;
+    else if (text[i] === '`') {
+      const end = text.indexOf('`', i + 1);
+      if (end < 0) return null;
+      subs.push(text.slice(i + 1, end));
+      i = end;
+    } else if (text[i] === '$' && text[i + 1] === '(') {
+      let depth = 0;
+      let j = i + 1;
+      for (; j < text.length; j++) {
+        if (text[j] === '(') depth++;
+        else if (text[j] === ')' && --depth === 0) break;
+      }
+      if (j >= text.length) return null;
+      subs.push(text.slice(i + 2, j));
+      i = j;
+    }
+  }
+  return subs;
 }
 
 // Drops redirections, leading assignments and wrappers like sudo or env, and unpacks `bash -c "..."` and eval.

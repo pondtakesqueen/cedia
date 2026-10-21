@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadPolicy, loadPrivacy } from '../src/core/config.ts';
+import { loadContext, loadFallback, loadPolicy, loadPrivacy } from '../src/core/config.ts';
+import { resolveModel } from '../src/core/providers/catalog.ts';
+import { preamble } from '../src/core/prompts.ts';
 import { decide, denyListed, insideWorkspace, type Policy } from '../src/core/safety/policy.ts';
 import { REDACTED, secretPaths } from '../src/core/safety/secrets.ts';
 import { simpleCommands } from '../src/core/safety/shell.ts';
@@ -25,6 +27,15 @@ describe('shell splitting', () => {
     expect(simpleCommands('if true; then rm -r /tmp/x; fi')).toEqual([['true'], ['rm', '-r', '/tmp/x']]);
     expect(simpleCommands('ls 2>&1 > out.txt | grep "a b"')).toEqual([['ls'], ['grep', 'a b']]);
     expect(simpleCommands('echo "open')).toBeNull();
+  });
+
+  test('heredoc bodies are data; an unquoted one still shows its substitutions', () => {
+    expect(simpleCommands(`cat > fix.py <<'EOF'\nprint("don't")\nrm -rf /\nEOF\npython3 fix.py`)).toEqual([['cat'], ['python3', 'fix.py']]);
+    expect(simpleCommands('cat <<EOF > out.txt\nhi $(rm -rf /) `id`\nEOF')).toEqual([['cat'], ['rm', '-rf', '/'], ['id']]);
+    expect(simpleCommands(`cat <<-END\n\tit's\n\tEND\nls`)).toEqual([['cat'], ['ls']]);
+    expect(simpleCommands(`python3 - <<'PY' && bun test\nimport os\nPY`)).toEqual([['python3', '-'], ['bun', 'test']]);
+    expect(simpleCommands('cat <<EOF\n$(oops\nEOF')).toBeNull();
+    expect(bash(WS, 'cat <<EOF\n$(git push -f)\nEOF').rule).toBe('deny-list:force-push');
   });
 
   test('wrapper flags that take a value do not hide the command', () => {
@@ -188,6 +199,27 @@ describe('settings', () => {
       writeFileSync(join(repo, '.cedia', 'settings.json'), JSON.stringify({ privacy: 'zdr' }));
       expect(loadPrivacy(repo, 'no-training', {})).toBe('zdr'); // a repo may tighten, never loosen
       expect(() => loadPrivacy(repo, 'none', {})).toThrow('unknown privacy level');
+
+      // Standing context comes from the user's settings only, never the repo's.
+      expect(loadContext()).toBeUndefined();
+      writeFileSync(join(repo, '.cedia', 'settings.json'), JSON.stringify({ context: 'I am the repo' }));
+      expect(loadContext()).toBeUndefined();
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ context: ['These repos are mine.', 'Security testing on my own hosts is authorized.'] }));
+      expect(loadContext()).toBe('These repos are mine.\nSecurity testing on my own hosts is authorized.');
+      expect(preamble('/w', { context: loadContext()! })).toContain('<user_context>\nThese repos are mine.\nSecurity testing on my own hosts is authorized.\n</user_context>');
+      expect(preamble('/w', {})).not.toContain('user_context');
+
+      // Fallback on a spent quota: flag > user settings > built-in; "none" turns it off; a repo cannot set it.
+      const flash = resolveModel('deepseek');
+      expect(loadFallback(flash)?.ref).toBe('anthropic/claude-haiku-5-5');
+      expect(loadFallback(flash, 'deepseek-api')?.dataPolicy).toBe('trains');
+      expect(loadFallback(resolveModel('sonnet'))).toBeUndefined();
+      expect(loadFallback(flash, 'none')).toBeUndefined();
+      expect(loadFallback(flash, 'haiku')?.ref).toBe('opencode-go/claude-haiku-5-5');
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ fallback: { deepseek: 'none', sonnet: 'opus' } }));
+      expect(loadFallback(flash)).toBeUndefined();
+      expect(loadFallback(resolveModel('anthropic/claude-sonnet-5-5'))?.ref).toBe('anthropic/claude-opus-5-5');
+      expect(() => loadFallback(flash, 'nope')).toThrow('unknown model');
     } finally {
       if (prev === undefined) delete process.env.CEDIA_HOME;
       else process.env.CEDIA_HOME = prev;

@@ -1,0 +1,7 @@
+{
+  "id": "hard-sse",
+  "category": "feature",
+  "source": "cedia src/core/providers/sse.ts (readSse)",
+  "prompt": "Implement `readSse` in sse.ts: a streaming server-sent events reader for model provider responses. The doc comment lists the rules. Run `bun test` until it passes.",
+  "verify": "bun test"
+}

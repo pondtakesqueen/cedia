@@ -1,0 +1,7 @@
+{
+  "id": "hard-edit-tiers",
+  "category": "feature",
+  "source": "cedia src/core/tools/edit.ts (applyEdit)",
+  "prompt": "Implement `applyEdit` in edit.ts as its doc comment describes: exact match first, then whole lines ignoring trailing whitespace, then whole lines ignoring indentation with new_text re-indented to the file. Errors must say how many places matched and, when nothing matches, point at the line where old_text's first line appears. Run `bun test` until it passes.",
+  "verify": "bun test"
+}

@@ -1,0 +1,3 @@
+[test]
+# Eval task stubs under evals/tasks fail on purpose; the suite lives in test/.
+root = "test"

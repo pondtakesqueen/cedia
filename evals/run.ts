@@ -4,10 +4,11 @@
 //
 // Every harness binary comes from the environment (CEDIA_EVAL_<NAME>_BIN) or PATH, so the runner works on any
 // machine. Each task runs `--runs` times, each in its own clean temp dir. The task's verify command decides
-// pass or fail, never the agent's words.
+// pass or fail, never the agent's words. Workspaces are never marked public: the tasks come from cedia's own
+// code, so a model that trains on prompts (Muse) is refused here, as in any private repo.
 
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { costUsd, resolveModel } from "../src/core/providers/catalog.ts";
@@ -19,6 +20,9 @@ export type Task = {
   setup?: Record<string, string>;
   verify?: string;
   expectedExitCode?: number;
+  // Directory tasks only: a solution laid over setup, never copied into the workspace. The tests check that
+  // setup alone fails verify and setup plus reference passes it.
+  reference?: Record<string, string>;
 };
 
 type LedgerEntry = { kind: "rollout" | "session"; label: string; ms: number };
@@ -30,6 +34,8 @@ export type Reported = {
   tokens?: { input: number; cacheRead: number; output: number };
   cacheHitRatio?: number;
   turns?: number;
+  // cedia only: where the run's time went (see Timing in src/core/types.ts).
+  timing?: { modelMs: number; ttftMs: number; toolMs: number; retryMs?: number; harnessMs: number; outputTokPerSec: number };
 };
 
 export type Result = {
@@ -55,6 +61,8 @@ export type Result = {
   verifyOutput?: string;
   passed: boolean;
   falseDone: boolean;
+  // Test files from the task that the agent changed; they are restored before verify.
+  tampered?: string[];
 };
 
 type Invocation = { bin: string; args: string[]; env?: Record<string, string> };
@@ -69,6 +77,7 @@ const HARNESSES: Record<string, (task: Task, cwd: string, model: string | null) 
       "--max-budget-usd", process.env.CEDIA_EVAL_RUN_BUDGET ?? "0.5",
       ...(task.verify ? ["--check", task.verify] : []),
       ...(model ? ["--model", model] : []),
+      "--fallback", "none", // a result measures the model it names
     ],
   }),
   pi: (task, _cwd, model) => ({ bin: process.env.CEDIA_EVAL_PI_BIN ?? "pi", args: ["-p", task.prompt, ...(model ? ["--model", model] : [])] }),
@@ -117,7 +126,9 @@ export function checkLedgerIdentity(entries: LedgerEntry[], runCount: number): v
 }
 
 // A rough signal for harnesses that do not say whether they claim done.
-export const claimsDone = (stdout: string): boolean => /done|fixed|completed|passing|verified/i.test(stdout);
+// A keyword signal: says it finished, and does not say it stopped short.
+export const claimsDone = (stdout: string): boolean =>
+  /done|fixed|completed|passing|verified/i.test(stdout) && !/\b(could not|couldn't|cannot|can't|unable to|stopping here|was denied|not (been )?(run|verified|finished))\b/i.test(stdout);
 
 // Reads the JSON result cedia (`--output-format json`) or claude (`--output-format json`) prints last.
 export function parseReported(stdout: string): { reported: Reported; text: string } | undefined {
@@ -140,6 +151,7 @@ export function parseReported(stdout: string): { reported: Reported; text: strin
         tokens: { input: (u.uncached ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0), cacheRead: u.cacheRead ?? 0, output: u.output ?? 0 },
         cacheHitRatio: Number(j.cacheHitRatio),
         turns: Number(j.numTurns),
+        ...(j.timing ? { timing: j.timing as Reported["timing"] } : {}),
       },
     };
   }
@@ -197,8 +209,20 @@ export async function runTask(task: Task, harness: string, model: string | null,
     const text = parsed?.text ?? out.stdout;
     // cedia's subtype says whether it claimed done; a refused claim (done gate) is not a claim.
     const refusedClaim = reported.subtype === "error_unverified_claim";
-    const claimedDone = harness === "cedia" && parsed ? reported.subtype === "success" : claimsDone(text);
+    // cedia's success only means the run ended normally; a run that reports it could not finish is not a claim.
+    const claimedDone = harness === "cedia" && parsed ? reported.subtype === "success" && claimsDone(text) : claimsDone(text);
     const infraError = reported.subtype === "error_during_execution" && (reported.tokens?.input ?? 0) === 0;
+
+    // Tests that came with the task are put back before verify, so editing them cannot pass the task.
+    const tampered: string[] = [];
+    for (const [path, content] of Object.entries(task.setup ?? {})) {
+      if (!/\.test\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.(py|go)$/.test(path)) continue;
+      const full = join(cwd, path);
+      if (existsSync(full) && readFileSync(full, "utf8") === content) continue;
+      tampered.push(path);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, content);
+    }
 
     const verifyStart = Date.now();
     let passed: boolean;
@@ -236,17 +260,36 @@ export async function runTask(task: Task, harness: string, model: string | null,
       verifyOutput,
       passed,
       falseDone: claimedDone && !passed,
+      ...(tampered.length ? { tampered } : {}),
     };
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
 }
 
+// A task is either `<id>.json` (setup inline) or a directory `<id>/` holding task.json, files/ (the workspace)
+// and reference/ (a solution, for the tests only).
 export function loadTasks(dir: string): Task[] {
-  return readdirSync(dir)
-    .filter((f) => f.endsWith(".json"))
-    .sort()
-    .map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")) as Task);
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((e) => (e.isFile() && e.name.endsWith(".json")) || (e.isDirectory() && existsSync(join(dir, e.name, "task.json"))))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((e) => {
+      if (e.isFile()) return JSON.parse(readFileSync(join(dir, e.name), "utf8")) as Task;
+      const root = join(dir, e.name);
+      const task = JSON.parse(readFileSync(join(root, "task.json"), "utf8")) as Task;
+      return { ...task, setup: { ...task.setup, ...readTree(join(root, "files")) }, reference: readTree(join(root, "reference")) };
+    });
+}
+
+function readTree(root: string, prefix = ""): Record<string, string> {
+  if (!existsSync(root)) return {};
+  const out: Record<string, string> = {};
+  for (const e of readdirSync(join(root, prefix), { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${e.name}` : e.name;
+    if (e.isDirectory()) Object.assign(out, readTree(root, rel));
+    else out[rel] = readFileSync(join(root, rel), "utf8");
+  }
+  return out;
 }
 
 // A verify command whose tool is missing would fail every run for reasons that are not the agent's.
@@ -276,6 +319,8 @@ export type Summary = {
   costPerPass?: number;
   tokens?: { input: number; output: number };
   cacheHitRatio?: number;
+  // From runs that report timing: mean decode rate, time to first token per model call, and cedia's own share.
+  speed?: { outputTokPerSec: number; ttftMs: number; harnessShare: number; modelShare: number };
 };
 
 export function summarize(all: Result[]): Summary {
@@ -302,6 +347,24 @@ export function summarize(all: Result[]): Summary {
     avgMs: n ? Math.round(results.reduce((a, r) => a + r.wallMs, 0) / n) : 0,
     ...(costUsd !== undefined ? { costUsd, ...(passes ? { costPerPass: costUsd / passes } : {}) } : {}),
     ...(tok.length ? { tokens: { input, output: tok.reduce((a, t) => a + t!.output, 0) }, cacheHitRatio: input ? cacheRead / input : 0 } : {}),
+    ...speedOf(results),
+  };
+}
+
+function speedOf(results: Result[]): { speed?: Summary["speed"] } {
+  const timed = results.filter((r) => r.reported.timing);
+  if (!timed.length) return {};
+  const sum = (f: (r: Result) => number) => timed.reduce((a, r) => a + f(r), 0);
+  const t = (r: Result) => r.reported.timing!;
+  const wall = sum((r) => t(r).modelMs + t(r).toolMs + (t(r).retryMs ?? 0) + t(r).harnessMs);
+  const calls = sum((r) => r.reported.turns ?? 1);
+  return {
+    speed: {
+      outputTokPerSec: Math.round((sum((r) => t(r).outputTokPerSec) / timed.length) * 10) / 10,
+      ttftMs: Math.round(sum((r) => t(r).ttftMs) / calls),
+      harnessShare: wall ? sum((r) => t(r).harnessMs) / wall : 0,
+      modelShare: wall ? sum((r) => t(r).modelMs) / wall : 0,
+    },
   };
 }
 
@@ -328,6 +391,7 @@ export function formatSummary(s: Summary): string {
     `  pass@1 ${pct(s.pass1)}  pass^k ${pct(s.passAll)}  false-done ${pct(s.falseDone)}  refused claims ${pct(s.refused)}`,
     `  avg ${(s.avgMs / 1000).toFixed(1)}s per run` +
       (s.tokens ? `, ${Math.round(s.tokens.input / s.runs)} input / ${Math.round(s.tokens.output / s.runs)} output tokens per run, cache hit ${pct(s.cacheHitRatio ?? 0)}` : ""),
+    ...(s.speed ? [`  speed ${s.speed.outputTokPerSec} output tok/s, ${(s.speed.ttftMs / 1000).toFixed(2)}s to first token per call; model ${pct(s.speed.modelShare)} of time, cedia ${pct(s.speed.harnessShare)}`] : []),
     s.costUsd !== undefined ? `  cost $${s.costUsd.toFixed(4)} total, ${s.costPerPass !== undefined ? `$${s.costPerPass.toFixed(4)} per passed run` : "no passes"}` : "  cost not reported",
   ].join("\n");
 }

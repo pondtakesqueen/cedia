@@ -17,8 +17,8 @@ export type PermissionSetting = PermissionMode | 'auto';
 export const PERMISSION_SETTINGS: PermissionSetting[] = ['auto', ...PERMISSION_MODES];
 
 // Built-in guards. The user (never a repo or the model) may lift one with `unlock`; nothing else lifts them.
-export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside' | 'deploy' | 'secret-path' | 'secret-redaction';
-export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'rm-outside', 'deploy', 'secret-path', 'secret-redaction'];
+export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside' | 'deploy' | 'secret-path' | 'secret-redaction' | 'slop-check';
+export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'rm-outside', 'deploy', 'secret-path', 'secret-redaction', 'slop-check'];
 
 // Rules look like `bash`, `bash(bun test*)` or `edit(src/*)`. `*` matches anything. A bash pattern is
 // matched against each simple command in the line, so `bun test && rm -rf x` needs both to be allowed.
@@ -35,7 +35,7 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
   const path = spec.pathOf?.(input);
   const effect = effectOf(spec, input);
   if (command !== undefined) {
-    if (!commands) return deny('shell:unparsed', 'the command has unbalanced quotes');
+    if (!commands) return deny('shell:unparsed', 'unbalanced quotes, an unclosed substitution or a heredoc it cannot read');
     for (const argv of commands) {
       const hit = denyListed(argv, cwd);
       if (hit && !unlocked(hit.name)) return deny(`deny-list:${hit.name}`, hit.reason);
