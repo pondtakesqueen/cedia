@@ -9,6 +9,7 @@ import { redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
 import { evidence, ledgerEntries, verified } from '../trust/ledger.ts';
+import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
 import {
   addUsage,
@@ -47,6 +48,8 @@ export type RunOptions = {
   privacy?: PrivacyLevel;
   // Declared checks (task or repo). The done gate counts only these, never a command the model picked.
   checks?: string[];
+  // Checks cedia found in the repo rather than ones the user declared: the gate reminds once, never refuses.
+  softChecks?: boolean;
   // Puts bash inside the OS sandbox; absent means unsandboxed.
   wrap?: (command: string) => Promise<string>;
   // Shadow-git snapshots around every writing call; absent means changed files come from edit/write only.
@@ -153,9 +156,26 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const wallStart = performance.now();
   const timing = { modelMs: 0, ttftMs: 0, decodeMs: 0, toolMs: 0 };
 
+  // The slop guard reads this run's changes: the patch between its first and latest snapshot, or the edit and
+  // write calls when snapshots are off.
+  const slopOn = !opts.permission?.unlock?.includes('slop-check');
+  let slopNudged = false;
+  const slop = (): SlopFinding[] => {
+    if (!slopOn) return [];
+    const run = log.events.slice(runStart);
+    const base = run.find((e): e is EventOf<'snapshot'> => e.kind === 'snapshot');
+    try {
+      if (opts.snapshots && base && snap.tree) return findSlop(changesFromPatch(opts.snapshots.patch(base.tree, snap.tree)));
+    } catch {
+      // fall back to the calls
+    }
+    return findSlop(changesFromCalls(run));
+  };
+
   const finish = (subtype: ResultSubtype, reason: TurnEndReason, result?: string): HeadlessResult => {
     log.append({ kind: 'turn_end', reason, ...(reason === 'aborted' ? { cause: 'user' as const } : {}) });
-    const ev = evidence(entries());
+    const flags = slop().map(formatFinding);
+    const ev = { ...evidence(entries()), ...(flags.length ? { flags } : {}) };
     const hasEvidence = ev.changed.length > 0 || ev.checks.length > 0;
     return {
       type: 'result',
@@ -259,6 +279,15 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       log.append({ kind: 'reminder', as: 'user', text: CONTINUE_AFTER_LIMIT });
       continue;
     }
+    // Slop guard: one reminder naming what looks like a shortcut; the model fixes it or explains it.
+    if (!slopNudged) {
+      const found = slop();
+      if (found.length) {
+        slopNudged = true;
+        log.append({ kind: 'reminder', as: 'user', text: slopReminder(found) });
+        continue;
+      }
+    }
     // Done gate: one reminder to run a declared check, then the claim is refused.
     if (!verified(entries(), checks)) {
       if (!nudged) {
@@ -266,7 +295,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
         log.append({ kind: 'reminder', as: 'user', text: unverifiedReminder(checks) });
         continue;
       }
-      return finish('error_unverified_claim', 'completed');
+      if (!opts.softChecks) return finish('error_unverified_claim', 'completed');
     }
     return finish('success', 'completed');
   }

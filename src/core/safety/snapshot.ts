@@ -5,7 +5,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 // Shadow git: a separate git dir and index that record the working tree as trees, so cedia can name
 // every file a call changed (bash included) and later undo a turn. It never touches the user's repo:
 // GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE all point at cedia's copy, and user/system config is ignored.
-export type Snapshots = { take(): string | undefined; diff(from: string, to: string): string[]; restore(tree: string): void };
+export type Snapshots = { take(): string | undefined; diff(from: string, to: string): string[]; patch(from: string, to: string): string; restore(tree: string): void };
 
 const SLOW_MS = 10_000;
 
@@ -56,6 +56,11 @@ export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [
     diff(from, to) {
       if (from === to) return [];
       return git(['diff-tree', '-r', '--name-only', '--no-renames', '-z', from, to]).split('\0').filter(Boolean);
+    },
+    // Unified diff with no context lines, for the slop guard.
+    patch(from, to) {
+      if (from === to) return '';
+      return git(['diff-tree', '-r', '-p', '-U0', '--no-color', '--no-renames', '--no-ext-diff', from, to]);
     },
     // Puts the working tree back to `tree`: changed files restored, files added since removed.
     restore(tree) {

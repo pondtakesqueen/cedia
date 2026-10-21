@@ -78,6 +78,28 @@ export function loadChecks(cwd: string, flags: string[] = []): string[] {
   return [...new Set([...flags, ...project, ...user])];
 }
 
+// With no declared checks, the repo's own test command, so the done gate still asks for evidence. Detected
+// checks are soft: the gate reminds once but never refuses, since the repo's tests may already fail.
+export function detectChecks(cwd: string): string[] {
+  const has = (f: string) => existsSync(join(cwd, f));
+  if (has('package.json')) {
+    let scripts: Record<string, string> = {};
+    try {
+      scripts = (JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
+    } catch {
+      return [];
+    }
+    const pm = has('bun.lock') || has('bun.lockb') ? 'bun' : has('pnpm-lock.yaml') ? 'pnpm' : has('yarn.lock') ? 'yarn' : 'npm';
+    const test = scripts.test && !/no test specified/.test(scripts.test) ? [pm === 'bun' ? 'bun run test' : `${pm} test`] : [];
+    return test.length ? test : has('bun.lock') || has('bunfig.toml') ? ['bun test'] : [];
+  }
+  if (has('Cargo.toml')) return ['cargo test'];
+  if (has('go.mod')) return ['go test ./...'];
+  if (has('Makefile') && /^test:/m.test(readFileSync(join(cwd, 'Makefile'), 'utf8'))) return ['make test'];
+  if ((has('pyproject.toml') || has('pytest.ini') || has('setup.cfg')) && (has('tests') || has('test'))) return ['pytest'];
+  return [];
+}
+
 // Sandbox: flags > CEDIA_SANDBOX > user settings > auto. Network grants come from the user only, never the repo.
 export function loadSandbox(flags: { mode?: string; allowDomains?: string[] } = {}, env = process.env): { mode: SandboxSetting; allowedDomains: string[] } {
   const user = readSettings(join(cediaHome(), 'settings.json')).sandbox ?? {};

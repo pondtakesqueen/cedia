@@ -17,8 +17,8 @@ export type PermissionSetting = PermissionMode | 'auto';
 export const PERMISSION_SETTINGS: PermissionSetting[] = ['auto', ...PERMISSION_MODES];
 
 // Built-in guards. The user (never a repo or the model) may lift one with `unlock`; nothing else lifts them.
-export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside' | 'deploy' | 'secret-path' | 'secret-redaction';
-export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'rm-outside', 'deploy', 'secret-path', 'secret-redaction'];
+export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside' | 'deploy' | 'secret-path' | 'secret-redaction' | 'slop-check';
+export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'rm-outside', 'deploy', 'secret-path', 'secret-redaction', 'slop-check'];
 
 // Rules look like `bash`, `bash(bun test*)` or `edit(src/*)`. `*` matches anything. A bash pattern is
 // matched against each simple command in the line, so `bun test && rm -rf x` needs both to be allowed.

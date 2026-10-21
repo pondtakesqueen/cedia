@@ -7,7 +7,7 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectSlug, SessionLog, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, loadChecks, loadContext, loadPolicy, loadPrivacy, loadSandbox } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadPolicy, loadPrivacy, loadSandbox } from '../../core/config.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { openSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
@@ -37,12 +37,14 @@ export type HeadlessArgs = {
 export function receipt(ev: Evidence): string {
   const list = (xs: string[]) => (xs.length ? xs.join(', ') : 'none');
   const checks = ev.checks.map((c) => `${c.command} (exit ${c.exitCode})`);
-  return `cedia receipt: changed ${list(ev.changed)}; checks ${list(checks)}; unverified ${list(ev.unverified)}`;
+  return `cedia receipt: changed ${list(ev.changed)}; checks ${list(checks)}; unverified ${list(ev.unverified)}${ev.flags?.length ? `; flagged ${ev.flags.join(', ')}` : ''}`;
 }
 
 export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
   const model = resolveModel(args.model);
-  const checks = loadChecks(args.cwd, args.checks);
+  const declared = loadChecks(args.cwd, args.checks);
+  const checks = declared.length ? declared : detectChecks(args.cwd);
+  const softChecks = !declared.length && checks.length > 0;
   const privacy = loadPrivacy(args.cwd, args.privacy);
   const context = loadContext();
   const sandboxSettings = loadSandbox({ ...(args.sandbox ? { mode: args.sandbox } : {}), allowDomains: args.allowDomains ?? [] });
@@ -83,6 +85,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         permission: policy,
         privacy,
         checks,
+        ...(softChecks ? { softChecks } : {}),
         ...(sandbox.on ? { wrap: sandbox.wrap } : {}),
         ...(snapshots ? { snapshots } : {}),
         signal: ac.signal,

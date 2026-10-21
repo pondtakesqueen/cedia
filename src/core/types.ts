@@ -135,7 +135,8 @@ export type Provider = {
   stream(req: WireRequest, signal: AbortSignal): AsyncIterable<StreamEvent>;
 };
 
-export type Evidence = { changed: string[]; checks: { command: string; exitCode: number }[]; unverified: string[] };
+// flags: what the slop guard found in this run's changes (see core/trust/slop.ts).
+export type Evidence = { changed: string[]; checks: { command: string; exitCode: number }[]; unverified: string[]; flags?: string[] };
 
 export type ResultSubtype =
   | 'success' | 'error_max_turns' | 'error_max_budget_usd' | 'error_during_execution' | 'interrupted' | 'error_unverified_claim';
