@@ -4,16 +4,26 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { checkReadOnly } from '../tools/bash.ts';
 import { effectOf, type ToolSpec } from '../tools/registry.ts';
 import type { JsonObject } from '../types.ts';
+import { REDACTED } from './secrets.ts';
 import { simpleCommands } from './shell.ts';
 
 // read-only: reads and read-only commands run; writes and other commands need an allow rule.
 // workspace: writes inside the working directory and any command run, except the deny list.
+// cedia never stops to ask: a denied call returns its reason to the model and the run goes on.
 export type PermissionMode = 'read-only' | 'workspace';
 export const PERMISSION_MODES: PermissionMode[] = ['read-only', 'workspace'];
+// auto (the default setting): workspace when the OS sandbox is on, read-only when it is not.
+export type PermissionSetting = PermissionMode | 'auto';
+export const PERMISSION_SETTINGS: PermissionSetting[] = ['auto', ...PERMISSION_MODES];
+
+// Built-in guards. The user (never a repo or the model) may lift one with `unlock`; nothing else lifts them.
+export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside' | 'deploy' | 'secret-path' | 'secret-redaction';
+export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'rm-outside', 'deploy', 'secret-path', 'secret-redaction'];
 
 // Rules look like `bash`, `bash(bun test*)` or `edit(src/*)`. `*` matches anything. A bash pattern is
 // matched against each simple command in the line, so `bun test && rm -rf x` needs both to be allowed.
-export type Policy = { mode: PermissionMode; allow: string[]; deny: string[] };
+// `secrets` are credential stores no tool may read or write (see secretPaths).
+export type Policy = { mode: PermissionMode; allow: string[]; deny: string[]; unlock?: Guard[]; secrets?: string[] };
 export const READ_ONLY_POLICY: Policy = { mode: 'read-only', allow: [], deny: [] };
 
 export type Decision = { decision: 'allow' | 'deny'; rule: string; reason?: string };
@@ -21,19 +31,26 @@ export type Decision = { decision: 'allow' | 'deny'; rule: string; reason?: stri
 export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: string): Decision {
   const command = spec.name === 'bash' ? String(input.command ?? '') : undefined;
   const commands = command !== undefined ? simpleCommands(command) : undefined;
+  const unlocked = (g: Guard) => policy.unlock?.includes(g) ?? false;
+  const path = spec.pathOf?.(input);
+  const effect = effectOf(spec, input);
   if (command !== undefined) {
     if (!commands) return deny('shell:unparsed', 'the command has unbalanced quotes');
     for (const argv of commands) {
       const hit = denyListed(argv, cwd);
-      if (hit) return deny(`deny-list:${hit.name}`, hit.reason);
+      if (hit && !unlocked(hit.name)) return deny(`deny-list:${hit.name}`, hit.reason);
     }
   }
-  const path = spec.pathOf?.(input);
+  if (!unlocked('secret-path') && policy.secrets?.length) {
+    const named = command !== undefined ? secretInCommand(command, commands!, policy.secrets, cwd) : path !== undefined ? secretUnder(path, policy.secrets, cwd) : undefined;
+    if (named) return deny('deny-list:secret-path', `${named} holds credentials; cedia keeps it away from the model. Ask the user to run it`);
+  }
+  if (effect !== 'read' && JSON.stringify(input).includes(REDACTED))
+    return deny('redacted-placeholder', `the input contains ${REDACTED}, which stands for a secret you were not shown; writing it would replace the real value. Leave that part as it is or ask the user`);
   for (const rule of policy.deny) {
     if (matches(rule, spec.name, commands, path, cwd, 'any')) return deny(`deny:${rule}`, `matches the deny rule ${rule}`);
   }
 
-  const effect = effectOf(spec, input);
   if (effect === 'read' || effect === 'network') return { decision: 'allow', rule: 'effect:read' };
 
   const allowRule = policy.allow.find((rule) => matches(rule, spec.name, commands, path, cwd, 'every'));
@@ -95,11 +112,46 @@ function protectedPath(path: string, cwd: string): boolean {
   return /^(\.git|\.cedia)(\/|$)/.test(rel);
 }
 
+// The first secret store `path` falls under, if any. A store that holds the working directory is skipped, so
+// a session run inside cedia's own home can still read its files.
+function secretUnder(path: string, secrets: string[], cwd: string): string | undefined {
+  const full = real(resolve(cwd, expandHome(path)));
+  const root = real(cwd);
+  return secrets.find((s) => {
+    const store = real(s);
+    return !within(root, store) && within(full, store);
+  });
+}
+
+// A command names a store either as a word (`cat ~/.ssh/id_rsa`, `cp ../.aws/credentials x`) or anywhere in
+// its text, which catches redirections (`< ~/.netrc`) and `$HOME/.ssh` that the word split drops or keeps literal.
+function secretInCommand(command: string, commands: string[][], secrets: string[], cwd: string): string | undefined {
+  const home = homedir();
+  const text = command.replace(/\$\{?HOME\}?(?=\/|\b)/g, home).replace(/(^|[\s=<>'"(])~(?=\/)/g, `$1${home}`);
+  for (const s of secrets) {
+    if (within(real(cwd), real(s))) continue;
+    const forms = [s, s.startsWith(home + '/') ? '~' + s.slice(home.length) : s];
+    if (forms.some((f) => new RegExp(`${f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w.-])`).test(text))) return s;
+  }
+  for (const argv of commands)
+    for (const word of argv.slice(1)) {
+      if (word.startsWith('-') || word.includes('$')) continue;
+      const hit = secretUnder(word, secrets, cwd);
+      if (hit) return hit;
+    }
+  return undefined;
+}
+
+const within = (path: string, dir: string) => {
+  const rel = relative(dir, path);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+};
+
 const expandHome = (p: string) => (p === '~' || p.startsWith('~/') ? homedir() + p.slice(1) : p);
 
 // The deny list holds what a weak model will not pause for on its own (pstack "Always pause").
 // No allow rule or mode overrides it.
-type Hit = { name: string; reason: string };
+type Hit = { name: Guard; reason: string };
 
 const DEPLOYS: Record<string, (args: string[]) => boolean> = {
   npm: (a) => sub(a) === 'publish',

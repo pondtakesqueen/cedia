@@ -163,6 +163,37 @@ describe('loop', () => {
     expect((await runPrompt(second.opts, 'hi')).subtype).toBe('success');
   });
 
+  test('privacy zdr refuses models that keep prompts', async () => {
+    const haiku = { ...resolveModel('anthropic/claude-haiku-5-5'), wire: 'faux' as const };
+    const kept = await runPrompt(setup([{ blocks: [text('hi')] }], { model: haiku, privacy: 'zdr' }).opts, 'hi');
+    expect(kept).toMatchObject({ subtype: 'error_during_execution', result: expect.stringContaining('zero-data-retention') });
+    expect((await runPrompt(setup([{ blocks: [text('hi')] }], { model: haiku }).opts, 'hi')).subtype).toBe('success');
+    const zdr = { ...resolveModel('deepseek'), wire: 'faux' as const };
+    expect((await runPrompt(setup([{ blocks: [text('hi')] }], { model: zdr, privacy: 'zdr' }).opts, 'hi')).subtype).toBe('success');
+  });
+
+  test('secrets in tool output are redacted before they are logged or sent', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-secret-'));
+    const key = 'sk-proj-' + 'Ab3'.repeat(10);
+    writeFileSync(join(dir, '.env'), `OPENAI_API_KEY=${key}\nDEBUG=1\n`);
+    const path = join(dir, 's.jsonl');
+    const log = SessionLog.create({ path });
+    const steps: FauxStep[] = [{ blocks: [toolUse('c1', 'read', { path: '.env' })] }, { blocks: [text('done')] }];
+    const provider = fauxProvider(steps);
+    await runPrompt({ log, provider, model: FAUX_MODEL, tools: [readTool], system: 'sys', cwd: dir }, 'show env');
+    const result = of(log.events, 'tool_result')[0]!;
+    expect(result.output.text).toContain('OPENAI_API_KEY=[cedia:redacted]');
+    expect(result.output.text).toContain('DEBUG=1');
+    expect(result.output.redacted).toBe(1);
+    expect(readFileSync(path, 'utf8')).not.toContain(key);
+    expect(provider.state.bodies.length).toBe(2);
+    expect(JSON.stringify(provider.state.bodies)).not.toContain(key);
+
+    const open = SessionLog.create();
+    await runPrompt({ log: open, provider: fauxProvider(steps), model: FAUX_MODEL, tools: [readTool], system: 'sys', cwd: dir, permission: { mode: 'read-only', allow: [], deny: [], unlock: ['secret-redaction'] } }, 'show env');
+    expect(of(open.events, 'tool_result')[0]!.output.text).toContain(key);
+  });
+
   test('header values never reach the log file', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cedia-log-'));
     const path = join(dir, 's.jsonl');

@@ -7,7 +7,7 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectSlug, SessionLog, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, loadChecks, loadPolicy, loadSandbox } from '../../core/config.ts';
+import { cediaHome, loadChecks, loadPolicy, loadPrivacy, loadSandbox } from '../../core/config.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { openSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
@@ -26,6 +26,8 @@ export type HeadlessArgs = {
   permission?: string;
   allow?: string[];
   deny?: string[];
+  unlock?: string[];
+  privacy?: string;
   checks?: string[];
   sandbox?: string;
   allowDomains?: string[];
@@ -41,10 +43,20 @@ export function receipt(ev: Evidence): string {
 export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
   const model = resolveModel(args.model);
   const checks = loadChecks(args.cwd, args.checks);
-  const policy = loadPolicy(args.cwd, { ...(args.permission ? { mode: args.permission } : {}), allow: args.allow ?? [], deny: args.deny ?? [] });
+  const privacy = loadPrivacy(args.cwd, args.privacy);
   const sandboxSettings = loadSandbox({ ...(args.sandbox ? { mode: args.sandbox } : {}), allowDomains: args.allowDomains ?? [] });
   const { sandbox, note: sandboxNote } = await openSandbox(args.cwd, sandboxSettings.mode, { allowedDomains: sandboxSettings.allowedDomains, cediaHome: cediaHome() });
   if (sandboxNote) process.stderr.write(sandboxNote + '\n');
+  const policyFlags = { ...(args.permission ? { mode: args.permission } : {}), allow: args.allow ?? [], deny: args.deny ?? [], unlock: args.unlock ?? [] };
+  let policy;
+  try {
+    policy = loadPolicy(args.cwd, policyFlags, process.env, sandbox.on);
+  } catch (e) {
+    await sandbox.close();
+    throw e;
+  }
+  if (!sandbox.on && policy.mode === 'read-only' && !args.permission && !process.env.CEDIA_PERMISSION)
+    process.stderr.write('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
   const snapshots = openSnapshots(args.cwd, join(cediaHome(), 'snapshots', projectSlug(args.cwd)), [cediaHome(), ...sandbox.placeholders]);
   const keyNote = missingKeyNote(model);
   if (keyNote) process.stderr.write(keyNote + '\n');
@@ -65,9 +77,10 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         model,
         tools: CORE_TOOLS,
         system: BASE_SYSTEM,
-        preamble: preamble(args.cwd, { mode: policy.mode, checks, sandbox }),
+        preamble: preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox }),
         cwd: args.cwd,
         permission: policy,
+        privacy,
         checks,
         ...(sandbox.on ? { wrap: sandbox.wrap } : {}),
         ...(snapshots ? { snapshots } : {}),

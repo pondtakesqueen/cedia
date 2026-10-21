@@ -7,7 +7,8 @@ export type ToolSpec = ToolDef & {
   effect: ToolEffect;
   // Narrower effect for a given input, e.g. a bash command that only reads. Defaults to `effect`.
   effectOf?(input: JsonObject): ToolEffect;
-  // The workspace path a write touches, so the policy can keep writes inside the working directory.
+  // The path a call reads or writes, so the policy can keep writes inside the working directory and reads out of
+  // credential stores.
   pathOf?(input: JsonObject): string | undefined;
   replay: 'safe' | 'unsafe';
   run(input: JsonObject, ctx: ToolCtx): Promise<ToolOutput>;

@@ -19,7 +19,10 @@ export type AssistantBlock =
   | { type: 'tool_use'; id: string; callId?: string; name: string; input: JsonObject; inputError?: string };
 
 export type EffectStatus = 'completed' | 'failed' | 'denied' | 'not_started' | 'interrupted_safe' | 'interrupted_unknown';
-export type ToolOutput = { text: string; isError: boolean; exitCode?: number; spillPath?: string; images?: string[] };
+// `redacted` counts secrets cedia replaced before the output was logged and sent.
+export type ToolOutput = { text: string; isError: boolean; exitCode?: number; spillPath?: string; images?: string[]; redacted?: number };
+// no-training: models that train on prompts run only in repos marked public. zdr: only zero-data-retention models.
+export type PrivacyLevel = 'no-training' | 'zdr';
 export type ToolEffect = 'read' | 'write_workspace' | 'exec' | 'network';
 
 export type AttemptErrorCode =

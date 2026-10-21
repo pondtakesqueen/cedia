@@ -19,6 +19,7 @@ export const readTool: ToolSpec = {
     additionalProperties: false,
   },
   effect: 'read',
+  pathOf: (input) => (typeof input.path === 'string' ? input.path : undefined),
   replay: 'safe',
   async run(input, ctx) {
     const path = String(input.path ?? '');
