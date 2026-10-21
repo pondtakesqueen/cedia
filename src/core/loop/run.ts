@@ -12,6 +12,7 @@ import type { SessionLog } from '../session/log.ts';
 import { evidence, ledgerEntries, verified } from '../trust/ledger.ts';
 import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
+import { spawnNudge } from '../tools/spawn.ts';
 import {
   addUsage,
   hitRatio,
@@ -64,6 +65,9 @@ export type RunOptions = {
   // Once a turn leaves the context at this many tokens, the session writes a handoff note and ends with subtype
   // 'handoff'; the client goes on in a new session (core/project/handoff.ts). Absent means never.
   handoffAt?: number;
+  // Once a turn leaves the context at this many tokens, a session that has the spawn tool and has not used it is
+  // reminded of it, once (core/tools/spawn.ts). Absent means never.
+  spawnNudgeAt?: number;
   // Messages from other threads, shown as a reminder at each turn boundary. `delivered` runs after the reminder
   // is logged, so a crash in between shows a message twice rather than never.
   inbox?: { pending(): { ids: string[]; text: string } | undefined; delivered(ids: string[]): void };
@@ -186,6 +190,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const snap: { tree?: string } = {};
   // 0: working; 1: asked for the note; 2: asked again after a tool call; 'off': gave up on handing off.
   let handoff: 0 | 1 | 2 | 'off' = 0;
+  let spawnNudged = false;
   const wallStart = performance.now();
   const timing = { modelMs: 0, ttftMs: 0, decodeMs: 0, toolMs: 0, retryMs: 0 };
   // The largest context any reply of this run saw: what handoff and sub-threads are meant to keep down.
@@ -341,6 +346,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       if (handoff === 0 && opts.handoffAt !== undefined && size >= opts.handoffAt && size >= 2 * contextSize(first.usage) && changedHere()) {
         handoff = 1;
         log.append({ kind: 'reminder', as: 'user', text: HANDOFF_PROMPT });
+      } else if (!spawnNudged && handoff === 0 && opts.spawnNudgeAt !== undefined && size >= opts.spawnNudgeAt && byName.has('spawn')) {
+        spawnNudged = true;
+        if (!log.events.some((e) => e.kind === 'tool_intent' && e.tool === 'spawn')) log.append({ kind: 'reminder', as: 'user', text: spawnNudge(size) });
       }
       continue;
     }

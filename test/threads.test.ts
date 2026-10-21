@@ -10,6 +10,7 @@ import { fauxProvider, type FauxStep } from '../src/core/providers/faux.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 import { projectKey, projectRoot, projectSlug, SessionLog } from '../src/core/session/log.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
+import { spawnNudge, spawnTool } from '../src/core/tools/spawn.ts';
 import { recallTool, threadTools } from '../src/core/tools/threads.ts';
 import type { EventOf, SessionEvent } from '../src/core/types.ts';
 
@@ -100,9 +101,9 @@ describe('thread tools', () => {
 describe('handoff in the loop', () => {
   const model = resolveModel('faux');
   const big = 'x'.repeat(40_000);
+  const bigTool = { ...CORE_TOOLS[0]!, name: 'big', effect: 'read' as const, pathOf: undefined, run: async () => ({ text: big, isError: false }) };
   const run = (script: FauxStep[], extra: Partial<Parameters<typeof runPrompt>[0]> = {}) => {
     const log = SessionLog.create();
-    const bigTool = { ...CORE_TOOLS[0]!, name: 'big', effect: 'read' as const, pathOf: undefined, run: async () => ({ text: big, isError: false }) };
     const permission = { mode: 'workspace' as const, allow: [], deny: [] };
     return runPrompt({ log, provider: fauxProvider(script), model, tools: [...CORE_TOOLS, bigTool], system: 'sys', cwd: tmp(), permission, ...extra }, 'do it').then((r) => ({ r, log }));
   };
@@ -164,6 +165,32 @@ describe('handoff in the loop', () => {
     const reminders = log.events.filter((e): e is EventOf<'reminder'> => e.kind === 'reminder');
     expect(reminders.map((e) => e.text)).toEqual(['<message from="t-1">use port 8080</message>']);
     expect(delivered).toEqual([['m1']]);
+  });
+
+  const spawner = spawnTool(async () => ({ model: 'faux/scripted', subtype: 'success', result: 'found it', costUsd: 0, changed: [], unverified: [] }));
+  const nudges = (log: SessionLog) => log.events.filter((e) => e.kind === 'reminder' && e.text.endsWith(spawnNudge(0).split('tokens')[1]!));
+
+  test('past spawnNudgeAt, a session with the spawn tool is reminded of it once', async () => {
+    const { r, log } = await run([tool('c1', 'big', {}), tool('c2', 'big', {}), reply('done')], { spawnNudgeAt: 2000, tools: [...CORE_TOOLS, spawner, bigTool] });
+    expect(r.subtype).toBe('success');
+    expect(nudges(log)).toHaveLength(1);
+    expect(nudges(log)[0]).toMatchObject({ text: expect.stringMatching(/^Your context is about 1\dk tokens/) });
+    expect(lintSession(log.events)).toEqual([]);
+  });
+
+  test('no spawn reminder without the tool, below the mark, or once the session has spawned', async () => {
+    const without = await run([tool('c1', 'big', {}), reply('done')], { spawnNudgeAt: 2000 });
+    expect(nudges(without.log)).toHaveLength(0);
+    const below = await run([tool('c1', 'big', {}), reply('done')], { spawnNudgeAt: 1_000_000, tools: [...CORE_TOOLS, spawner, bigTool] });
+    expect(nudges(below.log)).toHaveLength(0);
+    const spawned = await run([tool('s1', 'spawn', { kind: 'explore', task: 'find it' }), tool('c1', 'big', {}), reply('done')], { spawnNudgeAt: 2000, tools: [...CORE_TOOLS, spawner, bigTool] });
+    expect(nudges(spawned.log)).toHaveLength(0);
+  });
+
+  test('the handoff note request wins over the spawn reminder in the same turn', async () => {
+    const { r, log } = await run([write, tool('c1', 'big', {}), reply('the note')], { handoffAt: 2000, spawnNudgeAt: 2000, tools: [...CORE_TOOLS, spawner, bigTool] });
+    expect(r.subtype).toBe('handoff');
+    expect(nudges(log)).toHaveLength(0);
   });
 
   test('the default handoff point is half the window, at most 150k, and below a long-context price', () => {
@@ -348,6 +375,28 @@ describe('sub-threads (offline, faux)', () => {
     const child = sessionsOf(dir).find((l) => l.id === sub.sessions[0]!.sessionId)!;
     expect(head(child.events)).toMatchObject({ model: 'faux/fallback', role: 'explore' });
     expect(child.events.find((e) => e.kind === 'tool_result')).toMatchObject({ status: 'denied' });
+  });
+
+  test('an explore sub-thread whose swarm model is out of quota goes on on the writer model', () => {
+    const dir = tmp();
+    const ro = ['--output-format', 'json', '--sandbox', 'off', '--swarm', 'faux/fallback'];
+    const script = [
+      tool('s1', 'spawn', { kind: 'explore', task: 'Find where the port is set.' }),
+      { error: { code: 'quota', status: 429, message: 'Rate limit exceeded' } },
+      reply('Port is set in server.ts:3.'),
+      reply('found it'),
+    ];
+    const run = cedia(dir, script, ['-p', 'where is the port set?', ...ro]);
+    const result = JSON.parse(run.out);
+    expect(result).toMatchObject({ subtype: 'success', result: 'found it' });
+    expect(run.err).toContain('faux/fallback is out of quota; the explore sub-thread goes on on faux/scripted');
+    const parent = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
+    const report = parent.events.find((e): e is EventOf<'tool_result'> => e.kind === 'tool_result')!;
+    expect(report).toMatchObject({ status: 'completed' });
+    expect(report.output.text).toContain('model="faux/scripted"');
+    expect(report.output.text).toContain('Port is set in server.ts:3.');
+    const sub = storeOf(dir).list().find((t) => t.parent === result.thread)!;
+    expect(sub.sessions.map((s) => [s.model, s.why])).toEqual([['faux/fallback', 'start'], ['faux/scripted', 'quota']]);
   });
 
   test('a sub-thread that fails stays listed, and the parent sees the failure', () => {

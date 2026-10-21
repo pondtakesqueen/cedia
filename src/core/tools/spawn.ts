@@ -83,7 +83,14 @@ Write the task as a complete brief: the goal, the paths and facts it needs, and 
   };
 }
 
-export const subtaskPrompt = (task: string, parent: string | undefined, kind: SpawnKind) =>
+// A writer that has spawn is reminded of it once, when its context passes a third of the way to its handoff point:
+// in the repo evals Haiku never called spawn on its own, even at 170k, and read every file into its own context.
+export const spawnNudgeAt = (handoffAt: number) => Math.round(handoffAt / 3);
+
+export const spawnNudge = (tokens: number) =>
+  `Your context is about ${Math.round(tokens / 1000)}k tokens, and every later turn re-sends all of it. From here, hand reading you will not need word for word to the spawn tool: kind "explore" for a question that takes several files to answer (how a flow works, where something is defined, every caller of a function), several in one turn when they are independent. Its report comes back with paths and line numbers; read yourself only the parts of files you are about to edit.`;
+
+export const subtaskPrompt =(task: string, parent: string | undefined, kind: SpawnKind) =>
   `You are a sub-thread${parent ? ` of thread ${parent}` : ''}: another session handed you this task and will see only your final message. Do this task and nothing else.${kind === 'explore' ? ' You can read and run read-only commands, not edit.' : ''}
 
 <task>

@@ -1,0 +1,15 @@
+Running 3 tasks x 2 runs on cedia (anthropic/claude-haiku-5-5), 3 at a time...
+  PASS real-slop-guard#2 (186.0s $0.0410, 1 sub-thread, peak 64k)
+  PASS real-subthreads#1 (330.3s $0.2363, 7 sub-thread, peak 125k)
+  PASS real-subthreads#2 (276.3s $0.1297, 4 sub-thread, peak 108k)
+  PASS real-threads#1 (369.4s $0.2016, 4 sub-thread, peak 121k)
+  PASS real-threads#2 (509.6s $0.1486, 5 sub-thread, peak 113k)
+  PASS real-slop-guard#1 (4536.2s $0.0396, 2 sub-thread, peak 77k)
+
+Results written to evals/results/2026-10-21-real-cedia-haiku-5-5-spawn-nudge.jsonl
+cedia (anthropic/claude-haiku-5-5): 3 tasks, 6 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 1034.6s per run, 2472014 input / 68827 output tokens per run, cache hit 92.5%
+  peak context 101k mean, 125k max, 4 of 6 runs past 100k; 0 handoffs, 23 sub-threads
+  speed 249.2 output tok/s, 0.92s to first token per call; model 27.9% of time, cedia 0.0%
+  cost $0.7969 total, $0.1328 per passed run
