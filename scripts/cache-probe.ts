@@ -13,8 +13,7 @@ import { fauxProvider } from '../src/core/providers/faux.ts';
 import { missingKeyNote } from '../src/core/providers/http.ts';
 import { providerFor } from '../src/core/providers/index.ts';
 import { SessionLog, sessionPath } from '../src/core/session/log.ts';
-import { bashTool } from '../src/core/tools/bash.ts';
-import { readTool } from '../src/core/tools/read.ts';
+import { CORE_TOOLS } from '../src/core/tools/index.ts';
 
 const { values } = parseArgs({
   options: { model: { type: 'string' }, turns: { type: 'string', default: '20' }, runs: { type: 'string', default: '3' }, context: { type: 'string', multiple: true } },
@@ -33,7 +32,7 @@ for (let r = 0; r < Number(values.runs); r++) {
   const id = crypto.randomUUID();
   const log = SessionLog.create({ id, path: sessionPath(cwd, id) });
   const result = await runPrompt(
-    { log, provider: model.wire === 'faux' ? fauxStand(turns) : providerFor(model), model, tools: [readTool, bashTool], system, preamble: preamble(cwd), cwd, maxTurns: turns + 3, ...(model.defaultEffort ? { effort: model.defaultEffort } : {}) },
+    { log, provider: model.wire === 'faux' ? fauxStand(turns) : providerFor(model), model, tools: CORE_TOOLS, system, preamble: preamble(cwd), cwd, maxTurns: turns + 3, ...(model.defaultEffort ? { effort: model.defaultEffort } : {}) },
     `There are ${turns - 1} files named part01.txt to part${String(turns - 1).padStart(2, '0')}.txt. Read them one at a time, in order, with one read call per turn (do not batch them). Then reply with the sum of all values.`,
   );
   const rows = attributeMisses(log.events, { minTokens: model.caps.cacheMinTokens, blockTokens: model.caps.cacheBlockTokens });

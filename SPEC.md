@@ -16,7 +16,7 @@ The full plan, with the comparison against other harnesses and the review it wen
 | Wire formats | Anthropic Messages, Chat Completions, OpenAI Responses |
 | Auth | API keys only, from the environment (`CEDIA_ANTHROPIC_API_KEY` stands in for `ANTHROPIC_API_KEY`, which Claude Code cloud sessions drop) or added by an egress proxy (cloud network secrets). No Claude.ai or Cursor OAuth, no request that impersonates another client |
 | Sandbox | `@anthropic-ai/sandbox-runtime`, stage 2 |
-| Permission | Sandbox + deterministic argv read-only policy + allow rules (stage 2); classifier (stage 6) |
+| Permission | Modes `read-only` (default) and `workspace`, allow/deny rules, a built-in deny list, then the sandbox (stage 2); classifier (stage 6). Rules: flags > `CEDIA_PERMISSION` > `~/.cedia/settings.json`; a repo's `.cedia/settings.json` can only add deny rules |
 | Edit tool | `edits[]` with tiered matching; `apply_patch` for GPT; edit mode chosen per model from eval results |
 | Compaction | Claude: server-side context editing and on-demand compaction (`compact-2026-09-04`), or a client-side summary of the whole history with thinking stripped; never client-side tool-result clearing or keep-tail, because Claude 5.5-family thinking signatures bind the unedited prefix. Chat Completions and Responses: client side, clear old tool results first, then summarize. Segments stay grep-able |
 | Session | Append-only JSONL tree; a `request` event before every model call so each request can be rebuilt from the log. Header values are never logged: names plus value hashes only |
@@ -152,7 +152,8 @@ Guarantees that hold whatever model runs come from the log, not the model's word
 
 - **Done gate** (`core/trust/gate.ts`, stage 2). When the agent claims done and the ledger has no passing declared check after its last write, the run ends with `error_unverified_claim` and exit code 1. Only checks declared for the task or repo count; an ad hoc command the model chose does not.
 - **Receipt.** Every turn that changed files ends with a receipt from the ledger: files changed, checks run, their results.
-- **Deny list** (stage 2, before the stage-6 classifier): force-push, `git reset --hard` on shared branches, `rm -rf` outside the workspace, deploy commands. pstack's "Always pause" list is a harness rule because a weak model will not pause on its own.
+- **Deny list** (`core/safety/policy.ts`, stage 2, before the stage-6 classifier): force-push (including `--force-with-lease`, `+refspec`, branch deletion), `git reset --hard` and `git clean -f` (any branch until shadow snapshots can undo them), `rm -r` or `find -delete` outside the workspace or on targets that cannot be resolved, and publish/deploy commands (`npm publish`, `vercel --prod`, `kubectl apply`, `terraform apply`, `gh pr merge` and similar). It reads each simple command, through `sudo`, `bash -c`, `$( )` and chains. No mode or allow rule lifts it. pstack's "Always pause" list is a harness rule because a weak model will not pause on its own. It guards against mistakes; the sandbox is the boundary.
+- **Permission event.** Every call that reaches the policy logs `permission{decision, rule, reason}`; a denied call gets `tool_result{status:'denied'}` naming the rule, and no `tool_intent`.
 - **Read-only** subagents get write tools and MCP stripped by `ToolSpec.effect`, not by prompt.
 - **Session linter** (`cedia lint-session <file>`, stage 2): tool_intent/tool_result pairing, `systemHash`/`toolsHash` constant except after `tools_changed`, no header values, every `request` followed by an `attempt`. Runs in CI on faux sessions.
 
@@ -195,6 +196,7 @@ Each stage ends with something usable, and every done-criterion has a test or a 
 - The task's check decides, never the agent's words; read the transcript whenever a result changes.
 - Every prompt or default change runs the eval before merge.
 - The pi-era set (8 tasks, all harnesses 8/8) is a regression floor. New tasks come from cedia's own git history and must separate harnesses.
+- **Budget order.** Run every eval on Haiku 5.5 and the OpenCode Go models first; Opus arms run last, once the cheap arms have settled the task set. Each paid run prints its estimated cost first.
 - **Four-arm comparison** decides whether the cheap-writer pairing earns its place: (a) `claude -p` with Opus, (b) cedia Opus plans + DeepSeek writes, (c) cedia Opus + Opus, (d) cedia Opus + Haiku. 3 runs each; pass^3, false-done rate and cost per passed task. (c) against (a) measures the harness; (b) and (d) against (c) measure the pairing. A pairing becomes the default for a task category only if it is within 3 points of (a) on pass^3 and at least 2x cheaper per passed task.
 
 ## Licenses

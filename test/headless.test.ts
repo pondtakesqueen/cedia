@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { attributeMisses } from '../src/core/context/cache.ts';
@@ -35,6 +35,16 @@ describe('cedia -p (offline, faux)', () => {
     const [file] = readdirSync(join(sessions, project!));
     const log = SessionLog.load(join(sessions, project!, file!));
     expect(log.events.map((e) => e.kind)).toContain('tool_result');
+  });
+
+  test('read-only by default; --permission workspace lets a command write', () => {
+    const script = [call('c1', 'echo hi > out.txt'), reply('done')];
+    const ro = cedia(script, ['-p', 'write it', '--output-format', 'json']);
+    expect(existsSync(join(ro.dir, 'out.txt'))).toBe(false);
+    const ws = cedia(script, ['-p', 'write it', '--permission', 'workspace']);
+    expect(ws.code).toBe(0);
+    expect(existsSync(join(ws.dir, 'out.txt'))).toBe(true);
+    expect(cedia(script, ['-p', 'x', '--permission', 'yolo']).err).toContain('unknown permission mode');
   });
 
   test('prompt from stdin', () => {

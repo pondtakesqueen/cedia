@@ -4,8 +4,9 @@ import { buildMessages, sessionHeader } from '../context/build.ts';
 import { hash } from '../hash.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
+import { decide, READ_ONLY_POLICY, type Policy } from '../safety/policy.ts';
 import type { SessionLog } from '../session/log.ts';
-import { toolDefs, type ToolSpec } from '../tools/registry.ts';
+import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
 import {
   addUsage,
   hitRatio,
@@ -35,6 +36,8 @@ export type RunOptions = {
   // Per-session facts (cwd, date) go in the first user turn, never in the cached system prompt.
   preamble?: string;
   cwd: string;
+  // Defaults to read-only: nothing writes unless the caller opts in.
+  permission?: Policy;
   role?: string;
   effort?: Effort;
   ttl?: '5m' | '1h';
@@ -196,6 +199,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   }
 }
 
+// The policy decides each call first; a denied call gets a denied result and no intent.
 // Intents are written in block order; read-only calls run together, anything else runs alone (an ordering barrier).
 async function runTools(
   calls: Extract<AssistantBlock, { type: 'tool_use' }>[],
@@ -204,7 +208,7 @@ async function runTools(
   signal: AbortSignal,
   log: SessionLog,
 ) {
-  type Job = { callId: string; spec: ToolSpec; input: Record<string, unknown> };
+  type Job = { callId: string; spec: ToolSpec; input: Record<string, unknown>; parallel: boolean };
   const results = new Map<string, EventOf<'tool_result'>['output'] & { status: EventOf<'tool_result'>['status'] }>();
   const jobs: Job[] = [];
   for (const c of calls) {
@@ -213,8 +217,15 @@ async function runTools(
     if (c.inputError) results.set(callId, { status: 'not_started', text: `not run: ${c.inputError}`, isError: true });
     else if (!spec) results.set(callId, { status: 'not_started', text: `not run: unknown tool "${c.name}"`, isError: true });
     else {
+      const d = decide(opts.permission ?? READ_ONLY_POLICY, spec, c.input, opts.cwd);
+      log.append({ kind: 'permission', callId, tool: c.name, ...d });
+      if (d.decision === 'deny') {
+        results.set(callId, { status: 'denied', text: `denied (${d.rule}): ${d.reason}. Do not retry it another way; tell the user what you needed.`, isError: true });
+        continue;
+      }
       log.append({ kind: 'tool_intent', callId, tool: c.name, input: c.input });
-      jobs.push({ callId, spec, input: c.input });
+      const effect = effectOf(spec, c.input);
+      jobs.push({ callId, spec, input: c.input, parallel: effect === 'read' || effect === 'network' });
     }
   }
   const run = async (j: Job) => {
@@ -227,7 +238,7 @@ async function runTools(
   };
   let pool: Job[] = [];
   for (const j of jobs) {
-    if (j.spec.effect === 'read' || j.spec.effect === 'network') pool.push(j);
+    if (j.parallel) pool.push(j);
     else {
       await Promise.all(pool.map(run));
       pool = [];
