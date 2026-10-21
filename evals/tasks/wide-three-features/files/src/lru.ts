@@ -4,8 +4,9 @@
 // - get(key): the value, or undefined when missing or expired. A hit makes the entry the most recently used.
 //   An expired entry is removed when it is found, with onEvict(key, value, 'expired').
 // - set(key, value): stores it as the most recently used, with a fresh ttl. When that takes the cache over
-//   capacity, the least recently used entry is removed with onEvict(key, value, 'capacity'). Expired entries
-//   are removed first (reason 'expired'), and only if the cache is still over capacity is a live one evicted.
+//   capacity, the least recently used entry is removed with onEvict(key, value, 'capacity'). Capacity counts
+//   every stored entry, expired or not. Expired entries are removed first (reason 'expired'), and only if the
+//   cache is still over capacity is a live one evicted.
 // - delete(key): true if a live entry was removed (onEvict reason 'delete'); an expired one is removed with
 //   reason 'expired' and delete returns false.
 // - size: the number of live (unexpired) entries.
