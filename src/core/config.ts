@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { PERMISSION_MODES, type PermissionMode, type Policy } from './safety/policy.ts';
 
-export type Settings = { permissions?: { mode?: PermissionMode; allow?: string[]; deny?: string[] } };
+export type Settings = { permissions?: { mode?: PermissionMode; allow?: string[]; deny?: string[] }; checks?: string[] };
 
 export const cediaHome = () => process.env.CEDIA_HOME ?? join(homedir(), '.cedia');
 
@@ -25,4 +25,11 @@ export function loadPolicy(cwd: string, flags: { mode?: string; allow?: string[]
   if (!PERMISSION_MODES.includes(mode as PermissionMode)) throw new Error(`unknown permission mode "${mode}" (use ${PERMISSION_MODES.join(' or ')})`);
   const union = (...lists: (string[] | undefined)[]) => [...new Set(lists.flatMap((l) => l ?? []))];
   return { mode: mode as PermissionMode, allow: union(flags.allow, user.allow), deny: union(flags.deny, user.deny, project.deny) };
+}
+
+// Declared checks for the done gate. Declaring a check grants nothing, so a repo may declare its own.
+export function loadChecks(cwd: string, flags: string[] = []): string[] {
+  const user = readSettings(join(cediaHome(), 'settings.json')).checks ?? [];
+  const project = readSettings(join(cwd, '.cedia', 'settings.json')).checks ?? [];
+  return [...new Set([...flags, ...project, ...user])];
 }
