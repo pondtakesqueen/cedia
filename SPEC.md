@@ -14,7 +14,7 @@ The full plan, with the comparison against other harnesses and the review it wen
 | Writing code | DeepSeek V4.1 Flash through OpenCode Go (ZDR), Haiku 5.5 as fallback; beam-free for volume work while it is free |
 | Muse Spark | Only on repos marked public: the Contributor tier trains on prompts and completions |
 | Wire formats | Anthropic Messages, Chat Completions, OpenAI Responses |
-| Auth | API keys only, from the environment or added by an egress proxy (cloud network secrets). No Claude.ai or Cursor OAuth, no request that impersonates another client |
+| Auth | API keys only, from the environment (`CEDIA_ANTHROPIC_API_KEY` stands in for `ANTHROPIC_API_KEY`, which Claude Code cloud sessions drop) or added by an egress proxy (cloud network secrets). No Claude.ai or Cursor OAuth, no request that impersonates another client |
 | Sandbox | `@anthropic-ai/sandbox-runtime`, stage 2 |
 | Permission | Sandbox + deterministic argv read-only policy + allow rules (stage 2); classifier (stage 6) |
 | Edit tool | `edits[]` with tiered matching; `apply_patch` for GPT; edit mode chosen per model from eval results |
@@ -130,6 +130,8 @@ Per provider: Anthropic uses automatic `cache_control` plus a breakpoint at the 
 | Responses | `input_tokens_details.cached_tokens` | 0 | `input_tokens` minus cacheRead |
 
 Reasoning tokens are a subset of `output`. Hit ratio = cacheRead / (uncached + cacheRead + cacheWrite).
+
+Providers cache in blocks (`cacheBlockTokens`): DeepSeek in 128-token blocks, and Anthropic reads stop a few tokens short at the turn boundary. A read is a miss only when it falls more than one block short of the previous input. Measured numbers live in `evals/cache/`.
 
 Claude 5.5-family models also bind thinking signatures to the prefix, so any history edit is a correctness bug, not just a cache miss. Stage 4 checks this three ways: diff captured requests turn to turn; run with `prefix_mismatch_behavior: "drop_block"` (beta `thinking-binding-controls-2026-08-01`) and log any `input_transformations`; then set the field explicitly.
 

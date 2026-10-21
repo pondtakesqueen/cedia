@@ -5,6 +5,8 @@ import type { Effort, ModelCapabilities, ModelSpec, Price, Usage } from '../type
 // refresh them from https://opencode.ai/inference/go/v1/models when they matter.
 
 const ANTHROPIC = 'https://api.anthropic.com/v1/messages';
+// Claude Code cloud sessions drop ANTHROPIC_API_KEY from the environment, so cedia also reads CEDIA_ANTHROPIC_API_KEY.
+const ANTHROPIC_AUTH = { env: 'ANTHROPIC_API_KEY', altEnv: 'CEDIA_ANTHROPIC_API_KEY', scheme: 'x-api-key' } as const;
 const GO = 'https://opencode.ai/inference/go';
 const GO_AUTH = { env: 'OPENCODE_API_KEY', scheme: 'bearer' } as const;
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -16,6 +18,7 @@ const claudeCaps: ModelCapabilities = {
   input: ['text', 'image'],
   effortLevels: EFFORTS,
   cacheMinTokens: 512,
+  cacheBlockTokens: 16, // reads land a few tokens short of the previous input (turn boundary re-render), measured on Haiku 5.5 via Go
   midConversationSystem: false,
   contextWindow: 1_000_000,
 };
@@ -27,6 +30,7 @@ const chatCaps: ModelCapabilities = {
   input: ['text'],
   effortLevels: [],
   cacheMinTokens: 64,
+  cacheBlockTokens: 128, // measured on DeepSeek V4.1 Flash via Go, 2026-10-21
   midConversationSystem: true,
   contextWindow: 1_000_000,
 };
@@ -48,7 +52,7 @@ const claude = (id: string, price: Price, extra: Partial<ModelSpec> = {}): Model
   id,
   wire: 'anthropic-messages',
   url: ANTHROPIC,
-  auth: { env: 'ANTHROPIC_API_KEY', scheme: 'x-api-key' },
+  auth: ANTHROPIC_AUTH,
   maxOutput: 128_000,
   defaultEffort: 'medium',
   price,

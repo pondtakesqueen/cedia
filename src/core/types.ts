@@ -72,6 +72,7 @@ export type ModelCapabilities = {
   input: ('text' | 'image')[];
   effortLevels: Effort[];
   cacheMinTokens: number;
+  cacheBlockTokens: number; // providers cache whole blocks; a read up to one block short of the previous input is a full hit
   midConversationSystem: boolean;
   contextWindow: number;
 };
@@ -81,7 +82,7 @@ export type ModelSpec = {
   id: string; // id sent on the wire
   wire: Wire;
   url: string;
-  auth: { env: string; scheme: 'x-api-key' | 'bearer' };
+  auth: { env: string; altEnv?: string; scheme: 'x-api-key' | 'bearer' }; // altEnv: read when env is empty
   headers?: Record<string, string>;
   sessionHeader?: string; // e.g. x-opencode-session
   cacheKeyField?: 'prompt_cache_key';

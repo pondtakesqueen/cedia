@@ -1,6 +1,7 @@
 // Measures prompt-cache hits on a real model: a tool-using session of N turns, repeated R times.
-// usage: bun scripts/cache-probe.ts --model <ref> [--turns 20] [--runs 3]
-import { mkdtempSync, writeFileSync } from 'node:fs';
+// usage: bun scripts/cache-probe.ts --model <ref> [--turns 20] [--runs 3] [--context <file>...]
+// --context appends files to the system prompt as project instructions, to approach a real session's prompt size.
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -15,12 +16,15 @@ import { SessionLog, sessionPath } from '../src/core/session/log.ts';
 import { bashTool } from '../src/core/tools/bash.ts';
 import { readTool } from '../src/core/tools/read.ts';
 
-const { values } = parseArgs({ options: { model: { type: 'string' }, turns: { type: 'string', default: '20' }, runs: { type: 'string', default: '3' } } });
+const { values } = parseArgs({
+  options: { model: { type: 'string' }, turns: { type: 'string', default: '20' }, runs: { type: 'string', default: '3' }, context: { type: 'string', multiple: true } },
+});
 if (!values.model) throw new Error('--model is required');
 const model = resolveModel(values.model);
 const keyNote = missingKeyNote(model);
 if (keyNote) console.error(keyNote);
 const turns = Number(values.turns);
+const system = [BASE_SYSTEM, ...(values.context ?? []).map((f) => `<project-instructions file="${f}">\n${readFileSync(f, 'utf8')}\n</project-instructions>`)].join('\n\n');
 
 const runs = [];
 for (let r = 0; r < Number(values.runs); r++) {
@@ -29,18 +33,21 @@ for (let r = 0; r < Number(values.runs); r++) {
   const id = crypto.randomUUID();
   const log = SessionLog.create({ id, path: sessionPath(cwd, id) });
   const result = await runPrompt(
-    { log, provider: model.wire === 'faux' ? fauxStand(turns) : providerFor(model), model, tools: [readTool, bashTool], system: BASE_SYSTEM, preamble: preamble(cwd), cwd, maxTurns: turns + 3, ...(model.defaultEffort ? { effort: model.defaultEffort } : {}) },
+    { log, provider: model.wire === 'faux' ? fauxStand(turns) : providerFor(model), model, tools: [readTool, bashTool], system, preamble: preamble(cwd), cwd, maxTurns: turns + 3, ...(model.defaultEffort ? { effort: model.defaultEffort } : {}) },
     `There are ${turns - 1} files named part01.txt to part${String(turns - 1).padStart(2, '0')}.txt. Read them one at a time, in order, with one read call per turn (do not batch them). Then reply with the sum of all values.`,
   );
-  const rows = attributeMisses(log.events, { minTokens: model.caps.cacheMinTokens });
+  const rows = attributeMisses(log.events, { minTokens: model.caps.cacheMinTokens, blockTokens: model.caps.cacheBlockTokens });
   const later = rows.slice(1);
   const input = later.reduce((s, r) => s + r.input, 0);
   const read = later.reduce((s, r) => s + r.cacheRead, 0);
-  runs.push({ run: r + 1, subtype: result.subtype, requests: rows.length, hitAfterFirst: input ? read / input : 0, costUsd: result.costUsd, misses: rows.filter((x) => x.cause && x.cause !== 'cold'), log: log.path });
+  // Prefix reuse: cached tokens over what a perfect cache could serve. Near 1 means cedia kept the prefix stable;
+  // the hit ratio also depends on how much new text each turn adds.
+  const reusable = later.reduce((s, r) => s + r.reusable, 0);
+  runs.push({ run: r + 1, subtype: result.subtype, requests: rows.length, hitAfterFirst: input ? read / input : 0, prefixReuse: reusable ? Math.min(read, reusable) / reusable : 0, costUsd: result.costUsd, misses: rows.filter((x) => x.cause && x.cause !== 'cold'), log: log.path });
 }
 
-const hits = runs.map((r) => r.hitAfterFirst);
-console.log(JSON.stringify({ model: model.ref, turns, runs, mean: hits.reduce((a, b) => a + b, 0) / hits.length, min: Math.min(...hits), max: Math.max(...hits) }, null, 2));
+const stat = (xs: number[]) => ({ mean: xs.reduce((a, b) => a + b, 0) / xs.length, min: Math.min(...xs), max: Math.max(...xs) });
+console.log(JSON.stringify({ model: model.ref, turns, systemChars: system.length, hit: stat(runs.map((r) => r.hitAfterFirst)), prefixReuse: stat(runs.map((r) => r.prefixReuse)), runs }, null, 2));
 
 // Offline stand-in that behaves like a model following the probe prompt, so the script itself can be checked.
 function fauxStand(n: number) {

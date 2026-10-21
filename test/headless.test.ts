@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { attributeMisses } from '../src/core/context/cache.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
-import { missingKeyNote } from '../src/core/providers/http.ts';
+import { authHeaders, missingKeyNote } from '../src/core/providers/http.ts';
 import { SessionLog } from '../src/core/session/log.ts';
 import type { SessionEvent } from '../src/core/types.ts';
 
@@ -55,9 +55,12 @@ describe('cedia -p (offline, faux)', () => {
     expect(lines.filter((l) => l.type === 'event').map((l) => l.event.kind)).toEqual(['session', 'reminder', 'user', 'request', 'attempt', 'assistant', 'turn_end']);
   });
 
-  test('a missing key is a note, since a proxy may add credentials', () => {
-    expect(missingKeyNote(resolveModel('opus'), {})).toContain('ANTHROPIC_API_KEY is not set');
+  test('a missing key is a note, since a proxy may add credentials; the alternate name counts', () => {
+    expect(missingKeyNote(resolveModel('opus'), {})).toContain('ANTHROPIC_API_KEY (or CEDIA_ANTHROPIC_API_KEY) is not set');
     expect(missingKeyNote(resolveModel('opus'), { ANTHROPIC_API_KEY: 'k' })).toBeUndefined();
+    expect(missingKeyNote(resolveModel('opus'), { CEDIA_ANTHROPIC_API_KEY: 'k' })).toBeUndefined();
+    expect(authHeaders(resolveModel('opus'), { CEDIA_ANTHROPIC_API_KEY: 'alt' })).toEqual({ 'x-api-key': 'alt' });
+    expect(authHeaders(resolveModel('opus'), { ANTHROPIC_API_KEY: 'main', CEDIA_ANTHROPIC_API_KEY: 'alt' })).toEqual({ 'x-api-key': 'main' });
     expect(missingKeyNote(resolveModel('faux'), {})).toBeUndefined();
   });
 });
@@ -78,5 +81,11 @@ describe('miss attribution', () => {
       req(402, 'changed'), asst(403, 100, 1300),
     ]);
     expect(rows.map((r) => r.cause)).toEqual(['cold', undefined, 'system_changed', 'idle_over_ttl', 'provider']);
+  });
+
+  test('a read short of the previous input by less than one cache block is not a miss', () => {
+    const rows = attributeMisses([req(0), asst(1, 0, 723), req(2), asst(3, 640, 170), req(4), asst(5, 640, 856)], { blockTokens: 128 });
+    expect(rows.map((r) => r.cause)).toEqual(['cold', undefined, 'provider']);
+    expect(rows[1]!.reusable).toBe(640);
   });
 });
