@@ -24,7 +24,41 @@ export type Settings = {
   spawn?: boolean;
   // Tokens of context at which a session hands off to a new one, or "off". User settings only.
   handoffAt?: number | 'off';
+  // The desktop app's own settings (cedian: theme, keymap, layout and the like). cedia never reads them and checks
+  // only that they are an object, so the desktop can keep them in this file without cedia knowing their shape.
+  desktop?: Record<string, unknown>;
 };
+
+// Every key cedia knows, with the keys allowed inside the objects it reads. A key that is not here is a typo or a
+// setting from a newer cedia, and either way it would be silently ignored, so reading the file fails instead.
+const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
+  permissions: ['mode', 'allow', 'deny', 'unlock'],
+  checks: 'any',
+  sandbox: ['mode', 'allowedDomains'],
+  privacy: 'any',
+  context: 'any',
+  fallback: 'any',
+  roles: ['plan', 'code', 'review', 'swarm'],
+  spawn: 'any',
+  handoffAt: 'any',
+  desktop: 'any',
+};
+
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+export function checkSettings(value: unknown): Settings {
+  if (!isObject(value)) throw new Error('settings must be a JSON object');
+  for (const [key, inner] of Object.entries(value)) {
+    const allowed = SETTINGS_KEYS[key as keyof Settings];
+    if (!allowed) throw new Error(`unknown setting "${key}" (known: ${Object.keys(SETTINGS_KEYS).join(', ')})`);
+    if (key === 'desktop' && !isObject(inner)) throw new Error('"desktop" must be an object');
+    if (allowed === 'any') continue;
+    if (!isObject(inner)) throw new Error(`"${key}" must be an object`);
+    const unknown = Object.keys(inner).find((k) => !allowed.includes(k));
+    if (unknown) throw new Error(`unknown setting "${key}.${unknown}" (known: ${allowed.join(', ')})`);
+  }
+  return value as Settings;
+}
 
 // How a plan or review role runs: in cedia on a catalog model, or through the user's own Claude Code CLI.
 export type RoleChoice = { via: 'cedia'; model: ModelSpec } | { via: 'claude-code'; model: string };
@@ -34,7 +68,7 @@ export const cediaHome = () => process.env.CEDIA_HOME ?? join(homedir(), '.cedia
 function readSettings(path: string): Settings {
   if (!existsSync(path)) return {};
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as Settings;
+    return checkSettings(JSON.parse(readFileSync(path, 'utf8')));
   } catch (e) {
     throw new Error(`${path}: ${(e as Error).message}`);
   }
