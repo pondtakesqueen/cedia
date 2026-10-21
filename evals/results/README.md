@@ -135,3 +135,28 @@ Files: `2026-10-21-real-cedia-deepseek-flash-{spawn-on,handoff-90k,turns-200}.js
 - That 429 found a cedia bug: the session slept on the retry-after, and the eval's SIGTERM at the run limit could not wake it, so three runs hung past their 1200 s. A 429 asking for more than 10 minutes now counts as spent quota (no retry, the fallback applies), and abort ends a retry wait (e0d9080).
 - The one Flash failure that was not the cap (`real-threads#2`, handoff) made the threads tests pass and broke a sandbox test in `test/headless.test.ts`.
 - Reading: the 50-turn default suits Haiku but cuts off models that take smaller steps; raising it, or counting work instead of turns, would let the cheaper model finish. On a provider without a long-context price, handoff buys nothing but time.
+
+## 2026-10-21: spawn reminder and handoff that carries the plan
+
+The same three `real-*` tasks on Haiku 5.5, 2 runs per task and arm, 3 at a time, against the PR #15 rows above. Two changes: a writer that has spawn and has not used it gets one reminder when its context passes a third of its handoff point (30k for Haiku), and the handoff note now carries the plan for what is left while the new session is told to follow it instead of planning again.
+
+| Setup | pass@1 | Peak context, mean (max) | Runs past 100k | Sub-threads / handoffs | Avg time | Output tokens per run | Cost | Cost per passed run |
+|---|---|---|---|---|---|---|---|---|
+| before: spawn off, handoff off | 100% | 157k (211k) | 5 of 6 | - | 381 s | 76,939 | $1.758 | $0.293 |
+| before: handoff at 90k | 83.3% | 103k (114k) | 4 of 6 | 19 handoffs | 665 s | 135,803 | $1.027 | $0.205 |
+| handoff at 90k, note carries the plan (spawn off) | 100% | 128k (158k) | 5 of 6 | 8 handoffs | 394 s | 83,700 | $0.844 | $0.141 |
+| spawn reminder (handoff off) | 100% | 101k (125k) | 4 of 6 | 23 sub-threads | 334 s * | 68,827 | $0.797 | $0.133 |
+| both (the default) | 100% | 101k (126k) | 3 of 6 | 19 sub-threads, 1 handoff | 416 s * | 69,424 | $0.666 | $0.111 |
+
+\* Excluding one run per arm that hung on a bug, not the setup (below). The default arm's hung `real-threads#2` was rerun once (`-default-nudge-plan-rerun`) and that row replaces it here.
+
+Per task, mean cost per run (plan handoff / spawn reminder / both): `real-slop-guard` $0.052 / $0.040 / $0.039, `real-subthreads` $0.179 / $0.183 / $0.200, `real-threads` $0.191 / $0.175 / $0.093.
+
+Files: `2026-10-21-real-cedia-haiku-5-5-{handoff-90k-plan,spawn-nudge,default-nudge-plan,default-nudge-plan-rerun}.jsonl` with `.log`. Measured on the branch before it was rebased onto the bounded tool pool and sub-thread limit (#17), which none of these runs came near.
+
+- Where handoff time went: a diagnostic run of `real-threads` at 90k (session logs kept) showed every new session re-reading about 30k tokens of code, then thinking for 30k to 40k tokens (2 to 3 minutes at 250 tok/s) to plan the whole task again, writing one file and being back at 90k, since that thinking stays in its context. Five handoffs meant five plans, and the run hit its 1200 s limit. With the plan in the note, handoffs per run fell from 3.2 to 1.3, no run timed out, and time dropped from 665 s to 394 s, about the same as no handoff (381 s), at under half its cost.
+- Peaks still pass 100k in handoff runs: one reply that plans (40k to 50k thinking tokens) can take a session from 90k to 150k in a turn, before the boundary where handoff is checked.
+- With the reminder, Haiku spawned in every run that reached it (42 sub-threads in 12 runs, against none in 18 runs before). It usually sends 2 to 5 explore sub-threads in parallel, then often one `work` sub-thread with the whole implementation. A work child has no handoff, so it is where the default arm's runs went past 100k (`real-subthreads` at $0.20).
+- Beam's free tier ran out mid-eval (retry-after 6.7 to 7.8 h). The default arm's explore sub-threads ran on Beam; in the spawn-reminder arm and the rerun all 24 fell back to Haiku through the new quota fallback for explore, so that arm paid for its exploring and the two are not a clean comparison of spawn alone.
+- Two bugs hung runs, both fixed on main by #16 and #17: the session slept on Beam's multi-hour retry-after, and a bash timeout killed bash but not a script it started, which kept the pipes open (one run hung 75 minutes).
+- Reading: both changes pay, and together they give the lowest cost per passed run measured on these tasks ($0.111, against $0.293 with neither and $0.205 with the old handoff) at about the old single-context time. Next: give work sub-threads the same handoff as the writer, and check the handoff point before a planning reply rather than after it.
