@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Resolve symlinks so `ln -s .../bin/cedia ~/.local/bin/cedia` works.
+src="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+exec bun "$src/src/cli.ts" "$@"

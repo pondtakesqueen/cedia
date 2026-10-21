@@ -14,7 +14,7 @@ The full plan, with the comparison against other harnesses and the review it wen
 | Writing code | DeepSeek V4.1 Flash through OpenCode Go (ZDR), Haiku 5.5 as fallback; beam-free for volume work while it is free |
 | Muse Spark | Only on repos marked public: the Contributor tier trains on prompts and completions |
 | Wire formats | Anthropic Messages, Chat Completions, OpenAI Responses |
-| Auth | API keys only. No Claude.ai or Cursor OAuth, no request that impersonates another client |
+| Auth | API keys only, from the environment or added by an egress proxy (cloud network secrets). No Claude.ai or Cursor OAuth, no request that impersonates another client |
 | Sandbox | `@anthropic-ai/sandbox-runtime`, stage 2 |
 | Permission | Sandbox + deterministic argv read-only policy + allow rules (stage 2); classifier (stage 6) |
 | Edit tool | `edits[]` with tiered matching; `apply_patch` for GPT; edit mode chosen per model from eval results |

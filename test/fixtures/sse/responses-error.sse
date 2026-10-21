@@ -1,0 +1,6 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_3"}}
+
+event: response.failed
+data: {"type":"response.failed","response":{"status":"failed","error":{"code":"server_error","message":"internal"}}}
+
