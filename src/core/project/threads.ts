@@ -6,7 +6,7 @@ import { join } from 'node:path';
 // append-only JSONL file, so two cedia processes can write to one without locking: a line is one small append.
 
 export type ThreadState = 'working' | 'done' | 'failed' | 'stopped';
-export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota' | 'fix';
+export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota';
 
 type ThreadBody =
   // parent: the thread that spawned this one as a sub-thread.
