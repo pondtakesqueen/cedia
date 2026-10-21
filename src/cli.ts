@@ -8,7 +8,9 @@ import type { Effort } from './core/types.ts';
 
 const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on stdin)
 
-  -m, --model <ref>            model alias or ref (default: $CEDIA_MODEL or deepseek)
+  -m, --model <ref>            the code role: model alias or ref (default: $CEDIA_MODEL, roles.code in settings, deepseek)
+      --plan <ref>             the plan role: a model, claude-code[:<model>] to plan in your own Claude Code
+                               (default opus there), or none (default: roles.plan in settings, none)
       --output-format <f>      text | json | stream-json (default text)
       --max-turns <n>          stop after n model calls (default 50)
       --max-budget-usd <x>     stop once spend reaches x
@@ -22,8 +24,8 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --privacy <level>        no-training | zdr: which models may see this repo (default: $CEDIA_PRIVACY, settings, no-training)
       --fallback <ref|none>    model to continue on in a new session when this one's quota runs out
                                (default: settings, then deepseek -> Haiku 5.5 on the Claude API)
-      --review <ref>           after the done gate passes, have this model review the change (read-only);
-                               changes it asks for go back to the writer once
+      --review <ref>           the review role, after the done gate passes: a model, claude-code[:<model>]
+                               (default sonnet there), or none. Changes it asks for go back to the writer once
       --check <command>        declared check for the done gate, e.g. 'bun test'; repeatable
       --sandbox <s>            auto | on | off: OS sandbox for bash (default: $CEDIA_SANDBOX, settings, auto)
       --allow-domain <host>    let sandboxed commands reach this host; repeatable
@@ -53,6 +55,7 @@ export async function main(argv: string[]): Promise<number> {
       privacy: { type: 'string' },
       fallback: { type: 'string' },
       review: { type: 'string' },
+      plan: { type: 'string' },
       check: { type: 'string', multiple: true },
       sandbox: { type: 'string' },
       'allow-domain': { type: 'string', multiple: true },
@@ -78,7 +81,7 @@ export async function main(argv: string[]): Promise<number> {
   try {
     const result = await runHeadless({
       prompt,
-      model: values.model ?? process.env.CEDIA_MODEL ?? 'deepseek',
+      ...(values.model ? { model: values.model } : {}),
       cwd: values.cwd ?? process.cwd(),
       outputFormat: format,
       ...(values['max-turns'] ? { maxTurns: Number(values['max-turns']) } : {}),
@@ -92,6 +95,7 @@ export async function main(argv: string[]): Promise<number> {
       ...(values.privacy ? { privacy: values.privacy } : {}),
       ...(values.fallback ? { fallback: values.fallback } : {}),
       ...(values.review ? { review: values.review } : {}),
+      ...(values.plan ? { plan: values.plan } : {}),
       ...(values.check ? { checks: values.check } : {}),
       ...(values.sandbox ? { sandbox: values.sandbox } : {}),
       ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),

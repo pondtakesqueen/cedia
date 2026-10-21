@@ -16,7 +16,13 @@ export type Settings = {
   context?: string | string[];
   // Model (alias or ref) -> the model to continue on when its quota runs out, or "none". User settings only.
   fallback?: Record<string, string>;
+  // The model for each role: an alias or ref, `claude-code[:<model>]` for plan and review, or "none". User
+  // settings only: a repo must not pick what the user pays for.
+  roles?: { plan?: string; code?: string; review?: string };
 };
+
+// How a plan or review role runs: in cedia on a catalog model, or through the user's own Claude Code CLI.
+export type RoleChoice = { via: 'cedia'; model: ModelSpec } | { via: 'claude-code'; model: string };
 
 export const cediaHome = () => process.env.CEDIA_HOME ?? join(homedir(), '.cedia');
 
@@ -83,6 +89,23 @@ export function loadFallback(model: ModelSpec, flag?: string): ModelSpec | undef
   if (!ref || ref === 'none') return undefined;
   const fallback = resolveModel(ref);
   return fallback.ref === model.ref ? undefined : fallback;
+}
+
+// Roles: flags > CEDIA_MODEL (code only) > user settings > defaults (code: deepseek; plan and review: off).
+// `claude-code` alone means opus for plan and sonnet for review. The writer always runs in cedia, where its
+// writes go through the policy, the sandbox and the done gate.
+export function loadRoles(flags: { plan?: string; code?: string; review?: string } = {}, env = process.env): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice } {
+  const user = readSettings(join(cediaHome(), 'settings.json')).roles ?? {};
+  const codeRef = flags.code ?? env.CEDIA_MODEL ?? user.code ?? 'deepseek';
+  if (/^claude-code\b/.test(codeRef)) throw new Error('the code role runs in cedia, where its writes are checked; use claude-code for plan or review');
+  const role = (ref: string | undefined, claudeModel: string): RoleChoice | undefined => {
+    if (!ref || ref === 'none') return undefined;
+    const m = /^claude-code(?::(.+))?$/.exec(ref);
+    return m ? { via: 'claude-code', model: m[1] ?? claudeModel } : { via: 'cedia', model: resolveModel(ref) };
+  };
+  const plan = role(flags.plan ?? user.plan, 'opus');
+  const review = role(flags.review ?? user.review, 'sonnet');
+  return { code: resolveModel(codeRef), ...(plan ? { plan } : {}), ...(review ? { review } : {}) };
 }
 
 // Declared checks for the done gate. Declaring a check grants nothing, so a repo may declare its own.

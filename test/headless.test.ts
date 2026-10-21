@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { attributeMisses } from '../src/core/context/cache.ts';
@@ -10,13 +10,13 @@ import type { SessionEvent } from '../src/core/types.ts';
 
 const BIN = join(import.meta.dir, '..', 'bin', 'cedia');
 
-function cedia(script: unknown[], args: string[], stdin?: string) {
+function cedia(script: unknown[], args: string[], stdin?: string, env: Record<string, string> = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'cedia-e2e-'));
   const scriptPath = join(dir, 'script.json');
   writeFileSync(scriptPath, JSON.stringify(script));
   const home = join(dir, 'home');
   const proc = Bun.spawnSync([BIN, '-m', 'faux', '--cwd', dir, ...args], {
-    env: { ...process.env, CEDIA_FAUX_SCRIPT: scriptPath, CEDIA_HOME: home },
+    env: { ...process.env, CEDIA_FAUX_SCRIPT: scriptPath, CEDIA_HOME: home, ...env },
     stdin: stdin === undefined ? 'ignore' : new TextEncoder().encode(stdin),
   });
   return { code: proc.exitCode, out: proc.stdout.toString(), err: proc.stderr.toString(), home, dir };
@@ -162,6 +162,69 @@ describe('cedia -p (offline, faux)', () => {
     test('no review when the writer did not succeed or changed nothing', () => {
       const r = cedia([call('c1', 'ls'), reply('nothing to do')], args);
       expect(JSON.parse(r.out).review).toBeUndefined();
+    });
+  });
+
+  describe('roles', () => {
+    const base = ['-p', 'make f.txt say good', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -s f.txt'];
+    const writes = [call('c1', 'echo good > f.txt'), call('c2', 'test -s f.txt'), reply('done')];
+    const userTexts = (events: SessionEvent[]) => events.flatMap((e) => (e.kind === 'user' ? [e.text] : []));
+    const sessionsOf = (home: string) => {
+      const root = join(home, 'sessions');
+      const [project] = readdirSync(root);
+      return readdirSync(join(root, project!)).map((f) => SessionLog.load(join(root, project!, f)).events);
+    };
+
+    test('a cedia planner reads only, and the writer gets its plan with the task', () => {
+      const r = cedia([call('p1', 'cat f.txt'), reply('1. Write good to f.txt.\n2. Run test -s f.txt.'), ...writes], [...base, '--plan', 'faux/fallback']);
+      const result = JSON.parse(r.out);
+      expect(result).toMatchObject({ subtype: 'success', plan: { model: 'faux/fallback', via: 'cedia' } });
+      const all = sessionsOf(r.home);
+      const planner = all.find((l) => (l[0] as { role: string }).role === 'plan')!;
+      expect((planner[0] as Extract<SessionEvent, { kind: 'session' }>).tools.map((t) => t.name)).toEqual(['read', 'bash']);
+      const writer = all.find((l) => (l[0] as { role: string }).role === 'code')!;
+      expect(userTexts(writer)[0]).toContain('<plan by="faux/fallback">\n1. Write good to f.txt.\n2. Run test -s f.txt.\n</plan>');
+    });
+
+    test('claude-code plans and reviews in your own Claude Code, read-only and without API keys', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cedia-fake-claude-'));
+      const bin = join(dir, 'claude');
+      const result = (text: string) => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: 'cc-1', total_cost_usd: 0.5 });
+      writeFileSync(join(dir, '1'), result('Write good to f.txt.'));
+      writeFileSync(join(dir, '2'), result('f.txt:1 needs a period.\nVERDICT: changes'));
+      writeFileSync(
+        bin,
+        `#!/bin/sh\nn=$(($(cat ${dir}/n 2>/dev/null || echo 0) + 1)); echo $n > ${dir}/n\nprintf '%s\\n' "$@" > ${dir}/args$n; env > ${dir}/env$n\ncat ${dir}/$n\n`,
+        { mode: 0o755 },
+      );
+      const r = cedia([...writes, call('c3', 'echo good. > f.txt'), call('c4', 'test -s f.txt'), reply('fixed')], [...base, '--plan', 'claude-code', '--review', 'claude-code'], undefined, {
+        CEDIA_CLAUDE_BIN: bin,
+        ANTHROPIC_API_KEY: 'sk-ant-should-not-pass',
+      });
+      const out = JSON.parse(r.out);
+      expect(out).toMatchObject({
+        subtype: 'success',
+        result: 'fixed',
+        plan: { model: 'claude-code:opus', via: 'claude-code', sessionId: 'cc-1', costUsd: 0.5 },
+        review: { model: 'claude-code:sonnet', via: 'claude-code', verdict: 'changes', fixed: true },
+      });
+      expect(out.costUsd).toBeLessThan(0.5); // the subscription's notional cost is not cedia's spend
+      const planArgs = readFileSync(join(dir, 'args1'), 'utf8');
+      expect(planArgs).toContain('--permission-mode\ndontAsk');
+      expect(planArgs).toContain('--tools\nRead,Grep,Glob,Bash\n');
+      expect(planArgs).toContain('--model\nopus');
+      expect(readFileSync(join(dir, 'args2'), 'utf8')).toContain('Bash(git diff:*)\nBash(git log:*)\nBash(git show:*)\nBash(git status:*)\nBash(test -s f.txt)');
+      expect(readFileSync(join(dir, 'env1'), 'utf8')).not.toContain('ANTHROPIC_API_KEY');
+      expect(readFileSync(join(dir, 'env1'), 'utf8')).not.toContain('CEDIA_');
+      const writer = sessionsOf(r.home).find((l) => (l[0] as { role: string }).role === 'code')!;
+      expect(userTexts(writer)).toEqual([expect.stringContaining('<plan by="claude-code:opus">'), expect.stringContaining('<review>\nf.txt:1 needs a period.\n</review>')]);
+    });
+
+    test('a failed plan step goes on without a plan', () => {
+      const r = cedia(writes, [...base, '--plan', 'claude-code'], undefined, { CEDIA_CLAUDE_BIN: '/nonexistent/claude' });
+      expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success' });
+      expect(JSON.parse(r.out).plan).toBeUndefined();
+      expect(r.err).toContain('going on without a plan');
     });
   });
 
