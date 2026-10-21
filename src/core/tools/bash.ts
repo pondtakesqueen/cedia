@@ -118,6 +118,27 @@ export function scrubbedEnv(env: Record<string, string | undefined> = process.en
   );
 }
 
+const PIPE_GRACE_MS = 500;
+
+// Reads a pipe as it fills, so what arrived is there to return even when the pipe never closes.
+function drain(stream: ReadableStream<Uint8Array>) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  const done = (async () => {
+    try {
+      for (let r = await reader.read(); !r.done; r = await reader.read()) text += decoder.decode(r.value, { stream: true });
+    } catch {
+      // cancelled by stop()
+    }
+  })();
+  const stop = () => {
+    reader.cancel().catch(() => {});
+    return text + decoder.decode();
+  };
+  return { done, stop };
+}
+
 export const bashTool: ToolSpec = {
   name: 'bash',
   description:
@@ -138,14 +159,30 @@ export const bashTool: ToolSpec = {
     const command = String(input.command ?? '');
     const timeout = Math.min(Number(input.timeout_ms ?? 120_000), 600_000);
     const script = ctx.wrap ? await ctx.wrap(command) : command;
-    const proc = Bun.spawn(['bash', '-c', script], { cwd: ctx.cwd, env: scrubbedEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' });
-    const kill = () => proc.kill();
-    ctx.signal.addEventListener('abort', kill, { once: true });
-    const timer = setTimeout(kill, timeout);
-    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    // Its own process group, so a timeout or an abort ends what the command started too, not only bash.
+    const proc = Bun.spawn(['bash', '-c', script], { cwd: ctx.cwd, env: scrubbedEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', detached: true });
+    let stopped = '';
+    const kill = (why: string) => () => {
+      stopped ||= why;
+      try {
+        process.kill(-proc.pid, 'SIGKILL');
+      } catch {
+        proc.kill('SIGKILL');
+      }
+    };
+    const onAbort = kill('aborted');
+    ctx.signal.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(kill(`timed out after ${timeout} ms`), timeout);
+    const out = drain(proc.stdout);
+    const err = drain(proc.stderr);
+    const code = await proc.exited;
     clearTimeout(timer);
-    ctx.signal.removeEventListener('abort', kill);
-    const text = [out, err && `[stderr]\n${err}`].filter(Boolean).join('\n') || '(no output)';
-    return { text: clip(`${text}\n[exit ${code}]`), isError: code !== 0, exitCode: code };
+    ctx.signal.removeEventListener('abort', onAbort);
+    // A background job the command left running (`server &`) keeps the pipes open after bash exits: wait a
+    // moment for the output, then return without it rather than wait for the job.
+    await Promise.race([Promise.all([out.done, err.done]), Bun.sleep(PIPE_GRACE_MS)]);
+    const [o, e] = [out.stop(), err.stop()];
+    const text = [o, e && `[stderr]\n${e}`].filter(Boolean).join('\n') || '(no output)';
+    return { text: clip(`${text}\n[exit ${code}${stopped ? `, ${stopped}` : ''}]`), isError: code !== 0, exitCode: code };
   },
 };
