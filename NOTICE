@@ -1,13 +1,7 @@
 cedia adapts code from the following sources:
 
-- pstack-claude (MIT) — pi/ subagent machinery adapted into src/task/ (agents.ts, agent-tools.ts, child.ts, worktree.ts, agent-text.ts, sleep-wait.ts, config.ts). Copyright (c) pstack-claude authors.
-- Grok Build (Apache-2.0) — auto_mode_classifier_system_prompt.md, goal_*_prompt.md adapted for gate classifier and goal mode.
-- Codex (Apache-2.0) — compaction prompt and model capability registry concepts.
+- harness2 (Apache-2.0) — budget ledger identity (R rollouts + P sessions per task) adapted into evals/run.ts. Executor, benchmark, and recursion code were not copied.
 
 Claude Code (no license) — read only for understanding; no code copied.
 
-- oh-my-pi (MIT) — web search chain shape (ordered providers with availability checks, accumulated failures, shared response envelope) adapted into src/websearch.ts and src/websearch-providers.ts. Provider request code was not copied.
-
-- harness2 (Apache-2.0) — budget ledger identity (R rollouts + P sessions per task) adapted into scripts/scoreboard.mjs. Executor, benchmark, and recursion code were not copied.
-
-- pi-anthropic-auth (MIT) — used as an external pi package (OAuth transport patch). No code copied into this repo.
+Earlier versions of this repository (the pi package, removed in stage 0) also adapted code from pstack-claude (MIT), Grok Build (Apache-2.0), Codex (Apache-2.0) and oh-my-pi (MIT). That code is no longer in the tree; see git history.

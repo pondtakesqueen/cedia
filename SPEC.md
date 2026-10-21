@@ -1,131 +1,200 @@
 # cedia spec
 
-cedia is a personal coding harness built as a pi package. It runs the original pstack (`cursor/plugins/pstack`) on Claude, GPT and Grok. The goal is a harness the user can trust: every "done" is backed by evidence the harness itself recorded, and cedia is good enough on the user's own work that no other harness is worth reaching for, proven by a scoreboard against Claude Code, Codex, Grok Build, opencode and oh-my-pi.
+cedia is a personal coding harness written from scratch in TypeScript on Bun. It replaces Claude Code and Codex for one developer's daily work. The goal is a harness the user can trust and afford: every "done" is backed by evidence the harness recorded, and the prompt cache hit rate matches the DeepSeek harness. Progress is measured by an eval suite run against pi, Claude Code and Codex on the same tasks.
+
+The full plan, with the comparison against other harnesses and the review it went through, is the "แผนสร้าง cedia v1" doc (rev 17, 2026-10-21). Research findings and source paths are in `research/NOTES.md`.
+
+## Decisions
+
+| Topic | Decision |
+|---|---|
+| Language, runtime | TypeScript on Bun |
+| Shape | Own core, written here. Libraries as dependencies where they do not touch the core: pi-tui for the TUI, `@anthropic-ai/sandbox-runtime` for the sandbox. Not a fork: the pi-era cedia ran into pi core limits (paste expansion before hooks, provider layer) that needed a fork, and the core is where cedia differs. |
+| Plan and thinking | Claude top-tier through an API key (Anthropic Messages) |
+| Writing code | DeepSeek V4.1 Flash through OpenCode Go (ZDR), Haiku 5.5 as fallback; beam-free for volume work while it is free |
+| Muse Spark | Only on repos marked public: the Contributor tier trains on prompts and completions |
+| Wire formats | Anthropic Messages, Chat Completions, OpenAI Responses |
+| Auth | API keys only. No Claude.ai or Cursor OAuth, no request that impersonates another client |
+| Sandbox | `@anthropic-ai/sandbox-runtime`, stage 2 |
+| Permission | Sandbox + deterministic argv read-only policy + allow rules (stage 2); classifier (stage 6) |
+| Edit tool | `edits[]` with tiered matching; `apply_patch` for GPT; edit mode chosen per model from eval results |
+| Compaction | Claude: server-side context editing and on-demand compaction (`compact-2026-09-04`), or a client-side summary of the whole history with thinking stripped; never client-side tool-result clearing or keep-tail, because Claude 5.5-family thinking signatures bind the unedited prefix. Chat Completions and Responses: client side, clear old tool results first, then summarize. Segments stay grep-able |
+| Session | Append-only JSONL tree; a `request` event before every model call so each request can be rebuilt from the log. Header values are never logged: names plus value hashes only |
+| Protocol | JSONL over stdio; ACP later |
+| Cache | Target ≥ 90% hit ratio per session with every miss attributed; TTL 5 minutes, 1 hour optional after measuring cost |
+| Spend | Warn when daily spend passes $20 |
+| Config precedence | flags > env > project `.cedia/` > user `~/.cedia/` > defaults; arrays union and dedupe |
+| Public repo marker | A `.cedia/public` file in the repo. Without it, models with `dataPolicy: trains` are refused |
+| Old code | No code from cedia-rs (traces to claw_code). From the pi-era package keep `evals/` and use `trust.ts` logic as a reference |
+
+## Architecture
+
+Clients (TUI, headless `-p`, eval runner) talk to the core over one protocol. Inside the core every event is written to the session log first, and the context builder builds the next request from that log, so resume, fork, compaction and evals take the same path.
+
+```
+src/
+  cli.ts
+  core/        no UI; tested with a faux provider
+    loop/ session/ context/ providers/ tools/ safety/ trust/ skills/ hooks.ts roles.ts
+  protocol/    command and event types + JSONL codec
+  clients/     tui/ headless/
+evals/         tasks/, run.ts, baseline/
+```
+
+Rule enforced by a test: `src/core` and `src/protocol` never import from `src/clients`.
+
+Session files live at `~/.cedia/sessions/<project-slug>/<id>.jsonl`. The first line is a `session` event `{cwd, parentSession?, role, createdAt}`. The leaf is the last event; a fork is a new file whose first event's `parentId` points into the source.
+
+## Core shapes
+
+These are fixed before stage 1 code is written. Names may change; the information each one carries may not shrink.
+
+```ts
+// Assistant content keeps each wire's opaque reasoning payload so it can be replayed byte for byte.
+type AssistantBlock =
+  | { type: 'text'; text: string; sig?: string }
+  | { type: 'thinking'; text: string; opaque?: string; redacted?: boolean }
+  | { type: 'tool_use'; id: string; callId?: string; name: string; input: JsonObject; inputError?: string };
+// The assistant event records which wire produced it; blocks are only replayed to the same wire.
+type AssistantEvent = { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage };
+type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'aborted' | 'error';
+
+// Provider boundary. One adapter per wire; the loop never sees wire JSON.
+type Provider = { wire: Wire; stream(req: WireRequest, signal: AbortSignal): AsyncIterable<StreamEvent> };
+type StreamEvent =
+  | { type: 'start' }
+  | { type: 'text_start' | 'text_end'; index: number } | { type: 'text_delta'; index: number; delta: string }
+  | { type: 'thinking_start' | 'thinking_end'; index: number } | { type: 'thinking_delta'; index: number; delta: string }
+  | { type: 'toolcall_start'; index: number; id: string; name: string } | { type: 'toolcall_delta'; index: number; delta: string } | { type: 'toolcall_end'; index: number }
+  | { type: 'done'; message: AssistantEvent }
+  | { type: 'error'; error: AttemptError };
+
+// Every turn ends with one turn_end event, including aborts.
+type TurnEnd = { kind: 'turn_end'; reason: 'completed' | 'aborted' | 'error' | 'max_tokens' | 'budget' | 'max_turns'; cause?: 'user' | 'parent' | 'hook' };
+
+type AttemptError = {
+  code: 'rate_limit' | 'overloaded' | 'auth' | 'bad_request' | 'network' | 'timeout' | 'server' | 'context_length';
+  status?: number; retryAfterMs?: number; message: string;
+};
+
+// Headless result. Exit code 0 only on 'success'.
+type HeadlessResult = {
+  type: 'result';
+  subtype: 'success' | 'error_max_turns' | 'error_max_budget_usd' | 'error_during_execution' | 'interrupted' | 'error_unverified_claim';
+  sessionId: string; numTurns: number; usage: Usage; costUsd: number; cacheHitRatio: number; result: string; evidence?: Evidence;
+};
+
+// Per-model facts the adapters and the loop branch on.
+type ModelCapabilities = {
+  reasoning: 'anthropic-thinking' | 'reasoning_content' | 'responses-item' | 'none';
+  replayReasoning: 'required' | 'forbidden' | 'same-turn';
+  parallelToolCalls: boolean; input: ('text' | 'image')[]; effortLevels: string[];
+  cacheMinTokens: number; midConversationSystem: boolean; contextWindow: number;
+};
+
+type ToolOutput = { text: string; images?: BlobRef[] };
+```
+
+Rules that go with the shapes:
+
+- **Abort.** `signal` aborts the stream; the adapter emits `done` with `stop: 'aborted'` and whatever blocks were complete. Unfinished tool calls get synthetic `tool_result`s. The turn ends with `turn_end{reason:'aborted'}`.
+- **Retry.** `rate_limit`, `overloaded`, `network`, `timeout` and `server` retry with exponential backoff, at most 5 attempts, honouring `retryAfterMs`. `auth`, `bad_request` and `context_length` never retry. Each try is its own `attempt` event.
+- **Request event.** Carries model, effort, `toolsHash`, `systemHash`, `bodyHash`, TTL and header names with value hashes. Never header values.
+- **Role fallback** starts a new session on the fallback model; it never swaps the model inside a session (cache rule 5).
+- **Mid-conversation system prompt.** Appended as a system message when `midConversationSystem` is true, otherwise as a user text block.
+- **Parallel tools.** Calls whose `ToolSpec.effect` is `read` or `network` run in a bounded pool; `write_workspace` and `exec` run alone, as ordering barriers. `tool_intent` events are written in assistant block order; results go back as one batch (Anthropic requires all results of a turn in one user message).
+- **Permission order in the log.** `assistant → permission → tool_intent (only if allowed) → tool_result`. A denied call gets `tool_result{status:'denied'}` and no `tool_intent`.
+- **Token estimate.** The last response's `usage` plus `chars/4` for the delta; Anthropic `count_tokens` on demand.
+- **Faux provider.** A script is an array of assistant messages or factories `(context, state) => AssistantEvent`, emitted as delta-level `StreamEvent`s. It computes `usage` by hashing the prefix it was sent, so `cacheRead` is nonzero exactly when the prefix repeats. Shape modeled on pi's faux provider (MIT); add a NOTICE entry if code is adapted.
+
+Protocol events (core → client): every session event, plus `stream` (the `StreamEvent`s of the current attempt), `turn_end` and `result`. Commands (client → core): `prompt`, `abort`, `permission_reply`, `resume`, `fork`.
+
+## Cache rules
+
+Taken from the DeepSeek harness (`packages/core/agent-loop/README.md`, "KV Cache effect") and Claude Code's prompt caching docs.
+
+1. The prefix stays byte-identical: tools in a fixed order, system prompt sections in a fixed order, no paths or per-process values in the cached part.
+2. A system prompt change mid-session is appended as a system message, never written into message 0.
+3. The tool list is frozen at the first request; later tools come through tool search or an appended announcement.
+4. Cancelled tool calls get synthetic results appended; history is never cut.
+5. Roles change only when a subagent starts. The main session never switches model; each subagent owns its cache.
+
+Per provider: Anthropic uses automatic `cache_control` plus a breakpoint at the end of tools and system; OpenCode Go requests carry a stable `x-opencode-session` and cedia's own User-Agent; Responses requests carry `prompt_cache_key`. Each `request` event records model, effort, tools hash, system hash, body hash, TTL and header names, so a miss can be traced to what changed.
+
+`Usage` keeps disjoint `uncached / cacheRead / cacheWrite / output` fields. Mapping per wire:
+
+| Wire | cacheRead | cacheWrite | uncached |
+|---|---|---|---|
+| Anthropic Messages | `cache_read_input_tokens` | `cache_creation_input_tokens` | `input_tokens` |
+| Chat Completions | `prompt_tokens_details.cached_tokens`, or DeepSeek `prompt_cache_hit_tokens` | 0 | `prompt_tokens` minus cacheRead |
+| Responses | `input_tokens_details.cached_tokens` | 0 | `input_tokens` minus cacheRead |
+
+Reasoning tokens are a subset of `output`. Hit ratio = cacheRead / (uncached + cacheRead + cacheWrite).
+
+Claude 5.5-family models also bind thinking signatures to the prefix, so any history edit is a correctness bug, not just a cache miss. Stage 4 checks this three ways: diff captured requests turn to turn; run with `prefix_mismatch_behavior: "drop_block"` (beta `thinking-binding-controls-2026-08-01`) and log any `input_transformations`; then set the field explicitly.
+
+## Model roles
+
+| Role | pstack roles it serves | Default |
+|---|---|---|
+| `plan` | judgment and prose, hardest tasks, how explainer, why synthesizer, reflect judgment | Claude top-tier, effort medium |
+| `code` | feature/refactoring, bug-fix, perf-issue, hillclimb, how explorer, why investigators | DeepSeek V4.1 Flash, fallback Haiku 5.5 |
+| `smol` | classifier, `/goal` judge, input repair, titles, commit messages | Haiku 5.5 |
+| `swarm` | swarm workers, reflect tooling | beam-free, then DeepSeek V4.1 Flash |
+| `panel` | arena, architect, interrogate, cross-judge | Claude + DeepSeek V4 Pro; Muse only on public repos |
+| `advisor` | reviews the `code` role each turn (from oh-my-pi) | Claude, low effort, read-only |
 
 ## Trust
 
-Trust comes from the harness's records, never from the model's self-report.
+Guarantees that hold whatever model runs come from the log, not the model's words.
 
-| Mechanism | What it does | Milestone |
+- **Done gate** (`core/trust/gate.ts`, stage 2). When the agent claims done and the ledger has no passing declared check after its last write, the run ends with `error_unverified_claim` and exit code 1. Only checks declared for the task or repo count; an ad hoc command the model chose does not.
+- **Receipt.** Every turn that changed files ends with a receipt from the ledger: files changed, checks run, their results.
+- **Deny list** (stage 2, before the stage-6 classifier): force-push, `git reset --hard` on shared branches, `rm -rf` outside the workspace, deploy commands. pstack's "Always pause" list is a harness rule because a weak model will not pause on its own.
+- **Read-only** subagents get write tools and MCP stripped by `ToolSpec.effect`, not by prompt.
+- **Session linter** (`cedia lint-session <file>`, stage 2): tool_intent/tool_result pairing, `systemHash`/`toolsHash` constant except after `tools_changed`, no header values, every `request` followed by an `attempt`. Runs in CI on faux sessions.
+
+## Git
+
+cedia is not a git client; it covers what an agent session needs and leaves the rest to `git`, `gh` or lazygit through `!`.
+
+| Feature | Stage | Notes |
 |---|---|---|
-| Evidence ledger | Records every file change (edit, write, and bash commands that touch the tree) and every check command after it, with exit code and output tail. | M0 |
-| Claim check | A turn that claims done, fixed or passing while the ledger shows changes after the last passing check, or that narrates an action ("ran the tests") with no matching tool call, gets one continuation: do it, or say plainly what is unverified. At most 1 per turn. | M0 |
-| Receipt footer | Append a footer generated from the ledger to the final message: files changed, checks run with exit codes, what was not verified. The model does not write it. `/receipt` shows the full ledger. | M0 |
-| Irreversible-action gate | Fixed deny/ask list (force-push, deploy, broad `rm -rf`, publishing, sending messages) pauses for the user in every mode, enforced by `tool_call`. | M0 |
-| Gate classifier | Ambiguous commands go to Haiku `low` with a prompt adapted from Grok Build's `auto_mode_classifier_system_prompt.md`. Only harness-recorded user turns authorize. | M1 |
-| Visible failures | Tool errors and retries are shown verbatim; nothing is retried silently. | M0 |
-| Goal mode | `/goal <outcome>`: acceptance criteria written to a plan file → work → the harness runs the stated check itself → a readonly adversarial verifier in a fresh context tries to refute it → fix and re-verify only the delta. Adapt only the planner and the code-change verifier lens from Grok Build; the receipt replaces its summarizer. | M1 |
-| Reproduced findings | A reviewer finding is shown only with evidence that reruns (`path:line` or command output). | M1 |
-
-**Bounds.** Every loop has a hard cap and ends with an honest report, never with silent extra work: continuation 2, claim check 1, status reminder 2 per turn; goal mode 3 verify rounds, then stop and report what is met and what is not.
-
-Decisions were settled in a grilling session on 2026-10-16. Evidence and source paths are in `research/NOTES.md`.
-
-## Shape
-
-- cedia is one pi package (extension + config) plus thin CLI wrappers (`bin/cedia`, `bin/cedia-update`) that exec `pi` with `PI_CODING_AGENT_DIR=~/.cedia`. No fork.
-- Base: `@earendil-works/pi-coding-agent`, pinned to exactly `1.3.0`. Bump by hand after the smoke set passes.
-- TypeScript on Node, installed with `npm link`.
-- Config and sessions: `~/.cedia/` and project `.cedia/`.
-- Surfaces: pi's TUI and headless `cedia -p`.
-
-## Models and auth
-
-| Vendor | Route | Use |
-|---|---|---|
-| Anthropic | API key (`ANTHROPIC_API_KEY`) only | Small tasks: `claude-haiku-5-5` @`low`. Everything else, including pstack roles: `claude-opus-5-5` @`medium` |
-| OpenAI | Sign in with ChatGPT via pi-ai provider `openai-chatgpt` (dynamic client, `ext_agent_host_id`) | Plan usage, no per-token cost |
-| xAI | API key (`XAI_API_KEY`) | `grok-4.7` |
-
-Not used: Claude.ai OAuth (Anthropic forbids it in third-party apps, see `research/docs/claude-code/legal-and-compliance.md`), Cursor login (no public API; existing implementations impersonate the Cursor client), OpenCode Zen, pi-ai `openai-codex` (borrows Codex's client id).
-
-Cost guard: status line shows session and daily spend; warn when daily spend passes $20.
-
-Provider layer: pi-ai as is. Add Anthropic `thinking.display: "updates"` through `before_provider_request` only if the smoke set shows Opus/Haiku going silent between tool calls.
+| Deny list for force-push and `git reset --hard` on shared branches | 2 | Trust section |
+| Shadow-git snapshot before each turn that writes | 2 | Separate git dir, never touches the user's repo or index; covers bash edits too, which Claude Code's checkpoints do not |
+| Branch and dirty count in the status line | 3 | |
+| `/diff`: working tree changes, and changes since the turn started | 3 | Like Codex and OpenCode `/diff` |
+| `/undo` and `/redo` of the last turn's files | 3 | From the shadow snapshot; says plainly it does not undo external side effects |
+| `/commit`: message from the `smol` role, user confirms | 4 | Stages only files the session changed unless told otherwise |
+| `/pr`: push the branch and open a PR through `gh` | 4 | Push needs approval; never to the default branch |
+| `/review`: review the diff or a PR with the `panel` role | 5 | Findings come with evidence |
+| Worktree per subagent | 5 | |
+| `/rewind` conversation and files together | 6 | |
 
 ## pstack
 
-`bin/cedia-setup` installs the original pstack (sparse clone of `cursor/plugins` into `~/.cedia/packages/`, fast-forward on rerun) and lists its skills in `~/.cedia/settings.json`. Do not edit its files. Skills whose `name` is a display name (`Poteto Mode`, `Make Bot UI`) are loaded from a regenerated copy in `~/.cedia/skill-fixes/` with only the `name` line set to the directory name, because pi registers names verbatim and `/poteto-mode` would not resolve. pstack wins name collisions with `~/.agents/skills/` (`tdd`, `teach`). cedia supplies what Cursor supplied:
+cedia runs the original pstack without editing its files. `cedia setup` clones it to `~/.cedia/plugins/pstack`. cedia supplies what Cursor supplied: `Task`, `AskQuestion`, todo lists, per-role models from `~/.cedia/rules/pstack-models.md`, and `docs/harness/cedia.md` mapping Cursor names to cedia's. Cursor-only features are skipped with a "Skipped in cedia" line.
 
-1. `Task` and `AskQuestion` tools with the original names and parameter shapes (`subagent_type`, `run_in_background`, `readonly`, `model`). Adapt the code from pstack-claude's Pi extension (MIT, `pi/*.ts`) rather than writing it from scratch. One child process per subagent via pi's `rpc-entry`, at most 4 concurrent, nesting depth 3 (the deepest layer gets no `Task`), `isolation: "worktree"` under `.cedia/worktrees/`, `readonly` removes `edit` and `write`.
-2. Cursor model names through `pi.registerVirtualModel()`, e.g. `claude-opus-5-5-xhigh` → `anthropic/claude-opus-5-5 @xhigh`, `grok-4.7-xhigh-fast` → `xai/grok-4.7 @xhigh`.
-3. `prompts/cedia-tools.md`, injected as the `<cedia-tools>` system prompt section on every run (same text each time, so the cached prefix holds), mapping Cursor paths and tools to cedia's (`.cursor/rules/pstack-models.mdc` → `~/.cedia/pstack-models.md`, `.cursor/projects/` → `~/.cedia/sessions/`, `.cursor/skills/` → skill dirs).
+## Stages
 
-The original pstack names only these models: `grok-4.7-xhigh-fast` (code default), `grok-4.7-medium-fast`, `claude-opus-5-5-xhigh` (prose and judgment default), `claude-opus-5-5-medium`, `claude-opus-5-5-max`. The virtual-model table maps all of them to `anthropic/claude-opus-5-5 @medium`. A `cedia/auto` virtual model routes small tasks to Haiku `low` and the rest to Opus `medium`; the scoreboard decides the routing rule. Role overrides live in `~/.cedia/pstack-models.md`, written by pstack's `/setup-pstack`.
+Each stage ends with something usable, and every done-criterion has a test or a repeatable command. The full checklists are in the plan doc.
 
-Claude Code keeps using pstack-claude; cedia does not touch it.
-
-## Compatibility
-
-Agent Skills (`SKILL.md`), `AGENTS.md` with `CLAUDE.md` fallback, MCP (built into pi), plugins per the `agent-plugins.org` 1.0.0 schema (skills and agents). opencode config is not read.
-
-## M0 behaviors
-
-All built as pi extension hooks.
-
-| Behavior | Hook |
-|---|---|
-| Text-only end of turn with open todos → send a continuation naming them, at most 2 in a row. Only in headless mode, `/loop`, or "run until done". | `agent_before_settle` → `continue: true` |
-| 5 tool steps with nothing for the user to read → append "say in a few words what you're doing, then continue". At most 2 per turn. All modes. | `tool_result` + `pi.sendMessage()` |
-| A new user message during work steers the current task. | pi steering (default) |
-| Compaction writes a handoff: pi's own checkpoint summary plus open todos, unverified files, suggested skills (from `SKILL.md` reads), artifact paths instead of copies, prompt-level redaction. Stored as pi's compaction entry in the session. | `session_before_compact` → pi's exported `compact()` with the session's `streamSimple` |
-| `/handoff [focus]` triggers the same compaction with a focus. A command instead of the planned skill: the instructions live in `src/handoff.ts`, so a command reuses them with no second copy. | `registerCommand` |
-| `TodoWrite`; plan mode is a readonly permission profile. | `registerTool`, tool exposure |
-
-System prompt: pi's default + pstack. Variants (a base adapted from Grok Build's `prompt.md`, per-family overlays) are experiments that must beat the baseline on the smoke set.
-
-## Milestones
-
-- **M0.** Trust mechanisms marked M0 above, per-request telemetry (input, output, cache read, cache write, $, wall time from each vendor's `usage`), scoreboard runner, pstack and its translation layer (`AskQuestion`, virtual models, `cedia-tools.md`), M0 behaviors, cost guard.
-- **M1.** Goal mode, gate classifier, reproduced findings, `Task` subagents with a time-budget line (`elapsed 340s / 1200s`) on messages to children.
-- **M2.** MCP, LSP diagnostics after edit, `WebFetch` (ours) and web search through each vendor's server tool.
-- **M3.** Sandbox: macOS Seatbelt plus allow/deny rules.
-- **M4.** Checkpoints: shadow git under `~/.cedia/checkpoints/` with `/undo`.
-
-Read the matching Claude Code, Codex and Grok Build docs and source at the start of each milestone.
-
-## Deferred until evidence
-
-Each of these waits for a measured trigger:
-
-- Model capability registry: when a second per-family difference has been accepted.
-- Custom provider adapters: when pi-ai blocks a needed feature.
-- Shell-command hooks: implemented via `CEDIA_HOOKS` (pre_tool and post_tool), `src/hooks.ts`. Trigger met by user request, not by evidence.
-- Cross-session memory: when the same context has to be repeated across sessions.
-- `<pasted_content>` tagging: pi's editor expands paste markers (`[paste #1 +40 lines]`, only for pastes over 10 lines or 1,000 chars) before the `input` hook fires, so pasted text is indistinguishable from typed text. Revisit when pi exposes paste spans on `input`, or if cedia ever replaces pi's editor.
-- Automations (benny): dropped; use `cedia -p` + cron if ever needed.
-
-## Scoreboard
-
-The scoreboard is the product's core. Every change is a hillclimb step (pstack's hillclimb playbook): one hypothesis, before/after on the scoreboard, one commit per accepted win.
-
-| Metric | Source |
-|---|---|
-| False-done rate (most important) | tasks where cedia said done but the grader failed |
-| Review precision | reviewer findings that reproduce / findings shown |
-| Task pass rate | user's own tasks (8-10) + Terminal-Bench smoke set |
-| Cache hit | `cache_read / total input` per request |
-| Cost | $ per passed task |
-| Speed | wall time per task |
-| Stability | crashes and hangs per 100 tasks |
-| Unconfirmed irreversible actions | must be 0 |
-
-Harnesses compared weekly on the same tasks and models: cedia, plain pi, Claude Code, Codex, Grok Build, opencode, oh-my-pi (all have a headless mode). Their token spend counts toward the budget.
-
-"Good enough to stop looking": cedia wins or ties every row on the user's tasks and is within 5% of the best on Terminal-Bench.
-
-First experiments, A/B on the scoreboard:
-1. Handoff compaction vs each vendor's server compaction (cache hit, pass rate).
-2. Per-family edit tool (`apply_patch` for GPT and Grok, string replace for Claude) vs pi's `edit` for all.
-3. Cache discipline: all tools declared from turn one, no system prompt edits mid-session, `clear_at` reminders, per-message effort changes, `prompt_cache_key`, Anthropic 1-hour TTL.
+0. Clean the repo: move evals and the baseline in, delete the pi package, Bun skeleton, CI.
+1. Core: the shapes above, three wire formats, faux provider, `request` and `attempt` events, abort and retry, headless result, minimal read and bash. Gate: an offline faux test where `systemHash` and `toolsHash` stay constant and each prefix extends the last across 20 tool-using turns. Measured, not gated: `bun scripts/cache-probe.ts --model <ref> --turns 20 --runs 3` on Claude and DeepSeek, reporting hit ratio, spread and every miss with its cause (target ≥ 90%).
+2. Tools, permission and deny list, session, sandbox (CI installs bubblewrap), evidence ledger, done gate, session linter, hooks, `evals/run.ts` with 3 runs, tokens and cost, first eval baseline including the four-arm comparison.
+3. TUI on pi-tui, minimal compaction, one full day of real use.
+4. AGENTS.md, full compaction (per-wire rule above, with the three-step thinking check), memory, light `/goal`, cache warming.
+5. Skills, MCP, subagents by role, advisor, web.
+6. Rewind, LSP, delegate, full goal mode, classifier, full eval against pi, `claude -p` and `codex exec`, and the four-arm comparison again.
 
 ## Eval
 
-- Smoke set: 8 Terminal-Bench tasks spread over bug fix, feature, refactor, long-running and multi-file work. Run on the default model after each prompt or tool change, on all three families weekly. Set the per-run budget after the first measured run.
-- Baseline: plain pi on the same model every run; Claude Code and Codex periodically.
-- Tests for cedia itself: vitest for pure logic, headless e2e with pi-ai's `faux` provider for `Task`, `AskQuestion`, handoff and the continuation rules.
-- Done for M0: the scoreboard runs end to end against every listed harness and cedia is ≥ plain pi on every row.
+- Run each task 3 times in a clean temp dir; report pass@1, pass^3, false-done rate, time, tokens and cost.
+- The task's check decides, never the agent's words; read the transcript whenever a result changes.
+- Every prompt or default change runs the eval before merge.
+- The pi-era set (8 tasks, all harnesses 8/8) is a regression floor. New tasks come from cedia's own git history and must separate harnesses.
+- **Four-arm comparison** decides whether the cheap-writer pairing earns its place: (a) `claude -p` with Opus, (b) cedia Opus plans + DeepSeek writes, (c) cedia Opus + Opus, (d) cedia Opus + Haiku. 3 runs each; pass^3, false-done rate and cost per passed task. (c) against (a) measures the harness; (b) and (d) against (c) measure the pairing. A pairing becomes the default for a task category only if it is within 3 points of (a) on pass^3 and at least 2x cheaper per passed task.
 
 ## Licenses
 
-Keep a `NOTICE` for adapted code: pstack-claude (MIT), Grok Build and Codex (Apache-2.0) if their prompts are adapted, oh-my-pi (MIT) if any code is ported. Never copy from `anthropics/claude-code` (no license) or from leaked sources.
+Keep `NOTICE` for adapted Apache-2.0 or MIT code. Never copy from `anthropics/claude-code` (no license) or leaked sources, and never port cedia-rs code.

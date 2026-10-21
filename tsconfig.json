@@ -1,13 +1,15 @@
 {
   "compilerOptions": {
-    "target": "es2024",
-    "module": "nodenext",
-    "moduleResolution": "nodenext",
+    "target": "esnext",
+    "module": "preserve",
+    "moduleResolution": "bundler",
     "strict": true,
-    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true,
+    "noEmit": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": ["bun"]
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "evals"]
 }
