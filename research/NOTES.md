@@ -117,3 +117,36 @@ Excluded on purpose: `tanbiralam/claude-code` (leaked proprietary source) and le
 
 ## Not yet read in depth
 Claude Code, Codex and Grok Build feature pages (subagents, hooks, permissions, sandbox, checkpoints, plan mode, memory). Read the matching pages from all three when each milestone starts.
+
+## Claude Code CHANGELOG (read 2026-10-21, up to 2.1.306)
+
+Source: https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md (no license: ideas only, copy nothing). 426 versions; enterprise, gateway, plugin, mod, IDE and Slack entries left out. Each finding names the version that added or fixed it, and the cedia code it was checked against at 80e9643.
+
+### Open in cedia today (checked in the code)
+- Framing tags are not escaped: a sub-thread report, thread message or handoff note that contains `</subthread>`, `</message>` or `</handoff>` closes cedia's frame (`tools/spawn.ts:24`, `project/threads.ts:142`, `clients/headless/main.ts:77`). Claude Code marks subagent output with a header (2.1.277), escapes `<system-reminder>` in hook output (2.1.292), neutralizes markup and invisible characters in memory (2.1.284) and strips invisible Unicode from prompts (2.1.277).
+- Bash kills only the shell on timeout or abort, then waits for stdout EOF (`tools/bash.ts:142-145`); a backgrounded child holding the pipe keeps the call open. Claude Code fixed orphaned process trees (2.1.212) and hooks hanging on `daemon &` (2.1.285).
+- The sandbox denies writes to `.git/hooks` only when it exists (`safety/sandbox.ts:48`), so bash can create it and plant a hook that runs outside the sandbox on the user's next commit; `core.hooksPath` targets such as `.husky` are not protected. Claude Code protects `.husky` (2.1.90) and asks before writing shell startup files and `~/.config/git` (2.1.160).
+- Read-only calls run with `Promise.all` over the whole batch (`loop/run.ts:432-441`), though the spec says a bounded pool; parallel explore sub-threads have no concurrency or per-run cap. Claude Code caps concurrent subagents at 20 (2.1.217) and spawns per session at 200 (2.1.212).
+- The deny list covers push, reset --hard and clean -f; ref-losing commands (`stash drop/clear`, `branch -D`, `reflog expire`, `update-ref -d`, `filter-branch`) are not covered and shadow snapshots cannot restore them. Claude Code blocks `stash drop` and `commit --amend` on commits it did not make (2.1.183).
+- Bash output is cut in the middle at 30k characters (`tools/registry.ts:26`); Claude Code saves large output to a file with a preview (2.1.2) and lets the user raise the inline cap (2.1.261).
+
+### Failure classes worth a test each
+- Redaction misses Claude Code fixed: invisible character inside a key name and `Bearer`/`Basic` before the key (2.1.286), URL password with `@` or `%40` (2.1.285), key with no value followed by JSON in a shell string (2.1.296), GitLab token families (2.1.232), freezes on long token-like text (2.1.290, twice).
+- Sandbox exit codes: Linux sandbox reported 0 for failed commands under zsh (2.1.275). The done gate depends on the exit code.
+- Malformed turns: thinking-only reply (2.1.183, 2.1.251), tool name over 200 characters stuck forever (2.1.281), tool result that is not a string (2.1.286), retries ignoring max turns when unparseable calls alternate with max_tokens (2.1.281), unexpected `tool_use_id` loop (2.1.274), unpaired `tool_use` on abort (2.1.218).
+- Thinking rejected by the API: Claude Code drops all thinking and retries (2.1.282) after a rejection repeated every turn (2.1.259). cedia cannot edit history, so the matching recovery is a new session from the handoff note, as quota fallback does.
+- Cache misses Claude Code fixed by re-rendering less: tool list re-rendered after OAuth refresh (2.1.248), tool changes on resume (2.1.267), memory age note changing per request (2.1.275), attachments re-rendered on resume (2.1.277), effort change (2.1.260 for Fable 5.1). All are prevented in cedia by cache rules 1-3; keep them as faux tests.
+
+### Cost ideas to measure
+- Resume of a cold thread: Claude Code warns before resuming an idle conversation (2.1.304), hands hooks the staleness and re-cache cost (2.1.251), and compacts an idle 200k+ conversation before its 1-hour cache expires (2.1.299).
+- Stagger same-prefix parallel agents so later ones read the cache the first one wrote (2.1.229).
+- Per-session cache line with the likely cause of each miss (2.1.251, 2.1.260, 2.1.280); cedia's request events already hold the hashes to name causes exactly.
+- TTL per role: 1 hour for the main session, 5 minutes for subagents (2.1.243), per agent (2.1.248).
+- Usage report from logs: warnings for max effort, large tool results and always-on context (2.1.299), unused skills and their context cost (2.1.261).
+- Task tools are offered only to older models since 2.1.268; whether Haiku 5.5 or DeepSeek still benefit is an eval question.
+
+### Rules for features cedia has not built yet
+- Hooks: fail closed when a hook cannot start, times out or cannot be handed its input (2.1.288, 2.1.295, 2.1.299); re-run every permission check after a hook rewrites input (2.1.290, 2.1.300); escape and cap hook output (2.1.292, 2.1.89, 2.1.247); exec form without a shell (2.1.139); prompt hooks written as instructions were misjudged (2.1.294).
+- Classifier: deny rules first; a denial covers the outcome, not the exact command (2.1.281); deny once and say a retry will not help (2.1.280); review subagent spawns and cross-session messages too (2.1.178, 2.1.222); reuse the cached prefix (2.1.221); a too-long transcript is compacted rather than denying every call (2.1.288, 2.1.302); exfiltration through public diagram-renderer URLs (2.1.261) and cloud metadata credentials (2.1.257).
+- Worktrees: never remove one with unpushed commits without asking (2.1.301, 2.1.304).
+- Session log: Claude Code began recording each request's system prompt, tools and parameters in 2.1.300; cedia logs their hashes and could keep each distinct body once by hash.
