@@ -5,7 +5,7 @@ import { GUARDS } from './core/safety/policy.ts';
 import { cediaHome } from './core/config.ts';
 import { threadLine, threadsDir, ThreadStore } from './core/project/threads.ts';
 import { lintSession } from './core/session/lint.ts';
-import { projectSlug, SessionLog } from './core/session/log.ts';
+import { projectKey, SessionLog } from './core/session/log.ts';
 import type { Effort } from './core/types.ts';
 
 const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on stdin)
@@ -144,7 +144,7 @@ function lintFiles(files: string[]): number {
 
 function threads(argv: string[]): number {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' }, all: { type: 'boolean' } } });
-  const store = new ThreadStore(threadsDir(cediaHome(), projectSlug(values.cwd ?? process.cwd())));
+  const store = new ThreadStore(threadsDir(cediaHome(), projectKey(values.cwd ?? process.cwd())));
   const [cmd = 'list', id, ...rest] = positionals;
   try {
     if (cmd === 'list') {

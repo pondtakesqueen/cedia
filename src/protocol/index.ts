@@ -2,12 +2,17 @@
 // events of the current attempt, and one result. Client -> core: commands.
 import type { HeadlessResult, SessionEvent, StreamEvent } from '../core/types.ts';
 
+// Clients that read cedia's files (the desktop indexes threads and replays sessions) take these shapes from here.
+// `protocol.schema.json` beside this file is generated from them (`bun scripts/protocol-schema.ts`); a test fails
+// when it is stale.
+export type { SessionEvent } from '../core/types.ts';
+export type { ThreadEvent } from '../core/project/threads.ts';
+
 export type CoreMessage = { type: 'event'; event: SessionEvent } | { type: 'stream'; event: StreamEvent } | HeadlessResult;
 
 export type Command =
   | { type: 'prompt'; text: string }
   | { type: 'abort' }
-  | { type: 'permission_reply'; callId: string; allow: boolean }
   | { type: 'resume'; sessionId: string }
   | { type: 'fork'; sessionId: string; at: string };
 

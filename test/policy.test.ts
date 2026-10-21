@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadContext, loadFallback, loadPolicy, loadPrivacy, loadRoles } from '../src/core/config.ts';
+import { checkSettings, loadContext, loadFallback, loadPolicy, loadPrivacy, loadRoles, loadSpawn } from '../src/core/config.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { preamble } from '../src/core/prompts.ts';
 import { decide, denyListed, insideWorkspace, type Policy } from '../src/core/safety/policy.ts';
@@ -250,6 +250,36 @@ describe('settings', () => {
       writeFileSync(join(repo, '.cedia', 'settings.json'), JSON.stringify({ roles: { code: 'opus' } }));
       writeFileSync(join(home, 'settings.json'), '{}');
       expect(loadRoles({}, {}).code).toBe(flash);
+    } finally {
+      if (prev === undefined) delete process.env.CEDIA_HOME;
+      else process.env.CEDIA_HOME = prev;
+    }
+  });
+});
+
+describe('settings keys', () => {
+  test('a key cedia does not know fails loudly, at the top level and inside the objects it reads', () => {
+    expect(() => checkSettings({ permision: { mode: 'workspace' } })).toThrow('unknown setting "permision"');
+    expect(() => checkSettings({ permissions: { mod: 'workspace' } })).toThrow('unknown setting "permissions.mod"');
+    expect(() => checkSettings({ roles: { writer: 'deepseek' } })).toThrow('unknown setting "roles.writer"');
+    expect(() => checkSettings([])).toThrow('settings must be a JSON object');
+  });
+
+  test('desktop is the desktop app’s own object: cedia accepts any shape inside it, and only an object', () => {
+    const s = { roles: { code: 'deepseek' }, desktop: { theme: 'system', keymap: 'macos', layout: { panes: ['agent', 'review'] } } };
+    expect(checkSettings(s)).toEqual(s);
+    expect(() => checkSettings({ desktop: 'dark' })).toThrow('"desktop" must be an object');
+  });
+
+  test('a settings file with a misspelled key stops the load that reads it', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cedia-home-'));
+    const prev = process.env.CEDIA_HOME;
+    process.env.CEDIA_HOME = home;
+    try {
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ spwan: false, desktop: { theme: 'dark' } }));
+      expect(() => loadSpawn()).toThrow('unknown setting "spwan"');
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ spawn: false, desktop: { theme: 'dark' } }));
+      expect(loadSpawn()).toBe(false);
     } finally {
       if (prev === undefined) delete process.env.CEDIA_HOME;
       else process.env.CEDIA_HOME = prev;

@@ -1,0 +1,1610 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "roots": {
+    "CoreMessage": {
+      "$ref": "#/definitions/CoreMessage"
+    },
+    "Command": {
+      "$ref": "#/definitions/Command"
+    },
+    "SessionEvent": {
+      "$ref": "#/definitions/SessionEvent"
+    },
+    "ThreadEvent": {
+      "$ref": "#/definitions/ThreadEvent"
+    }
+  },
+  "definitions": {
+    "AssistantBlock": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text"
+            },
+            "text": {
+              "type": "string"
+            },
+            "sig": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "thinking"
+            },
+            "text": {
+              "type": "string"
+            },
+            "opaque": {
+              "type": "string"
+            },
+            "redacted": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_use"
+            },
+            "id": {
+              "type": "string"
+            },
+            "callId": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "input": {
+              "$ref": "#/definitions/JsonObject"
+            },
+            "inputError": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "name",
+            "input"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AttemptError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/definitions/AttemptErrorCode"
+        },
+        "status": {
+          "type": "number"
+        },
+        "retryAfterMs": {
+          "type": "number"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "AttemptErrorCode": {
+      "type": "string",
+      "enum": [
+        "rate_limit",
+        "overloaded",
+        "auth",
+        "bad_request",
+        "network",
+        "timeout",
+        "server",
+        "context_length",
+        "quota"
+      ]
+    },
+    "Command": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "prompt"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "abort"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resume"
+            },
+            "sessionId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "sessionId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "fork"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "sessionId",
+            "at"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "CoreMessage": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "event"
+            },
+            "event": {
+              "$ref": "#/definitions/SessionEvent"
+            }
+          },
+          "required": [
+            "type",
+            "event"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "stream"
+            },
+            "event": {
+              "$ref": "#/definitions/StreamEvent"
+            }
+          },
+          "required": [
+            "type",
+            "event"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/definitions/HeadlessResult"
+        }
+      ]
+    },
+    "EffectStatus": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed",
+        "denied",
+        "not_started",
+        "interrupted_safe",
+        "interrupted_unknown"
+      ]
+    },
+    "Effort": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "EventId": {
+      "type": "string"
+    },
+    "Evidence": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "exitCode": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "command",
+              "exitCode"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "unverified": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "changed",
+        "checks",
+        "unverified"
+      ],
+      "additionalProperties": false
+    },
+    "HeadlessResult": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "result"
+        },
+        "subtype": {
+          "$ref": "#/definitions/ResultSubtype"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "numTurns": {
+          "type": "number"
+        },
+        "usage": {
+          "$ref": "#/definitions/Usage"
+        },
+        "costUsd": {
+          "type": "number"
+        },
+        "cacheHitRatio": {
+          "type": "number"
+        },
+        "result": {
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/definitions/Evidence"
+        },
+        "timing": {
+          "$ref": "#/definitions/Timing"
+        },
+        "peakContext": {
+          "type": "number"
+        },
+        "plan": {
+          "$ref": "#/definitions/Step"
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "approve",
+                "changes",
+                "unclear"
+              ]
+            },
+            "fixed": {
+              "type": "boolean"
+            },
+            "model": {
+              "type": "string"
+            },
+            "via": {
+              "type": "string",
+              "enum": [
+                "cedia",
+                "claude-code"
+              ]
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "costUsd": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "fixed",
+            "model",
+            "sessionId",
+            "verdict",
+            "via"
+          ]
+        },
+        "thread": {
+          "type": "string"
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subthreads": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "subtype",
+        "sessionId",
+        "numTurns",
+        "usage",
+        "costUsd",
+        "cacheHitRatio",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "JsonObject": {
+      "type": "object",
+      "additionalProperties": {}
+    },
+    "ResultSubtype": {
+      "type": "string",
+      "enum": [
+        "success",
+        "error_max_turns",
+        "error_max_budget_usd",
+        "error_during_execution",
+        "interrupted",
+        "error_unverified_claim",
+        "handoff"
+      ]
+    },
+    "SessionEvent": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "session"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "system": {
+              "type": "string"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ToolDef"
+              }
+            },
+            "parentSession": {
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "cwd",
+            "id",
+            "kind",
+            "model",
+            "parentId",
+            "role",
+            "system",
+            "tools"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "user"
+            },
+            "text": {
+              "type": "string"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "id",
+            "kind",
+            "parentId",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "request"
+            },
+            "model": {
+              "type": "string"
+            },
+            "effort": {
+              "$ref": "#/definitions/Effort"
+            },
+            "toolsHash": {
+              "type": "string"
+            },
+            "systemHash": {
+              "type": "string"
+            },
+            "bodyHash": {
+              "type": "string"
+            },
+            "ttl": {
+              "type": "string",
+              "enum": [
+                "5m",
+                "1h"
+              ]
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "bodyHash",
+            "headers",
+            "id",
+            "kind",
+            "model",
+            "parentId",
+            "systemHash",
+            "toolsHash"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "attempt"
+            },
+            "requestId": {
+              "$ref": "#/definitions/EventId"
+            },
+            "n": {
+              "type": "number"
+            },
+            "error": {
+              "$ref": "#/definitions/AttemptError"
+            },
+            "ttftMs": {
+              "type": "number"
+            },
+            "ms": {
+              "type": "number"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "id",
+            "kind",
+            "n",
+            "parentId",
+            "requestId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "assistant"
+            },
+            "wire": {
+              "$ref": "#/definitions/Wire"
+            },
+            "model": {
+              "type": "string"
+            },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/AssistantBlock"
+              }
+            },
+            "stop": {
+              "$ref": "#/definitions/StopReason"
+            },
+            "usage": {
+              "$ref": "#/definitions/Usage"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "blocks",
+            "id",
+            "kind",
+            "model",
+            "parentId",
+            "stop",
+            "usage",
+            "wire"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "snapshot"
+            },
+            "tree": {
+              "type": "string"
+            },
+            "callId": {
+              "type": "string"
+            },
+            "changed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "ms": {
+              "type": "number"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "changed",
+            "id",
+            "kind",
+            "parentId",
+            "tree"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "permission"
+            },
+            "callId": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "deny"
+              ]
+            },
+            "rule": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "callId",
+            "decision",
+            "id",
+            "kind",
+            "parentId",
+            "rule",
+            "tool"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tool_intent"
+            },
+            "callId": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "input": {
+              "$ref": "#/definitions/JsonObject"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "callId",
+            "id",
+            "input",
+            "kind",
+            "parentId",
+            "tool"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "tool_result"
+            },
+            "callId": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/EffectStatus"
+            },
+            "output": {
+              "$ref": "#/definitions/ToolOutput"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "callId",
+            "id",
+            "kind",
+            "output",
+            "parentId",
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "reminder"
+            },
+            "text": {
+              "type": "string"
+            },
+            "as": {
+              "type": "string",
+              "enum": [
+                "system",
+                "user"
+              ]
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "as",
+            "at",
+            "id",
+            "kind",
+            "parentId",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "turn_end"
+            },
+            "reason": {
+              "$ref": "#/definitions/TurnEndReason"
+            },
+            "cause": {
+              "type": "string",
+              "enum": [
+                "user",
+                "parent",
+                "hook"
+              ]
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "id",
+            "kind",
+            "parentId",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "SessionWhy": {
+      "type": "string",
+      "enum": [
+        "start",
+        "resume",
+        "handoff",
+        "quota"
+      ]
+    },
+    "Step": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "via": {
+          "type": "string",
+          "enum": [
+            "cedia",
+            "claude-code"
+          ]
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "costUsd": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "model",
+        "via",
+        "sessionId"
+      ],
+      "additionalProperties": false
+    },
+    "StopReason": {
+      "type": "string",
+      "enum": [
+        "end_turn",
+        "tool_use",
+        "max_tokens",
+        "refusal",
+        "aborted",
+        "error"
+      ]
+    },
+    "StreamEvent": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "start"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text_start"
+            },
+            "index": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "index"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text_delta"
+            },
+            "index": {
+              "type": "number"
+            },
+            "delta": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "delta"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "text_end"
+            },
+            "index": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "index"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "thinking_start"
+            },
+            "index": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "index"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "thinking_delta"
+            },
+            "index": {
+              "type": "number"
+            },
+            "delta": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "delta"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "thinking_end"
+            },
+            "index": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "index"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "toolcall_start"
+            },
+            "index": {
+              "type": "number"
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "id",
+            "name"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "toolcall_delta"
+            },
+            "index": {
+              "type": "number"
+            },
+            "delta": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index",
+            "delta"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "toolcall_end"
+            },
+            "index": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "index"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "done"
+            },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/AssistantBlock"
+              }
+            },
+            "stop": {
+              "$ref": "#/definitions/StopReason"
+            },
+            "usage": {
+              "$ref": "#/definitions/Usage"
+            }
+          },
+          "required": [
+            "type",
+            "blocks",
+            "stop",
+            "usage"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "error"
+            },
+            "error": {
+              "$ref": "#/definitions/AttemptError"
+            }
+          },
+          "required": [
+            "type",
+            "error"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ThreadEvent": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "open"
+            },
+            "title": {
+              "type": "string"
+            },
+            "task": {
+              "type": "string"
+            },
+            "parent": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "kind",
+            "task",
+            "title"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "session"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            },
+            "why": {
+              "$ref": "#/definitions/SessionWhy"
+            },
+            "path": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "kind",
+            "model",
+            "role",
+            "sessionId",
+            "why"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "handoff"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "note": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "kind",
+            "note",
+            "sessionId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "message"
+            },
+            "id": {
+              "type": "string"
+            },
+            "from": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "from",
+            "id",
+            "kind",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "delivered"
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "ids",
+            "kind",
+            "sessionId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "state"
+            },
+            "state": {
+              "$ref": "#/definitions/ThreadState"
+            },
+            "result": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "kind",
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "archived"
+            },
+            "archived": {
+              "type": "boolean"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "archived",
+            "at",
+            "kind"
+          ]
+        }
+      ]
+    },
+    "ThreadState": {
+      "type": "string",
+      "enum": [
+        "working",
+        "done",
+        "failed",
+        "stopped"
+      ]
+    },
+    "Timing": {
+      "type": "object",
+      "properties": {
+        "wallMs": {
+          "type": "number"
+        },
+        "modelMs": {
+          "type": "number"
+        },
+        "ttftMs": {
+          "type": "number"
+        },
+        "toolMs": {
+          "type": "number"
+        },
+        "retryMs": {
+          "type": "number"
+        },
+        "harnessMs": {
+          "type": "number"
+        },
+        "outputTokPerSec": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "wallMs",
+        "modelMs",
+        "ttftMs",
+        "toolMs",
+        "retryMs",
+        "harnessMs",
+        "outputTokPerSec"
+      ],
+      "additionalProperties": false
+    },
+    "ToolDef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "schema": {
+          "$ref": "#/definitions/JsonObject"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "schema"
+      ],
+      "additionalProperties": false
+    },
+    "ToolOutput": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "isError": {
+          "type": "boolean"
+        },
+        "exitCode": {
+          "type": "number"
+        },
+        "spillPath": {
+          "type": "string"
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "redacted": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "text",
+        "isError"
+      ],
+      "additionalProperties": false
+    },
+    "TurnEndReason": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "aborted",
+        "error",
+        "max_tokens",
+        "budget",
+        "max_turns",
+        "handoff"
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "uncached": {
+          "type": "number"
+        },
+        "cacheRead": {
+          "type": "number"
+        },
+        "cacheWrite": {
+          "type": "number"
+        },
+        "output": {
+          "type": "number"
+        },
+        "reasoning": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "uncached",
+        "cacheRead",
+        "cacheWrite",
+        "output"
+      ],
+      "additionalProperties": false
+    },
+    "Wire": {
+      "type": "string",
+      "enum": [
+        "anthropic-messages",
+        "chat-completions",
+        "openai-responses",
+        "faux"
+      ]
+    }
+  }
+}

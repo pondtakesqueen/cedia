@@ -6,7 +6,7 @@ import { resolveModel } from '../../core/providers/catalog.ts';
 import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
-import { projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
+import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoffAt, loadPolicy, loadPrivacy, loadRoles, loadSandbox, loadSpawn, type RoleChoice } from '../../core/config.ts';
 import { handoffNote, MAX_HANDOFFS } from '../../core/project/handoff.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
@@ -147,7 +147,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? (JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) as FauxStep[]) : undefined;
   const handoffAt = loadHandoffAt(model, args.handoffAt);
   // Every run belongs to a thread of the project, unless nothing is written to disk.
-  const store = args.noSessionFile ? undefined : new ThreadStore(threadsDir(cediaHome(), projectSlug(args.cwd)));
+  const store = args.noSessionFile ? undefined : new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
   if (args.thread && !store?.has(args.thread)) {
     await sandbox.close();
     throw new Error(`no thread ${args.thread} in this project${args.noSessionFile ? ' (threads need session files)' : ''}`);
