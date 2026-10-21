@@ -1,0 +1,20 @@
+data: {"id":"c1","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Need "}}]}
+
+data: {"id":"c1","choices":[{"index":0,"delta":{"reasoning_content":"two files."}}]}
+
+data: {"id":"c1","choices":[{"index":0,"delta":{"content":"Reading."}}]}
+
+data: {"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"read","arguments":""}}]}}]}
+
+data: {"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":"}}]}}]}
+
+data: {"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_b","type":"function","function":{"name":"read","arguments":"{\"path\":\"b.txt\"}"}}]}}]}
+
+data: {"id":"c1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"a.txt\"}"}}]}}]}
+
+data: {"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: {"id":"c1","choices":[],"usage":{"prompt_tokens":5000,"completion_tokens":40,"prompt_cache_hit_tokens":4600,"prompt_cache_miss_tokens":400,"completion_tokens_details":{"reasoning_tokens":12}}}
+
+data: [DONE]
+

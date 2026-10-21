@@ -1,0 +1,33 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"Look at a."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"Look at a."}],"encrypted_content":"gAAAAenc"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","output_index":1,"content_index":0,"delta":"Reading a."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_1"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"fc_1","call_id":"call_r1","name":"read","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","output_index":2,"delta":"{\"path\":\"a.txt\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":2,"item":{"type":"function_call","id":"fc_1","call_id":"call_r1","name":"read","arguments":"{\"path\":\"a.txt\"}"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":9000,"input_tokens_details":{"cached_tokens":8192},"output_tokens":30,"output_tokens_details":{"reasoning_tokens":10}}}}
+

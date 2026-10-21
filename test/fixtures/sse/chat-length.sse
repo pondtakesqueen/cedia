@@ -1,0 +1,6 @@
+data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_x","function":{"name":"read","arguments":"{\"path\":\"ver"}}]}}]}
+
+data: {"choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":100,"completion_tokens":8,"prompt_tokens_details":{"cached_tokens":64}}}
+
+data: [DONE]
+
