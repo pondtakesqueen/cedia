@@ -62,6 +62,14 @@ describe('loop', () => {
     for (const a of of(log.events, 'attempt')) expect(a).toMatchObject({ ttftMs: expect.any(Number), ms: expect.any(Number) });
   });
 
+  test('the default turn limit lets a session run past 50 turns', async () => {
+    const loop: FauxStep = () => ({ blocks: [toolUse(`c${Math.random()}`, 'read', { path: 'a.txt' })] });
+    const { opts } = setup([...Array.from({ length: 80 }, () => loop), { blocks: [text('done')] }]);
+    const res = await runPrompt(opts, 'loop');
+    expect(res.subtype).toBe('success');
+    expect(res.numTurns).toBe(81);
+  });
+
   test('maxTurns stops with error_max_turns', async () => {
     const loop: FauxStep = () => ({ blocks: [toolUse(`c${Math.random()}`, 'read', { path: 'a.txt' })] });
     const { log, opts } = setup([loop, loop, loop, loop], { maxTurns: 3 });
