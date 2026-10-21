@@ -2,7 +2,7 @@
 //
 // slugify(text, max?):
 // - lower case;
-// - these letters become ASCII: a with any accent (à á â ã ä å) -> a, likewise for e, i, o, u, y, c (ç), n (ñ);
+// - a letter with an accent or other diacritic loses it (à -> a, ç -> c, ñ -> n, ź -> z, and so on);
 //   ß -> ss, æ -> ae, œ -> oe, ø -> o, ł -> l, đ -> d;
 // - any other character that is not a-z or 0-9 is a separator; runs of separators become one "-", and the slug
 //   never starts or ends with "-";
