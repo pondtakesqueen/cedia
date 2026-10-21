@@ -1,0 +1,7 @@
+{
+  "id": "wide-deprecate",
+  "category": "refactor",
+  "source": "synthetic: a deprecated logging call spread over 20 modules, an alias, a re-export and a comment",
+  "prompt": "`oldLog` in src/log.ts is deprecated. Move every use in src/ to the `log` API (log.<level>(msg), or log.at(level, msg) when the level is a variable), then remove oldLog completely, including any re-export, so that the name no longer appears anywhere in src/. Logged lines must stay exactly the same. Do not change the tests. Run `bun test` until it passes.",
+  "verify": "bun test"
+}

@@ -11,5 +11,7 @@
     "skipLibCheck": true,
     "types": ["bun"]
   },
-  "include": ["src", "test", "evals", "scripts"]
+  "include": ["src", "test", "evals", "scripts"],
+  // Each eval task is its own program; its stub is meant to be wrong.
+  "exclude": ["evals/tasks"]
 }

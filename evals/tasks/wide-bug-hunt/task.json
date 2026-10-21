@@ -1,0 +1,7 @@
+{
+  "id": "wide-bug-hunt",
+  "category": "bugfix",
+  "source": "synthetic: a 25-file order-pricing service with two bugs in different modules",
+  "prompt": "Tests in test/orders.test.ts fail. Find the root causes in src/ and fix them; the pricing rules are in README.md. Do not change the tests. Run `bun test` until it passes.",
+  "verify": "bun test"
+}
