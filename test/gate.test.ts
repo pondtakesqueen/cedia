@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { baselinePath, compare, DEFAULT_SUITE, expectedCost, fisherLower, loadSuite, taskHash, type Baseline, type Thresholds } from "../evals/gate.ts";
 import type { Result, Task } from "../evals/run.ts";
 
-const th: Thresholds = { passP: 0.1, costRise: 0.25, timeRise: 0.3 };
+const th: Thresholds = { passP: 0.1, costRise: 0.15, timeRise: 0.2, totalRise: 0.4 };
 
 const row = (id: string, run: number, o: { passed?: boolean; falseDone?: boolean; cost?: number; ms?: number; infra?: boolean } = {}): Result => ({
   id, category: "c", harness: "cedia", model: "m", run, ts: "", ledger: [], wallMs: o.ms ?? 60_000, output: "", stderr: "", exitCode: 0,
@@ -47,22 +47,33 @@ describe("regression gate", () => {
     expect(c.checks.find((x) => x.name === "tasks broken")!.candidate).toContain("t3 (0/2, was 2/2)");
   });
 
-  test("any rise in false-done fails the gate", () => {
-    const c = compare(set(), set((id, run) => (id === "t5" && run === 2 ? { passed: false, falseDone: true } : {})), { thresholds: th });
-    expect(status(c, "false-done")).toBe("regressed");
+  test("any rise in false-done fails the gate, except on tasks with hidden tests", () => {
+    const fd = set((id, run) => (id === "t5" && run === 2 ? { passed: false, falseDone: true } : {}));
+    expect(status(compare(set(), fd, { thresholds: th }), "false-done")).toBe("regressed");
+    // The run's own checks passed and a spec it could not see failed: a failed run, not an unbacked claim.
+    const hidden = compare(set(), fd, { thresholds: th, hiddenTasks: ["t5"] });
+    expect(status(hidden, "false-done")).toBe("ok");
+    expect(hidden.checks.find((x) => x.name === "false-done")!.note).toContain("0 -> 1 on tasks with hidden tests");
   });
 
-  test("cost and time fail past their limit, paired by task", () => {
-    expect(status(compare(set(), set(() => ({ cost: 0.012 })), { thresholds: th }), "cost per task set")).toBe("ok");
-    expect(status(compare(set(), set(() => ({ cost: 0.013 })), { thresholds: th }), "cost per task set")).toBe("regressed");
-    expect(status(compare(set(), set(() => ({ cost: 0.005 })), { thresholds: th }), "cost per task set")).toBe("better");
-    expect(status(compare(set(), set(() => ({ ms: 80_000 })), { thresholds: th }), "time per task set")).toBe("regressed");
+  test("cost and time fail past their limit for the typical task or the whole set, paired by task", () => {
+    expect(status(compare(set(), set(() => ({ cost: 0.011 })), { thresholds: th }), "cost")).toBe("ok");
+    expect(status(compare(set(), set(() => ({ cost: 0.012 })), { thresholds: th }), "cost")).toBe("regressed");
+    expect(status(compare(set(), set(() => ({ cost: 0.005 })), { thresholds: th }), "cost")).toBe("better");
+    // One expensive task 50% dearer moves the typical task 3.4%, and the whole set past its limit.
+    const dear = (k: number) => set((id) => ({ cost: id === "t0" ? k : 0.01 }));
+    const spike = compare(dear(1), dear(1.5), { thresholds: th });
+    expect(status(spike, "cost")).toBe("regressed");
+    expect(spike.checks.find((x) => x.name === "cost")!.note).toContain("typical task +3.4%");
+    // One cheap task twice as dear is noise for the set: the typical task moves 6%.
+    expect(status(compare(set(), set((id) => ({ cost: id === "t1" ? 0.02 : 0.01 })), { thresholds: th }), "cost")).toBe("ok");
+    expect(status(compare(set(), set(() => ({ ms: 80_000 })), { thresholds: th }), "time")).toBe("regressed");
     // Wall time from another concurrency is not compared.
-    expect(status(compare(set(), set(() => ({ ms: 80_000 })), { thresholds: th, sameJobs: false }), "time per task set")).toBe("skipped");
+    expect(status(compare(set(), set(() => ({ ms: 80_000 })), { thresholds: th, sameJobs: false }), "time")).toBe("skipped");
     // Jitter on tasks of a few seconds is not a regression however large the ratio.
-    expect(status(compare(set(() => ({ ms: 100 })), set(() => ({ ms: 300 })), { thresholds: th }), "time per task set")).toBe("ok");
+    expect(status(compare(set(() => ({ ms: 100 })), set(() => ({ ms: 300 })), { thresholds: th }), "time")).toBe("ok");
     // A free model has no cost to compare.
-    expect(status(compare(set(() => ({ cost: 0 })), set(() => ({ cost: 0 })), { thresholds: th }), "cost per task set")).toBe("skipped");
+    expect(status(compare(set(() => ({ cost: 0 })), set(() => ({ cost: 0 })), { thresholds: th }), "cost")).toBe("skipped");
   });
 
   test("provider errors and changed tasks are left out, and too few runs is inconclusive", () => {
@@ -83,7 +94,7 @@ describe("regression gate", () => {
     expect(tasks.map((t) => t.id)).toEqual(suite.tasks);
     expect(suite.runs).toBeGreaterThanOrEqual(2);
     expect(suite.maxUsd).toBeGreaterThan(0);
-    expect(suite.thresholds).toMatchObject({ passP: expect.any(Number), costRise: expect.any(Number), timeRise: expect.any(Number) });
+    expect(suite.thresholds).toMatchObject({ passP: expect.any(Number), costRise: expect.any(Number), timeRise: expect.any(Number), totalRise: expect.any(Number) });
   });
 
   test("expected cost comes from the baseline's spend, then earlier results, then the token estimate", () => {

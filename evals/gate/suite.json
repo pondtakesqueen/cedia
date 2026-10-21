@@ -11,5 +11,5 @@
   "jobs": 4,
   "models": ["anthropic/claude-haiku-5-5", "opencode-go/deepseek-v4.1-flash"],
   "maxUsd": 3,
-  "thresholds": { "passP": 0.1, "costRise": 0.25, "timeRise": 0.3 }
+  "thresholds": { "passP": 0.1, "costRise": 0.15, "timeRise": 0.2, "totalRise": 0.4 }
 }

@@ -1,14 +1,15 @@
 #!/usr/bin/env bun
 // Usage: bun evals/gate.ts [--suite evals/gate/suite.json] [--model <ref>]... [--runs <n>] [--jobs <n>] [--budget <usd>]
-//                          [--estimate] [--update-baseline] [--cedia-arg=<flag>]...
+//                          [--estimate] [--update-baseline] [--only id,id] [--cedia-arg=<flag>]...
 //        bun evals/gate.ts --compare <results.jsonl> [--against <results.jsonl|baseline.json>]
 //
 // The regression gate. Runs the suite's tasks on each model, records pass rate, false-done, cost and time, and
 // compares them with the baseline stored for that model in evals/gate/baseline/. Exit 0 when no model got worse,
 // 1 when one regressed, 3 when the comparison cannot be made (no baseline, too many provider errors, budget hit).
-// It prints the expected cost from the baseline's own spend (or earlier results) before it starts, and refuses to start a run that
-// would cost more than the suite's maxUsd unless --budget allows it.
+// It prints the expected cost from the baseline's own spend (or earlier results) before it starts, and refuses to
+// start a run that would cost more than the suite's maxUsd unless --budget allows it.
 //
+// --only runs some of the suite's tasks; with --update-baseline it replaces only their rows, as after a task changed.
 // --compare scores an existing result file instead of running anything, so a rule change can be checked for free.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -20,9 +21,11 @@ import { estimateCost, formatSummary, loadTasks, missingVerifyTools, REPO_ROOT, 
 export type Thresholds = {
   // One-sided Fisher exact test on passed runs: a lower pass rate fails the gate when p is below this.
   passP: number;
-  // Mean cost or wall time per run, paired by task, may rise by this share before the gate fails.
+  // Cost or wall time of the typical task (geometric mean of per-task ratios) may rise by this share.
   costRise: number;
   timeRise: number;
+  // The whole task set's cost or wall time (sum of per-task means) may rise by this share.
+  totalRise: number;
 };
 
 export type Suite = {
@@ -102,25 +105,28 @@ const byTask = (rs: Result[]) => {
 };
 const mean = (xs: number[]) => xs.reduce((a, x) => a + x, 0) / xs.length;
 
-// Paired by task, so a run that lost a task to provider errors is not cheaper for it: the sum over common tasks of
-// each task's mean, candidate over baseline.
-function pairedRatio(base: Map<string, Result[]>, cand: Map<string, Result[]>, f: (r: Result) => number | undefined): { base: number; cand: number } | undefined {
+// Paired by task, so a run that lost a task to provider errors is not cheaper for it. `base` and `cand` are the sums
+// over common tasks of each task's mean; `typical` is the geometric mean of the per-task ratios, which one noisy
+// expensive task cannot move much.
+function paired(base: Map<string, Result[]>, cand: Map<string, Result[]>, f: (r: Result) => number | undefined): { base: number; cand: number; typical?: number } | undefined {
   let b = 0;
   let c = 0;
+  const logs: number[] = [];
   for (const [id, crs] of cand) {
     const bv = (base.get(id) ?? []).map(f).filter((x): x is number => typeof x === "number");
     const cv = crs.map(f).filter((x): x is number => typeof x === "number");
     if (!bv.length || !cv.length) continue;
     b += mean(bv);
     c += mean(cv);
+    if (mean(bv) > 0 && mean(cv) > 0) logs.push(Math.log(mean(cv) / mean(bv)));
   }
-  return b || c ? { base: b, cand: c } : undefined;
+  return b || c ? { base: b, cand: c, ...(logs.length ? { typical: Math.exp(mean(logs)) } : {}) } : undefined;
 }
 
 export function compare(
   baseAll: Result[],
   candAll: Result[],
-  opts: { thresholds: Thresholds; planned?: number; staleTasks?: string[]; sameJobs?: boolean; model?: string },
+  opts: { thresholds: Thresholds; planned?: number; staleTasks?: string[]; sameJobs?: boolean; model?: string; hiddenTasks?: string[] },
 ): Comparison {
   const { thresholds: th } = opts;
   const stale = new Set(opts.staleTasks ?? []);
@@ -158,36 +164,48 @@ export function compare(
   const broken = [...ct].filter(([id, rs]) => rs.length >= 2 && rs.every((r) => !r.passed) && (bt.get(id) ?? []).every((r) => r.passed)).map(([id, rs]) => `${id} (0/${rs.length}, was ${bt.get(id)!.length}/${bt.get(id)!.length})`);
   checks.push({ name: "tasks broken", baseline: "", candidate: broken.length ? broken.join(", ") : "none", status: broken.length ? "regressed" : "ok" });
 
-  // A false done is the trust guarantee failing, so any rise fails the gate.
-  const bf = base.filter((r) => r.falseDone).length;
-  const cf = cand.filter((r) => r.falseDone).length;
+  // A false done is the trust guarantee failing, so any rise fails the gate. On a task with hidden tests the run's
+  // own checks passed and the spec it could not see failed: that is a failed run, already counted above.
+  const hidden = new Set(opts.hiddenTasks ?? []);
+  const seen = (rs: Result[]) => rs.filter((r) => !hidden.has(r.id));
+  const fd = (rs: Result[]) => ({ n: seen(rs).length, f: seen(rs).filter((r) => r.falseDone).length, h: rs.filter((r) => r.falseDone && hidden.has(r.id)).length });
+  const bf = fd(base);
+  const cf = fd(cand);
+  const rate = (x: { n: number; f: number }) => (x.n ? x.f / x.n : 0);
   checks.push({
     name: "false-done",
-    baseline: `${pct(bf / base.length)} (${bf})`,
-    candidate: `${pct(cf / cand.length)} (${cf})`,
-    status: cf / cand.length > bf / base.length ? "regressed" : cf / cand.length < bf / base.length ? "better" : "ok",
+    baseline: `${pct(rate(bf))} (${bf.f})`,
+    candidate: `${pct(rate(cf))} (${cf.f})`,
+    status: rate(cf) > rate(bf) ? "regressed" : rate(cf) < rate(bf) ? "better" : "ok",
+    ...(bf.h || cf.h ? { note: `plus ${bf.h} -> ${cf.h} on tasks with hidden tests, counted as failures, not gated here` } : {}),
   });
 
-  // `floor` is the smallest absolute rise that counts, so tasks of a few seconds cannot fail the gate on jitter.
+  // Two limits each: the typical task (geometric mean of per-task ratios) and the whole set (sum of task means), so
+  // neither a broad small rise nor a large one on one expensive task gets through. `floor` is the smallest absolute
+  // rise of the set that counts, so tasks of a few seconds cannot fail the gate on jitter.
   const rise = (name: string, f: (r: Result) => number | undefined, limit: number, floor: number, fmt: (x: number) => string, skip?: string) => {
-    const r = pairedRatio(bt, ct, f);
+    const r = paired(bt, ct, f);
     if (skip || !r) return checks.push({ name, baseline: r ? fmt(r.base) : "-", candidate: r ? fmt(r.cand) : "-", status: "skipped", note: skip ?? "not reported" });
     if (r.base < 1e-9) return checks.push({ name, baseline: fmt(r.base), candidate: fmt(r.cand), status: "skipped", note: "the baseline costs nothing" });
-    const ratio = r.cand / r.base;
+    const total = r.cand / r.base;
+    const typical = r.typical ?? total;
+    const signed = (x: number) => `${x >= 1 ? "+" : ""}${pct(x - 1)}`;
+    const over = r.cand - r.base > floor && (typical > 1 + limit || total > 1 + th.totalRise);
+    const under = r.base - r.cand > floor && typical < 1 - limit && total < 1;
     checks.push({
       name,
       baseline: fmt(r.base),
       candidate: fmt(r.cand),
-      status: ratio > 1 + limit && r.cand - r.base > floor ? "regressed" : ratio < 1 - limit && r.base - r.cand > floor ? "better" : "ok",
-      note: `${ratio >= 1 ? "+" : ""}${pct(ratio - 1)} (limit +${pct(limit)})`,
+      status: over ? "regressed" : under ? "better" : "ok",
+      note: `typical task ${signed(typical)} (limit +${pct(limit)}), whole set ${signed(total)} (limit +${pct(th.totalRise)})`,
     });
   };
-  const nTasks = ct.size;
-  rise("cost per task set", (r) => r.reported.costUsd, th.costRise, 0.002, (x) => `$${x.toFixed(4)}`);
-  rise("time per task set", (r) => r.wallMs, th.timeRise, 10_000, (x) => `${(x / 1000).toFixed(0)}s`, opts.sameJobs === false ? "the baseline ran at another --jobs, which changes wall time" : undefined);
+  rise("cost", (r) => r.reported.costUsd, th.costRise, 0.002, (x) => `$${x.toFixed(4)}`);
+  rise("time", (r) => r.wallMs, th.timeRise, 10_000, (x) => `${(x / 1000).toFixed(0)}s`, opts.sameJobs === false ? "the baseline ran at another --jobs, which changes wall time" : undefined);
   // Reported, never gated: they explain a cost or time change.
-  const turns = pairedRatio(bt, ct, (r) => r.reported.turns);
-  if (turns) checks.push({ name: "turns per task set", baseline: turns.base.toFixed(0), candidate: turns.cand.toFixed(0), status: "ok", note: `${nTasks} tasks, not gated` });
+  const nTasks = ct.size;
+  const turns = paired(bt, ct, (r) => r.reported.turns);
+  if (turns) checks.push({ name: "turns", baseline: turns.base.toFixed(0), candidate: turns.cand.toFixed(0), status: "ok", note: `${nTasks} tasks, not gated` });
 
   return { model, verdict: checks.some((c) => c.status === "regressed") ? "regressed" : "pass", checks };
 }
@@ -280,6 +298,7 @@ async function main(argv: string[]): Promise<number> {
   let update = false;
   let comparePath: string | undefined;
   let againstPath: string | undefined;
+  let only: string[] | undefined;
   const cediaArgs: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -294,10 +313,15 @@ async function main(argv: string[]): Promise<number> {
     else if (a === "--update-baseline") update = true;
     else if (a === "--compare") comparePath = argv[++i]!;
     else if (a === "--against") againstPath = argv[++i]!;
+    else if (a === "--only") only = argv[++i]!.split(",");
     else if (a === "--cedia-arg" || a.startsWith("--cedia-arg=")) cediaArgs.push(a.includes("=") ? a.slice("--cedia-arg=".length) : argv[++i]!);
     else throw new Error(`unknown flag: ${a}`);
   }
-  const { suite, tasks } = loadSuite(suitePath);
+  const loaded = loadSuite(suitePath);
+  const { suite } = loaded;
+  for (const id of only ?? []) if (!suite.tasks.includes(id)) throw new Error(`--only: ${id} is not in suite ${suite.name}`);
+  const tasks = loaded.tasks.filter((t) => !only || only.includes(t.id));
+  const hiddenTasks = tasks.filter((t) => Object.keys(t.hidden ?? {}).length).map((t) => t.id);
   const hashes = Object.fromEntries(tasks.map((t) => [t.id, taskHash(t)]));
   const staleOf = (b: Baseline) => (Object.keys(b.taskHashes).length ? tasks.filter((t) => b.taskHashes[t.id] && b.taskHashes[t.id] !== hashes[t.id]).map((t) => t.id) : []);
 
@@ -309,7 +333,7 @@ async function main(argv: string[]): Promise<number> {
       console.error(`no baseline for ${model} at ${baselinePath(model, baselineDir)}`);
       return 3;
     }
-    const c = compare(base.results, cand, { thresholds: suite.thresholds, staleTasks: staleOf(base), model });
+    const c = compare(base.results, cand, { thresholds: suite.thresholds, staleTasks: staleOf(base), model, hiddenTasks });
     console.log(formatComparison(c));
     return c.verdict === "pass" ? 0 : c.verdict === "regressed" ? 1 : 3;
   }
@@ -367,6 +391,7 @@ async function main(argv: string[]): Promise<number> {
         staleTasks: staleOf(base),
         sameJobs: base.jobs === jobs,
         model: m,
+        hiddenTasks,
       });
       if (JSON.stringify(base.cediaArgs) !== JSON.stringify(args)) c.checks.unshift({ name: "setup", baseline: base.cediaArgs.join(" ") || "defaults", candidate: args.join(" ") || "defaults", status: "skipped", note: "cedia flags differ from the baseline's" });
       verdict = c.verdict;
@@ -379,7 +404,14 @@ async function main(argv: string[]): Promise<number> {
       if (run.stopped || run.results.filter((r) => !r.infraError).length < 0.8 * tasks.length * runs) {
         console.error(`  not stored as the baseline: the run stopped early or lost too many runs to provider errors`);
       } else {
-        const b: Baseline = { suite: suite.name, model: m, commit, date, runs, jobs, cediaArgs: args, taskHashes: hashes, results: run.results.map((r) => ({ ...r, output: r.output.slice(-500), stderr: r.stderr.slice(-300) })) };
+        const rows = run.results.map((r) => ({ ...r, output: r.output.slice(-500), stderr: r.stderr.slice(-300) }));
+        // With --only, the other tasks keep their baseline rows; the record of how it was made is the new run's.
+        const kept = only && base ? base.results.filter((r) => !only!.includes(r.id)) : [];
+        const b: Baseline = {
+          suite: suite.name, model: m, commit, date, runs, jobs, cediaArgs: args,
+          taskHashes: { ...(only && base ? base.taskHashes : {}), ...hashes },
+          results: [...kept, ...rows].sort((x, y) => x.id.localeCompare(y.id) || x.run - y.run),
+        };
         mkdirSync(dirname(baselinePath(m, baselineDir)), { recursive: true });
         writeFileSync(baselinePath(m, baselineDir), JSON.stringify(b, null, 1) + "\n");
         console.log(`  baseline stored: ${baselinePath(m, baselineDir)}`);
