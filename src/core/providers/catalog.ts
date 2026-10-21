@@ -94,8 +94,8 @@ export const CATALOG: ModelSpec[] = [
   go('beam-free', 'chat-completions', p(0, 0, 0), { dataPolicy: 'retained' }),
   go('muse-spark-1.3-contributor', 'openai-responses', p(0.1, 0.2, 0.002), { dataPolicy: 'trains' }),
   go('grok-4.7', 'openai-responses', { ...p(2, 6, 0.5), above: { tokens: 200_000, price: p(4, 12, 1) } }, { dataPolicy: 'retained', caps: { ...responsesCaps, effortLevels: ['low', 'medium', 'high', 'xhigh'] } }),
-  // DeepSeek's own API, paid per token: the fallback when the Go quota runs out. Its privacy policy lists training
-  // as a use of inputs with no opt-out for the API, so it counts as `trains`.
+  // DeepSeek's own API, paid per token. Its privacy policy lists training as a use of inputs with no opt-out for
+  // the API, so it counts as `trains` and runs only in public repos.
   {
     ref: 'deepseek/deepseek-v4.1-flash',
     id: 'deepseek-v4.1-flash',
@@ -140,9 +140,10 @@ export const ALIASES: Record<string, string> = {
   faux: 'faux/scripted',
 };
 
-// Where a session goes when its model's plan or balance runs out: the same model, paid another way.
+// Where a session goes when its model's plan or balance runs out. Off the Go plan, so its quota does not apply,
+// and kept from training: Haiku 5.5 on the Claude API passed as many hard evals as Go's DeepSeek Flash for less.
 export const FALLBACKS: Record<string, string> = {
-  'opencode-go/deepseek-v4.1-flash': 'deepseek/deepseek-v4.1-flash',
+  'opencode-go/deepseek-v4.1-flash': 'anthropic/claude-haiku-5-5',
 };
 
 export function resolveModel(ref: string): ModelSpec {

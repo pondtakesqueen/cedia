@@ -21,7 +21,7 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --unlock <guard>         lift a built-in guard: ${GUARDS.join(', ')}; repeatable
       --privacy <level>        no-training | zdr: which models may see this repo (default: $CEDIA_PRIVACY, settings, no-training)
       --fallback <ref|none>    model to continue on in a new session when this one's quota runs out
-                               (default: settings, then deepseek -> deepseek-api)
+                               (default: settings, then deepseek -> Haiku 5.5 on the Claude API)
       --check <command>        declared check for the done gate, e.g. 'bun test'; repeatable
       --sandbox <s>            auto | on | off: OS sandbox for bash (default: $CEDIA_SANDBOX, settings, auto)
       --allow-domain <host>    let sandboxed commands reach this host; repeatable

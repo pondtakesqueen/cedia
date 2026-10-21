@@ -213,11 +213,12 @@ describe('http', () => {
     expect(isRetryable(classifyStatus(402, ''))).toBe(false);
   });
 
-  test("DeepSeek's own API is the paid fallback for Go's DeepSeek Flash, and counts as training on prompts", () => {
+  test("DeepSeek's own API counts as training on prompts; the quota fallback is Haiku on the Claude API", () => {
     const api = resolveModel('deepseek-api');
     expect(api).toMatchObject({ id: 'deepseek-v4.1-flash', url: 'https://api.deepseek.com/chat/completions', dataPolicy: 'trains', auth: { env: 'DEEPSEEK_API_KEY' } });
     expect(api.price).toEqual(resolveModel('deepseek').price);
-    expect(FALLBACKS[resolveModel('deepseek').ref]).toBe(api.ref);
+    const fallback = resolveModel(FALLBACKS[resolveModel('deepseek').ref]!);
+    expect(fallback).toMatchObject({ ref: 'anthropic/claude-haiku-5-5', url: 'https://api.anthropic.com/v1/messages', dataPolicy: 'retained' });
   });
 });
 

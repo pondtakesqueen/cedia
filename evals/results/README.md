@@ -28,10 +28,12 @@ Seven tasks built from cedia's own code (`evals/tasks/hard-*/`): tiered edit mat
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Claude Haiku 5.5 via Anthropic API | 21 | 95.2% | 85.7% | 0% | 4.8% | 3/3 | 55.5 s | 99,976 / 12,125 | 83.5% | 222 | $0.188 |
 | DeepSeek V4.1 Flash via Go | 21 | 95.2% | 85.7% | 0% | 0% | 3/3 | 77.4 s | 211,666 / 12,158 | 87.6% | 173 | $0.480 |
+| Beam (free) via Go | 21 | 100% | 100% | 0% | 0% | 3/3 | 57.2 s | 241,195 / 14,705 | 86.0% | 346 | $0.000 |
 
-Files: `2026-10-21-hard-cedia-haiku-5-5.jsonl`, `2026-10-21-hard-cedia-deepseek-flash.jsonl`.
+Files: `2026-10-21-hard-cedia-haiku-5-5.jsonl`, `2026-10-21-hard-cedia-deepseek-flash.jsonl`, `2026-10-21-hard-cedia-beam.jsonl`.
 
 - Failures: Haiku `hard-redact-bugs#3` (the done gate refused a claim with no passing check after the last change); DeepSeek `hard-shell-split#1` (hit the 300 s run timeout).
 - Output tok/s here is output tokens over all model time, time to first token included; later runs report the decode rate on its own. cedia's own overhead was under 0.1% of run time on Haiku. On DeepSeek about 7% went to retry waits after Go 429 and 503 errors, which the timing now reports as `retryMs`.
 - A first round on the earlier code found a real usability bug: Haiku gave up on `hard-ledger` because a heredoc with an apostrophe was denied as an unparsed command and the denial told it not to retry. Heredocs are now parsed, and a parse failure tells the model to rewrite the command.
+- Beam ran later, on the code with the quota fallback (`--fallback none` in evals), and is the only model to pass all 21; its tok/s is the decode rate alone, so it is not comparable with the two rows above.
 - Reading: both models are tied on pass rate and both resisted the injection; Haiku is faster and cheaper per passed run ($0.009 against $0.024) because DeepSeek reads twice the input. The set now ranks harnesses better than the first one, but the top models will likely saturate it too.

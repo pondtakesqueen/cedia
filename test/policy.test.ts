@@ -211,7 +211,8 @@ describe('settings', () => {
 
       // Fallback on a spent quota: flag > user settings > built-in; "none" turns it off; a repo cannot set it.
       const flash = resolveModel('deepseek');
-      expect(loadFallback(flash)?.ref).toBe('deepseek/deepseek-v4.1-flash');
+      expect(loadFallback(flash)?.ref).toBe('anthropic/claude-haiku-5-5');
+      expect(loadFallback(flash, 'deepseek-api')?.dataPolicy).toBe('trains');
       expect(loadFallback(resolveModel('sonnet'))).toBeUndefined();
       expect(loadFallback(flash, 'none')).toBeUndefined();
       expect(loadFallback(flash, 'haiku')?.ref).toBe('opencode-go/claude-haiku-5-5');
