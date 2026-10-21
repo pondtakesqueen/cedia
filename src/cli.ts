@@ -14,7 +14,7 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --plan <ref>             the plan role: a model, claude-code[:<model>] to plan in your own Claude Code
                                (default opus there), or none (default: roles.plan in settings, none)
       --output-format <f>      text | json | stream-json (default text)
-      --max-turns <n>          stop after n model calls (default 50)
+      --max-turns <n>          stop after n model calls (default 200)
       --max-budget-usd <x>     stop once spend reaches x
       --effort <level>         low | medium | high | xhigh | max
       --cwd <dir>              working directory (default: current)

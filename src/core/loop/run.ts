@@ -148,7 +148,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const { log, provider, model, tools } = opts;
   const signal = opts.signal ?? new AbortController().signal;
   const now = opts.now ?? (() => new Date());
-  const maxTurns = opts.maxTurns ?? 50;
+  // 200, not 50: on the real-repo evals Haiku finishes in 23 to 40 turns, but DeepSeek Flash takes 60 to 102
+  // smaller ones and failed at 50 in 5 of 6 runs, then passed 6 of 6 at 200. The budget still caps spend.
+  const maxTurns = opts.maxTurns ?? 200;
   const retryMax = opts.retry?.max ?? 5;
   // A retry wait ends early on abort, so SIGTERM (the eval's run timeout) is not held up by a long retry-after.
   const sleep = opts.retry?.sleep ?? ((ms: number) => new Promise<void>((r) => {
