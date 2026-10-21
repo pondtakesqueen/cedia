@@ -7,6 +7,7 @@ import { FAUX_MODEL, resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, text, toolUse, type FauxStep } from '../src/core/providers/faux.ts';
 import { SessionLog } from '../src/core/session/log.ts';
 import { bashTool } from '../src/core/tools/bash.ts';
+import { CORE_TOOLS } from '../src/core/tools/index.ts';
 import { readTool } from '../src/core/tools/read.ts';
 import type { EventOf, SessionEvent } from '../src/core/types.ts';
 
@@ -41,11 +42,11 @@ function expectPaired(events: SessionEvent[]) {
 }
 
 describe('loop', () => {
-  test('runs a tool and answers; log order is request, attempt, assistant, intent, result', async () => {
+  test('runs a tool and answers; log order is request, attempt, assistant, permission, intent, result', async () => {
     const { log, opts } = setup([{ blocks: [toolUse('c1', 'read', { path: 'a.txt' })] }, { blocks: [text('it says alpha')] }]);
     const res = await runPrompt(opts, 'what is in a.txt');
     expect(res).toMatchObject({ subtype: 'success', numTurns: 2, result: 'it says alpha' });
-    expect(kinds(log.events)).toEqual(['session', 'user', 'request', 'attempt', 'assistant', 'tool_intent', 'tool_result', 'request', 'attempt', 'assistant', 'turn_end']);
+    expect(kinds(log.events)).toEqual(['session', 'user', 'request', 'attempt', 'assistant', 'permission', 'tool_intent', 'tool_result', 'request', 'attempt', 'assistant', 'turn_end']);
     expect(of(log.events, 'tool_result')[0]!.output.text).toContain('alpha');
     expectPaired(log.events);
   });
@@ -110,7 +111,7 @@ describe('loop', () => {
     expect(of(log.events, 'assistant')[0]!.stop).toBe('aborted');
   });
 
-  test('bad tool input, unknown tools and refused commands still get results', async () => {
+  test('bad tool input, unknown tools and denied commands still get results', async () => {
     const { log, opts } = setup([
       {
         blocks: [
@@ -123,9 +124,10 @@ describe('loop', () => {
     ]);
     await runPrompt(opts, 'go');
     const results = of(log.events, 'tool_result');
-    expect(results.map((r) => r.status)).toEqual(['not_started', 'not_started', 'failed']);
-    expect(results[2]!.output.text).toContain('refused');
-    expect(of(log.events, 'tool_intent').map((i) => i.callId)).toEqual(['c3']);
+    expect(results.map((r) => r.status)).toEqual(['not_started', 'not_started', 'denied']);
+    expect(results[2]!.output.text).toContain('deny-list:rm-outside');
+    expect(of(log.events, 'permission').map((p) => [p.callId, p.decision])).toEqual([['c3', 'deny']]);
+    expect(of(log.events, 'tool_intent')).toEqual([]);
     expectPaired(log.events);
   });
 
@@ -170,5 +172,60 @@ describe('loop', () => {
     expect(raw).not.toContain('sk-secret-value');
     const req = of(SessionLog.load(path).events, 'request')[0]!;
     expect(Object.keys(req.headers).sort()).toEqual(['authorization', 'x-opencode-session']);
+  });
+
+  test('read-only sessions deny writes; workspace sessions apply them', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-perm-'));
+    writeFileSync(join(dir, 'f.ts'), 'const a = 1;\n');
+    const steps = (): FauxStep[] => [
+      { blocks: [toolUse('e1', 'edit', { path: 'f.ts', edits: [{ old_text: 'a = 1', new_text: 'a = 2' }] }), toolUse('b1', 'bash', { command: 'touch made.txt' })] },
+      { blocks: [text('done')] },
+    ];
+    const ro = setup(steps(), { cwd: dir, tools: CORE_TOOLS });
+    await runPrompt(ro.opts, 'go');
+    expect(of(ro.log.events, 'tool_result').map((r) => r.status)).toEqual(['denied', 'denied']);
+    expect(readFileSync(join(dir, 'f.ts'), 'utf8')).toBe('const a = 1;\n');
+
+    const ws = setup(steps(), { cwd: dir, tools: CORE_TOOLS, permission: { mode: 'workspace', allow: [], deny: [] } });
+    await runPrompt(ws.opts, 'go');
+    expect(of(ws.log.events, 'tool_result').map((r) => r.status)).toEqual(['completed', 'completed']);
+    expect(readFileSync(join(dir, 'f.ts'), 'utf8')).toBe('const a = 2;\n');
+    expect(kinds(ws.log.events).slice(5, 11)).toEqual(['permission', 'tool_intent', 'permission', 'tool_intent', 'tool_result', 'tool_result']);
+    expectPaired(ws.log.events);
+  });
+
+  test('an allow rule lets one command through a read-only session, but not what it is chained with', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-allow-'));
+    const { log, opts } = setup(
+      [
+        { blocks: [toolUse('b1', 'bash', { command: 'touch ok.txt && ls' }), toolUse('b2', 'bash', { command: 'touch ok.txt && touch bad.txt' })] },
+        { blocks: [text('done')] },
+      ],
+      { cwd: dir, permission: { mode: 'read-only', allow: ['bash(touch ok.txt)'], deny: [] } },
+    );
+    await runPrompt(opts, 'go');
+    expect(of(log.events, 'permission').map((p) => p.rule)).toEqual(['allow:bash(touch ok.txt)', 'mode:read-only']);
+    expect(of(log.events, 'tool_result').map((r) => r.status)).toEqual(['completed', 'denied']);
+  });
+
+  test('read-only bash calls run together; a writing call is a barrier', async () => {
+    const order: string[] = [];
+    const slow = (name: string, effect: 'read' | 'exec', ms: number) => ({
+      ...readTool,
+      name,
+      effect,
+      async run() {
+        order.push(`start ${name}`);
+        await new Promise((r) => setTimeout(r, ms));
+        order.push(`end ${name}`);
+        return { text: name, isError: false };
+      },
+    });
+    const { opts } = setup(
+      [{ blocks: [toolUse('1', 'r1', {}), toolUse('2', 'r2', {}), toolUse('3', 'w', {}), toolUse('4', 'r3', {})] }, { blocks: [text('ok')] }],
+      { tools: [slow('r1', 'read', 20), slow('r2', 'read', 5), slow('w', 'exec', 1), slow('r3', 'read', 1)], permission: { mode: 'workspace', allow: [], deny: [] } },
+    );
+    await runPrompt(opts, 'go');
+    expect(order).toEqual(['start r1', 'start r2', 'end r2', 'end r1', 'start w', 'end w', 'start r3', 'end r3']);
   });
 });

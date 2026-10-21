@@ -6,8 +6,8 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { SessionLog, sessionPath } from '../../core/session/log.ts';
-import { bashTool } from '../../core/tools/bash.ts';
-import { readTool } from '../../core/tools/read.ts';
+import { loadPolicy } from '../../core/config.ts';
+import { CORE_TOOLS } from '../../core/tools/index.ts';
 import type { Effort, HeadlessResult } from '../../core/types.ts';
 import { encode } from '../../protocol/index.ts';
 
@@ -20,10 +20,14 @@ export type HeadlessArgs = {
   maxBudgetUsd?: number;
   effort?: Effort;
   noSessionFile?: boolean;
+  permission?: string;
+  allow?: string[];
+  deny?: string[];
 };
 
 export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
   const model = resolveModel(args.model);
+  const policy = loadPolicy(args.cwd, { ...(args.permission ? { mode: args.permission } : {}), allow: args.allow ?? [], deny: args.deny ?? [] });
   const keyNote = missingKeyNote(model);
   if (keyNote) process.stderr.write(keyNote + '\n');
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? (JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) as FauxStep[]) : undefined;
@@ -41,10 +45,11 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         log,
         provider: providerFor(model, { fauxScript }),
         model,
-        tools: [readTool, bashTool],
+        tools: CORE_TOOLS,
         system: BASE_SYSTEM,
-        preamble: preamble(args.cwd),
+        preamble: preamble(args.cwd, policy.mode),
         cwd: args.cwd,
+        permission: policy,
         signal: ac.signal,
         ...(args.effort ?? model.defaultEffort ? { effort: args.effort ?? model.defaultEffort } : {}),
         ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns } : {}),

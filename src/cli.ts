@@ -11,6 +11,9 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --max-budget-usd <x>     stop once spend reaches x
       --effort <level>         low | medium | high | xhigh | max
       --cwd <dir>              working directory (default: current)
+      --permission <mode>      read-only | workspace (default: $CEDIA_PERMISSION, ~/.cedia/settings.json, read-only)
+      --allow <rule>           allow a call, e.g. 'bash(bun test*)' or 'edit(src/*)'; repeatable
+      --deny <rule>            deny a call; repeatable. The built-in deny list always applies
       --no-session-file        keep the session log in memory only
 
 models: ${Object.keys(ALIASES).join(', ')}`;
@@ -27,6 +30,9 @@ export async function main(argv: string[]): Promise<number> {
       'max-budget-usd': { type: 'string' },
       effort: { type: 'string' },
       cwd: { type: 'string' },
+      permission: { type: 'string' },
+      allow: { type: 'string', multiple: true },
+      deny: { type: 'string', multiple: true },
       'no-session-file': { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -56,6 +62,9 @@ export async function main(argv: string[]): Promise<number> {
       ...(values['max-budget-usd'] ? { maxBudgetUsd: Number(values['max-budget-usd']) } : {}),
       ...(values.effort ? { effort: values.effort as Effort } : {}),
       ...(values['no-session-file'] ? { noSessionFile: true } : {}),
+      ...(values.permission ? { permission: values.permission } : {}),
+      ...(values.allow ? { allow: values.allow } : {}),
+      ...(values.deny ? { deny: values.deny } : {}),
     });
     if (result.subtype !== 'success' && format === 'text') console.error(`cedia: ${result.subtype}`);
     return result.subtype === 'success' ? 0 : 1;

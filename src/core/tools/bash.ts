@@ -1,7 +1,8 @@
 import { clip, type ToolSpec } from './registry.ts';
 
-// Stage 1 bash is read-only: every command in a pipeline or && chain must be on the allow list,
-// and nothing that writes, substitutes or redirects is accepted. The sandbox replaces this in stage 2.
+// A command counts as read-only when every command in its pipeline or && chain is on this list and
+// nothing writes, substitutes or redirects. Read-only commands run in parallel and in read-only sessions;
+// anything else is an `exec` call that the permission policy decides.
 
 const READ_ONLY = new Set([
   'ls', 'cat', 'head', 'tail', 'wc', 'grep', 'rg', 'find', 'pwd', 'echo', 'sort', 'uniq', 'cut', 'tr',
@@ -102,7 +103,7 @@ function splitTopLevel(command: string): string[] | null {
 export const bashTool: ToolSpec = {
   name: 'bash',
   description:
-    'Run a read-only shell command in the working directory (ls, cat, grep, rg, find, git status/log/diff/show, and similar). Pipes and && are allowed; redirection, substitution and writing commands are refused.',
+    'Run a shell command with bash in the working directory and return its output and exit code. Use it to search, build and run tests. A command the permission policy denies is not run; the result says why.',
   schema: {
     type: 'object',
     properties: {
@@ -112,12 +113,11 @@ export const bashTool: ToolSpec = {
     required: ['command'],
     additionalProperties: false,
   },
-  effect: 'read',
-  replay: 'safe',
+  effect: 'exec',
+  replay: 'unsafe',
+  effectOf: (input) => (checkReadOnly(String(input.command ?? '')).ok ? 'read' : 'exec'),
   async run(input, ctx) {
     const command = String(input.command ?? '');
-    const verdict = checkReadOnly(command);
-    if (!verdict.ok) return { text: `refused: ${verdict.reason}`, isError: true };
     const timeout = Math.min(Number(input.timeout_ms ?? 120_000), 600_000);
     const proc = Bun.spawn(['bash', '-c', command], { cwd: ctx.cwd, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' });
     const kill = () => proc.kill();
