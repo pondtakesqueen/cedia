@@ -6,6 +6,7 @@ import { effectOf, type ToolSpec } from '../tools/registry.ts';
 import type { JsonObject } from '../types.ts';
 import { REDACTED } from './secrets.ts';
 import { simpleCommands } from './shell.ts';
+import { hooksDir } from './sandbox.ts';
 
 // read-only: reads and read-only commands run; writes and other commands need an allow rule.
 // workspace: writes inside the working directory and any command run, except the deny list.
@@ -111,10 +112,13 @@ function real(path: string): string {
   return resolve(realpathSync(head), ...tail);
 }
 
-// .git (hooks and config run code later, outside any sandbox) and .cedia (cedia's rules and checks).
+// .git (hooks and config run code later, outside any sandbox), a hooks directory set by core.hooksPath (.husky)
+// and .cedia (cedia's rules and checks).
 function protectedPath(path: string, cwd: string): boolean {
-  const rel = relative(real(cwd), real(resolve(cwd, expandHome(path))));
-  return /^(\.git|\.cedia)(\/|$)/.test(rel);
+  const full = real(resolve(cwd, expandHome(path)));
+  if (/^(\.git|\.cedia)(\/|$)/.test(relative(real(cwd), full))) return true;
+  const hooks = hooksDir(cwd);
+  return hooks !== undefined && within(full, real(hooks));
 }
 
 // The first secret store `path` falls under, if any. A store that holds the working directory is skipped, so
