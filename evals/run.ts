@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Usage: bun evals/run.ts [--harness cedia|pi|claude|codex|opencode|omp] [--model <ref>] [--runs 3] [--jobs 4]
 //                         [--tasks evals/tasks] [--only id,id] [--budget <usd>] [--estimate] [--out results.jsonl]
+//                         [--review <model>]   (cedia only: a second model reviews each finished run)
 //
 // Every harness binary comes from the environment (CEDIA_EVAL_<NAME>_BIN) or PATH, so the runner works on any
 // machine. Each task runs `--runs` times, each in its own clean temp dir. The task's verify command decides
@@ -36,6 +37,8 @@ export type Reported = {
   turns?: number;
   // cedia only: where the run's time went (see Timing in src/core/types.ts).
   timing?: { modelMs: number; ttftMs: number; toolMs: number; retryMs?: number; harnessMs: number; outputTokPerSec: number };
+  // cedia with --review: what the reviewer said and whether the writer was sent back to fix it.
+  review?: { verdict: string; fixed: boolean };
 };
 
 export type Result = {
@@ -78,6 +81,7 @@ const HARNESSES: Record<string, (task: Task, cwd: string, model: string | null) 
       ...(task.verify ? ["--check", task.verify] : []),
       ...(model ? ["--model", model] : []),
       "--fallback", "none", // a result measures the model it names
+      ...(process.env.CEDIA_EVAL_REVIEW ? ["--review", process.env.CEDIA_EVAL_REVIEW] : []),
     ],
   }),
   pi: (task, _cwd, model) => ({ bin: process.env.CEDIA_EVAL_PI_BIN ?? "pi", args: ["-p", task.prompt, ...(model ? ["--model", model] : [])] }),
@@ -152,6 +156,7 @@ export function parseReported(stdout: string): { reported: Reported; text: strin
         cacheHitRatio: Number(j.cacheHitRatio),
         turns: Number(j.numTurns),
         ...(j.timing ? { timing: j.timing as Reported["timing"] } : {}),
+        ...(j.review ? { review: { verdict: String((j.review as { verdict: unknown }).verdict), fixed: Boolean((j.review as { fixed: unknown }).fixed) } } : {}),
       },
     };
   }
@@ -419,6 +424,7 @@ async function main(argv: string[]): Promise<number> {
     else if (a === "--only") only = argv[++i]!.split(",");
     else if (a === "--estimate") estimate = true;
     else if (a === "--measured") measuredPath = argv[++i]!;
+    else if (a === "--review") process.env.CEDIA_EVAL_REVIEW = argv[++i]!;
   }
 
   const tasks = loadTasks(tasksDir).filter((t) => !only || only.includes(t.id));
@@ -448,7 +454,7 @@ async function main(argv: string[]): Promise<number> {
       results.push(r);
       spent += r.reported.costUsd ?? 0;
       const cost = r.reported.costUsd !== undefined ? ` $${r.reported.costUsd.toFixed(4)}` : "";
-      console.log(`  ${r.passed ? "PASS" : "FAIL"} ${task.id}#${run} (${(r.wallMs / 1000).toFixed(1)}s${cost}${r.falseDone ? ", FALSE DONE" : ""}${r.refusedClaim ? ", claim refused" : ""})`);
+      console.log(`  ${r.passed ? "PASS" : "FAIL"} ${task.id}#${run} (${(r.wallMs / 1000).toFixed(1)}s${cost}${r.falseDone ? ", FALSE DONE" : ""}${r.refusedClaim ? ", claim refused" : ""}${r.reported.review ? `, review ${r.reported.review.verdict}` : ""})`);
       if (spent >= budget && !stopped) {
         stopped = true;
         console.error(`budget $${budget} reached after $${spent.toFixed(4)}; stopping`);

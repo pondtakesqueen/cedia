@@ -42,13 +42,20 @@ export function splitWords(segment: string): string[] | null {
   return words;
 }
 
-export function checkReadOnly(command: string): Verdict {
-  if (/[`\n]|\$\(|<\(|>\(/.test(command)) return { ok: false, reason: 'command substitution and newlines are not allowed' };
-  // Strip quoted text and the two harmless redirections before looking for operators, so `grep "a>b"` is fine.
-  const bare = command
+// Strips quoted text and the two harmless redirections (2>&1, 2>/dev/null), leaving the operators that matter.
+const bareOf = (command: string) =>
+  command
     .replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, '""')
     .replace(/(^|\s)\d?>&\d(?=\s|$)/g, ' ')
     .replace(/(^|\s)2>\s*\/dev\/null(?=\s|$)/g, ' ');
+
+// True when the command writes a file through `>`, `>>` or `&>`, which the split argv no longer shows.
+export const redirectsOutput = (command: string): boolean => />/.test(bareOf(command));
+
+export function checkReadOnly(command: string): Verdict {
+  if (/[`\n]|\$\(|<\(|>\(/.test(command)) return { ok: false, reason: 'command substitution and newlines are not allowed' };
+  // Look for operators outside quotes, so `grep "a>b"` is fine.
+  const bare = bareOf(command);
   if (/[<>;]/.test(bare) || bare.replace(/&&/g, '').includes('&')) return { ok: false, reason: 'redirection, background jobs and ; are not allowed' };
   const original = splitTopLevel(command);
   if (!original) return { ok: false, reason: 'unbalanced quotes' };

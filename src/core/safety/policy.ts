@@ -1,7 +1,7 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
-import { checkReadOnly } from '../tools/bash.ts';
+import { checkReadOnly, redirectsOutput } from '../tools/bash.ts';
 import { effectOf, type ToolSpec } from '../tools/registry.ts';
 import type { JsonObject } from '../types.ts';
 import { REDACTED } from './secrets.ts';
@@ -53,19 +53,22 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
 
   if (effect === 'read' || effect === 'network') return { decision: 'allow', rule: 'effect:read' };
 
-  const allowRule = policy.allow.find((rule) => matches(rule, spec.name, commands, path, cwd, 'every'));
+  const allowRule = policy.allow.find((rule) => matches(rule, spec.name, commands, path, cwd, 'every', command));
   if (effect === 'write_workspace' && path !== undefined && !insideWorkspace(path, cwd) && !allowRule)
     return deny('outside-workspace', `${path} is outside the working directory`);
   if (effect === 'write_workspace' && path !== undefined && protectedPath(path, cwd))
     return deny('protected-path', `${path} is git's or cedia's own config; ask the user to change it`);
   if (allowRule) return { decision: 'allow', rule: `allow:${allowRule}` };
   if (policy.mode === 'workspace') return { decision: 'allow', rule: 'mode:workspace' };
-  return deny('mode:read-only', 'this session is read-only; writes and commands that may write need an allow rule');
+  // Say what made a command count as a write, so a model can split `a; b` into two read-only calls.
+  const verdict = command !== undefined ? checkReadOnly(command) : undefined;
+  const why = verdict && !verdict.ok ? verdict.reason : undefined;
+  return deny('mode:read-only', `this session is read-only; writes and commands that may write need an allow rule${why ? ` (${why}; read-only commands may be run one at a time)` : ''}`);
 }
 
 const deny = (rule: string, reason: string): Decision => ({ decision: 'deny', rule, reason });
 
-function matches(rule: string, tool: string, commands: string[][] | null | undefined, path: string | undefined, cwd: string, mode: 'any' | 'every'): boolean {
+function matches(rule: string, tool: string, commands: string[][] | null | undefined, path: string | undefined, cwd: string, mode: 'any' | 'every', command?: string): boolean {
   const m = /^([\w-]+)(?:\((.*)\))?$/.exec(rule.trim());
   if (!m || m[1] !== tool) return false;
   const pattern = m[2];
@@ -74,7 +77,9 @@ function matches(rule: string, tool: string, commands: string[][] | null | undef
   if (commands) {
     const line = (argv: string[]) => argv.join(' ');
     if (mode === 'any') return commands.some((argv) => re.test(line(argv)));
-    // To allow, every simple command (substitutions included) must match or only read.
+    // To allow, every simple command (substitutions included) must match or only read. The argv has lost its
+    // redirections, so a command that writes through `>` is never covered: `echo x > f` would read as `echo x`.
+    if (command !== undefined && redirectsOutput(command)) return false;
     return commands.length > 0 && commands.every((argv) => re.test(line(argv)) || checkReadOnly(line(argv)).ok);
   }
   if (path === undefined) return false;

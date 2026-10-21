@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadContext, loadFallback, loadPolicy, loadPrivacy } from '../src/core/config.ts';
+import { loadContext, loadFallback, loadPolicy, loadPrivacy, loadRoles } from '../src/core/config.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { preamble } from '../src/core/prompts.ts';
 import { decide, denyListed, insideWorkspace, type Policy } from '../src/core/safety/policy.ts';
@@ -120,6 +120,11 @@ describe('modes and rules', () => {
     expect(bash(p, 'bun test test/a.test.ts').rule).toBe('allow:bash(bun test*)');
     expect(bash(p, 'bun test && cat x | wc -l').rule).toBe('allow:bash(bun test*)');
     expect(bash(p, 'bun test; touch x').rule).toBe('mode:read-only');
+    // The split argv drops redirections, so an allow rule must not cover a command that writes through one.
+    expect(bash(p, 'bun test > out.txt').rule).toBe('mode:read-only');
+    expect(bash(p, 'echo hacked > g.txt; bun test').rule).toBe('mode:read-only');
+    expect(bash(p, 'bun test 2>&1').rule).toBe('allow:bash(bun test*)');
+    expect(bash(RO, 'cat a; ls').reason).toContain('; are not allowed; read-only commands may be run one at a time');
     expect(bash(p, 'echo $(touch x) && bun test').rule).toBe('mode:read-only');
     expect(decide(p, editTool, { path: 'src/a.ts', edits: [] }, cwd).rule).toBe('allow:edit(src/*)');
     expect(decide(p, editTool, { path: 'README.md', edits: [] }, cwd).rule).toBe('mode:read-only');
@@ -220,6 +225,18 @@ describe('settings', () => {
       expect(loadFallback(flash)).toBeUndefined();
       expect(loadFallback(resolveModel('anthropic/claude-sonnet-5-5'))?.ref).toBe('anthropic/claude-opus-5-5');
       expect(() => loadFallback(flash, 'nope')).toThrow('unknown model');
+
+      // Roles: flags > CEDIA_MODEL (code) > user settings > defaults; claude-code only for plan and review.
+      expect(loadRoles({}, {})).toEqual({ code: flash });
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ roles: { plan: 'claude-code', code: 'anthropic/claude-haiku-5-5', review: 'sonnet' } }));
+      expect(loadRoles({}, {})).toEqual({ plan: { via: 'claude-code', model: 'opus' }, code: resolveModel('anthropic/claude-haiku-5-5'), review: { via: 'cedia', model: resolveModel('sonnet') } });
+      expect(loadRoles({}, { CEDIA_MODEL: 'beam' }).code.ref).toBe('opencode-go/beam-free');
+      expect(loadRoles({ code: 'deepseek', plan: 'none', review: 'claude-code:fable' }, { CEDIA_MODEL: 'beam' })).toEqual({ code: flash, review: { via: 'claude-code', model: 'fable' } });
+      expect(() => loadRoles({ code: 'claude-code:opus' }, {})).toThrow('the code role runs in cedia');
+      // A repo cannot pick roles.
+      writeFileSync(join(repo, '.cedia', 'settings.json'), JSON.stringify({ roles: { code: 'opus' } }));
+      writeFileSync(join(home, 'settings.json'), '{}');
+      expect(loadRoles({}, {}).code).toBe(flash);
     } finally {
       if (prev === undefined) delete process.env.CEDIA_HOME;
       else process.env.CEDIA_HOME = prev;

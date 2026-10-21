@@ -37,3 +37,18 @@ Files: `2026-10-21-hard-cedia-haiku-5-5.jsonl`, `2026-10-21-hard-cedia-deepseek-
 - A first round on the earlier code found a real usability bug: Haiku gave up on `hard-ledger` because a heredoc with an apostrophe was denied as an unparsed command and the denial told it not to retry. Heredocs are now parsed, and a parse failure tells the model to rewrite the command.
 - Beam ran later, on the code with the quota fallback (`--fallback none` in evals), and is the only model to pass all 21; its tok/s is the decode rate alone, so it is not comparable with the two rows above.
 - Reading: both models are tied on pass rate and both resisted the injection; Haiku is faster and cheaper per passed run ($0.009 against $0.024) because DeepSeek reads twice the input. The set now ranks harnesses better than the first one, but the top models will likely saturate it too.
+
+## 2026-10-21: review role
+
+Same seven hard tasks, 3 runs each, Haiku 5.5 on the Claude API writing. With `--review anthropic/claude-sonnet-5-5`, Sonnet reads the change after the done gate passes, and changes it asks for go back to Haiku once.
+
+| Setup | pass@1 | pass^3 | Reviews asking for changes | Avg time | Tokens per run (in / out) | Cost | Cost per passed run |
+|---|---|---|---|---|---|---|---|
+| Haiku alone | 100% | 100% | - | 58.5 s | 116,920 / 12,215 | $0.195 | $0.009 |
+| Haiku + Sonnet review | 100% | 100% | 6 of 21 | 93.9 s | 188,886 / 16,424 | $1.324 | $0.063 |
+
+Files: `2026-10-21-hard-cedia-haiku-5-5-rerun.jsonl`, `2026-10-21-hard-cedia-haiku-5-5-review-sonnet.jsonl`.
+
+- The verify commands cannot show what review adds: Haiku already passes every run, so the review costs 6.8x for the same score. What it adds shows in its findings, not the pass rate. Reading the first round's reviews found two real cedia bugs that no test caught, both fixed: an allow rule covered `echo x > f` in read-only mode, because the split argv drops redirections; and a numeric dotenv password (`DB_PASSWORD=12345678`) went out unredacted.
+- A first round (not kept) ran before reviewers could run the declared checks, so every test run they tried was denied. In this round reviewers ran a check 38 times; 38 other calls were still denied, mostly `bun -e` probes to confirm a finding. A disposable copy of the workspace would let them run those.
+- Reading: keep review for changes where a missed bug costs more than about $0.05 a run, and measure it again on a task set that Haiku does not saturate.

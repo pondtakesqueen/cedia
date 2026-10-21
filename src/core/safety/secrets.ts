@@ -39,13 +39,14 @@ const ASSIGNMENT =
 
 // Which assigned values count as secrets, so code that only names a secret (`password: hash(input)`,
 // `token = getToken()`) still reads as written:
-// - a dotenv line (`export NAME=value` at the start of a line): any value;
+// - a dotenv line (`export NAME=value` at the start of a line): any value, except a number under a name that
+//   is not a password, secret or key (MAX_TOKENS=4096 is a setting; DB_PASSWORD=12345678 is not);
 // - a quoted value: 4+ characters for passwords and secrets, otherwise 8+ with a letter and a digit;
 // - any other value: 8+ characters with a letter and a digit, and no call or member access.
 function secretValue(kind: string, quote: string, value: string, dotenv: boolean): boolean {
   if (/^(\$|process\.|os\.|env\.|getenv|none$|null$|undefined$|true$|false$)/i.test(value)) return false; // a reference
   const tokenLike = value.length >= 8 && /[A-Za-z]/.test(value) && /\d/.test(value);
-  if (dotenv) return !/^\d+$/.test(value); // MAX_TOKENS=4096 is a setting, not a secret
+  if (dotenv) return !/^\d+$/.test(value) || /passw|pwd|secret|key|credential/i.test(kind);
   if (quote) return /passw|pwd|secret/i.test(kind) ? value.length >= 4 : tokenLike;
   return tokenLike && !/[().[\]]/.test(value);
 }

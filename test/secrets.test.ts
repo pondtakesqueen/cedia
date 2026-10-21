@@ -29,6 +29,8 @@ test('dotenv, JSON, YAML and URL secrets keep their names', () => {
   expect(r('OPENAI_API_KEY=whatever-it-is\nDEBUG=1\nexport DB_PASSWORD=changeme')).toBe(`OPENAI_API_KEY=${REDACTED}\nDEBUG=1\nexport DB_PASSWORD=${REDACTED}`);
   expect(r('{"api_key": "abcd1234efgh5678", "name": "x"}')).toBe(`{"api_key": "${REDACTED}", "name": "x"}`);
   expect(r('secret = "hunter"')).toBe(`secret = "${REDACTED}"`);
+  // A number is a setting under most names, never under a password, secret or key.
+  expect(r('DB_PASSWORD=12345678\nPIN_SECRET=998877\nAPI_KEY=123456789012')).toBe(`DB_PASSWORD=${REDACTED}\nPIN_SECRET=${REDACTED}\nAPI_KEY=${REDACTED}`);
   expect(r('DATABASE_URL=postgres://app:s3cr3tpw@db:5432/x')).toBe(`DATABASE_URL=postgres://app:${REDACTED}@db:5432/x`);
 });
 

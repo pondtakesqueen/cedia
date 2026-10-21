@@ -153,7 +153,14 @@ export type HeadlessResult = {
   result: string;
   evidence?: Evidence;
   timing?: Timing;
+  // The plan the writer was given, and the review of its change (see core/trust/review.ts).
+  plan?: Step;
+  review?: Step & { verdict: 'approve' | 'changes' | 'unclear'; fixed: boolean };
 };
+
+// A role run around the writer. `via: 'claude-code'` is the user's own Claude Code CLI (their subscription): its
+// session lives in Claude Code, and its reported cost is not added to costUsd.
+export type Step = { model: string; via: 'cedia' | 'claude-code'; sessionId: string; costUsd?: number };
 
 // Where a run's wall time went. outputTokPerSec is the model's decode rate: output tokens (thinking included)
 // over streaming time. harnessMs is everything that was neither the model nor a tool: cedia's own overhead.
