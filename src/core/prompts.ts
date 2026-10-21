@@ -17,6 +17,7 @@ const GUARD_NOTE: Partial<Record<Guard, string>> = {
   'force-push': 'force-push',
   'reset-hard': 'git reset --hard',
   'clean-force': 'git clean -f',
+  'drop-refs': 'git stash drop, branch -D and other commands that delete commits',
   'rm-outside': 'rm -r outside the working directory',
   deploy: 'publishing and deploys',
   'secret-path': 'credential stores such as ~/.ssh',

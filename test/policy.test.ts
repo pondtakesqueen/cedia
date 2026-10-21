@@ -77,6 +77,18 @@ describe('deny list', () => {
     ['terraform apply -auto-approve', 'deploy'],
     ['gh pr merge 3 --squash', 'deploy'],
     ['gcloud run deploy api', 'deploy'],
+    // Commands that lose commits, which cedia's snapshots cannot bring back.
+    ['git stash drop', 'drop-refs'],
+    ['git stash clear', 'drop-refs'],
+    ['git branch -D old', 'drop-refs'],
+    ['git branch -d -f old', 'drop-refs'],
+    ['git branch --delete --force old', 'drop-refs'],
+    ['git -C sub branch -df old', 'drop-refs'],
+    ['git reflog expire --expire=now --all', 'drop-refs'],
+    ['git reflog delete HEAD@{1}', 'drop-refs'],
+    ['git update-ref -d refs/heads/x', 'drop-refs'],
+    ['git filter-branch --tree-filter "rm x" HEAD', 'drop-refs'],
+    ['git filter-repo --path secret --invert-paths', 'drop-refs'],
   ];
   for (const [command, name] of denied)
     test(`denies ${command}`, () => {
@@ -85,7 +97,7 @@ describe('deny list', () => {
       expect(d.rule).toBe(`deny-list:${name}`);
     });
 
-  const allowed = ['git push origin feature', 'git push -u origin feature', 'git reset --soft HEAD~1', 'git clean -n', 'rm -rf node_modules dist', 'rm -rf ./*', 'rm -r src/old', 'find . -name "*.tmp" -delete', 'rm /tmp/x.txt', 'npm test', 'bun run build', 'kubectl get pods', 'gh pr view 3'];
+  const allowed = ['git push origin feature', 'git push -u origin feature', 'git reset --soft HEAD~1', 'git clean -n', 'rm -rf node_modules dist', 'rm -rf ./*', 'rm -r src/old', 'find . -name "*.tmp" -delete', 'rm /tmp/x.txt', 'npm test', 'bun run build', 'kubectl get pods', 'gh pr view 3', 'git stash', 'git stash pop', 'git stash list', 'git branch -d merged', 'git branch new', 'git reflog', 'git update-ref refs/heads/x HEAD'];
   for (const command of allowed) test(`allows ${command}`, () => expect(bash(WS, command).decision).toBe('allow'));
 
   test('allow rules and modes cannot lift it', () => {
