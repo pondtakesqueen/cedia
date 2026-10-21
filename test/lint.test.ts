@@ -65,3 +65,17 @@ describe('session linter', () => {
     expect(rules((await goodLog()).slice(0, -1))).toEqual(['turn-end']);
   });
 });
+
+describe('declared check matching', () => {
+  test('the whole command, give or take whitespace, 2>&1 and a cd to the working directory', async () => {
+    const { matchCheck } = await import('../src/core/trust/ledger.ts');
+    const checks = ['node test.js'];
+    expect(matchCheck('node  test.js 2>&1', checks, '/w')).toBe('node test.js');
+    expect(matchCheck('cd /w && node test.js', checks, '/w')).toBe('node test.js');
+    expect(matchCheck('cd "/w/" && node test.js', checks, '/w')).toBe('node test.js');
+    expect(matchCheck('cd . && node test.js', checks, '/w')).toBe('node test.js');
+    expect(matchCheck('cd /elsewhere && node test.js', checks, '/w')).toBeUndefined();
+    expect(matchCheck('node test.js | tail', checks, '/w')).toBeUndefined();
+    expect(matchCheck('node test.js; echo ok', checks, '/w')).toBeUndefined();
+  });
+});

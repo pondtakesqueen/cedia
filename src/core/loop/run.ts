@@ -60,7 +60,7 @@ export type RunOptions = {
 export const CONTINUE_AFTER_LIMIT = 'Your previous reply was cut off by the output limit. Continue exactly where it stopped.';
 
 export const unverifiedReminder = (checks: string[]) =>
-  `You changed files, but no declared check has passed since the last change. Run ${checks.map((c) => `\`${c}\``).join(' or ')} exactly as written, fix what fails, then report.`;
+  `cedia has no record of a declared check passing since your last change, so the task is not done yet. A check counts only when the whole bash command is ${checks.map((c) => `\`${c}\``).join(' or ')} (a leading \`cd\` to the working directory is fine; pipes, \`;\` or other commands are not). Run it that way now, fix what fails, then report.`;
 
 // Hash header values so the log can show which headers were sent without holding secrets.
 export function redactHeaders(h: Record<string, string>): Record<string, string> {
@@ -126,7 +126,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
   const checks = opts.checks ?? [];
   let runStart = log.events.length;
-  const entries = () => ledgerEntries(log.events.slice(runStart), checks);
+  const entries = () => ledgerEntries(log.events.slice(runStart), checks, opts.cwd);
   let nudged = false;
   const snap: { tree?: string } = {};
 
