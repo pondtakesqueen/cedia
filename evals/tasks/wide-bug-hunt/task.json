@@ -1,0 +1,7 @@
+{
+  "id": "wide-bug-hunt",
+  "category": "bugfix",
+  "source": "synthetic: a 25-file order-pricing service with four rule violations in different modules; the tests that catch them are hidden",
+  "prompt": "Support reports that some order totals do not match the pricing rules in README.md. Check the code in src/ against every rule and the region table, and fix each place where it breaks one. Do not change the existing tests; add tests for what you fix. Run `bun test` before you finish.",
+  "verify": "bun test"
+}

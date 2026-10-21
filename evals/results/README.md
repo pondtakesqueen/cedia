@@ -68,3 +68,20 @@ Files: `2026-10-21-hard-cedia-haiku-5-5-spawn-off.jsonl`, `2026-10-21-hard-cedia
 - The spawn tool costs nothing measurable when unused, and Haiku did not spawn on any of these tasks: each is a few files, which the tool's description says to do yourself. Its value has to be measured on tasks with wide searches or independent parts.
 - The one failure in both spawn arms is `hard-redact-bugs#1`, a refused claim (no passing check after the last change), as in earlier rounds.
 - Handoff works end to end on a real model: 4 of the 6 runs that handed off passed, and the notes (2.7k to 4.5k characters) name the done condition, each change with its line, the checks run, and traps to avoid. Both failures hit the eval's 300 s run timeout on `hard-shell-split`, the longest task, after 1 and 2 handoffs. Forced this early, handoff cut input by 13% but added a third more output (the notes, and re-orienting), so it cost 28% more. It pays only when a session's context is large, which is why the default is half the window, at most 150k: none of these tasks gets near it.
+
+## 2026-10-21: wide tasks and hidden tests
+
+Four new tasks meant to be wider and longer than the hard set: `wide-bug-hunt` (four pricing-rule violations in a 25-file service, one of them a region table that drifted from the README), `wide-deprecate` (remove `oldLog` from 20 modules, with an alias, a re-export, a dynamic level and multiline calls), `wide-three-features` (three independent modules from their comments) and `long-migrate` (ten callback handlers to async/await). 3 runs each, Haiku 5.5 writing, the same three arms as above, except handoff at 30k.
+
+| Setup | pass@1 | pass^3 | Sub-threads / handoffs | Avg time | Tokens per run (in / out) | Cost | Cost per passed run |
+|---|---|---|---|---|---|---|---|
+| spawn off | 100% | 100% | - | 38.5 s | 98,510 / 8,138 | $0.084 | $0.007 |
+| spawn on | 100% | 100% | 0 sub-threads | 33.0 s | 79,547 / 7,115 | $0.072 | $0.006 |
+| handoff at 30k | 91.7% | 75.0% | 0 handoffs | 46.3 s | 93,598 / 7,412 | $0.076 | $0.007 |
+
+Files: `2026-10-21-wide-cedia-haiku-5-5-{spawn-off,spawn-on,handoff-30k}.jsonl`, with each run's printed summary in the matching `.log`.
+
+- The first versions of these tasks had visible tests that named every bug; a pilot passed 4 of 4 in 10 to 33 s for under a cent each. So a task directory may now hold `hidden/`: tests laid over the workspace only at verify. `wide-bug-hunt` became a vague report ("some totals do not match README.md") with its hand-worked tests hidden, and `wide-three-features` keeps a few examples in sight while every rule is checked hidden.
+- Haiku 5.5 still found all four bug-hunt violations in every run, the drifted table included.
+- Hidden tests caught three places where the module comments did not say what the tests expected (a diacritic the list left out, spaces around a duration, whether expired entries count toward capacity). Each failing run had read the comment as written, so the comments were fixed, not the tests. The one failure above is the last of those three, before its fix.
+- No run spawned and none handed off, even at 30k: the runs took 4 to 11 turns and their context stayed under it. The arms differ by noise, not by setup (all three are the same harness on these runs). These tasks do not exercise sub-threads or handoff; that needs a real repository with a task that spans many files, where one session's context grows past 100k.

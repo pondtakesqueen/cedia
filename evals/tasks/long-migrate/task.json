@@ -1,0 +1,7 @@
+{
+  "id": "long-migrate",
+  "category": "refactor",
+  "source": "synthetic: ten callback-style handlers to move to async/await on db.promises",
+  "prompt": "Migrate every handler in src/handlers/ from the callback style to async functions, as README.md describes: each takes only the request, returns a Promise of its result, throws HttpError where it called done(err), and uses db.promises instead of db's callback API. Behaviour must not change. Do not change the tests. Run `bun test` until it passes.",
+  "verify": "bun test"
+}

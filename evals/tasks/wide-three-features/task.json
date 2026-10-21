@@ -1,0 +1,7 @@
+{
+  "id": "wide-three-features",
+  "category": "feature",
+  "source": "synthetic: three independent modules (duration parsing, slugs, an expiring LRU cache); the tests that check every rule are hidden",
+  "prompt": "Implement the three modules in src/ (duration.ts, slug.ts, lru.ts). They do not depend on each other. Each one's comment gives its rules; test/ has only a few examples, and your code will be checked against every rule in the comments. Do not change the existing tests; add your own for the rules they leave out. Run `bun test` before you finish.",
+  "verify": "bun test"
+}

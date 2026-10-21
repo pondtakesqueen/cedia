@@ -36,7 +36,8 @@ describe("evals runner", () => {
     }
   });
 
-  // A hard task is only fair if its stub fails and its reference solution passes, both through verify.
+  // A hard task is only fair if its stub fails and its reference solution passes, both through verify (with the
+  // hidden tests laid over each, as the runner does).
   const hard = loadTasks(new URL("../evals/tasks", import.meta.url).pathname).filter((t) => t.reference);
   for (const t of hard)
     test(`${t.id}: the stub fails verify and the reference passes it`, () => {
@@ -50,9 +51,12 @@ describe("evals runner", () => {
       };
       const verify = () => Bun.spawnSync(["sh", "-c", t.verify!], { cwd: dir, stdout: "pipe", stderr: "pipe" }).exitCode;
       lay(t.setup!);
+      lay(t.hidden ?? {});
       expect(verify()).not.toBe(t.expectedExitCode ?? 0);
       lay(t.reference!);
       expect(verify()).toBe(t.expectedExitCode ?? 0);
+      // A hidden test never reaches the workspace the agent works in.
+      for (const path of Object.keys(t.hidden ?? {})) expect(t.setup![path]).toBeUndefined();
     }, 30_000);
 
   test("parses cedia's and claude's JSON results", () => {

@@ -7,6 +7,30 @@ export type TextEdit = { old_text: string; new_text: string; replace_all?: boole
 type Tier = 'exact' | 'trailing-space' | 'indentation';
 export type Applied = { from: number; to: number; tier: Tier; count: number };
 
+// The edits a call asked for. Besides the schema's `edits` array, it takes the two shapes models send most
+// often by mistake (measured: 179 of 418 Haiku 5.5 edit calls in the eval logs): old_text and new_text at the
+// top level, and `edits` as a string, either JSON or a broken `[{"old_text">…` with new_text at the top level.
+export function editsOf(input: JsonObject): TextEdit[] | { error: string } {
+  const one = (old: unknown, next: unknown): TextEdit[] | undefined =>
+    typeof old === 'string' && typeof next === 'string' ? [{ old_text: old, new_text: next, ...(input.replace_all === true ? { replace_all: true } : {}) }] : undefined;
+  let raw = input.edits;
+  if (raw === undefined) return one(input.old_text, input.new_text) ?? { error: 'edits is required: an array of {old_text, new_text}' };
+  if (typeof raw === 'string') {
+    const broken = /^\[\{"old_text">([\s\S]*)$/.exec(raw);
+    if (broken) return one(broken[1], input.new_text) ?? { error: 'edits must be an array of {old_text, new_text} objects, not a string' };
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return { error: 'edits must be an array of {old_text, new_text} objects, not a string' };
+    }
+  }
+  if (!Array.isArray(raw)) return { error: 'edits must be an array of {old_text, new_text} objects' };
+  if (!raw.length) return { error: 'edits is empty' };
+  const bad = raw.findIndex((e) => !e || typeof e !== 'object' || typeof (e as TextEdit).old_text !== 'string' || typeof (e as TextEdit).new_text !== 'string');
+  if (bad >= 0) return { error: `edits[${bad}] needs old_text and new_text strings` };
+  return raw as TextEdit[];
+}
+
 const fullPath = (input: JsonObject, cwd: string) => {
   const path = String(input.path ?? '');
   return isAbsolute(path) ? path : resolve(cwd, path);
@@ -94,9 +118,9 @@ export const editTool: ToolSpec = {
   pathOf: (input) => (typeof input.path === 'string' ? input.path : undefined),
   async run(input, ctx) {
     const path = String(input.path ?? '');
-    const edits = Array.isArray(input.edits) ? (input.edits as TextEdit[]) : [];
     if (!path) return { text: 'path is required', isError: true };
-    if (!edits.length) return { text: 'edits is empty', isError: true };
+    const edits = editsOf(input);
+    if ('error' in edits) return { text: edits.error, isError: true };
     const full = fullPath(input, ctx.cwd);
     let raw: string;
     try {
