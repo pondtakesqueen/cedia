@@ -120,6 +120,16 @@ describe('cedia -p (offline, faux)', () => {
     expect(second.events.some((e) => e.kind === 'reminder' && e.text.includes('stopped partway through this task when its quota ran out'))).toBe(true);
   });
 
+  test('--on-quota wait:<minutes> waits for the quota in the same session instead of falling back', () => {
+    const quota = { error: { code: 'quota', status: 429, retryAfterMs: 50, message: 'usage limit reached, resets soon' } };
+    const r = cedia([quota, reply('done')], ['-p', 'x', '--output-format', 'json', '--on-quota', 'wait:1', '--fallback', 'faux/fallback']);
+    expect(r.code).toBe(0);
+    expect(r.err).toContain('faux/scripted is out of quota; waiting');
+    expect(r.err).not.toContain('continuing on faux/fallback');
+    expect(JSON.parse(r.out).sessions).toHaveLength(1);
+    expect(cedia([reply('x')], ['-p', 'x', '--on-quota', 'later']).err).toContain('fallback or wait:<minutes>');
+  });
+
   // Claude Code drops all thinking and retries when the API rejects it (2.1.282), after a rejection that repeated
   // every turn (2.1.259), and hung on "Prompt is too long" (2.1.274, 2.1.304). cedia never edits history, so a
   // refused history goes on in a new session, as a spent quota does.

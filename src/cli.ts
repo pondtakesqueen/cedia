@@ -26,6 +26,8 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --privacy <level>        no-training | zdr: which models may see this repo (default: $CEDIA_PRIVACY, settings, no-training)
       --fallback <ref|none>    model to continue on in a new session when this one's quota runs out
                                (default: settings, then deepseek -> Haiku 5.5 on the Claude API)
+      --on-quota <fallback|wait:<min>>  on a spent quota that says when it comes back, wait up to min minutes in all
+                               before falling back (default: settings onQuota, fallback)
       --review <ref>           the review role, after the done gate passes: a model, claude-code[:<model>]
                                (default sonnet there), or none. Changes it asks for go back to the writer once
       --spawn <on|off>         let the writer hand self-contained work to sub-threads (default: settings, on)
@@ -66,6 +68,7 @@ export async function main(argv: string[]): Promise<number> {
       unlock: { type: 'string', multiple: true },
       privacy: { type: 'string' },
       fallback: { type: 'string' },
+      'on-quota': { type: 'string' },
       thread: { type: 'string' },
       spawn: { type: 'string' },
       swarm: { type: 'string' },
@@ -110,6 +113,7 @@ export async function main(argv: string[]): Promise<number> {
       ...(values.unlock ? { unlock: values.unlock } : {}),
       ...(values.privacy ? { privacy: values.privacy } : {}),
       ...(values.fallback ? { fallback: values.fallback } : {}),
+      ...(values['on-quota'] ? { onQuota: values['on-quota'] } : {}),
       ...(values.thread ? { thread: values.thread } : {}),
       ...(values.spawn ? { spawn: values.spawn } : {}),
       ...(values.swarm ? { swarm: values.swarm } : {}),

@@ -79,6 +79,10 @@ export type RunOptions = {
   signal?: AbortSignal;
   onStream?: (e: StreamEvent) => void;
   retry?: { max?: number; baseMs?: number; capMs?: number; sleep?: (ms: number) => Promise<void> };
+  // The longest the run waits, in all, for a spent quota that says when it comes back (a 429 with retry-after);
+  // absent means a spent quota ends the session at once, so the client can fall back. `onQuotaWait` hears each wait.
+  quotaWaitMs?: number;
+  onQuotaWait?: (ms: number) => void;
   now?: () => Date;
 };
 
@@ -211,6 +215,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const timing = { modelMs: 0, ttftMs: 0, decodeMs: 0, toolMs: 0, retryMs: 0 };
   // The largest context any reply of this run saw: what handoff and sub-threads are meant to keep down.
   let peakContext = 0;
+  let quotaWaited = 0;
 
   // The slop guard reads this run's changes: the patch between its first and latest snapshot, or the edit and
   // write calls when snapshots are off.
@@ -308,10 +313,16 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       }
       log.append({ kind: 'attempt', requestId: request.id, n, error: got.error, ...t });
       timing.modelMs += t.ms ?? 0;
-      if (!isRetryable(got.error) || n >= retryMax) return finish('error_during_execution', 'error', got.error.message);
+      const after = got.error.retryAfterMs;
+      const quotaWait = got.error.code === 'quota' && opts.quotaWaitMs !== undefined && after !== undefined && quotaWaited + after <= opts.quotaWaitMs ? after : undefined;
+      if ((!isRetryable(got.error) && quotaWait === undefined) || n >= retryMax) return finish('error_during_execution', 'error', got.error.message);
       const base = opts.retry?.baseMs ?? 1000;
       const cap = opts.retry?.capMs ?? 30_000;
-      const wait = got.error.retryAfterMs ?? Math.min(cap, base * 2 ** (n - 1));
+      const wait = after ?? Math.min(cap, base * 2 ** (n - 1));
+      if (quotaWait !== undefined) {
+        quotaWaited += quotaWait;
+        opts.onQuotaWait?.(quotaWait);
+      }
       await sleep(wait);
       timing.retryMs += wait;
       if (signal.aborted) return finish('interrupted', 'aborted');

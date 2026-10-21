@@ -7,7 +7,7 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoffAt, loadPolicy, loadPrivacy, loadRoles, loadSandbox, loadSpawn, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS } from '../../core/project/handoff.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
 import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
@@ -46,6 +46,8 @@ export type HeadlessArgs = {
   // The model explore sub-threads run on, and whether writer sessions may spawn sub-threads at all.
   swarm?: string;
   spawn?: string;
+  // "fallback" or "wait:<minutes>": what a spent quota does.
+  onQuota?: string;
   // Reviews the change once the writer's claim passes the done gate.
   review?: string;
   checks?: string[];
@@ -143,6 +145,13 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     process.stderr.write('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
   const snapshots = openSnapshots(args.cwd, join(cediaHome(), 'snapshots', projectSlug(args.cwd)), [cediaHome(), ...sandbox.placeholders]);
   const fallback = loadFallback(model, args.fallback);
+  let quotaWaitMs: number | undefined;
+  try {
+    quotaWaitMs = loadQuotaWait(args.onQuota);
+  } catch (e) {
+    await sandbox.close();
+    throw e;
+  }
   for (const m of [model, ...[roles.plan, roles.review].flatMap((r) => (r?.via === 'cedia' ? [r.model] : []))]) {
     const note = missingKeyNote(m);
     if (note) process.stderr.write(note + '\n');
@@ -201,6 +210,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const parts: HeadlessResult[] = [];
   const spent = () => ({ turns: parts.reduce((n, r) => n + r.numTurns, 0), costUsd: parts.reduce((c, r) => c + r.costUsd, 0) });
   let handoffs = 0;
+  // Quota waits add up across the run's sessions, against the one ceiling.
+  let quotaWaited = 0;
   // child: a sub-thread's session, which gets the core tools only (no spawn, recall, threads, inbox or handoff).
   type RunOpts = { continues?: { sessionId: string; changed: string[] }; note?: string; role?: 'plan' | 'review' | 'explore'; child?: { thread?: string } };
   const run = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}) => {
@@ -249,6 +260,9 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
             }
           : {}),
         signal: ac.signal,
+        ...(quotaWaitMs !== undefined
+          ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), process.stderr.write(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
+          : {}),
         ...(args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
         ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - used.turns } : {}),
         ...(args.maxBudgetUsd !== undefined ? { maxBudgetUsd: args.maxBudgetUsd - used.costUsd } : {}),

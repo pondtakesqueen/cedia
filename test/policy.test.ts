@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkSettings, loadContext, loadFallback, loadPolicy, loadPrivacy, loadRoles, loadSpawn } from '../src/core/config.ts';
+import { checkSettings, loadContext, loadFallback, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSpawn } from '../src/core/config.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { preamble } from '../src/core/prompts.ts';
 import { decide, denyListed, insideWorkspace, type Policy } from '../src/core/safety/policy.ts';
@@ -250,6 +250,27 @@ describe('settings', () => {
       writeFileSync(join(repo, '.cedia', 'settings.json'), JSON.stringify({ roles: { code: 'opus' } }));
       writeFileSync(join(home, 'settings.json'), '{}');
       expect(loadRoles({}, {}).code).toBe(flash);
+    } finally {
+      if (prev === undefined) delete process.env.CEDIA_HOME;
+      else process.env.CEDIA_HOME = prev;
+    }
+  });
+});
+
+describe('on a spent quota', () => {
+  test('fallback by default; wait:<minutes> from the flag or the user settings, never the repo', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cedia-home-'));
+    const prev = process.env.CEDIA_HOME;
+    process.env.CEDIA_HOME = home;
+    try {
+      expect(loadQuotaWait()).toBeUndefined();
+      expect(loadQuotaWait('fallback')).toBeUndefined();
+      expect(loadQuotaWait('wait:90')).toBe(90 * 60_000);
+      expect(() => loadQuotaWait('wait')).toThrow('fallback or wait:<minutes>');
+      expect(() => loadQuotaWait('wait:0')).toThrow('fallback or wait:<minutes>');
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ onQuota: 'wait:15' }));
+      expect(loadQuotaWait()).toBe(15 * 60_000);
+      expect(loadQuotaWait('fallback')).toBeUndefined();
     } finally {
       if (prev === undefined) delete process.env.CEDIA_HOME;
       else process.env.CEDIA_HOME = prev;

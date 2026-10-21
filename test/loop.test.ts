@@ -102,6 +102,30 @@ describe('loop', () => {
     expect(of(log.events, 'request')).toHaveLength(1);
   });
 
+  // Claude Code's retry watchdog waits for a usage limit to reset, up to a ceiling (2.1.295, 2.1.301, 2.1.305).
+  test('a spent quota is waited out only when asked, only when it says when, and only up to the ceiling', async () => {
+    const MIN = 60_000;
+    const spent = (retryAfterMs?: number): FauxStep => ({ error: { code: 'quota', status: 429, message: 'usage limit reached', ...(retryAfterMs ? { retryAfterMs } : {}) } });
+    const waits: number[] = [];
+    const waited = setup([spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN, onQuotaWait: (ms) => void waits.push(ms) });
+    expect(await runPrompt(waited.opts, 'hi')).toMatchObject({ subtype: 'success', timing: { retryMs: 20 * MIN } });
+    expect(waited.sleeps).toEqual([20 * MIN]);
+    expect(waits).toEqual([20 * MIN]);
+    expect(of(waited.log.events, 'attempt').map((a) => a.error?.code)).toEqual(['quota', undefined]);
+    // Without the option a spent quota ends the session, so the client can fall back.
+    const plain = setup([spent(20 * MIN), { blocks: [text('ok')] }]);
+    expect((await runPrompt(plain.opts, 'hi')).subtype).toBe('error_during_execution');
+    expect(plain.sleeps).toEqual([]);
+    // The ceiling is for the whole run: a second 20-minute wait would pass 30 minutes.
+    const twice = setup([spent(20 * MIN), spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN });
+    expect((await runPrompt(twice.opts, 'hi')).subtype).toBe('error_during_execution');
+    expect(twice.sleeps).toEqual([20 * MIN]);
+    // A spent balance says no time: waiting will not bring it back.
+    const balance = setup([{ error: { code: 'quota', status: 402, message: 'Insufficient Balance' } }, { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN });
+    expect((await runPrompt(balance.opts, 'hi')).subtype).toBe('error_during_execution');
+    expect(balance.sleeps).toEqual([]);
+  });
+
   test('gives up after 5 attempts', async () => {
     const err: FauxStep = { error: { code: 'server', status: 500, message: 'boom' } };
     const { log, opts } = setup([err, err, err, err, err, err]);
