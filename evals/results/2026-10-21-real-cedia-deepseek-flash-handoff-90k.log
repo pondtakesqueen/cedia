@@ -1,0 +1,15 @@
+Running 3 tasks x 2 runs on cedia (deepseek), 3 at a time...
+  PASS real-slop-guard#1 (314.0s $0.0598, peak 91k)
+  PASS real-slop-guard#2 (501.7s $0.0603, peak 90k)
+  PASS real-subthreads#1 (545.8s $0.1143, 2 handoff, peak 112k)
+  PASS real-subthreads#2 (545.8s $0.1125, 2 handoff, peak 104k)
+  PASS real-threads#1 (471.7s $0.0984, 1 handoff, peak 90k)
+  FAIL real-threads#2 (790.8s $0.1402, 2 handoff, peak 90k)
+
+Results written to flash-handoff-90k.jsonl
+cedia (deepseek): 3 tasks, 6 scored runs
+  pass@1 83.3%  pass^k 66.7%  false-done 0.0%  refused claims 0.0%
+  avg 528.3s per run, 3919752 input / 68322 output tokens per run, cache hit 92.2%
+  peak context 96k mean, 112k max, 2 of 6 runs past 100k; 7 handoffs, 0 sub-threads
+  speed 212.9 output tok/s, 1.73s to first token per call; model 85.4% of time, cedia 0.1%
+  cost $0.5854 total, $0.1171 per passed run

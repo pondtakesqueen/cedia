@@ -108,3 +108,30 @@ Files: `2026-10-21-real-cedia-haiku-5-5-{spawn-off,spawn-on,handoff-90k,handoff-
 - The first pilot found a real bug: the bash tool dropped `GIT_CONFIG_KEY_n` as secret-looking but kept `GIT_CONFIG_COUNT`, so every git command in a tool call failed; the count, keys and values now go together. And it showed that the agent's sandbox cannot open another sandbox inside it, so the repo tasks skip that one test inside it (verify still runs it).
 - In the first handoff round, 12 of 19 handoffs came from sessions that had changed no file (by the evidence ledger), and the failed run handed off five times in a row without a change, then timed out. A session now hands off only after it has changed a file: none of the 16 handoffs in the second round came before a change. Pass rate and cost stayed within noise; peaks rose, since a session now reads on past 90k until its first change.
 - Reading: on a codebase this size handoff is the lever that pays, at the price of time; spawn has no measured value until the model uses it. Next: hand off before a turn would cross the price line rather than after, and test whether a reminder at high context gets Haiku to spawn explore sub-threads.
+
+## 2026-10-21: real repository on DeepSeek V4.1 Flash and Beam
+
+The three `real-*` tasks above, 2 runs per task and arm, measured at 80e9643 (main after the Haiku round, before any later spawn or handoff change). DeepSeek V4.1 Flash and Beam (free) via Go, off-peak for DeepSeek. Single context is `--handoff-at off` with spawn on; handoff is `--handoff-at 90000` with spawn on. Haiku rows are copied from the round above.
+
+| Model, setup | pass@1 | Runs at the 50-turn cap | Peak context, mean (max) | Runs past 100k | Handoffs | Avg time | Output tokens per run | Cost | Cost per passed run |
+|---|---|---|---|---|---|---|---|---|---|
+| Haiku 5.5, single context | 100% | 0 of 6 | 130k (173k) | 4 of 6 | - | 305 s | 61,923 | $1.300 | $0.217 |
+| Haiku 5.5, handoff at 90k (after a change) | 83.3% | 0 of 6 | 125k (162k) | 4 of 6 | 16 | 614 s | 125,980 | $1.156 | $0.231 |
+| Flash, single context | 66.7% | 5 of 6 | 125k (142k) | 6 of 6 | - | 431 s | 49,391 | $0.386 | $0.096 |
+| Flash, handoff at 90k | 83.3% | 2 of 6 | 96k (112k) | 2 of 6 | 7 | 528 s | 68,322 | $0.585 | $0.117 |
+| Flash, single context, `--max-turns 200` | 100% | 0 of 6 | 138k (171k) | 4 of 6 | - | 629 s | 58,801 | $0.597 | $0.099 |
+| Beam, single context | 66.7% | 6 of 6 | 69k (86k) | 0 of 6 | - | 198 s | 26,059 | $0 | $0 |
+| Beam, handoff at 90k | 50.0% | 6 of 6 | 68k (80k) | 0 of 6 | 0 | 237 s | 25,273 | $0 | $0 |
+
+Per task, mean cost per run on Flash (single / handoff / 200 turns): `real-slop-guard` $0.054 / $0.060 / $0.068, `real-subthreads` $0.072 / $0.113 / $0.123, `real-threads` $0.067 / $0.119 / $0.108.
+
+Files: `2026-10-21-real-cedia-deepseek-flash-{spawn-on,handoff-90k,turns-200}.jsonl` and `2026-10-21-real-cedia-beam-{spawn-on,handoff-90k}.jsonl`, each with its `.log`.
+
+- The default of 50 turns per session is what failed these models, not their work. Haiku finishes in 23 to 40 turns; Flash takes 60 to 102 and Beam hit 50 in all 12 runs. Every Flash and Beam failure but one is `error_max_turns`. The handoff arm passes more because each new session gets 50 turns of its own. With `--max-turns 200` Flash passed 6 of 6.
+- At that cap Flash passes like Haiku at under half the cost ($0.099 against $0.217 per passed run), and takes twice as long (629 s against 305 s). It writes a little less, but reads in many short turns.
+- Handoff does not pay on Flash: DeepSeek has no long-context price, so a 170k request costs the same per token as a 20k one, and the 200-turn single context costs the same as handoff at 90k. Handoff's saving on Haiku comes from staying under Haiku's 100k price line.
+- Neither model spawned, in any of 30 runs, so spawn is still unmeasured on every model tried.
+- Beam stops at 50 turns before its context reaches 90k, so it never handed off. The free tier then ran out: a 200-turn Beam round got `429 Rate limit exceeded` with retry-after 27380 s (7.6 h), and is not in the table.
+- That 429 found a cedia bug: the session slept on the retry-after, and the eval's SIGTERM at the run limit could not wake it, so three runs hung past their 1200 s. A 429 asking for more than 10 minutes now counts as spent quota (no retry, the fallback applies), and abort ends a retry wait (e0d9080).
+- The one Flash failure that was not the cap (`real-threads#2`, handoff) made the threads tests pass and broke a sandbox test in `test/headless.test.ts`.
+- Reading: the 50-turn default suits Haiku but cuts off models that take smaller steps; raising it, or counting work instead of turns, would let the cheaper model finish. On a provider without a long-context price, handoff buys nothing but time.
