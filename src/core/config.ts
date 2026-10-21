@@ -11,6 +11,8 @@ export type Settings = {
   checks?: string[];
   sandbox?: { mode?: SandboxSetting; allowedDomains?: string[] };
   privacy?: PrivacyLevel;
+  // Standing facts about the user and their work, sent at the start of every session. User settings only.
+  context?: string | string[];
 };
 
 export const cediaHome = () => process.env.CEDIA_HOME ?? join(homedir(), '.cedia');
@@ -61,6 +63,13 @@ export function loadPrivacy(cwd: string, flag?: string, env = process.env): Priv
   return project === 'zdr' ? 'zdr' : (level as PrivacyLevel);
 }
 const PRIVACY_LEVELS: PrivacyLevel[] = ['no-training', 'zdr'];
+
+// The user's standing context. A repo's settings cannot set it: a cloned repo must not speak as the user.
+export function loadContext(): string | undefined {
+  const c = readSettings(join(cediaHome(), 'settings.json')).context;
+  const text = Array.isArray(c) ? c.join('\n') : c;
+  return text?.trim() || undefined;
+}
 
 // Declared checks for the done gate. Declaring a check grants nothing, so a repo may declare its own.
 export function loadChecks(cwd: string, flags: string[] = []): string[] {

@@ -7,7 +7,7 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectSlug, SessionLog, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, loadChecks, loadPolicy, loadPrivacy, loadSandbox } from '../../core/config.ts';
+import { cediaHome, loadChecks, loadContext, loadPolicy, loadPrivacy, loadSandbox } from '../../core/config.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { openSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
@@ -44,6 +44,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const model = resolveModel(args.model);
   const checks = loadChecks(args.cwd, args.checks);
   const privacy = loadPrivacy(args.cwd, args.privacy);
+  const context = loadContext();
   const sandboxSettings = loadSandbox({ ...(args.sandbox ? { mode: args.sandbox } : {}), allowDomains: args.allowDomains ?? [] });
   const { sandbox, note: sandboxNote } = await openSandbox(args.cwd, sandboxSettings.mode, { allowedDomains: sandboxSettings.allowedDomains, cediaHome: cediaHome() });
   if (sandboxNote) process.stderr.write(sandboxNote + '\n');
@@ -77,7 +78,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         model,
         tools: CORE_TOOLS,
         system: BASE_SYSTEM,
-        preamble: preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox }),
+        preamble: preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}) }),
         cwd: args.cwd,
         permission: policy,
         privacy,

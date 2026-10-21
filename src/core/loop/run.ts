@@ -23,6 +23,7 @@ import {
   type PrivacyLevel,
   type Provider,
   type ResultSubtype,
+  type Timing,
   type SessionEvent,
   type StopReason,
   type StreamEvent,
@@ -93,9 +94,12 @@ export function rebuildRequest(events: SessionEvent[], requestIndex: number, mod
 
 type Collected = { ok: true; blocks: AssistantBlock[]; stop: StopReason; usage: Usage } | { ok: false; error: AttemptError } | { ok: 'aborted' };
 
-async function collect(provider: Provider, req: WireRequest, signal: AbortSignal, onStream?: (e: StreamEvent) => void): Promise<Collected> {
+async function collect(provider: Provider, req: WireRequest, signal: AbortSignal, onStream?: (e: StreamEvent) => void, timing: { ttftMs?: number; ms?: number } = {}): Promise<Collected> {
+  const start = performance.now();
   try {
     for await (const ev of provider.stream(req, signal)) {
+      timing.ttftMs ??= Math.round(performance.now() - start);
+      timing.ms = Math.round(performance.now() - start);
       onStream?.(ev);
       if (ev.type === 'error') return { ok: false, error: ev.error };
       if (ev.type === 'done') return ev.stop === 'aborted' ? { ok: 'aborted' } : { ok: true, blocks: ev.blocks, stop: ev.stop, usage: ev.usage };
@@ -106,6 +110,18 @@ async function collect(provider: Provider, req: WireRequest, signal: AbortSignal
     return { ok: false, error: { code: 'network', message: err instanceof Error ? err.message : String(err) } };
   }
   return signal.aborted ? { ok: 'aborted' } : { ok: false, error: { code: 'network', message: 'stream ended without a result' } };
+}
+
+function summarizeTiming(wall: number, t: { modelMs: number; ttftMs: number; decodeMs: number; toolMs: number }, outputTokens: number): Timing {
+  const r = Math.round;
+  return {
+    wallMs: r(wall),
+    modelMs: r(t.modelMs),
+    ttftMs: r(t.ttftMs),
+    toolMs: r(t.toolMs),
+    harnessMs: Math.max(0, r(wall - t.modelMs - t.toolMs)),
+    outputTokPerSec: t.decodeMs > 0 ? Math.round((outputTokens / t.decodeMs) * 10_000) / 10 : 0,
+  };
 }
 
 const callIdOf = (b: Extract<AssistantBlock, { type: 'tool_use' }>) => b.callId ?? b.id;
@@ -133,6 +149,8 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const entries = () => ledgerEntries(log.events.slice(runStart), checks, opts.cwd);
   let nudged = false;
   const snap: { tree?: string } = {};
+  const wallStart = performance.now();
+  const timing = { modelMs: 0, ttftMs: 0, decodeMs: 0, toolMs: 0 };
 
   const finish = (subtype: ResultSubtype, reason: TurnEndReason, result?: string): HeadlessResult => {
     log.append({ kind: 'turn_end', reason, ...(reason === 'aborted' ? { cause: 'user' as const } : {}) });
@@ -148,6 +166,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       cacheHitRatio: hitRatio(usage),
       result: result ?? lastText,
       ...(hasEvidence ? { evidence: ev } : {}),
+      timing: summarizeTiming(performance.now() - wallStart, timing, usage.output),
     };
   };
 
@@ -190,17 +209,22 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
     let got: Collected | undefined;
     for (let n = 1; ; n++) {
-      got = await collect(provider, req, signal, opts.onStream);
+      const t: { ttftMs?: number; ms?: number } = {};
+      got = await collect(provider, req, signal, opts.onStream, t);
       if (got.ok === 'aborted') {
         log.append({ kind: 'attempt', requestId: request.id, n, error: { code: 'network', message: 'aborted' } });
         log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: [], stop: 'aborted', usage: { ...ZERO_USAGE } });
         return finish('interrupted', 'aborted');
       }
       if (got.ok) {
-        log.append({ kind: 'attempt', requestId: request.id, n });
+        log.append({ kind: 'attempt', requestId: request.id, n, ...t });
+        timing.modelMs += t.ms ?? 0;
+        timing.ttftMs += t.ttftMs ?? 0;
+        timing.decodeMs += (t.ms ?? 0) - (t.ttftMs ?? 0);
         break;
       }
-      log.append({ kind: 'attempt', requestId: request.id, n, error: got.error });
+      log.append({ kind: 'attempt', requestId: request.id, n, error: got.error, ...t });
+      timing.modelMs += t.ms ?? 0;
       if (!isRetryable(got.error) || n >= retryMax) return finish('error_during_execution', 'error', got.error.message);
       const base = opts.retry?.baseMs ?? 1000;
       const cap = opts.retry?.capMs ?? 30_000;
@@ -224,7 +248,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
           log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: 'not run: the session stopped', isError: true } });
         return overBudget ? finish('error_max_budget_usd', 'budget') : finish('interrupted', 'aborted');
       }
+      const toolStart = performance.now();
       await runTools(calls, byName, opts, signal, log, snap);
+      timing.toolMs += performance.now() - toolStart;
       continue;
     }
     if (overBudget) return finish('error_max_budget_usd', 'budget');
@@ -243,6 +269,13 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     }
     return finish('success', 'completed');
   }
+}
+
+// A guard's denial is final; a command cedia could not read can be rewritten, since nothing was refused.
+function deniedText(rule: string, reason: string): string {
+  if (rule.startsWith('shell:'))
+    return `not run: cedia could not read this command (${reason}). Rewrite it: put file contents in the write tool instead of a shell string, or simplify the quoting.`;
+  return `denied (${rule}): ${reason}. Do not retry it another way; go on with the rest of the task and tell the user what you needed.`;
 }
 
 // The policy decides each call first; a denied call gets a denied result and no intent.
@@ -267,7 +300,7 @@ async function runTools(
       const d = decide(opts.permission ?? READ_ONLY_POLICY, spec, c.input, opts.cwd);
       log.append({ kind: 'permission', callId, tool: c.name, ...d });
       if (d.decision === 'deny') {
-        results.set(callId, { status: 'denied', text: `denied (${d.rule}): ${d.reason}. Do not retry it another way; tell the user what you needed.`, isError: true });
+        results.set(callId, { status: 'denied', text: deniedText(d.rule, d.reason ?? ''), isError: true });
         continue;
       }
       log.append({ kind: 'tool_intent', callId, tool: c.name, input: c.input });
@@ -287,17 +320,19 @@ async function runTools(
   const runWriting = async (j: Job) => {
     const snapshots = opts.snapshots;
     if (snapshots && !snap.tree) {
+      const t0 = performance.now();
       const base = snapshots.take();
       if (base) {
         snap.tree = base;
-        log.append({ kind: 'snapshot', tree: base, changed: [] });
+        log.append({ kind: 'snapshot', tree: base, changed: [], ms: Math.round(performance.now() - t0) });
       }
     }
     await run(j);
     if (!snapshots || !snap.tree) return;
+    const t1 = performance.now();
     const after = snapshots.take();
     if (!after) return;
-    log.append({ kind: 'snapshot', tree: after, callId: j.callId, changed: snapshots.diff(snap.tree, after) });
+    log.append({ kind: 'snapshot', tree: after, callId: j.callId, changed: snapshots.diff(snap.tree, after), ms: Math.round(performance.now() - t1) });
     snap.tree = after;
   };
   let pool: Job[] = [];

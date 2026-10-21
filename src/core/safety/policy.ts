@@ -35,7 +35,7 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
   const path = spec.pathOf?.(input);
   const effect = effectOf(spec, input);
   if (command !== undefined) {
-    if (!commands) return deny('shell:unparsed', 'the command has unbalanced quotes');
+    if (!commands) return deny('shell:unparsed', 'unbalanced quotes, an unclosed substitution or a heredoc it cannot read');
     for (const argv of commands) {
       const hit = denyListed(argv, cwd);
       if (hit && !unlocked(hit.name)) return deny(`deny-list:${hit.name}`, hit.reason);

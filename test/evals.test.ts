@@ -21,6 +21,8 @@ describe("evals runner", () => {
   test("claimsDone is a keyword signal", () => {
     expect(claimsDone("All tests passing.")).toBe(true);
     expect(claimsDone("I could not finish.")).toBe(false);
+    expect(claimsDone("I'm stopping here; the write was denied. Not verified: nothing has been run.")).toBe(false);
+    expect(claimsDone("Fixed the parser; bun test is passing.")).toBe(true);
   });
 
   test("every task file has an id, a prompt and a verify command", () => {

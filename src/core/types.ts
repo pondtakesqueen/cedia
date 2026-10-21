@@ -46,9 +46,10 @@ type EventBody =
       ttl?: '5m' | '1h';
       headers: Record<string, string>; // header name -> hash of the value, never the value
     }
-  | { kind: 'attempt'; requestId: EventId; n: number; error?: AttemptError }
+  // ttftMs: until the first streamed event; ms: the whole attempt.
+  | { kind: 'attempt'; requestId: EventId; n: number; error?: AttemptError; ttftMs?: number; ms?: number }
   | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage }
-  | { kind: 'snapshot'; tree: string; callId?: string; changed: string[] } // shadow-git tree after a writing call
+  | { kind: 'snapshot'; tree: string; callId?: string; changed: string[]; ms?: number } // shadow-git tree after a writing call
   | { kind: 'permission'; callId: string; tool: string; decision: 'allow' | 'deny'; rule: string; reason?: string }
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
   | { kind: 'tool_result'; callId: string; status: EffectStatus; output: ToolOutput }
@@ -146,7 +147,12 @@ export type HeadlessResult = {
   cacheHitRatio: number;
   result: string;
   evidence?: Evidence;
+  timing?: Timing;
 };
+
+// Where a run's wall time went. outputTokPerSec is the model's decode rate: output tokens over streaming time
+// after the first token. harnessMs is everything that was neither the model nor a tool: cedia's own overhead.
+export type Timing = { wallMs: number; modelMs: number; ttftMs: number; toolMs: number; harnessMs: number; outputTokPerSec: number };
 
 export function addUsage(a: Usage, b: Usage): Usage {
   return {
