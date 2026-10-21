@@ -25,6 +25,9 @@ export type Task = {
   // Directory tasks only: a solution laid over setup, never copied into the workspace. The tests check that
   // setup alone fails verify and setup plus reference passes it.
   reference?: Record<string, string>;
+  // Directory tasks only: tests the agent never sees, laid over the workspace after its run and before verify.
+  // They hold a task to its written spec instead of to the tests it can read.
+  hidden?: Record<string, string>;
 };
 
 type LedgerEntry = { kind: "rollout" | "session"; label: string; ms: number };
@@ -235,6 +238,11 @@ export async function runTask(task: Task, harness: string, model: string | null,
       mkdirSync(dirname(full), { recursive: true });
       writeFileSync(full, content);
     }
+    for (const [path, content] of Object.entries(task.hidden ?? {})) {
+      const full = join(cwd, path);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, content);
+    }
 
     const verifyStart = Date.now();
     let passed: boolean;
@@ -280,7 +288,7 @@ export async function runTask(task: Task, harness: string, model: string | null,
 }
 
 // A task is either `<id>.json` (setup inline) or a directory `<id>/` holding task.json, files/ (the workspace)
-// and reference/ (a solution, for the tests only).
+// reference/ (a solution, for the tests only) and, optionally, hidden/ (tests run only at verify).
 export function loadTasks(dir: string): Task[] {
   return readdirSync(dir, { withFileTypes: true })
     .filter((e) => (e.isFile() && e.name.endsWith(".json")) || (e.isDirectory() && existsSync(join(dir, e.name, "task.json"))))
@@ -289,7 +297,7 @@ export function loadTasks(dir: string): Task[] {
       if (e.isFile()) return JSON.parse(readFileSync(join(dir, e.name), "utf8")) as Task;
       const root = join(dir, e.name);
       const task = JSON.parse(readFileSync(join(root, "task.json"), "utf8")) as Task;
-      return { ...task, setup: { ...task.setup, ...readTree(join(root, "files")) }, reference: readTree(join(root, "reference")) };
+      return { ...task, setup: { ...task.setup, ...readTree(join(root, "files")) }, reference: readTree(join(root, "reference")), hidden: readTree(join(root, "hidden")) };
     });
 }
 

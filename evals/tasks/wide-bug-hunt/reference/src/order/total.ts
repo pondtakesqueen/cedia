@@ -1,4 +1,5 @@
 import type { Cart } from '../cart/cart.ts';
+import { mergeLines } from '../cart/merge.ts';
 import { sum, type Cents } from '../money/cents.ts';
 import { couponDiscount } from '../pricing/discounts/coupons.ts';
 import { priceLine, type PricedLine } from '../pricing/lines.ts';
@@ -10,7 +11,7 @@ export type Totals = { lines: PricedLine[]; subtotal: Cents; coupon: Cents; ship
 
 export function totals(c: Cart): Totals {
   const r = region(c.region);
-  const lines = c.lines.map(priceLine);
+  const lines = mergeLines(c).lines.map(priceLine);
   const subtotal = sum(lines.map((l) => l.total));
   const coupon = couponDiscount(c.coupon, subtotal);
   const discounted = subtotal - coupon;
