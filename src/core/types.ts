@@ -153,6 +153,8 @@ export type HeadlessResult = {
   result: string;
   evidence?: Evidence;
   timing?: Timing;
+  // Set when a second model reviewed the change (see core/trust/review.ts).
+  review?: { model: string; sessionId: string; verdict: 'approve' | 'changes' | 'unclear'; fixed: boolean };
 };
 
 // Where a run's wall time went. outputTokPerSec is the model's decode rate: output tokens (thinking included)

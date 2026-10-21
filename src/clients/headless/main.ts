@@ -11,7 +11,8 @@ import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadPol
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { openSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
-import { addUsage, hitRatio, type Effort, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent } from '../../core/types.ts';
+import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
+import { addUsage, hitRatio, ZERO_USAGE, type Effort, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent } from '../../core/types.ts';
 import { encode } from '../../protocol/index.ts';
 
 export type HeadlessArgs = {
@@ -29,6 +30,8 @@ export type HeadlessArgs = {
   unlock?: string[];
   privacy?: string;
   fallback?: string;
+  // A model that reviews the change once the writer's claim passes the done gate.
+  review?: string;
   checks?: string[];
   sandbox?: string;
   allowDomains?: string[];
@@ -41,24 +44,37 @@ export function receipt(ev: Evidence): string {
   return `cedia receipt: changed ${list(ev.changed)}; checks ${list(checks)}; unverified ${list(ev.unverified)}${ev.flags?.length ? `; flagged ${ev.flags.join(', ')}` : ''}`;
 }
 
+// What a reviewer may call: everything but the tools that write files. Bash stays, under a read-only policy.
+const REVIEW_TOOLS = CORE_TOOLS.filter((t) => t.effect !== 'write_workspace');
+
 const quotaSpent = (events: SessionEvent[]) => events.findLast((e) => e.kind === 'attempt')?.error?.code === 'quota';
 
 export const continueNote = (from: ModelSpec, sessionId: string) =>
   `A session on ${from.ref} (${sessionId}) stopped partway through this task when its quota ran out. The working tree may already hold part of the work: look at what changed before you go on.`;
 
-// One result for the two sessions: spend and turns add up, the rest is the fallback session's, whose evidence
-// already counts the first session's changes.
-function merge(first: HeadlessResult, second: HeadlessResult): HeadlessResult {
-  const usage = addUsage(first.usage, second.usage);
-  const checks = [...(first.evidence?.checks ?? []), ...(second.evidence?.checks ?? [])];
-  const flags = [...new Set([...(first.evidence?.flags ?? []), ...(second.evidence?.flags ?? [])])];
+// One result for a run made of several sessions (quota fallback, review, fix): spend and turns add up, changed
+// files and checks are pooled, and the rest is the last writer session's. A fallback session's evidence already
+// counts the first session's changes; a fix session's unverified list is the one that still stands.
+function combine(parts: HeadlessResult[], last: HeadlessResult): HeadlessResult {
+  const usage = parts.reduce((u, r) => addUsage(u, r.usage), ZERO_USAGE);
+  const evs = parts.flatMap((r) => (r.evidence ? [r.evidence] : []));
+  const flags = [...new Set(evs.flatMap((e) => e.flags ?? []))];
+  const evidence: Evidence | undefined = evs.length
+    ? {
+        changed: [...new Set(evs.flatMap((e) => e.changed))],
+        checks: evs.flatMap((e) => e.checks),
+        unverified: last.evidence?.unverified ?? [],
+        ...(flags.length ? { flags } : {}),
+      }
+    : undefined;
+  const { evidence: _, ...rest } = last;
   return {
-    ...second,
-    numTurns: first.numTurns + second.numTurns,
+    ...rest,
+    numTurns: parts.reduce((n, r) => n + r.numTurns, 0),
     usage,
-    costUsd: first.costUsd + second.costUsd,
+    costUsd: parts.reduce((c, r) => c + r.costUsd, 0),
     cacheHitRatio: hitRatio(usage),
-    ...(second.evidence ? { evidence: { ...second.evidence, checks, ...(flags.length ? { flags } : {}) } } : {}),
+    ...(evidence ? { evidence } : {}),
   };
 }
 
@@ -93,57 +109,94 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     if (args.outputFormat === 'stream-json') log.listeners.push((event) => out(encode({ type: 'event', event })));
     return log;
   };
+  const reviewer = args.review ? resolveModel(args.review) : undefined;
+  const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}) });
+  // The change the writer's session made: its first snapshot (taken before the first write) to its last.
+  const changesPatch = (events: SessionEvent[]): string | undefined => {
+    const snaps = events.filter((e): e is EventOf<'snapshot'> => e.kind === 'snapshot');
+    if (!snapshots || snaps.length < 2) return undefined;
+    try {
+      return snapshots.patch(snaps[0]!.tree, snaps.at(-1)!.tree);
+    } catch {
+      return undefined;
+    }
+  };
   const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}) });
 
   const ac = new AbortController();
   const onSignal = () => ac.abort();
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
-  // Scripted models share one script, so a fallback session reads on from where the first one stopped.
+  // Scripted models share one script, so a later session reads on from where the last one stopped.
   let faux: Provider | undefined;
   const providerOf = (m: ModelSpec) => (m.wire === 'faux' ? (faux ??= providerFor(m, { fauxScript })) : providerFor(m));
-  // A continuing session gets what is left of the turn and budget limits, not a fresh allowance.
-  const run = (m: ModelSpec, log: SessionLog, continues?: { from: ModelSpec; sessionId: string; changed: string[]; turns: number; costUsd: number }) =>
-    runPrompt(
+  // Every session of the run draws on one turn and budget allowance.
+  const parts: HeadlessResult[] = [];
+  const spent = () => ({ turns: parts.reduce((n, r) => n + r.numTurns, 0), costUsd: parts.reduce((c, r) => c + r.costUsd, 0) });
+  const run = async (m: ModelSpec, log: SessionLog, prompt: string, opts: { continues?: { from: ModelSpec; sessionId: string; changed: string[] }; reviewer?: boolean } = {}) => {
+    const { continues, reviewer } = opts;
+    const used = spent();
+    const result = await runPrompt(
       {
         log,
         provider: providerOf(m),
         model: m,
-        tools: CORE_TOOLS,
+        // The reviewer gets no write tools, and its policy is read-only whatever the run's mode.
+        tools: reviewer ? REVIEW_TOOLS : CORE_TOOLS,
         system: BASE_SYSTEM,
-        preamble: continues ? `${basePreamble}\n\n${continueNote(continues.from, continues.sessionId)}` : basePreamble,
+        preamble: reviewer ? reviewPreamble : continues ? `${basePreamble}\n\n${continueNote(continues.from, continues.sessionId)}` : basePreamble,
         cwd: args.cwd,
-        permission: policy,
+        permission: reviewer ? { ...policy, mode: 'read-only' } : policy,
         privacy,
-        checks,
-        ...(softChecks ? { softChecks } : {}),
+        checks: reviewer ? [] : checks,
+        ...(softChecks && !reviewer ? { softChecks } : {}),
         ...(sandbox.on ? { wrap: sandbox.wrap } : {}),
-        ...(snapshots ? { snapshots } : {}),
+        ...(snapshots && !reviewer ? { snapshots } : {}),
         ...(continues ? { continues: { sessionId: continues.sessionId, changed: continues.changed } } : {}),
+        ...(reviewer ? { role: 'review' } : {}),
         signal: ac.signal,
         ...(args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
-        ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - (continues?.turns ?? 0) } : {}),
-        ...(args.maxBudgetUsd !== undefined ? { maxBudgetUsd: args.maxBudgetUsd - (continues?.costUsd ?? 0) } : {}),
+        ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - used.turns } : {}),
+        ...(args.maxBudgetUsd !== undefined ? { maxBudgetUsd: args.maxBudgetUsd - used.costUsd } : {}),
         ...(args.outputFormat === 'stream-json' ? { onStream: (event) => out(encode({ type: 'stream', event })) } : {}),
       },
-      args.prompt,
+      prompt,
     );
+    parts.push(result);
+    return result;
+  };
   try {
-    const log = openLog();
-    let result = await run(model, log);
+    let writer = { model, log: openLog() };
+    let result = await run(model, writer.log, args.prompt);
     // A spent quota does not end the task: a new session on the fallback model picks it up (a session never
     // switches model, so its cache stays valid).
-    if (fallback && result.subtype === 'error_during_execution' && quotaSpent(log.events)) {
+    if (fallback && result.subtype === 'error_during_execution' && quotaSpent(writer.log.events)) {
       process.stderr.write(`cedia: ${model.ref} is out of quota; continuing on ${fallback.ref} in a new session\n`);
       const note = missingKeyNote(fallback);
       if (note) process.stderr.write(note + '\n');
       const changed = result.evidence?.changed ?? [];
-      const second = await run(fallback, openLog(), { from: model, sessionId: log.id, changed, turns: result.numTurns, costUsd: result.costUsd });
-      result = merge(result, second);
+      const from = writer;
+      writer = { model: fallback, log: openLog() };
+      result = await run(fallback, writer.log, args.prompt, { continues: { from: from.model, sessionId: from.log.id, changed } });
     }
+    // Review: after the writer's claim passed the done gate, a second model reads the change. Changes it asks
+    // for go back to the writer's own session once.
+    let review: ReviewOutcome | undefined;
+    if (reviewer && result.subtype === 'success' && result.evidence?.changed.length) {
+      const reviewLog = openLog();
+      const r = await run(reviewer, reviewLog, reviewPrompt(args.prompt, result.evidence, changesPatch(writer.log.events)), { reviewer: true });
+      const { verdict, findings } = r.subtype === 'success' ? parseVerdict(r.result) : { verdict: 'unclear' as const, findings: '' };
+      review = { model: reviewer.ref, sessionId: reviewLog.id, verdict, fixed: false };
+      if (verdict === 'changes') {
+        result = await run(writer.model, writer.log, fixPrompt(reviewer.ref, findings));
+        review.fixed = true;
+      } else if (verdict === 'unclear') process.stderr.write(`cedia: the review by ${reviewer.ref} gave no verdict (${r.subtype}); keeping the change as it is\n`);
+    }
+    result = { ...combine(parts, result), ...(review ? { review } : {}) };
     if (args.outputFormat === 'text') {
       out(result.result + (result.result.endsWith('\n') ? '' : '\n'));
       if (result.evidence) process.stderr.write(receipt(result.evidence) + '\n');
+      if (result.review) process.stderr.write(`cedia review: ${result.review.model} ${result.review.verdict === 'changes' ? 'asked for changes, sent back to the writer once' : result.review.verdict === 'approve' ? 'approved' : 'gave no verdict'}\n`);
     }
     else out(encode(result));
     return result;

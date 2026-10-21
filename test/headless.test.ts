@@ -120,6 +120,49 @@ describe('cedia -p (offline, faux)', () => {
     expect(second.events.some((e) => e.kind === 'reminder' && e.text.includes('stopped partway through this task when its quota ran out'))).toBe(true);
   });
 
+  describe('--review', () => {
+    const args = ['-p', 'make f.txt say good', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -s f.txt', '--review', 'faux/fallback'];
+    const writes = [call('c1', 'echo good > f.txt'), call('c2', 'test -s f.txt'), reply('done')];
+    const logs = (home: string) => {
+      const root = join(home, 'sessions');
+      const [project] = readdirSync(root);
+      return readdirSync(join(root, project!)).map((f) => SessionLog.load(join(root, project!, f)).events);
+    };
+    const head = (events: SessionEvent[]) => events[0] as Extract<SessionEvent, { kind: 'session' }>;
+
+    test('an approving review leaves the change as it is and adds its spend', () => {
+      const r = cedia([...writes, call('r1', 'cat f.txt'), reply('f.txt holds the asked text.\nVERDICT: approve')], args);
+      const result = JSON.parse(r.out);
+      expect(result).toMatchObject({ subtype: 'success', numTurns: 5, result: 'done', review: { model: 'faux/fallback', verdict: 'approve', fixed: false } });
+      const review = logs(r.home).find((l) => head(l).role === 'review')!;
+      expect(head(review).tools.map((t) => t.name)).toEqual(['read', 'bash']);
+      const prompt = review.find((e): e is Extract<SessionEvent, { kind: 'user' }> => e.kind === 'user')!.text;
+      expect(prompt).toContain('make f.txt say good');
+      expect(prompt).toContain('+good'); // the writer's diff, from its snapshots
+    });
+
+    test('requested changes go back to the writer session once; the reviewer cannot write', () => {
+      const r = cedia(
+        [...writes, call('r1', 'echo hacked > g.txt'), reply('f.txt:1 should end with a period.\nVERDICT: changes'), call('c3', 'echo good. > f.txt'), call('c4', 'test -s f.txt'), reply('fixed')],
+        args,
+      );
+      const result = JSON.parse(r.out);
+      expect(result).toMatchObject({ subtype: 'success', result: 'fixed', review: { verdict: 'changes', fixed: true }, evidence: { changed: ['f.txt'], unverified: [] } });
+      expect(existsSync(join(r.dir, 'g.txt'))).toBe(false);
+      const all = logs(r.home);
+      expect(all).toHaveLength(2);
+      const writer = all.find((l) => head(l).role !== 'review')!;
+      const asks = writer.filter((e): e is Extract<SessionEvent, { kind: 'user' }> => e.kind === 'user');
+      expect(asks).toHaveLength(2);
+      expect(asks[1]!.text).toContain('<review>\nf.txt:1 should end with a period.\n</review>');
+    });
+
+    test('no review when the writer did not succeed or changed nothing', () => {
+      const r = cedia([call('c1', 'ls'), reply('nothing to do')], args);
+      expect(JSON.parse(r.out).review).toBeUndefined();
+    });
+  });
+
   test('the DeepSeek API fallback is refused in a repo not marked public', () => {
     const r = cedia([{ error: { code: 'quota', status: 429, message: 'usage limit reached' } }], ['-p', 'x', '--output-format', 'json', '--fallback', 'deepseek-api']);
     expect(r.code).toBe(1);

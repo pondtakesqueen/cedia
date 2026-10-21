@@ -22,6 +22,8 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --privacy <level>        no-training | zdr: which models may see this repo (default: $CEDIA_PRIVACY, settings, no-training)
       --fallback <ref|none>    model to continue on in a new session when this one's quota runs out
                                (default: settings, then deepseek -> Haiku 5.5 on the Claude API)
+      --review <ref>           after the done gate passes, have this model review the change (read-only);
+                               changes it asks for go back to the writer once
       --check <command>        declared check for the done gate, e.g. 'bun test'; repeatable
       --sandbox <s>            auto | on | off: OS sandbox for bash (default: $CEDIA_SANDBOX, settings, auto)
       --allow-domain <host>    let sandboxed commands reach this host; repeatable
@@ -50,6 +52,7 @@ export async function main(argv: string[]): Promise<number> {
       unlock: { type: 'string', multiple: true },
       privacy: { type: 'string' },
       fallback: { type: 'string' },
+      review: { type: 'string' },
       check: { type: 'string', multiple: true },
       sandbox: { type: 'string' },
       'allow-domain': { type: 'string', multiple: true },
@@ -88,6 +91,7 @@ export async function main(argv: string[]): Promise<number> {
       ...(values.unlock ? { unlock: values.unlock } : {}),
       ...(values.privacy ? { privacy: values.privacy } : {}),
       ...(values.fallback ? { fallback: values.fallback } : {}),
+      ...(values.review ? { review: values.review } : {}),
       ...(values.check ? { checks: values.check } : {}),
       ...(values.sandbox ? { sandbox: values.sandbox } : {}),
       ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),
