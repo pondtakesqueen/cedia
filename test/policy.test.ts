@@ -25,6 +25,12 @@ describe('shell splitting', () => {
     expect(simpleCommands('ls 2>&1 > out.txt | grep "a b"')).toEqual([['ls'], ['grep', 'a b']]);
     expect(simpleCommands('echo "open')).toBeNull();
   });
+
+  test('wrapper flags that take a value do not hide the command', () => {
+    expect(simpleCommands('nohup time nice -n 5 make')).toEqual([['make']]);
+    expect(simpleCommands('timeout -k 2 10s bun test')).toEqual([['bun', 'test']]);
+    expect(simpleCommands('find . | xargs -n 1 -P 4 rm -f')).toEqual([['find', '.'], ['rm', '-f']]);
+  });
 });
 
 describe('deny list', () => {
@@ -45,6 +51,13 @@ describe('deny list', () => {
     ['find . -name x | xargs rm -rf', 'rm-outside'],
     ['find / -name "*.log" -delete', 'rm-outside'],
     ['sh -c "rm -fr /etc"', 'rm-outside'],
+    ['nice -n 5 git push -f', 'force-push'],
+    ['timeout 30 git push --force', 'force-push'],
+    ['timeout -s KILL 5s rm -rf /', 'rm-outside'],
+    ['sudo -u root rm -rf /etc', 'rm-outside'],
+    ['env -u HOME git reset --hard', 'reset-hard'],
+    ['stdbuf -o L git clean -fd', 'clean-force'],
+    ['sudo -- npm publish', 'deploy'],
     ['npm publish', 'deploy'],
     ['bun publish --access public', 'deploy'],
     ['vercel --prod', 'deploy'],

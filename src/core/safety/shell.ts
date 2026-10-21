@@ -2,7 +2,24 @@
 // into simple commands so a rule can look at each one's argv. The sandbox is the real boundary.
 
 const SEPARATORS = new Set([';', '\n', '&', '|', '(', ')', '`']);
-const WRAPPERS = new Set(['sudo', 'env', 'command', 'nohup', 'time', 'exec', 'nice', 'xargs', 'doas']);
+// Commands that run the rest of their argv as another command. `value` lists the flags whose next word is
+// their value (`nice -n 5 make` runs make, not 5); `positional` counts operands before the command (`timeout 5 make`).
+type Wrapper = { value?: string[]; positional?: number };
+const WRAPPERS = new Map<string, Wrapper>([
+  ['sudo', { value: ['-u', '-g', '-h', '-p', '-C', '-D', '-r', '-t', '-U', '--user', '--group', '--host', '--prompt', '--chdir', '--role', '--type', '--other-user', '--close-from'] }],
+  ['doas', { value: ['-u', '-C'] }],
+  ['env', { value: ['-u', '-C', '-S', '--unset', '--chdir', '--split-string'] }],
+  ['command', {}],
+  ['nohup', {}],
+  ['time', { value: ['-f', '-o', '--format', '--output'] }],
+  ['exec', { value: ['-a'] }],
+  ['nice', { value: ['-n', '--adjustment'] }],
+  ['ionice', { value: ['-c', '-n', '-p', '-P', '-u', '--class', '--classdata'] }],
+  ['setsid', {}],
+  ['stdbuf', { value: ['-i', '-o', '-e', '--input', '--output', '--error'] }],
+  ['timeout', { value: ['-s', '-k', '--signal', '--kill-after'], positional: 1 }],
+  ['xargs', { value: ['-a', '-d', '-E', '-e', '-I', '-i', '-L', '-l', '-n', '-P', '-s', '--arg-file', '--delimiter', '--eof', '--replace', '--max-lines', '--max-args', '--max-procs', '--max-chars', '--process-slot-var'] }],
+]);
 const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
 
 // Splits on ; & | && || newlines, subshells, $( ) and backticks outside quotes, then into words.
@@ -60,8 +77,16 @@ function expand(words: string[]): string[][] {
     const w = argv[i]!;
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w) || KEYWORDS.has(w)) i++;
     else if (WRAPPERS.has(w)) {
+      const wrapper = WRAPPERS.get(w)!;
       i++;
-      while (i < argv.length && argv[i]!.startsWith('-')) i++;
+      while (i < argv.length && argv[i]!.startsWith('-')) {
+        if (argv[i] === '--') {
+          i++;
+          break;
+        }
+        i += wrapper.value?.includes(argv[i]!) ? 2 : 1;
+      }
+      i += wrapper.positional ?? 0;
     } else break;
   }
   const rest = argv.slice(i);
