@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { attributeMisses } from '../src/core/context/cache.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
-import { missingKeyNote } from '../src/core/providers/http.ts';
+import { authHeaders, missingKeyNote } from '../src/core/providers/http.ts';
 import { SessionLog } from '../src/core/session/log.ts';
 import type { SessionEvent } from '../src/core/types.ts';
 
@@ -55,9 +55,12 @@ describe('cedia -p (offline, faux)', () => {
     expect(lines.filter((l) => l.type === 'event').map((l) => l.event.kind)).toEqual(['session', 'reminder', 'user', 'request', 'attempt', 'assistant', 'turn_end']);
   });
 
-  test('a missing key is a note, since a proxy may add credentials', () => {
-    expect(missingKeyNote(resolveModel('opus'), {})).toContain('ANTHROPIC_API_KEY is not set');
+  test('a missing key is a note, since a proxy may add credentials; the alternate name counts', () => {
+    expect(missingKeyNote(resolveModel('opus'), {})).toContain('ANTHROPIC_API_KEY (or CEDIA_ANTHROPIC_API_KEY) is not set');
     expect(missingKeyNote(resolveModel('opus'), { ANTHROPIC_API_KEY: 'k' })).toBeUndefined();
+    expect(missingKeyNote(resolveModel('opus'), { CEDIA_ANTHROPIC_API_KEY: 'k' })).toBeUndefined();
+    expect(authHeaders(resolveModel('opus'), { CEDIA_ANTHROPIC_API_KEY: 'alt' })).toEqual({ 'x-api-key': 'alt' });
+    expect(authHeaders(resolveModel('opus'), { ANTHROPIC_API_KEY: 'main', CEDIA_ANTHROPIC_API_KEY: 'alt' })).toEqual({ 'x-api-key': 'main' });
     expect(missingKeyNote(resolveModel('faux'), {})).toBeUndefined();
   });
 });

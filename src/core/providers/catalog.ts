@@ -5,6 +5,8 @@ import type { Effort, ModelCapabilities, ModelSpec, Price, Usage } from '../type
 // refresh them from https://opencode.ai/inference/go/v1/models when they matter.
 
 const ANTHROPIC = 'https://api.anthropic.com/v1/messages';
+// Claude Code cloud sessions drop ANTHROPIC_API_KEY from the environment, so cedia also reads CEDIA_ANTHROPIC_API_KEY.
+const ANTHROPIC_AUTH = { env: 'ANTHROPIC_API_KEY', altEnv: 'CEDIA_ANTHROPIC_API_KEY', scheme: 'x-api-key' } as const;
 const GO = 'https://opencode.ai/inference/go';
 const GO_AUTH = { env: 'OPENCODE_API_KEY', scheme: 'bearer' } as const;
 const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -50,7 +52,7 @@ const claude = (id: string, price: Price, extra: Partial<ModelSpec> = {}): Model
   id,
   wire: 'anthropic-messages',
   url: ANTHROPIC,
-  auth: { env: 'ANTHROPIC_API_KEY', scheme: 'x-api-key' },
+  auth: ANTHROPIC_AUTH,
   maxOutput: 128_000,
   defaultEffort: 'medium',
   price,
