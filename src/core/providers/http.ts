@@ -2,16 +2,22 @@ import type { AttemptError, AttemptErrorCode, ModelSpec } from '../types.ts';
 
 export const USER_AGENT = `cedia/${process.env.CEDIA_VERSION ?? '0.1.0'}`;
 
-export function authHeaders(model: ModelSpec, env: Record<string, string | undefined> = process.env): Record<string, string> {
-  const key = env[model.auth.env];
+type Env = Record<string, string | undefined>;
+
+export const authKey = (model: ModelSpec, env: Env = process.env): string | undefined =>
+  env[model.auth.env] || (model.auth.altEnv ? env[model.auth.altEnv] : undefined) || undefined;
+
+export function authHeaders(model: ModelSpec, env: Env = process.env): Record<string, string> {
+  const key = authKey(model, env);
   if (!key) return {};
   return model.auth.scheme === 'x-api-key' ? { 'x-api-key': key } : { authorization: `Bearer ${key}` };
 }
 
 // Credentials may also be added by an egress proxy (cloud network secrets), so a missing key is a note, not an error.
-export function missingKeyNote(model: ModelSpec, env: Record<string, string | undefined> = process.env): string | undefined {
-  if (model.wire === 'faux' || env[model.auth.env]) return undefined;
-  return `cedia: ${model.auth.env} is not set; sending ${model.ref} requests without credentials, expecting a proxy to add them`;
+export function missingKeyNote(model: ModelSpec, env: Env = process.env): string | undefined {
+  if (model.wire === 'faux' || authKey(model, env)) return undefined;
+  const names = model.auth.altEnv ? `${model.auth.env} (or ${model.auth.altEnv})` : model.auth.env;
+  return `cedia: ${names} is not set; sending ${model.ref} requests without credentials, expecting a proxy to add them`;
 }
 
 const RETRYABLE: AttemptErrorCode[] = ['rate_limit', 'overloaded', 'network', 'timeout', 'server'];
