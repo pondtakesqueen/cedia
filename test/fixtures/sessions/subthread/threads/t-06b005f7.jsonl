@@ -1,0 +1,4 @@
+{"at":"2026-10-21T18:06:24.697Z","kind":"open","title":"Write good to f.txt, then run grep -q good f.txt.","task":"Write good to f.txt, then run grep -q good f.txt.","parent":"t-24f88742"}
+{"at":"2026-10-21T18:06:24.700Z","kind":"session","sessionId":"b52b7694-27de-4f9e-bffe-4ae94ca0ed3d","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/b52b7694-27de-4f9e-bffe-4ae94ca0ed3d.jsonl"}
+{"at":"2026-10-21T18:06:24.731Z","kind":"state","state":"done","result":"Wrote good to f.txt; grep -q good f.txt passes."}
+{"at":"2026-10-21T18:06:24.731Z","kind":"archived","archived":true}

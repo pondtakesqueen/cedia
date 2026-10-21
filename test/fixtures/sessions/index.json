@@ -1,0 +1,18 @@
+[
+  {
+    "name": "edit-and-check",
+    "what": "write a file, edit it, run the declared check, and claim done with a receipt"
+  },
+  {
+    "name": "denied-call",
+    "what": "a call the deny list refuses: a permission event, a denied tool_result and no tool_intent"
+  },
+  {
+    "name": "handoff",
+    "what": "a long session hands off to a second session of the same thread, which recalls and verifies"
+  },
+  {
+    "name": "subthread",
+    "what": "a work sub-thread writes in its own session and thread; only its report comes back"
+  }
+]
