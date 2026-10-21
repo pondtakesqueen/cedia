@@ -1,2 +1,18 @@
-// Command and event types shared by the core and every client, plus the JSONL codec.
-export {};
+// JSONL protocol between the core and clients. Core -> client: every session event, the stream
+// events of the current attempt, and one result. Client -> core: commands.
+import type { HeadlessResult, SessionEvent, StreamEvent } from '../core/types.ts';
+
+export type CoreMessage = { type: 'event'; event: SessionEvent } | { type: 'stream'; event: StreamEvent } | HeadlessResult;
+
+export type Command =
+  | { type: 'prompt'; text: string }
+  | { type: 'abort' }
+  | { type: 'permission_reply'; callId: string; allow: boolean }
+  | { type: 'resume'; sessionId: string }
+  | { type: 'fork'; sessionId: string; at: string };
+
+export const encode = (m: CoreMessage | Command): string => JSON.stringify(m) + '\n';
+
+export function decode<T extends CoreMessage | Command>(line: string): T {
+  return JSON.parse(line) as T;
+}
