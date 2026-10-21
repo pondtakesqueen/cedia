@@ -63,9 +63,9 @@ describe('cedia -p (offline, faux)', () => {
 describe('miss attribution', () => {
   const at = (s: number) => new Date(Date.UTC(2026, 9, 21, 0, 0, s)).toISOString();
   const req = (s: number, systemHash = 's', toolsHash = 't') =>
-    ({ id: `r${s}`, parentId: null, at: at(s), kind: 'request', model: 'm', toolsHash, systemHash, bodyHash: 'b', headers: {} }) as SessionEvent;
+    ({ id: `r${s}`, parentId: null, at: at(s), kind: 'request', model: 'm', toolsHash, systemHash, bodyHash: "b", headers: {} }) as unknown as SessionEvent;
   const asst = (s: number, cacheRead: number, uncached: number) =>
-    ({ id: `a${s}`, parentId: null, at: at(s), kind: 'assistant', wire: 'faux', model: 'm', blocks: [], stop: 'end_turn', usage: { uncached, cacheRead, cacheWrite: 0, output: 1 } }) as SessionEvent;
+    ({ id: `a${s}`, parentId: null, at: at(s), kind: 'assistant', wire: 'faux', model: 'm', blocks: [], stop: 'end_turn', usage: { uncached, cacheRead, cacheWrite: 0, output: 1 } }) as unknown as SessionEvent;
 
   test('names the cause of each miss from the log', () => {
     const rows = attributeMisses([
