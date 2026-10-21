@@ -2,7 +2,7 @@
 
 cedia is a personal coding harness written from scratch in TypeScript on Bun. It replaces Claude Code and Codex for one developer's daily work. The goal is a harness the user can trust and afford: every "done" is backed by evidence the harness recorded, and the prompt cache hit rate matches the DeepSeek harness. Progress is measured by an eval suite run against pi, Claude Code and Codex on the same tasks.
 
-The full plan, with the comparison against other harnesses and the review it went through, is the "แผนสร้าง cedia v1" doc (rev 16, 2026-10-21). Research findings and source paths are in `research/NOTES.md`.
+The full plan, with the comparison against other harnesses and the review it went through, is the "แผนสร้าง cedia v1" doc (rev 17, 2026-10-21). Research findings and source paths are in `research/NOTES.md`.
 
 ## Decisions
 
@@ -18,11 +18,13 @@ The full plan, with the comparison against other harnesses and the review it wen
 | Sandbox | `@anthropic-ai/sandbox-runtime`, stage 2 |
 | Permission | Sandbox + deterministic argv read-only policy + allow rules (stage 2); classifier (stage 6) |
 | Edit tool | `edits[]` with tiered matching; `apply_patch` for GPT; edit mode chosen per model from eval results |
-| Compaction | Client side for every model: clear old tool results first, then summarize; grep-able segments |
-| Session | Append-only JSONL tree; a `request` event before every model call so each request can be rebuilt from the log |
+| Compaction | Claude: server-side context editing and on-demand compaction (`compact-2026-09-04`), or a client-side summary of the whole history with thinking stripped; never client-side tool-result clearing or keep-tail, because Claude 5.5-family thinking signatures bind the unedited prefix. Chat Completions and Responses: client side, clear old tool results first, then summarize. Segments stay grep-able |
+| Session | Append-only JSONL tree; a `request` event before every model call so each request can be rebuilt from the log. Header values are never logged: names plus value hashes only |
 | Protocol | JSONL over stdio; ACP later |
 | Cache | Target ≥ 90% hit ratio per session with every miss attributed; TTL 5 minutes, 1 hour optional after measuring cost |
 | Spend | Warn when daily spend passes $20 |
+| Config precedence | flags > env > project `.cedia/` > user `~/.cedia/` > defaults; arrays union and dedupe |
+| Public repo marker | A `.cedia/public` file in the repo. Without it, models with `dataPolicy: trains` are refused |
 | Old code | No code from cedia-rs (traces to claw_code). From the pi-era package keep `evals/` and use `trust.ts` logic as a reference |
 
 ## Architecture
@@ -41,6 +43,72 @@ evals/         tasks/, run.ts, baseline/
 
 Rule enforced by a test: `src/core` and `src/protocol` never import from `src/clients`.
 
+Session files live at `~/.cedia/sessions/<project-slug>/<id>.jsonl`. The first line is a `session` event `{cwd, parentSession?, role, createdAt}`. The leaf is the last event; a fork is a new file whose first event's `parentId` points into the source.
+
+## Core shapes
+
+These are fixed before stage 1 code is written. Names may change; the information each one carries may not shrink.
+
+```ts
+// Assistant content keeps each wire's opaque reasoning payload so it can be replayed byte for byte.
+type AssistantBlock =
+  | { type: 'text'; text: string; sig?: string }
+  | { type: 'thinking'; text: string; opaque?: string; redacted?: boolean }
+  | { type: 'tool_use'; id: string; callId?: string; name: string; input: JsonObject; inputError?: string };
+// The assistant event records which wire produced it; blocks are only replayed to the same wire.
+type AssistantEvent = { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage };
+type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'aborted' | 'error';
+
+// Provider boundary. One adapter per wire; the loop never sees wire JSON.
+type Provider = { wire: Wire; stream(req: WireRequest, signal: AbortSignal): AsyncIterable<StreamEvent> };
+type StreamEvent =
+  | { type: 'start' }
+  | { type: 'text_start' | 'text_end'; index: number } | { type: 'text_delta'; index: number; delta: string }
+  | { type: 'thinking_start' | 'thinking_end'; index: number } | { type: 'thinking_delta'; index: number; delta: string }
+  | { type: 'toolcall_start'; index: number; id: string; name: string } | { type: 'toolcall_delta'; index: number; delta: string } | { type: 'toolcall_end'; index: number }
+  | { type: 'done'; message: AssistantEvent }
+  | { type: 'error'; error: AttemptError };
+
+// Every turn ends with one turn_end event, including aborts.
+type TurnEnd = { kind: 'turn_end'; reason: 'completed' | 'aborted' | 'error' | 'max_tokens' | 'budget' | 'max_turns'; cause?: 'user' | 'parent' | 'hook' };
+
+type AttemptError = {
+  code: 'rate_limit' | 'overloaded' | 'auth' | 'bad_request' | 'network' | 'timeout' | 'server' | 'context_length';
+  status?: number; retryAfterMs?: number; message: string;
+};
+
+// Headless result. Exit code 0 only on 'success'.
+type HeadlessResult = {
+  type: 'result';
+  subtype: 'success' | 'error_max_turns' | 'error_max_budget_usd' | 'error_during_execution' | 'interrupted' | 'error_unverified_claim';
+  sessionId: string; numTurns: number; usage: Usage; costUsd: number; cacheHitRatio: number; result: string; evidence?: Evidence;
+};
+
+// Per-model facts the adapters and the loop branch on.
+type ModelCapabilities = {
+  reasoning: 'anthropic-thinking' | 'reasoning_content' | 'responses-item' | 'none';
+  replayReasoning: 'required' | 'forbidden' | 'same-turn';
+  parallelToolCalls: boolean; input: ('text' | 'image')[]; effortLevels: string[];
+  cacheMinTokens: number; midConversationSystem: boolean; contextWindow: number;
+};
+
+type ToolOutput = { text: string; images?: BlobRef[] };
+```
+
+Rules that go with the shapes:
+
+- **Abort.** `signal` aborts the stream; the adapter emits `done` with `stop: 'aborted'` and whatever blocks were complete. Unfinished tool calls get synthetic `tool_result`s. The turn ends with `turn_end{reason:'aborted'}`.
+- **Retry.** `rate_limit`, `overloaded`, `network`, `timeout` and `server` retry with exponential backoff, at most 5 attempts, honouring `retryAfterMs`. `auth`, `bad_request` and `context_length` never retry. Each try is its own `attempt` event.
+- **Request event.** Carries model, effort, `toolsHash`, `systemHash`, `bodyHash`, TTL and header names with value hashes. Never header values.
+- **Role fallback** starts a new session on the fallback model; it never swaps the model inside a session (cache rule 5).
+- **Mid-conversation system prompt.** Appended as a system message when `midConversationSystem` is true, otherwise as a user text block.
+- **Parallel tools.** Calls whose `ToolSpec.effect` is `read` or `network` run in a bounded pool; `write_workspace` and `exec` run alone, as ordering barriers. `tool_intent` events are written in assistant block order; results go back as one batch (Anthropic requires all results of a turn in one user message).
+- **Permission order in the log.** `assistant → permission → tool_intent (only if allowed) → tool_result`. A denied call gets `tool_result{status:'denied'}` and no `tool_intent`.
+- **Token estimate.** The last response's `usage` plus `chars/4` for the delta; Anthropic `count_tokens` on demand.
+- **Faux provider.** A script is an array of assistant messages or factories `(context, state) => AssistantEvent`, emitted as delta-level `StreamEvent`s. It computes `usage` by hashing the prefix it was sent, so `cacheRead` is nonzero exactly when the prefix repeats. Shape modeled on pi's faux provider (MIT); add a NOTICE entry if code is adapted.
+
+Protocol events (core → client): every session event, plus `stream` (the `StreamEvent`s of the current attempt), `turn_end` and `result`. Commands (client → core): `prompt`, `abort`, `permission_reply`, `resume`, `fork`.
+
 ## Cache rules
 
 Taken from the DeepSeek harness (`packages/core/agent-loop/README.md`, "KV Cache effect") and Claude Code's prompt caching docs.
@@ -51,7 +119,19 @@ Taken from the DeepSeek harness (`packages/core/agent-loop/README.md`, "KV Cache
 4. Cancelled tool calls get synthetic results appended; history is never cut.
 5. Roles change only when a subagent starts. The main session never switches model; each subagent owns its cache.
 
-Per provider: Anthropic uses automatic `cache_control` plus a breakpoint at the end of tools and system; OpenCode Go requests carry a stable `x-opencode-session` and cedia's own User-Agent; Responses requests carry `prompt_cache_key`. Each `request` event records model, effort, tools hash, system hash, TTL and headers, so a miss can be traced to what changed.
+Per provider: Anthropic uses automatic `cache_control` plus a breakpoint at the end of tools and system; OpenCode Go requests carry a stable `x-opencode-session` and cedia's own User-Agent; Responses requests carry `prompt_cache_key`. Each `request` event records model, effort, tools hash, system hash, body hash, TTL and header names, so a miss can be traced to what changed.
+
+`Usage` keeps disjoint `uncached / cacheRead / cacheWrite / output` fields. Mapping per wire:
+
+| Wire | cacheRead | cacheWrite | uncached |
+|---|---|---|---|
+| Anthropic Messages | `cache_read_input_tokens` | `cache_creation_input_tokens` | `input_tokens` |
+| Chat Completions | `prompt_tokens_details.cached_tokens`, or DeepSeek `prompt_cache_hit_tokens` | 0 | `prompt_tokens` minus cacheRead |
+| Responses | `input_tokens_details.cached_tokens` | 0 | `input_tokens` minus cacheRead |
+
+Reasoning tokens are a subset of `output`. Hit ratio = cacheRead / (uncached + cacheRead + cacheWrite).
+
+Claude 5.5-family models also bind thinking signatures to the prefix, so any history edit is a correctness bug, not just a cache miss. Stage 4 checks this three ways: diff captured requests turn to turn; run with `prefix_mismatch_behavior: "drop_block"` (beta `thinking-binding-controls-2026-08-01`) and log any `input_transformations`; then set the field explicitly.
 
 ## Model roles
 
@@ -64,6 +144,16 @@ Per provider: Anthropic uses automatic `cache_control` plus a breakpoint at the 
 | `panel` | arena, architect, interrogate, cross-judge | Claude + DeepSeek V4 Pro; Muse only on public repos |
 | `advisor` | reviews the `code` role each turn (from oh-my-pi) | Claude, low effort, read-only |
 
+## Trust
+
+Guarantees that hold whatever model runs come from the log, not the model's words.
+
+- **Done gate** (`core/trust/gate.ts`, stage 2). When the agent claims done and the ledger has no passing declared check after its last write, the run ends with `error_unverified_claim` and exit code 1. Only checks declared for the task or repo count; an ad hoc command the model chose does not.
+- **Receipt.** Every turn that changed files ends with a receipt from the ledger: files changed, checks run, their results.
+- **Deny list** (stage 2, before the stage-6 classifier): force-push, `git reset --hard` on shared branches, `rm -rf` outside the workspace, deploy commands. pstack's "Always pause" list is a harness rule because a weak model will not pause on its own.
+- **Read-only** subagents get write tools and MCP stripped by `ToolSpec.effect`, not by prompt.
+- **Session linter** (`cedia lint-session <file>`, stage 2): tool_intent/tool_result pairing, `systemHash`/`toolsHash` constant except after `tools_changed`, no header values, every `request` followed by an `attempt`. Runs in CI on faux sessions.
+
 ## pstack
 
 cedia runs the original pstack without editing its files. `cedia setup` clones it to `~/.cedia/plugins/pstack`. cedia supplies what Cursor supplied: `Task`, `AskQuestion`, todo lists, per-role models from `~/.cedia/rules/pstack-models.md`, and `docs/harness/cedia.md` mapping Cursor names to cedia's. Cursor-only features are skipped with a "Skipped in cedia" line.
@@ -73,12 +163,12 @@ cedia runs the original pstack without editing its files. `cedia setup` clones i
 Each stage ends with something usable, and every done-criterion has a test or a repeatable command. The full checklists are in the plan doc.
 
 0. Clean the repo: move evals and the baseline in, delete the pi package, Bun skeleton, CI.
-1. Core: three wire formats, faux provider, `request` and `attempt` events, minimal read and bash, ≥ 90% cache hit on a 20-turn session on Claude and DeepSeek.
-2. Tools, permission, session, sandbox, evidence ledger and claim check, hooks, first eval baseline.
+1. Core: the shapes above, three wire formats, faux provider, `request` and `attempt` events, abort and retry, headless result, minimal read and bash. Gate: an offline faux test where `systemHash` and `toolsHash` stay constant and each prefix extends the last across 20 tool-using turns. Measured, not gated: `bun scripts/cache-probe.ts --model <ref> --turns 20 --runs 3` on Claude and DeepSeek, reporting hit ratio, spread and every miss with its cause (target ≥ 90%).
+2. Tools, permission and deny list, session, sandbox (CI installs bubblewrap), evidence ledger, done gate, session linter, hooks, `evals/run.ts` with 3 runs, tokens and cost, first eval baseline including the four-arm comparison.
 3. TUI on pi-tui, minimal compaction, one full day of real use.
-4. AGENTS.md, full compaction, memory, light `/goal`, cache warming.
+4. AGENTS.md, full compaction (per-wire rule above, with the three-step thinking check), memory, light `/goal`, cache warming.
 5. Skills, MCP, subagents by role, advisor, web.
-6. Rewind, LSP, delegate, full goal mode, classifier, full eval against pi, `claude -p` and `codex exec`.
+6. Rewind, LSP, delegate, full goal mode, classifier, full eval against pi, `claude -p` and `codex exec`, and the four-arm comparison again.
 
 ## Eval
 
@@ -86,6 +176,7 @@ Each stage ends with something usable, and every done-criterion has a test or a 
 - The task's check decides, never the agent's words; read the transcript whenever a result changes.
 - Every prompt or default change runs the eval before merge.
 - The pi-era set (8 tasks, all harnesses 8/8) is a regression floor. New tasks come from cedia's own git history and must separate harnesses.
+- **Four-arm comparison** decides whether the cheap-writer pairing earns its place: (a) `claude -p` with Opus, (b) cedia Opus plans + DeepSeek writes, (c) cedia Opus + Opus, (d) cedia Opus + Haiku. 3 runs each; pass^3, false-done rate and cost per passed task. (c) against (a) measures the harness; (b) and (d) against (c) measure the pairing. A pairing becomes the default for a task category only if it is within 3 points of (a) on pass^3 and at least 2x cheaper per passed task.
 
 ## Licenses
 
