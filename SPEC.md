@@ -184,10 +184,10 @@ Each stage ends with something usable, and every done-criterion has a test or a 
 
 0. Clean the repo: move evals and the baseline in, delete the pi package, Bun skeleton, CI.
 1. Core: the shapes above, three wire formats, faux provider, `request` and `attempt` events, abort and retry, headless result, minimal read and bash. Gate: an offline faux test where `systemHash` and `toolsHash` stay constant and each prefix extends the last across 20 tool-using turns. Measured, not gated: `bun scripts/cache-probe.ts --model <ref> --turns 20 --runs 3` on Claude and DeepSeek, reporting hit ratio, spread and every miss with its cause (target ≥ 90%).
-2. Tools, permission and deny list, session, sandbox (CI installs bubblewrap), evidence ledger, done gate, session linter, hooks, `evals/run.ts` with 3 runs, tokens and cost, first eval baseline including the four-arm comparison.
+2. Tools, permission and deny list, session, sandbox (CI installs bubblewrap), evidence ledger, done gate, session linter, hooks, `evals/run.ts` with 3 runs, tokens and cost, first single-model eval baseline (`evals/results/`). The four-arm comparison needs a planner handing work to a writer, so it runs once subagents exist (stage 5).
 3. TUI on pi-tui, minimal compaction, one full day of real use.
 4. AGENTS.md, full compaction (per-wire rule above, with the three-step thinking check), memory, light `/goal`, cache warming.
-5. Skills, MCP, subagents by role, advisor, web.
+5. Skills, MCP, subagents by role, advisor, web; first four-arm comparison.
 6. Rewind, LSP, delegate, full goal mode, classifier, full eval against pi, `claude -p` and `codex exec`, and the four-arm comparison again.
 
 ## Eval
