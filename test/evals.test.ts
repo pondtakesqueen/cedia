@@ -93,6 +93,9 @@ describe("evals runner", () => {
     expect(sp.ttftMs).toBe(500);
     expect(sp.modelShare).toBeCloseTo(2800 / 3020);
     expect(sp.harnessShare).toBeCloseTo(20 / 3020);
+
+    const peak = (p: number, handoffs: number, subthreads: number): Result => ({ ...r("d", 1, true, true, 0), reported: { peakContext: p, handoffs, subthreads } });
+    expect(summarize([peak(80_000, 0, 2), peak(130_000, 1, 0)]).context).toEqual({ meanPeak: 105_000, maxPeak: 130_000, over100k: 1, handoffs: 1, subthreads: 2 });
   });
 
   test("estimates cost from measured tokens at the target model's price", () => {

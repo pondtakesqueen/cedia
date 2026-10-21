@@ -406,6 +406,8 @@ export type Summary = {
   cacheHitRatio?: number;
   // From runs that report timing: mean decode rate, time to first token per model call, and cedia's own share.
   speed?: { outputTokPerSec: number; ttftMs: number; harnessShare: number; modelShare: number };
+  // cedia: the mean and largest peak context per run, runs whose peak passed 100k, handoffs and sub-threads.
+  context?: { meanPeak: number; maxPeak: number; over100k: number; handoffs: number; subthreads: number };
 };
 
 export function summarize(all: Result[]): Summary {
@@ -433,6 +435,22 @@ export function summarize(all: Result[]): Summary {
     ...(costUsd !== undefined ? { costUsd, ...(passes ? { costPerPass: costUsd / passes } : {}) } : {}),
     ...(tok.length ? { tokens: { input, output: tok.reduce((a, t) => a + t!.output, 0) }, cacheHitRatio: input ? cacheRead / input : 0 } : {}),
     ...speedOf(results),
+    ...contextOf(results),
+  };
+}
+
+function contextOf(results: Result[]): { context?: Summary["context"] } {
+  const peaks = results.flatMap((r) => (r.reported.peakContext ? [r.reported.peakContext] : []));
+  if (!peaks.length) return {};
+  const count = (f: (r: Result) => number | undefined) => results.reduce((a, r) => a + (f(r) ?? 0), 0);
+  return {
+    context: {
+      meanPeak: Math.round(peaks.reduce((a, p) => a + p, 0) / peaks.length),
+      maxPeak: Math.max(...peaks),
+      over100k: peaks.filter((p) => p > 100_000).length,
+      handoffs: count((r) => r.reported.handoffs),
+      subthreads: count((r) => r.reported.subthreads),
+    },
   };
 }
 
@@ -476,6 +494,7 @@ export function formatSummary(s: Summary): string {
     `  pass@1 ${pct(s.pass1)}  pass^k ${pct(s.passAll)}  false-done ${pct(s.falseDone)}  refused claims ${pct(s.refused)}`,
     `  avg ${(s.avgMs / 1000).toFixed(1)}s per run` +
       (s.tokens ? `, ${Math.round(s.tokens.input / s.runs)} input / ${Math.round(s.tokens.output / s.runs)} output tokens per run, cache hit ${pct(s.cacheHitRatio ?? 0)}` : ""),
+    ...(s.context ? [`  peak context ${Math.round(s.context.meanPeak / 1000)}k mean, ${Math.round(s.context.maxPeak / 1000)}k max, ${s.context.over100k} of ${s.runs} runs past 100k; ${s.context.handoffs} handoffs, ${s.context.subthreads} sub-threads`] : []),
     ...(s.speed ? [`  speed ${s.speed.outputTokPerSec} output tok/s, ${(s.speed.ttftMs / 1000).toFixed(2)}s to first token per call; model ${pct(s.speed.modelShare)} of time, cedia ${pct(s.speed.harnessShare)}`] : []),
     s.costUsd !== undefined ? `  cost $${s.costUsd.toFixed(4)} total, ${s.costPerPass !== undefined ? `$${s.costPerPass.toFixed(4)} per passed run` : "no passes"}` : "  cost not reported",
   ].join("\n");
