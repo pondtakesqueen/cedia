@@ -14,7 +14,9 @@ function assistantMessage(blocks: AssistantBlock[], withReasoning: boolean): Jso
   return {
     role: 'assistant',
     content: text || null,
-    ...(withReasoning && reasoning ? { reasoning_content: reasoning } : {}),
+    // DeepSeek in thinking mode rejects a tool-call turn replayed without the field, even when the model
+    // produced no reasoning that turn, so it goes back as an empty string rather than being left out.
+    ...(withReasoning ? { reasoning_content: reasoning } : {}),
     ...(calls.length ? { tool_calls: calls } : {}),
   };
 }
@@ -30,7 +32,8 @@ export function chatMessages(req: WireRequest): JsonObject[] {
   req.messages.forEach((m: Message, i) => {
     if (m.role === 'system') out.push(midConversationSystem ? { role: 'system', content: m.text } : { role: 'user', content: `<system-reminder>\n${m.text}\n</system-reminder>` });
     else if (m.role === 'assistant') {
-      const withReasoning = m.wire === WIRE && (replayReasoning === 'required' || (replayReasoning === 'same-turn' && i > lastUserText));
+      const withReasoning =
+        m.wire === WIRE && req.model.caps.reasoning === 'reasoning_content' && (replayReasoning === 'required' || (replayReasoning === 'same-turn' && i > lastUserText));
       out.push(assistantMessage(m.blocks, withReasoning));
     } else {
       const texts: string[] = [];

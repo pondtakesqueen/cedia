@@ -155,6 +155,9 @@ describe('request bodies', () => {
     expect(b.messages[2].reasoning_content).toBeUndefined();
     const own = history.map((m) => (m.role === 'assistant' ? { ...m, wire: 'chat-completions' as const } : m));
     expect((chatBody(req('deepseek', own)) as any).messages[2].reasoning_content).toBe('hmm');
+    // A tool-call turn with no reasoning still carries the field: DeepSeek's thinking mode rejects it missing.
+    const noThinking = own.map((m) => (m.role === 'assistant' ? { ...m, blocks: m.blocks.filter((b) => b.type !== 'thinking') } : m));
+    expect((chatBody(req('deepseek', noThinking)) as any).messages[2].reasoning_content).toBe('');
     expect(b.stream_options).toEqual({ include_usage: true });
   });
 
