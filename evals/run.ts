@@ -2,6 +2,7 @@
 // Usage: bun evals/run.ts [--harness cedia|pi|claude|codex|opencode|omp] [--model <ref>] [--runs 3] [--jobs 4]
 //                         [--tasks evals/tasks] [--only id,id] [--budget <usd>] [--estimate] [--out results.jsonl]
 //                         [--review <model>]   (cedia only: a second model reviews each finished run)
+//                         [--cedia-arg <arg>]  (cedia only, repeatable: passed through, e.g. --cedia-arg=--spawn=off)
 //
 // Every harness binary comes from the environment (CEDIA_EVAL_<NAME>_BIN) or PATH, so the runner works on any
 // machine. Each task runs `--runs` times, each in its own clean temp dir. The task's verify command decides
@@ -39,6 +40,9 @@ export type Reported = {
   timing?: { modelMs: number; ttftMs: number; toolMs: number; retryMs?: number; harnessMs: number; outputTokPerSec: number };
   // cedia with --review: what the reviewer said and whether the writer was sent back to fix it.
   review?: { verdict: string; fixed: boolean };
+  // cedia: handoffs to a new session, and sub-threads spawned.
+  handoffs?: number;
+  subthreads?: number;
 };
 
 export type Result = {
@@ -82,6 +86,7 @@ const HARNESSES: Record<string, (task: Task, cwd: string, model: string | null) 
       ...(model ? ["--model", model] : []),
       "--fallback", "none", // a result measures the model it names
       ...(process.env.CEDIA_EVAL_REVIEW ? ["--review", process.env.CEDIA_EVAL_REVIEW] : []),
+      ...(process.env.CEDIA_EVAL_ARGS ? (JSON.parse(process.env.CEDIA_EVAL_ARGS) as string[]) : []),
     ],
   }),
   pi: (task, _cwd, model) => ({ bin: process.env.CEDIA_EVAL_PI_BIN ?? "pi", args: ["-p", task.prompt, ...(model ? ["--model", model] : [])] }),
@@ -157,6 +162,8 @@ export function parseReported(stdout: string): { reported: Reported; text: strin
         turns: Number(j.numTurns),
         ...(j.timing ? { timing: j.timing as Reported["timing"] } : {}),
         ...(j.review ? { review: { verdict: String((j.review as { verdict: unknown }).verdict), fixed: Boolean((j.review as { fixed: unknown }).fixed) } } : {}),
+        ...(Array.isArray(j.sessions) ? { handoffs: j.sessions.length - 1 } : {}),
+        ...(typeof j.subthreads === "number" ? { subthreads: j.subthreads } : {}),
       },
     };
   }
@@ -425,6 +432,10 @@ async function main(argv: string[]): Promise<number> {
     else if (a === "--estimate") estimate = true;
     else if (a === "--measured") measuredPath = argv[++i]!;
     else if (a === "--review") process.env.CEDIA_EVAL_REVIEW = argv[++i]!;
+    else if (a === "--cedia-arg" || a?.startsWith("--cedia-arg=")) {
+      const v = a!.includes("=") ? a!.slice("--cedia-arg=".length) : argv[++i]!;
+      process.env.CEDIA_EVAL_ARGS = JSON.stringify([...(process.env.CEDIA_EVAL_ARGS ? (JSON.parse(process.env.CEDIA_EVAL_ARGS) as string[]) : []), v]);
+    }
   }
 
   const tasks = loadTasks(tasksDir).filter((t) => !only || only.includes(t.id));
@@ -454,7 +465,7 @@ async function main(argv: string[]): Promise<number> {
       results.push(r);
       spent += r.reported.costUsd ?? 0;
       const cost = r.reported.costUsd !== undefined ? ` $${r.reported.costUsd.toFixed(4)}` : "";
-      console.log(`  ${r.passed ? "PASS" : "FAIL"} ${task.id}#${run} (${(r.wallMs / 1000).toFixed(1)}s${cost}${r.falseDone ? ", FALSE DONE" : ""}${r.refusedClaim ? ", claim refused" : ""}${r.reported.review ? `, review ${r.reported.review.verdict}` : ""})`);
+      console.log(`  ${r.passed ? "PASS" : "FAIL"} ${task.id}#${run} (${(r.wallMs / 1000).toFixed(1)}s${cost}${r.falseDone ? ", FALSE DONE" : ""}${r.refusedClaim ? ", claim refused" : ""}${r.reported.review ? `, review ${r.reported.review.verdict}` : ""}${r.reported.handoffs ? `, ${r.reported.handoffs} handoff` : ""}${r.reported.subthreads ? `, ${r.reported.subthreads} sub-thread` : ""})`);
       if (spent >= budget && !stopped) {
         stopped = true;
         console.error(`budget $${budget} reached after $${spent.toFixed(4)}; stopping`);

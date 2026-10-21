@@ -40,6 +40,9 @@ export function ledgerEntries(events: SessionEvent[], checks: string[], cwd?: st
       for (const path of files) out.push({ kind: 'write', at, tool: intent.tool, path });
     } else if (intent.tool === 'edit' || intent.tool === 'write') {
       if (e.status === 'completed') out.push({ kind: 'write', at, tool: intent.tool, path: String(intent.input.path) });
+    } else if (intent.tool === 'spawn' && intent.input.kind === 'work') {
+      // Without snapshots, a sub-thread that may write counts as one write the gate must see checked.
+      out.push({ kind: 'write', at, tool: 'spawn', command: 'a work sub-thread' });
     } else if (command !== undefined && !checkReadOnly(command).ok) {
       out.push({ kind: 'write', at, tool: 'bash', command });
     }
@@ -47,7 +50,7 @@ export function ledgerEntries(events: SessionEvent[], checks: string[], cwd?: st
   return out;
 }
 
-const label = (w: Extract<LedgerEntry, { kind: 'write' }>) => w.path ?? `bash: ${w.command}`;
+const label = (w: Extract<LedgerEntry, { kind: 'write' }>) => w.path ?? `${w.tool}: ${w.command}`;
 
 export function evidence(entries: LedgerEntry[]): Evidence {
   const writes = entries.filter((e): e is Extract<LedgerEntry, { kind: 'write' }> => e.kind === 'write');

@@ -7,9 +7,10 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoffAt, loadPolicy, loadPrivacy, loadRoles, loadSandbox, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoffAt, loadPolicy, loadPrivacy, loadRoles, loadSandbox, loadSpawn, type RoleChoice } from '../../core/config.ts';
 import { handoffNote, MAX_HANDOFFS } from '../../core/project/handoff.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
+import { spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
@@ -41,6 +42,9 @@ export type HeadlessArgs = {
   thread?: string;
   // Tokens of context at which a writer session hands off to a new one, or "off".
   handoffAt?: string;
+  // The model explore sub-threads run on, and whether writer sessions may spawn sub-threads at all.
+  swarm?: string;
+  spawn?: string;
   // Reviews the change once the writer's claim passes the done gate.
   review?: string;
   checks?: string[];
@@ -110,7 +114,8 @@ function combine(parts: HeadlessResult[], last: HeadlessResult): HeadlessResult 
 }
 
 export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
-  const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}) });
+  const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}) });
+  const spawnOn = loadSpawn(args.spawn);
   const model = roles.code;
   const declared = loadChecks(args.cwd, args.checks);
   const checks = declared.length ? declared : detectChecks(args.cwd);
@@ -190,17 +195,20 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const parts: HeadlessResult[] = [];
   const spent = () => ({ turns: parts.reduce((n, r) => n + r.numTurns, 0), costUsd: parts.reduce((c, r) => c + r.costUsd, 0) });
   let handoffs = 0;
-  type RunOpts = { continues?: { sessionId: string; changed: string[] }; note?: string; role?: 'plan' | 'review' };
+  // child: a sub-thread's session, which gets the core tools only (no spawn, recall, threads, inbox or handoff).
+  type RunOpts = { continues?: { sessionId: string; changed: string[] }; note?: string; role?: 'plan' | 'review' | 'explore'; child?: { thread?: string } };
   const run = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}) => {
     const { continues } = opts;
-    const reviewer = opts.role !== undefined; // plan and review both read and never write
+    const reviewer = opts.role !== undefined; // plan, review and explore read and never write
+    const child = opts.child;
+    const writing = !reviewer && !child; // the run's own writer: the one that hands off, gets mail and may spawn
     const used = spent();
     // A resumed session keeps the tools it was opened with (its cached prefix); new ones get recall once the
     // thread has an earlier session, and the thread tools once the project has another thread.
     const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
-    const extra = [...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : [])];
-    const tools = reviewer ? REVIEW_TOOLS : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
-    if (!reviewer) writerRuns.push({ log, from: log.events.length });
+    const extra = [...(spawnOn ? [spawn] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : [])];
+    const tools = reviewer ? REVIEW_TOOLS : child ? CORE_TOOLS : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
+    if (writing) writerRuns.push({ log, from: log.events.length });
     const result = await runPrompt(
       {
         log,
@@ -220,9 +228,9 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         ...(snapshots && !reviewer ? { snapshots } : {}),
         ...(continues ? { continues } : {}),
         ...(opts.role ? { role: opts.role } : {}),
-        ...(threadId ? { thread: threadId } : {}),
-        ...(!reviewer && handoffAt !== undefined && handoffs < MAX_HANDOFFS ? { handoffAt } : {}),
-        ...(!reviewer && store && threadId
+        ...(child ? (child.thread ? { thread: child.thread } : {}) : threadId ? { thread: threadId } : {}),
+        ...(writing && handoffAt !== undefined && handoffs < MAX_HANDOFFS ? { handoffAt } : {}),
+        ...(writing && store && threadId
           ? {
               inbox: {
                 pending: () => {
@@ -264,6 +272,30 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   };
   let task = args.prompt;
   let writer = { model, log: undefined as unknown as SessionLog };
+  // A sub-thread: its own thread (archived once it succeeds) and session, on the model its kind calls for.
+  // Explore runs on the swarm model unless privacy keeps that model out; work runs on the writer's model.
+  const explorer = privacy === 'zdr' && roles.swarm.dataPolicy !== 'zdr' ? model : roles.swarm;
+  let subthreads = 0;
+  const spawner: Spawner = async (brief: string, kind: SpawnKind) => {
+    subthreads++;
+    const m = kind === 'explore' ? explorer : writer.model;
+    const sub = store?.open(brief, threadId ? { parent: threadId } : {});
+    const log = openLog();
+    if (store && sub) store.append(sub, { kind: 'session', sessionId: log.id, model: m.ref, role: kind === 'explore' ? 'explore' : 'code', why: 'start', ...(log.path ? { path: log.path } : {}) });
+    let r: HeadlessResult;
+    try {
+      r = await run(m, log, subtaskPrompt(brief, threadId, kind), { ...(kind === 'explore' ? { role: 'explore' as const } : {}), child: sub ? { thread: sub } : {} });
+    } catch (e) {
+      if (store && sub) store.append(sub, { kind: 'state', state: 'failed', result: (e as Error).message });
+      throw e;
+    }
+    if (store && sub) {
+      store.append(sub, { kind: 'state', state: stateOf(r), result: r.result.slice(0, MAX_RESULT) });
+      if (r.subtype === 'success') store.append(sub, { kind: 'archived', archived: true });
+    }
+    return { ...(sub ? { thread: sub } : {}), model: m.ref, subtype: r.subtype, result: r.result, costUsd: r.costUsd, changed: r.evidence?.changed ?? [], unverified: r.evidence?.unverified ?? [] };
+  };
+  const spawn = spawnTool(spawner);
   // Runs the writer and follows its handoffs: each note opens a new session of the thread on the same model,
   // which starts from the task (and the fix it was on, if any) and the note.
   const write = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}) => {
@@ -330,7 +362,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       } else if (verdict === 'unclear') process.stderr.write(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
     }
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
-    result = { ...combine(parts, result), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(threadId ? { thread: threadId } : {}), sessions };
+    result = { ...combine(parts, result), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads } : {}) };
     if (store && threadId) store.append(threadId, { kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
     if (args.outputFormat === 'text') {
       out(result.result + (result.result.endsWith('\n') ? '' : '\n'));

@@ -86,12 +86,12 @@ export function recallTool(sessions: () => EarlierSession[]): ToolSpec {
 export function threadTools(store: ThreadStore, self: string): ToolSpec[] {
   const list: ToolSpec = {
     name: 'threads',
-    description: "List this project's other threads: id, state, title, and the first line of each one's latest result or handoff note.",
+    description: "List this project's other threads (archived ones left out): id, state, title, and the first line of each one's latest result or handoff note.",
     schema: { type: 'object', properties: {}, additionalProperties: false },
     effect: 'read',
     replay: 'safe',
     async run() {
-      const others = store.list().filter((t) => t.id !== self);
+      const others = store.list().filter((t) => t.id !== self && !t.archived);
       return { text: others.length ? others.map(threadLine).join('\n') : 'no other threads in this project', isError: false };
     },
   };

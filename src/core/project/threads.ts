@@ -9,7 +9,8 @@ export type ThreadState = 'working' | 'done' | 'failed' | 'stopped';
 export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota' | 'fix';
 
 type ThreadBody =
-  | { kind: 'open'; title: string; task: string }
+  // parent: the thread that spawned this one as a sub-thread.
+  | { kind: 'open'; title: string; task: string; parent?: string }
   | { kind: 'session'; sessionId: string; model: string; role: string; why: SessionWhy; path?: string }
   // Written when a session hands off: the note the next session starts from.
   | { kind: 'handoff'; sessionId: string; note: string }
@@ -17,7 +18,9 @@ type ThreadBody =
   | { kind: 'message'; id: string; from: string; text: string }
   // The messages a session was shown; they are in its log as a reminder.
   | { kind: 'delivered'; ids: string[]; sessionId: string }
-  | { kind: 'state'; state: ThreadState; result?: string };
+  | { kind: 'state'; state: ThreadState; result?: string }
+  // Hidden from lists, still readable. A sub-thread that finishes its task archives itself.
+  | { kind: 'archived'; archived: boolean };
 export type ThreadEvent = { at: string } & ThreadBody;
 
 export type ThreadMessage = { id: string; from: string; text: string; at: string };
@@ -26,6 +29,8 @@ export type Thread = {
   title: string;
   task: string;
   state: ThreadState;
+  parent?: string;
+  archived: boolean;
   sessions: Extract<ThreadEvent, { kind: 'session' }>[];
   handoff?: { sessionId: string; note: string };
   result?: string;
@@ -69,9 +74,9 @@ export class ThreadStore {
     appendFileSync(this.path(id), JSON.stringify({ at: now.toISOString(), ...body }) + '\n');
   }
 
-  open(task: string, now = new Date()): string {
+  open(task: string, opts: { parent?: string; now?: Date } = {}): string {
     const id = newThreadId();
-    this.append(id, { kind: 'open', title: titleOf(task), task }, now);
+    this.append(id, { kind: 'open', title: titleOf(task), task, ...(opts.parent ? { parent: opts.parent } : {}) }, opts.now);
     return id;
   }
 
@@ -104,13 +109,25 @@ export class ThreadStore {
 
 export function foldThread(id: string, events: ThreadEvent[]): Thread {
   const open = events.find((e) => e.kind === 'open');
-  const t: Thread = { id, title: open?.title ?? id, task: open?.task ?? '', state: 'working', sessions: [], messages: [], pending: [], updatedAt: events.at(-1)?.at ?? '' };
+  const t: Thread = {
+    id,
+    title: open?.title ?? id,
+    task: open?.task ?? '',
+    state: 'working',
+    ...(open?.parent ? { parent: open.parent } : {}),
+    archived: false,
+    sessions: [],
+    messages: [],
+    pending: [],
+    updatedAt: events.at(-1)?.at ?? '',
+  };
   const delivered = new Set<string>();
   for (const e of events) {
     if (e.kind === 'session') t.sessions.push(e);
     else if (e.kind === 'handoff') t.handoff = { sessionId: e.sessionId, note: e.note };
     else if (e.kind === 'message') t.messages.push({ id: e.id, from: e.from, text: e.text, at: e.at });
     else if (e.kind === 'delivered') for (const m of e.ids) delivered.add(m);
+    else if (e.kind === 'archived') t.archived = e.archived;
     else if (e.kind === 'state') {
       t.state = e.state;
       if (e.result !== undefined) t.result = e.result;
@@ -129,5 +146,5 @@ export function inboxReminder(messages: ThreadMessage[]): string {
 // One line per thread for the threads tool and `cedia threads`.
 export function threadLine(t: Thread): string {
   const latest = (t.result ?? t.handoff?.note ?? '').trim().split('\n')[0] ?? '';
-  return `${t.id}  ${t.state.padEnd(7)}  ${t.title}${latest ? `\n    ${latest.length > 120 ? `${latest.slice(0, 117)}...` : latest}` : ''}`;
+  return `${t.id}  ${t.state.padEnd(7)}  ${t.parent ? `(sub-thread of ${t.parent}) ` : ''}${t.archived ? '(archived) ' : ''}${t.title}${latest ? `\n    ${latest.length > 120 ? `${latest.slice(0, 117)}...` : latest}` : ''}`;
 }

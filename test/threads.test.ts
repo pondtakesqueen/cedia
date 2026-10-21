@@ -275,3 +275,85 @@ describe('cedia threads (offline, faux)', () => {
     expect(cedia(tmp(), [], ['-p', 'x', '--handoff-at', '12']).err).toContain('handoff-at must be a token count of at least 1000');
   });
 });
+
+describe('sub-threads (offline, faux)', () => {
+  const ws = ['--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'grep -q good f.txt'];
+
+  test('a work sub-thread writes in its own session; only its report comes back, and the parent must still check', () => {
+    const dir = tmp();
+    const script = [
+      tool('s1', 'spawn', { kind: 'work', task: 'Write good to f.txt, then run grep -q good f.txt.' }),
+      call('c1', 'echo good > f.txt'),
+      call('c2', 'grep -q good f.txt'),
+      reply('Wrote good to f.txt; grep -q good f.txt passes.'),
+      reply('done'),
+      call('c3', 'grep -q good f.txt'),
+      reply('done, checked'),
+    ];
+    const result = JSON.parse(cedia(dir, script, ['-p', 'make f.txt say good', ...ws]).out);
+    expect(result).toMatchObject({ subtype: 'success', result: 'done, checked', evidence: { unverified: [] } });
+    expect(result.evidence.changed).toContain('f.txt');
+    const parent = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
+    expect(head(parent.events).tools.map((t) => t.name)).toContain('spawn');
+    const report = parent.events.find((e): e is EventOf<'tool_result'> => e.kind === 'tool_result' && e.callId === 's1')!.output.text;
+    expect(report).toContain('Wrote good to f.txt; grep -q good f.txt passes.');
+    expect(report).toContain('kind="work"');
+    expect(report).toContain('Changed: f.txt');
+    // The child's own calls never enter the parent's context.
+    expect(JSON.stringify(parent.events)).not.toContain('echo good > f.txt');
+    // The parent's claim right after the spawn was refused once: the sub-thread's write needed a check.
+    expect(parent.events.some((e) => e.kind === 'reminder' && e.text.includes('no record of a declared check passing'))).toBe(true);
+
+    const store = storeOf(dir);
+    const sub = store.list().find((t) => t.parent === result.thread)!;
+    expect(sub).toMatchObject({ state: 'done', archived: true, title: 'Write good to f.txt, then run grep -q good f.txt.' });
+    const child = sessionsOf(dir).find((l) => l.id === sub.sessions[0]!.sessionId)!;
+    expect(head(child.events)).toMatchObject({ thread: sub.id });
+    expect(head(child.events).tools.map((t) => t.name)).toEqual(['read', 'edit', 'write', 'bash']);
+    for (const l of [parent, child]) expect(lintSession(l.events)).toEqual([]);
+    expect(threadsCli(dir).out).not.toContain(sub.id);
+    expect(threadsCli(dir, '--all').out).toContain(`(sub-thread of ${result.thread}) (archived)`);
+  });
+
+  test('explore runs read-only on the swarm model, even from a read-only session; work is refused there', () => {
+    const dir = tmp();
+    const ro = ['--output-format', 'json', '--sandbox', 'off', '--swarm', 'faux/fallback'];
+    const script = [
+      tool('s1', 'spawn', { kind: 'explore', task: 'Find where the port is set.' }),
+      call('c1', 'echo 1 > g.txt'),
+      reply('Port is set in server.ts:3.'),
+      tool('s2', 'spawn', { kind: 'work', task: 'Change the port.' }),
+      reply('found it'),
+    ];
+    const result = JSON.parse(cedia(dir, script, ['-p', 'where is the port set?', ...ro]).out);
+    expect(result).toMatchObject({ subtype: 'success', result: 'found it' });
+    const parent = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
+    const results = parent.events.filter((e): e is EventOf<'tool_result'> => e.kind === 'tool_result');
+    expect(results[0]!.output.text).toContain('Port is set in server.ts:3.');
+    expect(results[0]!.output.text).toContain('model="faux/fallback"');
+    expect(results[1]).toMatchObject({ status: 'denied' });
+    const sub = storeOf(dir).list().find((t) => t.parent === result.thread)!;
+    const child = sessionsOf(dir).find((l) => l.id === sub.sessions[0]!.sessionId)!;
+    expect(head(child.events)).toMatchObject({ model: 'faux/fallback', role: 'explore' });
+    expect(child.events.find((e) => e.kind === 'tool_result')).toMatchObject({ status: 'denied' });
+  });
+
+  test('a sub-thread that fails stays listed, and the parent sees the failure', () => {
+    const dir = tmp();
+    const script = [tool('s1', 'spawn', { kind: 'work', task: 'Write good to f.txt.' }), call('c1', 'echo good > f.txt'), reply('done'), reply('done'), call('c2', 'grep -q good f.txt'), reply('fixed it myself')];
+    const result = JSON.parse(cedia(dir, script, ['-p', 'make f.txt say good', ...ws]).out);
+    expect(result.subtype).toBe('success');
+    const parent = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
+    expect(parent.events.find((e) => e.kind === 'tool_result')).toMatchObject({ status: 'failed', output: { isError: true } });
+    const sub = storeOf(dir).list().find((t) => t.parent === result.thread)!;
+    expect(sub).toMatchObject({ state: 'failed', archived: false });
+  });
+
+  test('--spawn off leaves the tool out', () => {
+    const dir = tmp();
+    const result = JSON.parse(cedia(dir, [reply('ok')], ['-p', 'hi', '--output-format', 'json', '--spawn', 'off']).out);
+    const log = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
+    expect(head(log.events).tools.map((t) => t.name)).not.toContain('spawn');
+    expect(cedia(tmp(), [], ['-p', 'x', '--spawn', 'maybe']).err).toContain('--spawn must be on or off');
+  });
+});

@@ -162,6 +162,8 @@ export type HeadlessResult = {
   // The thread the run belongs to, and every session it took when it handed off or fell back.
   thread?: string;
   sessions?: string[];
+  // Sub-threads the run spawned (core/tools/spawn.ts); their spend is in costUsd.
+  subthreads?: number;
 };
 
 // A role run around the writer. `via: 'claude-code'` is the user's own Claude Code CLI (their subscription): its
