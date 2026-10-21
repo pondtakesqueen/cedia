@@ -103,11 +103,14 @@ describe('handoff in the loop', () => {
   const run = (script: FauxStep[], extra: Partial<Parameters<typeof runPrompt>[0]> = {}) => {
     const log = SessionLog.create();
     const bigTool = { ...CORE_TOOLS[0]!, name: 'big', effect: 'read' as const, pathOf: undefined, run: async () => ({ text: big, isError: false }) };
-    return runPrompt({ log, provider: fauxProvider(script), model, tools: [...CORE_TOOLS, bigTool], system: 'sys', cwd: tmp(), ...extra }, 'do it').then((r) => ({ r, log }));
+    const permission = { mode: 'workspace' as const, allow: [], deny: [] };
+    return runPrompt({ log, provider: fauxProvider(script), model, tools: [...CORE_TOOLS, bigTool], system: 'sys', cwd: tmp(), permission, ...extra }, 'do it').then((r) => ({ r, log }));
   };
 
+  const write = tool('w1', 'write', { path: 'f.txt', content: 'x' });
+
   test('once the context passes handoffAt, the session writes its note and ends with subtype handoff', async () => {
-    const { r, log } = await run([tool('c1', 'big', {}), reply('NOTE: next, run the tests')], { handoffAt: 2000 });
+    const { r, log } = await run([write, tool('c1', 'big', {}), reply('NOTE: next, run the tests')], { handoffAt: 2000 });
     expect(r.subtype).toBe('handoff');
     expect(r.result).toBe('NOTE: next, run the tests');
     expect(log.events.some((e) => e.kind === 'reminder' && e.text === HANDOFF_PROMPT)).toBe(true);
@@ -124,13 +127,22 @@ describe('handoff in the loop', () => {
   });
 
   test('a tool call instead of the note is not run; a second one gives up the handoff and the session goes on', async () => {
-    const once = await run([tool('c1', 'big', {}), call('c2', 'ls'), reply('the note')], { handoffAt: 2000 });
+    const once = await run([write, tool('c1', 'big', {}), call('c2', 'ls'), reply('the note')], { handoffAt: 2000 });
     expect(once.r).toMatchObject({ subtype: 'handoff', result: 'the note' });
     expect(once.log.events.find((e): e is EventOf<'tool_result'> => e.kind === 'tool_result' && e.callId === 'c2')).toMatchObject({ status: 'not_started', output: { text: HANDOFF_NO_TOOLS } });
 
-    const never = await run([tool('c1', 'big', {}), call('c2', 'ls'), call('c3', 'ls'), reply('done anyway')], { handoffAt: 2000 });
+    const never = await run([write, tool('c1', 'big', {}), call('c2', 'ls'), call('c3', 'ls'), reply('done anyway')], { handoffAt: 2000 });
     expect(never.r).toMatchObject({ subtype: 'success', result: 'done anyway' });
     expect(lintSession(never.log.events)).toEqual([]);
+  });
+
+  test('a session that has only read does not hand off: its successor would read it all again', async () => {
+    const { r, log } = await run([tool('c1', 'big', {}), tool('c2', 'big', {}), write, tool('c3', 'big', {}), reply('the note')], { handoffAt: 2000 });
+    expect(r).toMatchObject({ subtype: 'handoff', result: 'the note' });
+    // Asked for the note only after the write, two turns past the point it first passed handoffAt.
+    const asked = log.events.findIndex((e) => e.kind === 'reminder' && e.text === HANDOFF_PROMPT);
+    const wrote = log.events.findIndex((e) => e.kind === 'tool_result' && e.callId === 'w1');
+    expect(asked).toBeGreaterThan(wrote);
   });
 
   test('a session that starts large does not hand off until its context doubles', async () => {
