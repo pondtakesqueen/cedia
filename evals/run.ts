@@ -305,6 +305,47 @@ export async function runTask(task: Task, harness: string, model: string | null,
   }
 }
 
+// Runs every task `runs` times, `jobs` at a time, and stops starting runs once `budget` is spent. A provider outage
+// is not the agent's result: those runs go again once, one at a time, and keep both attempts in the ledger.
+export async function runAll(
+  tasks: Task[],
+  harness: string,
+  model: string | null,
+  opts: { runs: number; jobs: number; budget: number; log?: (line: string) => void },
+): Promise<{ results: Result[]; spent: number; stopped: boolean }> {
+  const log = opts.log ?? ((line: string) => console.log(line));
+  const total = tasks.length * opts.runs;
+  const queue = tasks.flatMap((task) => Array.from({ length: opts.runs }, (_, k) => ({ task, run: k + 1 })));
+  const results: Result[] = [];
+  let spent = 0;
+  let stopped = false;
+  const worker = async () => {
+    while (queue.length && !stopped) {
+      const { task, run } = queue.shift()!;
+      const r = await runTask(task, harness, model, run);
+      results.push(r);
+      spent += r.reported.costUsd ?? 0;
+      const cost = r.reported.costUsd !== undefined ? ` $${r.reported.costUsd.toFixed(4)}` : "";
+      log(`  ${r.passed ? "PASS" : "FAIL"} ${task.id}#${run} (${(r.wallMs / 1000).toFixed(1)}s${cost}${r.falseDone ? ", FALSE DONE" : ""}${r.refusedClaim ? ", claim refused" : ""}${r.reported.review ? `, review ${r.reported.review.verdict}` : ""}${r.reported.handoffs ? `, ${r.reported.handoffs} handoff` : ""}${r.reported.subthreads ? `, ${r.reported.subthreads} sub-thread` : ""}${r.reported.peakContext ? `, peak ${Math.round(r.reported.peakContext / 1000)}k` : ""})`);
+      if (spent >= opts.budget && !stopped) {
+        stopped = true;
+        console.error(`budget $${opts.budget} reached after $${spent.toFixed(4)}; stopping`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(opts.jobs, total)) }, worker));
+  for (const [i, r] of results.entries()) {
+    if (!r.infraError || stopped) continue;
+    const task = tasks.find((t) => t.id === r.id)!;
+    const again = await runTask(task, harness, model, r.run);
+    results[i] = { ...again, attempts: r.attempts + 1, ledger: [...r.ledger, ...again.ledger] };
+    spent += again.reported.costUsd ?? 0;
+    log(`  ${again.passed ? "PASS" : "FAIL"} ${task.id}#${r.run} (rerun after a provider error${again.infraError ? ", provider error again" : ""})`);
+  }
+  results.sort((a, b) => a.id.localeCompare(b.id) || a.run - b.run);
+  return { results, spent, stopped };
+}
+
 // A task is either `<id>.json` (setup inline) or a directory `<id>/` holding task.json, files/ (the workspace)
 // reference/ (a solution, for the tests only) and, optionally, hidden/ (tests run only at verify).
 export function loadTasks(dir: string): Task[] {
@@ -548,36 +589,7 @@ async function main(argv: string[]): Promise<number> {
   }
 
   console.log(`Running ${tasks.length} tasks x ${runs} runs on ${harness}${model ? ` (${model})` : ""}, ${jobs} at a time...`);
-  const queue = tasks.flatMap((task) => Array.from({ length: runs }, (_, k) => ({ task, run: k + 1 })));
-  const results: Result[] = [];
-  let spent = 0;
-  let stopped = false;
-  const worker = async () => {
-    while (queue.length && !stopped) {
-      const { task, run } = queue.shift()!;
-      const r = await runTask(task, harness, model, run);
-      results.push(r);
-      spent += r.reported.costUsd ?? 0;
-      const cost = r.reported.costUsd !== undefined ? ` $${r.reported.costUsd.toFixed(4)}` : "";
-      console.log(`  ${r.passed ? "PASS" : "FAIL"} ${task.id}#${run} (${(r.wallMs / 1000).toFixed(1)}s${cost}${r.falseDone ? ", FALSE DONE" : ""}${r.refusedClaim ? ", claim refused" : ""}${r.reported.review ? `, review ${r.reported.review.verdict}` : ""}${r.reported.handoffs ? `, ${r.reported.handoffs} handoff` : ""}${r.reported.subthreads ? `, ${r.reported.subthreads} sub-thread` : ""}${r.reported.peakContext ? `, peak ${Math.round(r.reported.peakContext / 1000)}k` : ""})`);
-      if (spent >= budget && !stopped) {
-        stopped = true;
-        console.error(`budget $${budget} reached after $${spent.toFixed(4)}; stopping`);
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(jobs, total)) }, worker));
-  // A provider outage is not the agent's result: rerun those once, one at a time, and keep both attempts in the ledger.
-  for (const [i, r] of results.entries()) {
-    if (!r.infraError || stopped) continue;
-    const task = tasks.find((t) => t.id === r.id)!;
-    const again = await runTask(task, harness, model, r.run);
-    results[i] = { ...again, attempts: r.attempts + 1, ledger: [...r.ledger, ...again.ledger] };
-    spent += again.reported.costUsd ?? 0;
-    console.log(`  ${again.passed ? "PASS" : "FAIL"} ${task.id}#${r.run} (rerun after a provider error${again.infraError ? ", provider error again" : ""})`);
-  }
-
-  results.sort((a, b) => a.id.localeCompare(b.id) || a.run - b.run);
+  const { results, stopped } = await runAll(tasks, harness, model, { runs, jobs, budget });
   writeFileSync(outPath, results.map((r) => JSON.stringify(r)).join("\n") + "\n");
   console.log(`\nResults written to ${outPath}`);
   checkLedgerIdentity(results.flatMap((r) => r.ledger), results.reduce((a, r) => a + r.attempts, 0));

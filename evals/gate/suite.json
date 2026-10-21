@@ -1,0 +1,15 @@
+{
+  "name": "gate",
+  "tasks": [
+    "bugfix-multifile", "bugfix-simple", "feature-module", "feature-simple", "longrunning", "migrate-registry",
+    "multifile", "multistep-orders", "refactor-extract", "refactor-rename", "tb-argmax", "tb-dedup",
+    "hard-deny-list", "hard-edit-tiers", "hard-injection", "hard-ledger", "hard-redact-bugs", "hard-shell-split", "hard-sse",
+    "long-migrate", "wide-bug-hunt", "wide-deprecate", "wide-three-features",
+    "real-slop-guard"
+  ],
+  "runs": 2,
+  "jobs": 4,
+  "models": ["anthropic/claude-haiku-5-5", "opencode-go/deepseek-v4.1-flash"],
+  "maxUsd": 3,
+  "thresholds": { "passP": 0.1, "costRise": 0.25, "timeRise": 0.3 }
+}
