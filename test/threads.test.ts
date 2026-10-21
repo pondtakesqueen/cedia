@@ -377,6 +377,28 @@ describe('sub-threads (offline, faux)', () => {
     expect(child.events.find((e) => e.kind === 'tool_result')).toMatchObject({ status: 'denied' });
   });
 
+  test('an explore sub-thread whose swarm model is out of quota goes on on the writer model', () => {
+    const dir = tmp();
+    const ro = ['--output-format', 'json', '--sandbox', 'off', '--swarm', 'faux/fallback'];
+    const script = [
+      tool('s1', 'spawn', { kind: 'explore', task: 'Find where the port is set.' }),
+      { error: { code: 'quota', status: 429, message: 'Rate limit exceeded' } },
+      reply('Port is set in server.ts:3.'),
+      reply('found it'),
+    ];
+    const run = cedia(dir, script, ['-p', 'where is the port set?', ...ro]);
+    const result = JSON.parse(run.out);
+    expect(result).toMatchObject({ subtype: 'success', result: 'found it' });
+    expect(run.err).toContain('faux/fallback is out of quota; the explore sub-thread goes on on faux/scripted');
+    const parent = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
+    const report = parent.events.find((e): e is EventOf<'tool_result'> => e.kind === 'tool_result')!;
+    expect(report).toMatchObject({ status: 'completed' });
+    expect(report.output.text).toContain('model="faux/scripted"');
+    expect(report.output.text).toContain('Port is set in server.ts:3.');
+    const sub = storeOf(dir).list().find((t) => t.parent === result.thread)!;
+    expect(sub.sessions.map((s) => [s.model, s.why])).toEqual([['faux/fallback', 'start'], ['faux/scripted', 'quota']]);
+  });
+
   test('a sub-thread that fails stays listed, and the parent sees the failure', () => {
     const dir = tmp();
     const script = [tool('s1', 'spawn', { kind: 'work', task: 'Write good to f.txt.' }), call('c1', 'echo good > f.txt'), reply('done'), reply('done'), call('c2', 'grep -q good f.txt'), reply('fixed it myself')];

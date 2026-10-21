@@ -280,15 +280,28 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   // Explore runs on the swarm model unless privacy keeps that model out; work runs on the writer's model.
   const explorer = privacy === 'zdr' && roles.swarm.dataPolicy !== 'zdr' ? model : roles.swarm;
   let subthreads = 0;
+  // An explore sub-thread whose swarm model is out of quota (Beam's free tier answers with hours to wait) goes on
+  // in a new session on the writer's model, as the writer itself would.
   const spawner: Spawner = async (brief: string, kind: SpawnKind) => {
     subthreads++;
-    const m = kind === 'explore' ? explorer : writer.model;
+    let m = kind === 'explore' ? explorer : writer.model;
     const sub = store?.open(brief, threadId ? { parent: threadId } : {});
-    const log = openLog();
-    if (store && sub) store.append(sub, { kind: 'session', sessionId: log.id, model: m.ref, role: kind === 'explore' ? 'explore' : 'code', why: 'start', ...(log.path ? { path: log.path } : {}) });
+    const once = async (why: SessionWhy) => {
+      const log = openLog();
+      if (store && sub) store.append(sub, { kind: 'session', sessionId: log.id, model: m.ref, role: kind === 'explore' ? 'explore' : 'code', why, ...(log.path ? { path: log.path } : {}) });
+      return { log, r: await run(m, log, subtaskPrompt(brief, threadId, kind), { ...(kind === 'explore' ? { role: 'explore' as const } : {}), child: sub ? { thread: sub } : {} }) };
+    };
     let r: HeadlessResult;
     try {
-      r = await run(m, log, subtaskPrompt(brief, threadId, kind), { ...(kind === 'explore' ? { role: 'explore' as const } : {}), child: sub ? { thread: sub } : {} });
+      const first = await once('start');
+      r = first.r;
+      if (kind === 'explore' && m !== writer.model && r.subtype === 'error_during_execution' && quotaSpent(first.log.events)) {
+        process.stderr.write(`cedia: ${m.ref} is out of quota; the explore sub-thread goes on on ${writer.model.ref}\n`);
+        m = writer.model;
+        const spent = r.costUsd;
+        r = (await once('quota')).r;
+        r = { ...r, costUsd: r.costUsd + spent };
+      }
     } catch (e) {
       if (store && sub) store.append(sub, { kind: 'state', state: 'failed', result: (e as Error).message });
       throw e;
