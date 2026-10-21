@@ -120,6 +120,56 @@ describe('cedia -p (offline, faux)', () => {
     expect(second.events.some((e) => e.kind === 'reminder' && e.text.includes('stopped partway through this task when its quota ran out'))).toBe(true);
   });
 
+  // Claude Code drops all thinking and retries when the API rejects it (2.1.282), after a rejection that repeated
+  // every turn (2.1.259), and hung on "Prompt is too long" (2.1.274, 2.1.304). cedia never edits history, so a
+  // refused history goes on in a new session, as a spent quota does.
+  describe('a history the provider refuses', () => {
+    const rejected = { error: { code: 'bad_request', status: 400, message: 'messages.3.content.0: Invalid `signature` in `thinking` block' } };
+    const args = ['-p', 'make f.txt say good', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'grep -q good f.txt'];
+    const sessions = (home: string) => {
+      const root = join(home, 'sessions');
+      const [project] = readdirSync(root);
+      return readdirSync(join(root, project!)).map((f) => ({ id: f.replace(/\.jsonl$/, ''), events: SessionLog.load(join(root, project!, f)).events }));
+    };
+    const head = (events: SessionEvent[]) => events[0] as Extract<SessionEvent, { kind: 'session' }>;
+
+    test('goes on in a new session on the same model, which still has to verify the first one\'s changes', () => {
+      const r = cedia([call('c1', 'echo good > f.txt'), rejected, call('c2', 'grep -q good f.txt'), reply('done')], args);
+      expect(r.code).toBe(0);
+      expect(r.err).toContain("faux/scripted refused this session's history (bad_request");
+      expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success', evidence: { changed: ['f.txt'], unverified: [] } });
+      const logs = sessions(r.home);
+      expect(logs).toHaveLength(2);
+      const second = logs.find((l) => head(l.events).parentSession)!;
+      const first = logs.find((l) => l !== second)!;
+      expect(head(second.events)).toMatchObject({ model: 'faux/scripted', parentSession: first.id });
+      expect(head(second.events).tools.map((t) => t.name)).toContain('recall');
+      expect(second.events.some((e) => e.kind === 'reminder' && e.text.includes('the provider refused its history'))).toBe(true);
+    });
+
+    test('a context past the window counts too; a refused first request does not, and a run restarts once', () => {
+      const long = { error: { code: 'context_length', status: 400, message: 'prompt is too long: 1048577 tokens > 1048576 maximum' } };
+      expect(cedia([call('c1', 'echo good > f.txt'), long, call('c2', 'grep -q good f.txt'), reply('done')], args).code).toBe(0);
+      // A first request the provider refuses is a bad request, not a bad history: a new session would fail the same way.
+      const first = cedia([rejected], args);
+      expect(JSON.parse(first.out).subtype).toBe('error_during_execution');
+      expect(sessions(first.home)).toHaveLength(1);
+      const twice = cedia([call('c1', 'echo good > f.txt'), rejected, call('c2', 'echo good >> f.txt'), rejected], args);
+      expect(JSON.parse(twice.out).subtype).toBe('error_during_execution');
+      expect(sessions(twice.home)).toHaveLength(2);
+    });
+
+    test('a resumed thread whose last session was refused goes on in a new session', () => {
+      const r = cedia([call('c1', 'echo good > f.txt'), rejected, call('c2', 'echo good >> f.txt'), rejected], args);
+      const thread = JSON.parse(r.out).thread as string;
+      const scriptPath = join(r.dir, 'script.json');
+      writeFileSync(scriptPath, JSON.stringify([call('c3', 'grep -q good f.txt'), reply('done')]));
+      const proc = Bun.spawnSync([BIN, '-m', 'faux', '--cwd', r.dir, ...args, '--thread', thread], { env: { ...process.env, CEDIA_FAUX_SCRIPT: scriptPath, CEDIA_HOME: r.home } });
+      expect(JSON.parse(proc.stdout.toString()).subtype).toBe('success');
+      expect(sessions(r.home)).toHaveLength(3);
+    });
+  });
+
   describe('--review', () => {
     const args = ['-p', 'make f.txt say good', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -s f.txt', '--review', 'faux/fallback'];
     const writes = [call('c1', 'echo good > f.txt'), call('c2', 'test -s f.txt'), reply('done')];

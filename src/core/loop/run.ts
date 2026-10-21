@@ -91,6 +91,16 @@ export const EMPTY_REPLY = 'Your last reply had no text and no tool call. Go on 
 export const unverifiedReminder = (checks: string[]) =>
   `cedia has no record of a declared check passing since your last change, so the task is not done yet. A check counts only when the whole bash command is ${checks.map((c) => `\`${c}\``).join(' or ')} (a leading \`cd\` to the working directory is fine; pipes, \`;\` or other commands are not). Run it that way now, fix what fails, then report.`;
 
+// The provider refused a request after taking this session's earlier ones: what changed is the history (a
+// thinking signature it no longer accepts, a tool call it cannot read back, a context past its window), and the
+// same request fails however often it is sent. The task goes on in a new session instead (clients/headless).
+export function historyRejected(events: SessionEvent[]): AttemptError | undefined {
+  const error = events.findLast((e): e is EventOf<'attempt'> => e.kind === 'attempt')?.error;
+  if (error?.code !== 'bad_request' && error?.code !== 'context_length') return undefined;
+  const request = events.findLastIndex((e) => e.kind === 'request');
+  return events.slice(0, request).some((e) => e.kind === 'assistant' && e.stop !== 'aborted') ? error : undefined;
+}
+
 // Hash header values so the log can show which headers were sent without holding secrets.
 export function redactHeaders(h: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(h).map(([k, v]) => [k.toLowerCase(), hash(v)]));

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runPrompt } from '../../core/loop/run.ts';
+import { historyRejected, runPrompt } from '../../core/loop/run.ts';
 import { preamble, BASE_SYSTEM } from '../../core/prompts.ts';
 import { resolveModel } from '../../core/providers/catalog.ts';
 import type { FauxStep } from '../../core/providers/faux.ts';
@@ -70,6 +70,9 @@ const quotaSpent = (events: SessionEvent[]) => events.findLast((e) => e.kind ===
 
 export const continueNote = (from: ModelSpec, sessionId: string) =>
   `A session on ${from.ref} (${sessionId}) stopped partway through this task when its quota ran out. The working tree may already hold part of the work: look at what changed before you go on.`;
+
+export const rejectedNote = (from: ModelSpec, sessionId: string) =>
+  `A session on ${from.ref} (${sessionId}) stopped partway through this task when the provider refused its history, so it could not go on. The working tree may already hold part of the work: look at what changed before you go on. The recall tool searches that session's full log.`;
 
 // A resumed thread on a model its last session did not use: the new session starts from the thread's latest
 // handoff note or result, and can search the earlier logs.
@@ -340,12 +343,14 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         plan = p.step;
       } else process.stderr.write('cedia: going on without a plan\n');
     }
-    // A resumed thread goes on in its last session when the model is the same (its cache may still be warm),
-    // otherwise in a new session that starts from where the thread stopped.
+    // A resumed thread goes on in its last session when the model is the same (its cache may still be warm) and
+    // the provider still takes that session's history, otherwise in a new session that starts from where the
+    // thread stopped.
     const last = resumed?.sessions.findLast((s) => s.role === 'code');
+    const lastLog = resumed && last?.model === model.ref && last.path && sessionExists(last.path) ? SessionLog.load(last.path) : undefined;
     let result: HeadlessResult;
-    if (resumed && last?.model === model.ref && last.path && sessionExists(last.path)) {
-      const log = SessionLog.load(last.path);
+    if (lastLog && !historyRejected(lastLog.events)) {
+      const log = lastLog;
       if (args.outputFormat === 'stream-json') log.listeners.push((event) => out(encode({ type: 'event', event })));
       record(log, model, 'resume');
       result = await write(model, log, task);
@@ -355,16 +360,29 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       result = await write(model, log, task, resumed ? { note: resumeNote(resumed) } : {});
     }
     // A spent quota does not end the task: a new session on the fallback model picks it up (a session never
-    // switches model, so its cache stays valid).
-    if (fallback && result.subtype === 'error_during_execution' && quotaSpent(writer.log.events)) {
-      process.stderr.write(`cedia: ${writer.model.ref} is out of quota; continuing on ${fallback.ref} in a new session\n`);
-      const note = missingKeyNote(fallback);
-      if (note) process.stderr.write(note + '\n');
-      const changed = result.evidence?.changed ?? [];
+    // switches model, so its cache stays valid). Nor does a history the provider refuses: a new session on the
+    // same model starts from the task and the working tree. Each happens at most once a run.
+    let fellBack = false;
+    let restarted = false;
+    while (result.subtype === 'error_during_execution') {
       const from = writer;
-      const log = openLog();
-      record(log, fallback, 'quota');
-      result = await write(fallback, log, task, { continues: { sessionId: from.log.id, changed }, note: continueNote(from.model, from.log.id) });
+      const changed = result.evidence?.changed ?? [];
+      const rejected = historyRejected(from.log.events);
+      if (fallback && !fellBack && quotaSpent(from.log.events)) {
+        fellBack = true;
+        process.stderr.write(`cedia: ${from.model.ref} is out of quota; continuing on ${fallback.ref} in a new session\n`);
+        const note = missingKeyNote(fallback);
+        if (note) process.stderr.write(note + '\n');
+        const log = openLog();
+        record(log, fallback, 'quota');
+        result = await write(fallback, log, task, { continues: { sessionId: from.log.id, changed }, note: continueNote(from.model, from.log.id) });
+      } else if (!restarted && rejected) {
+        restarted = true;
+        process.stderr.write(`cedia: ${from.model.ref} refused this session's history (${rejected.code}: ${rejected.message.slice(0, 200)}); continuing in a new session\n`);
+        const log = openLog();
+        record(log, from.model, 'rejected');
+        result = await write(from.model, log, task, { continues: { sessionId: from.log.id, changed }, note: rejectedNote(from.model, from.log.id) });
+      } else break;
     }
     // Review: after the writer's claim passed the done gate, a second model reads the change. Changes it asks
     // for go back to the writer's own session once.

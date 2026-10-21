@@ -99,7 +99,7 @@ type Step = { model: string; via: 'cedia' | 'claude-code'; sessionId: string; co
 // A thread file is append-only JSONL; the thread is the fold of its events (core/project/threads.ts).
 type ThreadEvent = { at: string } & (
   | { kind: 'open'; title: string; task: string; parent?: string }
-  | { kind: 'session'; sessionId: string; model: string; role: string; why: 'start' | 'resume' | 'handoff' | 'quota'; path?: string }
+  | { kind: 'session'; sessionId: string; model: string; role: string; why: 'start' | 'resume' | 'handoff' | 'quota' | 'rejected'; path?: string }
   | { kind: 'handoff'; sessionId: string; note: string }
   | { kind: 'message'; id: string; from: string; text: string } // from: a thread id or 'user'
   | { kind: 'delivered'; ids: string[]; sessionId: string }
@@ -124,6 +124,8 @@ Rules that go with the shapes:
 - **Request event.** Carries model, effort, `toolsHash`, `systemHash`, `bodyHash`, TTL and header names with value hashes. Never header values.
 - **Role fallback** starts a new session on the fallback model; it never swaps the model inside a session (cache rule 5).
 - **Quota fallback.** A run that ends on a `quota` error continues on its fallback model (`--fallback`, then `fallback` in `~/.cedia/settings.json`, then the built-in `deepseek` → `anthropic/claude-haiku-5-5`; `none` turns it off; a repo cannot set it). The new session has `parentSession`, a logged reminder that the tree may hold part of the work, what is left of the turn and budget limits, and the first session's changed files as writes the done gate must still see verified. The result adds up both sessions' spend and turns.
+- **Refused history.** A `bad_request` or `context_length` error on a request after the session's first accepted one means the provider no longer takes the session's history (a thinking signature it rejects, a tool call it cannot read back, a context past the window), and resending it fails the same way. cedia never edits history (Claude Code drops all thinking and retries), so the run goes on in a new session on the same model, once per run, the way quota fallback does: `parentSession`, the first session's changed files for the done gate, `recall`, and a logged note that the tree may hold part of the work. A resumed thread whose last session was refused starts a new session instead of resuming it.
+- **Malformed turns.** A reply with no text and no tool call (thinking only, or nothing) gets one reminder; a second in a row ends the run with `error_during_execution`, so an earlier turn's text never stands as the result. A `refusal` ends the run with `error_during_execution`. A tool's output is always a string by the time it is logged (an object is JSON, nothing is an error result). Calls in one reply that share an id run once and get one result, since the wire pairs results by id.
 - **Mid-conversation system prompt.** Appended as a system message when `midConversationSystem` is true, otherwise as a user text block.
 - **Parallel tools.** Calls whose `ToolSpec.effect` is `read` or `network` run in a bounded pool (8 at a time); `write_workspace` and `exec` run alone, as ordering barriers. `tool_intent` events are written in assistant block order; results go back as one batch (Anthropic requires all results of a turn in one user message).
 - **Permission order in the log.** `assistant → permission → tool_intent (only if allowed) → tool_result`. A denied call gets `tool_result{status:'denied'}` and no `tool_intent`.

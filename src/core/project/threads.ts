@@ -7,7 +7,8 @@ import { inert } from '../trust/frame.ts';
 // append-only JSONL file, so two cedia processes can write to one without locking: a line is one small append.
 
 export type ThreadState = 'working' | 'done' | 'failed' | 'stopped';
-export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota';
+// rejected: the provider refused the last session's history, so the thread went on in a new one.
+export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota' | 'rejected';
 
 type ThreadBody =
   // parent: the thread that spawned this one as a sub-thread.
