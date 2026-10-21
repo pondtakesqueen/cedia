@@ -39,6 +39,8 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
   const allowRule = policy.allow.find((rule) => matches(rule, spec.name, commands, path, cwd, 'every'));
   if (effect === 'write_workspace' && path !== undefined && !insideWorkspace(path, cwd) && !allowRule)
     return deny('outside-workspace', `${path} is outside the working directory`);
+  if (effect === 'write_workspace' && path !== undefined && protectedPath(path, cwd))
+    return deny('protected-path', `${path} is git's or cedia's own config; ask the user to change it`);
   if (allowRule) return { decision: 'allow', rule: `allow:${allowRule}` };
   if (policy.mode === 'workspace') return { decision: 'allow', rule: 'mode:workspace' };
   return deny('mode:read-only', 'this session is read-only; writes and commands that may write need an allow rule');
@@ -85,6 +87,12 @@ function real(path: string): string {
     head = up;
   }
   return resolve(realpathSync(head), ...tail);
+}
+
+// .git (hooks and config run code later, outside any sandbox) and .cedia (cedia's rules and checks).
+function protectedPath(path: string, cwd: string): boolean {
+  const rel = relative(real(cwd), real(resolve(cwd, expandHome(path))));
+  return /^(\.git|\.cedia)(\/|$)/.test(rel);
 }
 
 const expandHome = (p: string) => (p === '~' || p.startsWith('~/') ? homedir() + p.slice(1) : p);

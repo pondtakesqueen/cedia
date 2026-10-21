@@ -1,6 +1,7 @@
 import type { JsonObject, ToolDef, ToolEffect, ToolOutput } from '../types.ts';
 
-export type ToolCtx = { cwd: string; signal: AbortSignal };
+// `wrap` puts a shell command inside the OS sandbox when one is on.
+export type ToolCtx = { cwd: string; signal: AbortSignal; wrap?: (command: string) => Promise<string> };
 
 export type ToolSpec = ToolDef & {
   effect: ToolEffect;

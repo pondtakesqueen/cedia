@@ -100,6 +100,12 @@ function splitTopLevel(command: string): string[] | null {
   return out;
 }
 
+// Commands never see cedia's own credentials: provider keys and anything that looks like a secret stay out.
+const SECRET = /(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)($|_)/i;
+export function scrubbedEnv(env: Record<string, string | undefined> = process.env): Record<string, string> {
+  return Object.fromEntries(Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined && !SECRET.test(e[0]) && !e[0].startsWith('CEDIA_')));
+}
+
 export const bashTool: ToolSpec = {
   name: 'bash',
   description:
@@ -119,7 +125,8 @@ export const bashTool: ToolSpec = {
   async run(input, ctx) {
     const command = String(input.command ?? '');
     const timeout = Math.min(Number(input.timeout_ms ?? 120_000), 600_000);
-    const proc = Bun.spawn(['bash', '-c', command], { cwd: ctx.cwd, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' });
+    const script = ctx.wrap ? await ctx.wrap(command) : command;
+    const proc = Bun.spawn(['bash', '-c', script], { cwd: ctx.cwd, env: scrubbedEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' });
     const kill = () => proc.kill();
     ctx.signal.addEventListener('abort', kill, { once: true });
     const timer = setTimeout(kill, timeout);
