@@ -49,3 +49,25 @@ test('code that only names a secret reads as written', () => {
   ])
     expect([line, redactSecrets(line).count]).toEqual([line, 0]);
 });
+
+// Cases Claude Code's changelog records missing (2.1.232, 2.1.285, 2.1.286, 2.1.290).
+test('secrets hidden by an invisible character, an @ in a URL password, or an auth scheme still go', () => {
+  expect(r('API​_KEY=abcd1234efgh5678')).toBe(`API​_KEY=${REDACTED}`);
+  expect(r('postgres://app:p@ss@db:5432/x')).toBe(`postgres://app:${REDACTED}@db:5432/x`);
+  expect(r('postgres://app:p%40ssword@db:5432/x')).toBe(`postgres://app:${REDACTED}@db:5432/x`);
+  expect(r('Authorization: Bearer abcdef123456789xyz')).toBe(`Authorization: Bearer ${REDACTED}`);
+  expect(r('-H "Authorization: Basic dXNlcjpwYXNzd29yZDEyMw=="')).toBe(`-H "Authorization: Basic ${REDACTED}"`);
+  expect(r('glrt-abcdefghijklmnopqrstu1234 and glpat-abcdefghijklmnop1234.01.abcdefgh12')).toBe(`${REDACTED} and ${REDACTED}`);
+  expect(r(`curl -d '{"password":"","token":"abcd1234efgh5678"}'`)).toBe(`curl -d '{"password":"","token":"${REDACTED}"}'`);
+  for (const prose of ['Use Bearer authentication for the API.', 'Basic configuration lives in config.ts'])
+    expect([prose, redactSecrets(prose).count]).toEqual([prose, 0]);
+});
+
+test('long runs of token-like text redact in linear time', () => {
+  // Before names were bounded, 160k characters of `a.a.a.` took a minute and `token_token_` ten seconds.
+  for (const s of ['a.'.repeat(80_000), 'token_'.repeat(30_000), 'aB3'.repeat(60_000), 'x-'.repeat(80_000)]) {
+    const t = performance.now();
+    redactSecrets(s);
+    expect(performance.now() - t).toBeLessThan(1000);
+  }
+});

@@ -21,7 +21,7 @@ const TOKENS: RegExp[] = [
   /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}/g, // Stripe
   /\bgh[pousr]_[A-Za-z0-9]{30,}/g, // GitHub
   /\bgithub_pat_[A-Za-z0-9_]{30,}/g,
-  /\bglpat-[A-Za-z0-9_-]{20,}/g, // GitLab
+  /\bgl(?:pat|dt|rt|oas|ptt|agent|imt|soat|cbt|ft|ffct)-[A-Za-z0-9_.-]{20,}/g, // GitLab token families; routable ones carry dots
   /\bxox[abposr]-[A-Za-z0-9-]{10,}/g, // Slack
   /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, // AWS access key id
   /\bAIza[0-9A-Za-z_-]{35}\b/g, // Google
@@ -30,12 +30,20 @@ const TOKENS: RegExp[] = [
   /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, // JWT
 ];
 
-// The password in `scheme://user:password@host`.
-const URL_PASSWORD = /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)([^\s@/]{3,})@/g;
+// The password in `scheme://user:password@host`, up to the last @ before the host, so a password that holds an
+// @ goes whole.
+const URL_PASSWORD = /\b([a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{1,256}:)([^\s/?#]{3,})@/g;
 
-// `NAME=value`, `name: value`, `"name": "value"` and `NAME = "value"` where the name says secret.
-const ASSIGNMENT =
-  /\b([A-Za-z0-9_.-]*?(api[_-]?key|secret|token|passw(?:or)?d|pwd|private[_-]?key|access[_-]?key|credentials?)[A-Za-z0-9_.-]*)(["']?[ \t]*[:=][ \t]*)(["'`]?)([^\s"'`,;]+)\4/gi;
+// The credential after `Bearer` or `Basic`, as in an Authorization header. Prose (`Bearer authentication`) has
+// no digit and no mixed case.
+const AUTH_SCHEME = /\b(Bearer|Basic)([ \t]+)([A-Za-z0-9._~+/-]{12,}=*)/g;
+
+// `NAME=value`, `name: value`, `"name": "value"` and `NAME = "value"` where the name says secret. Names are at
+// most 64 characters: an unbounded name made long runs (`a.a.a.…`, minified code) take quadratic time.
+// Invisible characters inside a name (a zero-width space in API_KEY) do not hide it.
+const ASSIGNMENT = /\b([A-Za-z0-9_.\-\u00AD\u200B-\u200D\u2060\uFEFF]{1,64})(["']?[ \t]*[:=][ \t]*)(["'`]?)([^\s"'`,;]+)\3/g;
+const SECRET_NAME = /api[_-]?key|secret|token|passw(?:or)?d|pwd|private[_-]?key|access[_-]?key|credentials?/i;
+const INVISIBLE = /[\u00AD\u200B-\u200D\u2060\uFEFF]/g;
 
 // Which assigned values count as secrets, so code that only names a secret (`password: hash(input)`,
 // `token = getToken()`) still reads as written:
@@ -64,10 +72,18 @@ export function redactSecrets(text: string): { text: string; count: number } {
     count++;
     return `${head}${REDACTED}@`;
   });
-  out = out.replace(ASSIGNMENT, (match, name: string, kind: string, sep: string, quote: string, value: string, offset: number, all: string) => {
+  out = out.replace(AUTH_SCHEME, (match, scheme: string, space: string, value: string) => {
+    if (!/\d/.test(value) && !(/[a-z]/.test(value) && /[A-Z]/.test(value) && value.length >= 16)) return match;
+    count++;
+    return `${scheme}${space}${REDACTED}`;
+  });
+  out = out.replace(ASSIGNMENT, (match, name: string, sep: string, quote: string, value: string, offset: number, all: string) => {
     if (value.includes(REDACTED)) return match;
+    const clean = name.replace(INVISIBLE, '');
+    const kind = SECRET_NAME.exec(clean)?.[0];
+    if (!kind) return match;
     const lineStart = all.lastIndexOf('\n', offset - 1) + 1;
-    const dotenv = sep === '=' && /^[ \t]*(export[ \t]+)?$/.test(all.slice(lineStart, offset)) && /^[A-Z0-9_]+$/.test(name);
+    const dotenv = sep === '=' && /^[ \t]*(export[ \t]+)?$/.test(all.slice(lineStart, offset)) && /^[A-Z0-9_]+$/.test(clean);
     if (!secretValue(kind, quote, value, dotenv)) return match;
     count++;
     return `${name}${sep}${quote}${REDACTED}${quote}`;
