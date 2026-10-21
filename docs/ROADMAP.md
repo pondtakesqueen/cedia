@@ -1,0 +1,43 @@
+# Roadmap
+
+The order the work goes in from here, agreed on 2026-10-21. `SPEC.md` holds the decisions and the stage list; this file says what comes next and what "done" means for each step.
+
+The order follows two rules. Measure before changing: the regression gate comes before any change it would judge, so every later step lands with numbers. Trust before features: a harness that can be left alone has to be safe and stable before it gets more to do.
+
+## 1. Close open work (done)
+
+PRs #15 to #18: real-repository eval tasks, results on Haiku 5.5, DeepSeek V4.1 Flash and Beam, the 429 quota fix, the 200-turn default, and the first fixes from the Claude Code changelog review.
+
+## 2. Regression gate (this step)
+
+`bun evals/gate.ts` runs a fixed suite on each model, records pass rate, false-done, cost and time, compares them with the baseline stored for that model, and exits 1 when one got worse. How it decides, and what it costs, is in `evals/gate/README.md`.
+
+Done when: baselines for Haiku 5.5 and DeepSeek V4.1 Flash are stored; a second run on the same commit passes against them; the offline test (`test/gate.test.ts`) shows a broken harness fails.
+
+From here on:
+
+- A PR that changes a prompt, a default, the loop, a tool or the trust layer runs the gate before merge and puts its report in the PR description.
+- A PR meant to move the numbers (a new default, a cheaper path) runs `--update-baseline` in the same PR and says why the new numbers are the right ones.
+- A PR that changes a gate task invalidates that task's baseline; the gate leaves it out until the baseline is updated.
+
+## 3. Security and stability (P1 from `research/NOTES.md`)
+
+Fixed in #17 and #18: frame tags, bash process groups, hooks directories, the bounded tool pool and sub-thread cap, ref-losing git commands, and the redaction misses. Left, each with a faux test:
+
+- Large bash output goes to a file with a preview, instead of being cut in the middle at 30k characters.
+- The failure classes the changelog names: sandbox exit codes under another shell; malformed turns (a thinking-only reply, a tool name over 200 characters, a tool result that is not a string, unparseable calls alternating with `max_tokens`, an unpaired `tool_use` on abort); redaction on long token-like text without freezing.
+- Thinking rejected by the API: recover in a new session from a handoff note, as quota fallback does, since cedia never edits history.
+
+Done when: every item has a test, and the gate passes on both models.
+
+## 4. Make spawn work
+
+No model has called `spawn` in any of 30+ real-repository runs. The "Spawn และความเร็ว handoff" work adds a one-time reminder and a fallback for explore sub-threads when Beam's quota is out.
+
+Done when: a model spawns on its own on the `real-*` tasks, and spawn on beats spawn off on cost or time without a lower pass rate, measured with the gate (`--cedia-arg=--spawn=off` against the default).
+
+## 5. UX and new features
+
+`SPEC.md` stages 3 to 6, in order: the TUI on pi-tui with `/diff`, `/undo` and the status line; AGENTS.md, full compaction, memory, `/commit` and `/pr`; skills, MCP, subagents by role and the first four-arm comparison; rewind, LSP, goal mode, the classifier and the full eval against pi, `claude -p` and `codex exec`. The cost ideas in `research/NOTES.md` (cold-thread resume, staggered parallel agents, TTL per role) are measured with the gate as they come up.
+
+Each feature lands with its gate report, like any other change.
