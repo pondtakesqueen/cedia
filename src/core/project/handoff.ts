@@ -27,7 +27,8 @@ Write it for a capable engineer who has not seen this session:
 - What done looks like, and anything the user asked for that the task text leaves out.
 - What you changed, file by file, and what you checked and how (command and result).
 - Decisions you made and why, and approaches you ruled out, so they are not retried.
-- What is left, in order, starting with the next step.
+- The plan for what is left, in order, starting with the next step: for each step the file and the functions, types and signatures to add or change, concrete enough to carry out without designing it again.
+- The files and line ranges the next step needs, so it reads those instead of the whole codebase.
 - Facts that are costly to find again: exact error messages, paths, line numbers, commands that work.
 
 Be specific and brief. The next session can search this session's full log with the recall tool, so point to what is there instead of copying long output.`;
@@ -36,7 +37,7 @@ Be specific and brief. The next session can search this session's full log with 
 export const HANDOFF_NO_TOOLS = 'not run: cedia is handing this task to a new session. Write the handoff note now, without calling tools.';
 
 export const handoffNote = (sessionId: string, note: string) =>
-  `This task continues from an earlier session of this thread (${sessionId}), which handed off when its context grew long. Its note follows: it is your own earlier work, but check the working tree before relying on a detail. The recall tool searches the earlier sessions' full logs for anything the note leaves out.
+  `This task continues from an earlier session of this thread (${sessionId}), which handed off when its context grew long. Its note follows: it is your own earlier work, but check the working tree before relying on a detail. Its plan is settled: carry it out from the next step instead of planning the task again, and read only what that step needs (re-reading and re-planning are what make a handoff slow). The recall tool searches the earlier sessions' full logs for anything the note leaves out.
 
 <handoff session="${sessionId}">
 ${inert(note)}
