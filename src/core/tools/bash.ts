@@ -108,9 +108,14 @@ function splitTopLevel(command: string): string[] | null {
 }
 
 // Commands never see cedia's own credentials: provider keys and anything that looks like a secret stay out.
+// Git's environment config (GIT_CONFIG_COUNT with GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n) goes as one: a value
+// can be a credential header, and a count left without its keys makes every git command fail.
 const SECRET = /(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)($|_)/i;
+const GIT_ENV_CONFIG = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/;
 export function scrubbedEnv(env: Record<string, string | undefined> = process.env): Record<string, string> {
-  return Object.fromEntries(Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined && !SECRET.test(e[0]) && !e[0].startsWith('CEDIA_')));
+  return Object.fromEntries(
+    Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined && !SECRET.test(e[0]) && !GIT_ENV_CONFIG.test(e[0]) && !e[0].startsWith('CEDIA_')),
+  );
 }
 
 export const bashTool: ToolSpec = {

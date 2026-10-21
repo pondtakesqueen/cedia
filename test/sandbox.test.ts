@@ -71,6 +71,14 @@ describe('bash environment and protected paths', () => {
     expect(Object.keys(env).sort()).toEqual(['HOME', 'KEYBOARD', 'PATH']);
   });
 
+  test("git's environment config goes as a whole, so git still runs", () => {
+    const env = scrubbedEnv({ PATH: process.env.PATH, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraHeader', GIT_CONFIG_VALUE_0: 'Authorization: Bearer t', GIT_DIR: '/x' });
+    expect(Object.keys(env).sort()).toEqual(['GIT_DIR', 'PATH']);
+    // What was left before: a count without its keys, which git refuses to start with.
+    const broken = Bun.spawnSync(['git', 'config', '--list'], { env: { PATH: process.env.PATH ?? '', GIT_CONFIG_COUNT: '1', GIT_CONFIG_VALUE_0: 'v' }, stderr: 'pipe' });
+    expect(broken.exitCode).not.toBe(0);
+  });
+
   test('edit and write never touch .git or .cedia', () => {
     const cwd = tmp('cedia-prot-');
     const ws = { mode: 'workspace' as const, allow: [], deny: [] };
