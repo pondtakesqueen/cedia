@@ -433,12 +433,12 @@ async function runTools(
   for (const j of jobs) {
     if (j.parallel) pool.push(j);
     else {
-      await Promise.all(pool.map(run));
+      await bounded(pool, MAX_PARALLEL_TOOLS, run);
       pool = [];
       await runWriting(j);
     }
   }
-  await Promise.all(pool.map(run));
+  await bounded(pool, MAX_PARALLEL_TOOLS, run);
   // Secrets are replaced before the result is logged, so neither the log nor the provider ever holds them.
   const redact = !opts.permission?.unlock?.includes('secret-redaction');
   for (const c of calls) {
@@ -447,4 +447,16 @@ async function runTools(
     const r = redact ? redactSecrets(output.text) : { text: output.text, count: 0 };
     log.append({ kind: 'tool_result', callId, status, output: r.count ? { ...output, text: r.text, redacted: r.count } : output });
   }
+}
+
+// Read-only calls of one turn run together, at most this many at a time.
+export const MAX_PARALLEL_TOOLS = 8;
+
+// Runs `fn` over `items` with at most `limit` in flight, starting them in order.
+export async function bounded<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) await fn(items[next++]!);
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
