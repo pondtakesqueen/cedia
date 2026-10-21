@@ -52,14 +52,22 @@ At 2 runs on 24 tasks the pass check needs 5 failures more than the baseline's (
 
 ## Baselines
 
-Stored at e967722 (2026-10-21), with `wide-three-features` rerun at 46b5ea2 after its comment fix:
+Stored on main at 32774a7 (2026-10-21; the run's files name 43bd436, a merge with the same tree), after PRs #19 to #22:
 
-| Model | pass@1 | pass^2 | False-done | Cost per run of the suite | Avg time per run | Failures |
-|---|---|---|---|---|---|---|
-| Haiku 5.5 | 97.9% (47/48) | 95.8% | 0% | $0.27 | 33 s | `hard-redact-bugs#2` (claim refused) |
-| DeepSeek V4.1 Flash | 100% (48/48) | 100% | 0% | $0.39 | 70 s | none |
+| Model | pass@1 | pass^2 | False-done | Cost per run of the suite | Avg time per run |
+|---|---|---|---|---|---|
+| Haiku 5.5 | 100% (48/48) | 100% | 0% | $0.26 | 29 s |
+| DeepSeek V4.1 Flash | 100% (48/48) | 100% | 0% | $0.39 | 50 s |
 
-A whole gate run costs about $0.65 and takes about 35 minutes, most of it Flash. The second run (18f1760) cost $0.77: Haiku 47/48 ($0.32), Flash 46/48 ($0.45).
+A whole gate run costs about $0.65 and takes about 35 minutes, most of it Flash.
+
+History:
+
+| Commit | Haiku 5.5 | DeepSeek V4.1 Flash | Note |
+|---|---|---|---|
+| e967722 | 47/48, $0.27, 33 s | 47/48, $0.38, 68 s | first baseline |
+| 18f1760 (same code) | 47/48, $0.32, 37 s | 46/48, $0.45, 56 s | second run; found the `wide-three-features` comment and the cost-noise rules |
+| 32774a7 (main) | 48/48, $0.26, 29 s | 48/48, $0.39, 50 s | after #21 (spawn reminder, handoff note carries the plan): PASS on both against the earlier baseline, typical task cost -6% and -3%, time -9% and -8% |
 
 ## When to update the baseline
 
