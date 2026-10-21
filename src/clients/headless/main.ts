@@ -146,7 +146,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         system: BASE_SYSTEM,
         preamble: reviewer ? reviewPreamble : continues ? `${basePreamble}\n\n${continueNote(continues.from, continues.sessionId)}` : basePreamble,
         cwd: args.cwd,
-        permission: reviewer ? { ...policy, mode: 'read-only' } : policy,
+        // The reviewer may also run the declared checks, so it can test what it suspects instead of only reading.
+        permission: reviewer ? { ...policy, mode: 'read-only', allow: [...policy.allow, ...checks.map((c) => `bash(${c})`)] } : policy,
         privacy,
         checks: reviewer ? [] : checks,
         ...(softChecks && !reviewer ? { softChecks } : {}),

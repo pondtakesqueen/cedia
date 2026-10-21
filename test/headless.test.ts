@@ -131,11 +131,13 @@ describe('cedia -p (offline, faux)', () => {
     const head = (events: SessionEvent[]) => events[0] as Extract<SessionEvent, { kind: 'session' }>;
 
     test('an approving review leaves the change as it is and adds its spend', () => {
-      const r = cedia([...writes, call('r1', 'cat f.txt'), reply('f.txt holds the asked text.\nVERDICT: approve')], args);
+      const r = cedia([...writes, call('r1', 'cat f.txt; test -s f.txt'), reply('f.txt holds the asked text.\nVERDICT: approve')], args);
       const result = JSON.parse(r.out);
       expect(result).toMatchObject({ subtype: 'success', numTurns: 5, result: 'done', review: { model: 'faux/fallback', verdict: 'approve', fixed: false } });
       const review = logs(r.home).find((l) => head(l).role === 'review')!;
       expect(head(review).tools.map((t) => t.name)).toEqual(['read', 'bash']);
+      // Read-only, but it may run the declared check to test what it suspects.
+      expect(review.find((e) => e.kind === 'permission')).toMatchObject({ decision: 'allow', rule: 'allow:bash(test -s f.txt)' });
       const prompt = review.find((e): e is Extract<SessionEvent, { kind: 'user' }> => e.kind === 'user')!.text;
       expect(prompt).toContain('make f.txt say good');
       expect(prompt).toContain('+good'); // the writer's diff, from its snapshots
