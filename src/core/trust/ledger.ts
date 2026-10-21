@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { checkReadOnly } from '../tools/bash.ts';
 import type { EventOf, Evidence, SessionEvent } from '../types.ts';
 
@@ -8,13 +9,16 @@ export type LedgerEntry =
 
 // A bash call counts as a declared check only when its whole command is the check, give or take
 // whitespace and a trailing 2>&1. A pipe would hide the check's exit code, so `bun test | tail` does not count.
-export function matchCheck(command: string, checks: string[]): string | undefined {
+// A leading `cd <working dir> &&` is allowed too: models often add it, and it changes nothing.
+export function matchCheck(command: string, checks: string[], cwd?: string): string | undefined {
   const norm = (s: string) => s.trim().replace(/\s+/g, ' ').replace(/ 2>&1$/, '');
-  const c = norm(command);
+  let c = norm(command);
+  const cd = /^cd ("[^"]*"|'[^']*'|\S+) ?&& ?(.*)$/.exec(c);
+  if (cd && cwd && resolve(cwd, cd[1]!.replace(/^["']|["']$/g, '')) === resolve(cwd)) c = cd[2]!;
   return checks.find((k) => norm(k) === c);
 }
 
-export function ledgerEntries(events: SessionEvent[], checks: string[]): LedgerEntry[] {
+export function ledgerEntries(events: SessionEvent[], checks: string[], cwd?: string): LedgerEntry[] {
   const out: LedgerEntry[] = [];
   const intents = new Map<string, EventOf<'tool_intent'>>();
   // With snapshots the log names the files each writing call changed, bash included.
@@ -28,7 +32,7 @@ export function ledgerEntries(events: SessionEvent[], checks: string[]): LedgerE
     if (!intent || e.status === 'denied' || e.status === 'not_started') return;
     const files = snapped.get(e.callId);
     const command = intent.tool === 'bash' ? String(intent.input.command ?? '') : undefined;
-    const check = command !== undefined ? matchCheck(command, checks) : undefined;
+    const check = command !== undefined ? matchCheck(command, checks, cwd) : undefined;
     if (check !== undefined) {
       // Files a check leaves behind (caches, coverage) are not the change it verifies.
       out.push({ kind: 'check', at, command: check, exitCode: e.output.exitCode ?? (e.output.isError ? 1 : 0) });

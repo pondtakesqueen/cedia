@@ -13,7 +13,7 @@ cedia is a personal coding harness written from scratch in TypeScript on Bun. `S
 - `bin/cedia -p "<prompt>" [-m <model>] [--output-format text|json|stream-json] [--permission read-only|workspace] [--allow <rule>] [--deny <rule>]`: headless run. Read-only unless `--permission workspace`. `--check <cmd>` declares a check for the done gate. `--sandbox auto|on|off` controls the OS sandbox for bash (Linux needs bubblewrap, socat, ripgrep).
 - `bin/cedia lint-session <file.jsonl>...`: check a session log against the trust invariants. `-m faux` with `CEDIA_FAUX_SCRIPT=<steps.json>` runs offline.
 - `bun scripts/cache-probe.ts --model <ref> [--turns 20] [--runs 3]`: measure prompt-cache hits on a real model and name every miss.
-- `bun evals/run.ts --harness <name> [--model <ref>]`: run the eval tasks against a harness. Binaries come from `CEDIA_EVAL_<NAME>_BIN` or PATH.
+- `bun evals/run.ts --harness <name> [--model <ref>] [--runs 3] [--jobs 4] [--budget <usd>] [--only <ids>]`: run the eval tasks against a harness; `--estimate --model <ref> [--measured <results.jsonl>]` prices a run first. Binaries come from `CEDIA_EVAL_<NAME>_BIN` or PATH. Results go in `evals/results/`.
 
 ## How to work
 
