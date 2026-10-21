@@ -1,0 +1,29 @@
+{
+  "id": "real-subthreads",
+  "category": "real-repo",
+  "source": "cedia commit 4ead389 (Sub-threads: spawn explore or work into a fresh session, archived when done), redone from its parent",
+  "repo": {
+    "base": "8d44c2a41b3528ad9522cdb95158e089ebac980c",
+    "target": "4ead3894421e062d4b08cba8d93a5e2c9f0df758",
+    "tests": [
+      "test/threads.test.ts",
+      "test/policy.test.ts"
+    ],
+    "exclude": [
+      "evals/results",
+      "evals/baseline"
+    ],
+    "edits": [
+      {
+        "path": "test/headless.test.ts",
+        "old": "test.skipIf(!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin')",
+        "new": "test.skipIf(Boolean(process.env.SANDBOX_RUNTIME) || (!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin'))",
+        "why": "The agent's commands already run in the OS sandbox, which cannot open another inside it; verify runs outside it, where this test still runs."
+      }
+    ]
+  },
+  "prompt": "Implement this change in cedia, the repository you are in (a coding harness in TypeScript on Bun; AGENTS.md and SPEC.md describe it).\n\n<change>\nSub-threads: spawn explore or work into a fresh session, archived when done\n\nThe writer gets a spawn tool. The model says what the work is (explore: read-only; work: may edit) and cedia decides how it runs: explore on the swarm model (default beam, free and fast; the code model under zdr), read-only and in parallel; work on the writer's model under the run's policy, sandbox and checks, alone and between two snapshots, so the parent's ledger records its changes and the done gate still wants a check. Only the child's report enters the parent's context. A sub-thread is its own thread with a parent; it archives itself when it succeeds and stays listed when it fails. Children cannot spawn.\n\n--spawn on|off, --swarm <ref>, roles.swarm and spawn in user settings; cedia threads --all, archive and unarchive. The eval runner passes --cedia-arg through and reports handoffs and sub-threads per run.\n</change>\n\nThe tests in `test/threads.test.ts` and `test/policy.test.ts` were written for this change and say what it must do. Make them pass without changing them, and keep the whole `bun test` suite passing.",
+  "verify": "bun test",
+  "timeoutSec": 1200,
+  "budgetUsd": 1.5
+}

@@ -102,8 +102,10 @@ function combine(parts: HeadlessResult[], last: HeadlessResult): HeadlessResult 
     ? { wallMs: sum('wallMs'), modelMs: sum('modelMs'), ttftMs: sum('ttftMs'), toolMs: sum('toolMs'), retryMs: sum('retryMs'), harnessMs: sum('harnessMs'), outputTokPerSec: decodeSec > 0 ? Math.round((decoded / decodeSec) * 10) / 10 : 0 }
     : undefined;
   const { evidence: _, timing: __, ...rest } = last;
+  const peakContext = Math.max(0, ...parts.map((r) => r.peakContext ?? 0));
   return {
     ...rest,
+    ...(peakContext ? { peakContext } : {}),
     ...(timing ? { timing } : {}),
     numTurns: parts.reduce((n, r) => n + r.numTurns, 0),
     usage,

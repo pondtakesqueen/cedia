@@ -10,7 +10,7 @@
 // code, so a model that trains on prompts (Muse) is refused here, as in any private repo.
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { costUsd, resolveModel } from "../src/core/providers/catalog.ts";
@@ -28,6 +28,17 @@ export type Task = {
   // Directory tasks only: tests the agent never sees, laid over the workspace after its run and before verify.
   // They hold a task to its written spec instead of to the tests it can read.
   hidden?: Record<string, string>;
+  // Repo tasks only: redo a real commit of this repository. The workspace is the tree at `base` (minus
+  // `exclude`), with `tests` taken from `target`, the commit that made them pass; the rest of target's change is
+  // the reference. Built from local git history, so a clone without those commits leaves the task unavailable.
+  // `edits` adapt a file of the tree to the eval (exact text, which must occur once in it).
+  repo?: { base: string; target: string; tests: string[]; exclude?: string[]; edits?: { path: string; old: string; new: string; why: string }[] };
+  unavailable?: string;
+  // Setup paths to mark executable (repo tasks: the blobs git records as 100755).
+  executable?: string[];
+  // Per task: the run's wall-clock limit (default 300 s) and its spend limit (default $0.5 or CEDIA_EVAL_RUN_BUDGET).
+  timeoutSec?: number;
+  budgetUsd?: number;
 };
 
 type LedgerEntry = { kind: "rollout" | "session"; label: string; ms: number };
@@ -46,6 +57,8 @@ export type Reported = {
   // cedia: handoffs to a new session, and sub-threads spawned.
   handoffs?: number;
   subthreads?: number;
+  // cedia: tokens in the largest context one reply saw.
+  peakContext?: number;
 };
 
 export type Result = {
@@ -84,7 +97,7 @@ const HARNESSES: Record<string, (task: Task, cwd: string, model: string | null) 
       "-p", task.prompt,
       "--output-format", "json",
       "--permission", "workspace",
-      "--max-budget-usd", process.env.CEDIA_EVAL_RUN_BUDGET ?? "0.5",
+      "--max-budget-usd", process.env.CEDIA_EVAL_RUN_BUDGET ?? String(task.budgetUsd ?? 0.5),
       ...(task.verify ? ["--check", task.verify] : []),
       ...(model ? ["--model", model] : []),
       "--fallback", "none", // a result measures the model it names
@@ -167,6 +180,7 @@ export function parseReported(stdout: string): { reported: Reported; text: strin
         ...(j.review ? { review: { verdict: String((j.review as { verdict: unknown }).verdict), fixed: Boolean((j.review as { fixed: unknown }).fixed) } } : {}),
         ...(Array.isArray(j.sessions) ? { handoffs: j.sessions.length - 1 } : {}),
         ...(typeof j.subthreads === "number" ? { subthreads: j.subthreads } : {}),
+        ...(typeof j.peakContext === "number" ? { peakContext: j.peakContext } : {}),
       },
     };
   }
@@ -206,6 +220,7 @@ function exec(bin: string, args: string[], cwd: string, timeoutMs: number, env?:
 export async function runTask(task: Task, harness: string, model: string | null, run = 1): Promise<Result> {
   const make = HARNESSES[harness];
   if (!make) throw new Error(`unknown harness: ${harness}`);
+  if (task.unavailable) throw new Error(`${task.id}: ${task.unavailable}`);
   const cwd = mkdtempSync(join(tmpdir(), `cedia-eval-${task.id}-`));
   try {
     for (const [path, content] of Object.entries(task.setup ?? {})) {
@@ -213,10 +228,13 @@ export async function runTask(task: Task, harness: string, model: string | null,
       mkdirSync(dirname(full), { recursive: true });
       writeFileSync(full, content);
     }
+    for (const path of task.executable ?? []) chmodSync(join(cwd, path), 0o755);
+    // A repo task runs this repository's own code, so it borrows the installed dependencies.
+    if (task.repo && existsSync(join(REPO_ROOT, "node_modules"))) symlinkSync(join(REPO_ROOT, "node_modules"), join(cwd, "node_modules"));
 
     const inv = make(task, cwd, model);
     const start = Date.now();
-    const out = await exec(inv.bin, inv.args, cwd, 300_000, inv.env);
+    const out = await exec(inv.bin, inv.args, cwd, (task.timeoutSec ?? 300) * 1000, inv.env);
     const wallMs = Date.now() - start;
     const ledger: LedgerEntry[] = [{ kind: "rollout", label: `${task.id}#${run}:harness`, ms: wallMs }];
     const parsed = parseReported(out.stdout);
@@ -297,8 +315,55 @@ export function loadTasks(dir: string): Task[] {
       if (e.isFile()) return JSON.parse(readFileSync(join(dir, e.name), "utf8")) as Task;
       const root = join(dir, e.name);
       const task = JSON.parse(readFileSync(join(root, "task.json"), "utf8")) as Task;
-      return { ...task, setup: { ...task.setup, ...readTree(join(root, "files")) }, reference: readTree(join(root, "reference")), hidden: readTree(join(root, "hidden")) };
+      const files = { setup: { ...task.setup, ...readTree(join(root, "files")) }, reference: readTree(join(root, "reference")), hidden: readTree(join(root, "hidden")) };
+      if (!task.repo) return { ...task, ...files };
+      const fromGit = repoTask(task.repo);
+      if (typeof fromGit === "string") return { ...task, ...files, unavailable: fromGit };
+      return { ...task, setup: { ...fromGit.setup, ...files.setup }, reference: { ...fromGit.reference, ...files.reference }, hidden: files.hidden, executable: fromGit.executable };
     });
+}
+
+export const REPO_ROOT = resolve(import.meta.dir, "..");
+
+const git = (args: string[], input?: string) =>
+  spawnSync("git", args, { cwd: REPO_ROOT, maxBuffer: 256 * 1024 * 1024, ...(input !== undefined ? { input } : {}) });
+
+// Every blob of a commit, by path, read in one `git cat-file --batch`; `executable` collects the 100755 ones.
+function treeAt(commit: string, paths?: string[], executable: string[] = []): Record<string, string> {
+  const ls = git(["ls-tree", "-r", "-z", commit, ...(paths ? ["--", ...paths] : [])]);
+  if (ls.status !== 0) throw new Error(`git ls-tree ${commit}: ${ls.stderr.toString()}`);
+  const entries = ls.stdout.toString().split("\0").filter(Boolean).flatMap((line) => {
+    const [meta, path] = line.split("\t") as [string, string];
+    const [mode, type, sha] = meta.split(" ");
+    if (type === "blob" && mode === "100755") executable.push(path);
+    return type === "blob" ? [{ path, sha: sha! }] : [];
+  });
+  const cat = git(["cat-file", "--batch"], entries.map((e) => e.sha).join("\n") + "\n");
+  const buf = cat.stdout;
+  const out: Record<string, string> = {};
+  let at = 0;
+  for (const e of entries) {
+    const nl = buf.indexOf(10, at);
+    const size = Number(buf.subarray(at, nl).toString().split(" ")[2]);
+    out[e.path] = buf.subarray(nl + 1, nl + 1 + size).toString("utf8");
+    at = nl + 1 + size + 1;
+  }
+  return out;
+}
+
+export function repoTask(repo: NonNullable<Task["repo"]>): { setup: Record<string, string>; reference: Record<string, string>; executable: string[] } | string {
+  for (const c of [repo.base, repo.target]) if (git(["cat-file", "-e", `${c}^{commit}`]).status !== 0) return `commit ${c} is not in this clone (fetch the full history)`;
+  const excluded = (p: string) => (repo.exclude ?? []).some((x) => p === x || p.startsWith(x.endsWith("/") ? x : `${x}/`));
+  const executable: string[] = [];
+  const setup = Object.fromEntries(Object.entries(treeAt(repo.base, undefined, executable)).filter(([p]) => !excluded(p)));
+  Object.assign(setup, treeAt(repo.target, repo.tests));
+  for (const e of repo.edits ?? []) {
+    const text = setup[e.path];
+    if (text === undefined || text.split(e.old).length !== 2) throw new Error(`repo task edit: the text to replace must occur once in ${e.path}`);
+    setup[e.path] = text.replace(e.old, () => e.new);
+  }
+  const changed = git(["diff", "--name-only", "--diff-filter=AM", repo.base, repo.target]).stdout.toString().split("\n").filter((p) => p && !repo.tests.includes(p) && !excluded(p));
+  return { setup, reference: changed.length ? treeAt(repo.target, changed) : {}, executable: executable.filter((p) => p in setup) };
 }
 
 function readTree(root: string, prefix = ""): Record<string, string> {
@@ -446,7 +511,9 @@ async function main(argv: string[]): Promise<number> {
     }
   }
 
-  const tasks = loadTasks(tasksDir).filter((t) => !only || only.includes(t.id));
+  const listed = loadTasks(tasksDir).filter((t) => !only || only.includes(t.id));
+  for (const t of listed) if (t.unavailable) console.error(`skipping ${t.id}: ${t.unavailable}`);
+  const tasks = listed.filter((t) => !t.unavailable);
   const total = tasks.length * runs;
   if (estimate) {
     if (!model) throw new Error("--estimate needs --model");
@@ -473,7 +540,7 @@ async function main(argv: string[]): Promise<number> {
       results.push(r);
       spent += r.reported.costUsd ?? 0;
       const cost = r.reported.costUsd !== undefined ? ` $${r.reported.costUsd.toFixed(4)}` : "";
-      console.log(`  ${r.passed ? "PASS" : "FAIL"} ${task.id}#${run} (${(r.wallMs / 1000).toFixed(1)}s${cost}${r.falseDone ? ", FALSE DONE" : ""}${r.refusedClaim ? ", claim refused" : ""}${r.reported.review ? `, review ${r.reported.review.verdict}` : ""}${r.reported.handoffs ? `, ${r.reported.handoffs} handoff` : ""}${r.reported.subthreads ? `, ${r.reported.subthreads} sub-thread` : ""})`);
+      console.log(`  ${r.passed ? "PASS" : "FAIL"} ${task.id}#${run} (${(r.wallMs / 1000).toFixed(1)}s${cost}${r.falseDone ? ", FALSE DONE" : ""}${r.refusedClaim ? ", claim refused" : ""}${r.reported.review ? `, review ${r.reported.review.verdict}` : ""}${r.reported.handoffs ? `, ${r.reported.handoffs} handoff` : ""}${r.reported.subthreads ? `, ${r.reported.subthreads} sub-thread` : ""}${r.reported.peakContext ? `, peak ${Math.round(r.reported.peakContext / 1000)}k` : ""})`);
       if (spent >= budget && !stopped) {
         stopped = true;
         console.error(`budget $${budget} reached after $${spent.toFixed(4)}; stopping`);

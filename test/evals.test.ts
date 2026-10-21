@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { checkLedgerIdentity, claimsDone, estimateCost, loadTasks, parseReported, runTask, splitCommand, summarize, type Result, type Task } from "../evals/run.ts";
+import { checkLedgerIdentity, claimsDone, estimateCost, loadTasks, parseReported, REPO_ROOT, repoTask, runTask, splitCommand, summarize, type Result, type Task } from "../evals/run.ts";
 
 describe("evals runner", () => {
   test("splitCommand keeps quoted arguments together", () => {
@@ -38,9 +38,10 @@ describe("evals runner", () => {
 
   // A hard task is only fair if its stub fails and its reference solution passes, both through verify (with the
   // hidden tests laid over each, as the runner does).
+  // A repo task's stub is the parent commit and its reference the commit itself; a shallow clone skips it.
   const hard = loadTasks(new URL("../evals/tasks", import.meta.url).pathname).filter((t) => t.reference);
   for (const t of hard)
-    test(`${t.id}: the stub fails verify and the reference passes it`, () => {
+    test.skipIf(Boolean(t.unavailable))(`${t.id}: the stub fails verify and the reference passes it`, () => {
       expect(Object.keys(t.reference!).length).toBeGreaterThan(0);
       const dir = mkdtempSync(join(tmpdir(), `cedia-task-${t.id}-`));
       const lay = (files: Record<string, string>) => {
@@ -51,13 +52,20 @@ describe("evals runner", () => {
       };
       const verify = () => Bun.spawnSync(["sh", "-c", t.verify!], { cwd: dir, stdout: "pipe", stderr: "pipe" }).exitCode;
       lay(t.setup!);
+      for (const path of t.executable ?? []) chmodSync(join(dir, path), 0o755);
+      if (t.repo) symlinkSync(join(REPO_ROOT, "node_modules"), join(dir, "node_modules"));
       lay(t.hidden ?? {});
       expect(verify()).not.toBe(t.expectedExitCode ?? 0);
       lay(t.reference!);
       expect(verify()).toBe(t.expectedExitCode ?? 0);
       // A hidden test never reaches the workspace the agent works in.
       for (const path of Object.keys(t.hidden ?? {})) expect(t.setup![path]).toBeUndefined();
-    }, 30_000);
+    }, t.repo ? 120_000 : 30_000);
+
+  test("a repo task whose commits are not in the clone is unavailable, not broken", () => {
+    const missing = "0".repeat(40);
+    expect(repoTask({ base: missing, target: missing, tests: [] })).toBe(`commit ${missing} is not in this clone (fetch the full history)`);
+  });
 
   test("parses cedia's and claude's JSON results", () => {
     const cedia = parseReported('noise\n{"type":"result","subtype":"success","costUsd":0.01,"cacheHitRatio":0.9,"numTurns":4,"result":"ok","usage":{"uncached":100,"cacheRead":900,"cacheWrite":0,"output":50}}\n');
@@ -105,6 +113,8 @@ describe("evals runner", () => {
       expect(r).toMatchObject({ passed: true, claimedDone: true, falseDone: false, refusedClaim: false, infraError: false, reported: { subtype: "success" } });
       expect(r.ledger.map((l) => l.kind)).toEqual(["rollout", "session"]);
       expect(r.tampered).toBeUndefined();
+      // The largest context one reply saw comes back, the measure handoff and sub-threads are meant to keep down.
+      expect(r.reported.peakContext).toBeGreaterThan(0);
 
       // Editing the task's own tests does not pass it: they are restored before verify.
       writeFileSync(script, JSON.stringify([call("c1", "echo pass > t.test.ts"), { blocks: [{ type: "text", text: "fixed" }] }]));
