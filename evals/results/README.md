@@ -61,10 +61,10 @@ Same seven hard tasks, 3 runs each, Haiku 5.5 writing. Three arms run side by si
 |---|---|---|---|---|---|---|---|
 | spawn off | 95.2% | 85.7% | - | 54.9 s | 109,601 / 11,793 | $0.187 | $0.009 |
 | spawn on | 95.2% | 85.7% | 0 sub-threads | 50.9 s | 114,325 / 10,685 | $0.174 | $0.009 |
-| handoff at 20k | 90.5% | 85.7% | 13 handoffs in 7 runs | 82.0 s | 95,705 / 15,647 | $0.240 | $0.013 |
+| handoff at 20k | 90.5% | 85.7% | 10 handoffs in 6 runs | 82.0 s | 95,705 / 15,647 | $0.240 | $0.013 |
 
 Files: `2026-10-21-hard-cedia-haiku-5-5-spawn-off.jsonl`, `2026-10-21-hard-cedia-haiku-5-5-spawn-on.jsonl`, `2026-10-21-hard-cedia-haiku-5-5-handoff-20k.jsonl`.
 
 - The spawn tool costs nothing measurable when unused, and Haiku did not spawn on any of these tasks: each is a few files, which the tool's description says to do yourself. Its value has to be measured on tasks with wide searches or independent parts.
 - The one failure in both spawn arms is `hard-redact-bugs#1`, a refused claim (no passing check after the last change), as in earlier rounds.
-- Handoff works end to end on a real model: 5 of 7 runs that handed off passed, and the notes (2.7k to 4.5k characters) name the done condition, each change with its line, the checks run, and traps to avoid. Both failures hit the eval's 300 s run timeout on `hard-shell-split`, the longest task, after 1 and 2 handoffs. Forced this early, handoff cut input by 13% but added a third more output (the notes, and re-orienting), so it cost 28% more. It pays only when a session's context is large, which is why the default is half the window, at most 150k: none of these tasks gets near it.
+- Handoff works end to end on a real model: 4 of the 6 runs that handed off passed, and the notes (2.7k to 4.5k characters) name the done condition, each change with its line, the checks run, and traps to avoid. Both failures hit the eval's 300 s run timeout on `hard-shell-split`, the longest task, after 1 and 2 handoffs. Forced this early, handoff cut input by 13% but added a third more output (the notes, and re-orienting), so it cost 28% more. It pays only when a session's context is large, which is why the default is half the window, at most 150k: none of these tasks gets near it.
