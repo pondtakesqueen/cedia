@@ -1,0 +1,7 @@
+{
+  "id": "hard-deny-list",
+  "category": "feature",
+  "source": "cedia src/core/safety/policy.ts (denyListed, gitHit, rmHit)",
+  "prompt": "Implement `denyListed` in deny.ts: the guard that stops a coding agent from running destructive git and rm commands. The doc comment lists every rule. Run `bun test` until it passes.",
+  "verify": "bun test"
+}

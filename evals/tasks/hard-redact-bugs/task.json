@@ -1,0 +1,7 @@
+{
+  "id": "hard-redact-bugs",
+  "category": "bugfix",
+  "source": "cedia src/core/safety/secrets.ts (redactSecrets) with four injected bugs",
+  "prompt": "redact.ts replaces secrets in tool output before it reaches a model, but some of the tests in redact.test.ts fail. Find and fix the bugs in redact.ts. Do not change the tests. Run `bun test` until it passes.",
+  "verify": "bun test"
+}

@@ -7,7 +7,7 @@
 // pass or fail, never the agent's words.
 
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { costUsd, resolveModel } from "../src/core/providers/catalog.ts";
@@ -19,6 +19,9 @@ export type Task = {
   setup?: Record<string, string>;
   verify?: string;
   expectedExitCode?: number;
+  // Directory tasks only: a solution laid over setup, never copied into the workspace. The tests check that
+  // setup alone fails verify and setup plus reference passes it.
+  reference?: Record<string, string>;
 };
 
 type LedgerEntry = { kind: "rollout" | "session"; label: string; ms: number };
@@ -55,6 +58,8 @@ export type Result = {
   verifyOutput?: string;
   passed: boolean;
   falseDone: boolean;
+  // Test files from the task that the agent changed; they are restored before verify.
+  tampered?: string[];
 };
 
 type Invocation = { bin: string; args: string[]; env?: Record<string, string> };
@@ -200,6 +205,17 @@ export async function runTask(task: Task, harness: string, model: string | null,
     const claimedDone = harness === "cedia" && parsed ? reported.subtype === "success" : claimsDone(text);
     const infraError = reported.subtype === "error_during_execution" && (reported.tokens?.input ?? 0) === 0;
 
+    // Tests that came with the task are put back before verify, so editing them cannot pass the task.
+    const tampered: string[] = [];
+    for (const [path, content] of Object.entries(task.setup ?? {})) {
+      if (!/\.test\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.(py|go)$/.test(path)) continue;
+      const full = join(cwd, path);
+      if (existsSync(full) && readFileSync(full, "utf8") === content) continue;
+      tampered.push(path);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, content);
+    }
+
     const verifyStart = Date.now();
     let passed: boolean;
     let verifyExitCode: number | undefined;
@@ -236,17 +252,36 @@ export async function runTask(task: Task, harness: string, model: string | null,
       verifyOutput,
       passed,
       falseDone: claimedDone && !passed,
+      ...(tampered.length ? { tampered } : {}),
     };
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
 }
 
+// A task is either `<id>.json` (setup inline) or a directory `<id>/` holding task.json, files/ (the workspace)
+// and reference/ (a solution, for the tests only).
 export function loadTasks(dir: string): Task[] {
-  return readdirSync(dir)
-    .filter((f) => f.endsWith(".json"))
-    .sort()
-    .map((f) => JSON.parse(readFileSync(join(dir, f), "utf8")) as Task);
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((e) => (e.isFile() && e.name.endsWith(".json")) || (e.isDirectory() && existsSync(join(dir, e.name, "task.json"))))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((e) => {
+      if (e.isFile()) return JSON.parse(readFileSync(join(dir, e.name), "utf8")) as Task;
+      const root = join(dir, e.name);
+      const task = JSON.parse(readFileSync(join(root, "task.json"), "utf8")) as Task;
+      return { ...task, setup: { ...task.setup, ...readTree(join(root, "files")) }, reference: readTree(join(root, "reference")) };
+    });
+}
+
+function readTree(root: string, prefix = ""): Record<string, string> {
+  if (!existsSync(root)) return {};
+  const out: Record<string, string> = {};
+  for (const e of readdirSync(join(root, prefix), { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${e.name}` : e.name;
+    if (e.isDirectory()) Object.assign(out, readTree(root, rel));
+    else out[rel] = readFileSync(join(root, rel), "utf8");
+  }
+  return out;
 }
 
 // A verify command whose tool is missing would fail every run for reasons that are not the agent's.
