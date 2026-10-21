@@ -18,8 +18,14 @@ const MODE_NOTE: Record<PermissionMode, string> = {
 };
 
 // Per-session facts go in the first user turn, never in the cached system prompt.
-export function preamble(cwd: string, opts: { mode?: PermissionMode; checks?: string[] } = {}, now = new Date()): string {
+export function preamble(cwd: string, opts: { mode?: PermissionMode; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] } } = {}, now = new Date()): string {
   const lines = [`working directory: ${cwd}`, `date: ${now.toISOString().slice(0, 10)}`, `platform: ${process.platform}`, `permission: ${MODE_NOTE[opts.mode ?? 'read-only']}`];
+  if (opts.sandbox)
+    lines.push(
+      opts.sandbox.on
+        ? `sandbox: shell commands may write only inside the working directory and the temp dir, and reach only these hosts: ${opts.sandbox.allowedDomains.join(', ') || 'none'}. A blocked write or connection is the sandbox, not a bug to work around.`
+        : 'sandbox: off',
+    );
   if (opts.checks?.length)
     lines.push(`checks: after changing files, run ${opts.checks.map((c) => `\`${c}\``).join(' and ')} exactly as written (no pipes). The task is not done until one passes after your last change.`);
   return `<environment>\n${lines.join('\n')}\n</environment>`;

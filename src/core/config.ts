@@ -2,8 +2,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { PERMISSION_MODES, type PermissionMode, type Policy } from './safety/policy.ts';
+import { DEFAULT_DOMAINS, SANDBOX_SETTINGS, type SandboxSetting } from './safety/sandbox.ts';
 
-export type Settings = { permissions?: { mode?: PermissionMode; allow?: string[]; deny?: string[] }; checks?: string[] };
+export type Settings = {
+  permissions?: { mode?: PermissionMode; allow?: string[]; deny?: string[] };
+  checks?: string[];
+  sandbox?: { mode?: SandboxSetting; allowedDomains?: string[] };
+};
 
 export const cediaHome = () => process.env.CEDIA_HOME ?? join(homedir(), '.cedia');
 
@@ -32,4 +37,12 @@ export function loadChecks(cwd: string, flags: string[] = []): string[] {
   const user = readSettings(join(cediaHome(), 'settings.json')).checks ?? [];
   const project = readSettings(join(cwd, '.cedia', 'settings.json')).checks ?? [];
   return [...new Set([...flags, ...project, ...user])];
+}
+
+// Sandbox: flags > CEDIA_SANDBOX > user settings > auto. Network grants come from the user only, never the repo.
+export function loadSandbox(flags: { mode?: string; allowDomains?: string[] } = {}, env = process.env): { mode: SandboxSetting; allowedDomains: string[] } {
+  const user = readSettings(join(cediaHome(), 'settings.json')).sandbox ?? {};
+  const mode = flags.mode || env.CEDIA_SANDBOX || user.mode || 'auto';
+  if (!SANDBOX_SETTINGS.includes(mode as SandboxSetting)) throw new Error(`unknown sandbox setting "${mode}" (use ${SANDBOX_SETTINGS.join(', ')})`);
+  return { mode: mode as SandboxSetting, allowedDomains: [...new Set([...DEFAULT_DOMAINS, ...(user.allowedDomains ?? []), ...(flags.allowDomains ?? [])])] };
 }

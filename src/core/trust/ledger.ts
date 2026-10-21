@@ -17,19 +17,27 @@ export function matchCheck(command: string, checks: string[]): string | undefine
 export function ledgerEntries(events: SessionEvent[], checks: string[]): LedgerEntry[] {
   const out: LedgerEntry[] = [];
   const intents = new Map<string, EventOf<'tool_intent'>>();
+  // With snapshots the log names the files each writing call changed, bash included.
+  const snapped = new Map<string, string[]>();
+  for (const e of events) if (e.kind === 'snapshot' && e.callId) snapped.set(e.callId, e.changed);
   events.forEach((e, at) => {
     if (e.kind === 'request') intents.clear();
     if (e.kind === 'tool_intent') intents.set(e.callId, e);
     if (e.kind !== 'tool_result') return;
     const intent = intents.get(e.callId);
     if (!intent || e.status === 'denied' || e.status === 'not_started') return;
-    if (intent.tool === 'edit' || intent.tool === 'write') {
+    const files = snapped.get(e.callId);
+    const command = intent.tool === 'bash' ? String(intent.input.command ?? '') : undefined;
+    const check = command !== undefined ? matchCheck(command, checks) : undefined;
+    if (check !== undefined) {
+      // Files a check leaves behind (caches, coverage) are not the change it verifies.
+      out.push({ kind: 'check', at, command: check, exitCode: e.output.exitCode ?? (e.output.isError ? 1 : 0) });
+    } else if (files) {
+      for (const path of files) out.push({ kind: 'write', at, tool: intent.tool, path });
+    } else if (intent.tool === 'edit' || intent.tool === 'write') {
       if (e.status === 'completed') out.push({ kind: 'write', at, tool: intent.tool, path: String(intent.input.path) });
-    } else if (intent.tool === 'bash') {
-      const command = String(intent.input.command ?? '');
-      const check = matchCheck(command, checks);
-      if (check !== undefined) out.push({ kind: 'check', at, command: check, exitCode: e.output.exitCode ?? (e.output.isError ? 1 : 0) });
-      else if (!checkReadOnly(command).ok) out.push({ kind: 'write', at, tool: 'bash', command });
+    } else if (command !== undefined && !checkReadOnly(command).ok) {
+      out.push({ kind: 'write', at, tool: 'bash', command });
     }
   });
   return out;

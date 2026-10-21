@@ -51,7 +51,7 @@ describe('cedia -p (offline, faux)', () => {
     const script = [call('c1', 'echo hi > out.txt'), call('c2', 'test -f out.txt'), reply('done')];
     const r = cedia(script, ['-p', 'make it', '--permission', 'workspace', '--check', 'test -f out.txt']);
     expect(r.code).toBe(0);
-    expect(r.err).toContain('cedia receipt: changed bash: echo hi > out.txt; checks test -f out.txt (exit 0); unverified none');
+    expect(r.err).toContain('cedia receipt: changed out.txt; checks test -f out.txt (exit 0); unverified none');
     const sessions = join(r.home, 'sessions');
     const [project] = readdirSync(sessions);
     const file = join(sessions, project!, readdirSync(join(sessions, project!))[0]!);

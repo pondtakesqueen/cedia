@@ -15,7 +15,7 @@ The full plan, with the comparison against other harnesses and the review it wen
 | Muse Spark | Only on repos marked public: the Contributor tier trains on prompts and completions |
 | Wire formats | Anthropic Messages, Chat Completions, OpenAI Responses |
 | Auth | API keys only, from the environment (`CEDIA_ANTHROPIC_API_KEY` stands in for `ANTHROPIC_API_KEY`, which Claude Code cloud sessions drop) or added by an egress proxy (cloud network secrets). No Claude.ai or Cursor OAuth, no request that impersonates another client |
-| Sandbox | `@anthropic-ai/sandbox-runtime`, stage 2 |
+| Sandbox | `@anthropic-ai/sandbox-runtime` (bubblewrap on Linux, sandbox-exec on macOS) around every bash call: writes only in the working directory and temp dir, no reads of `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.netrc` or cedia's home, network only to package registries plus `--allow-domain`/user settings. `--sandbox auto` (default) falls back to unsandboxed with a stderr note; `on` requires it. Bash never inherits keys, tokens or `CEDIA_*` env. Edit and write never touch `.git/` or `.cedia/` |
 | Permission | Modes `read-only` (default) and `workspace`, allow/deny rules, a built-in deny list, then the sandbox (stage 2); classifier (stage 6). Rules: flags > `CEDIA_PERMISSION` > `~/.cedia/settings.json`; a repo's `.cedia/settings.json` can only add deny rules |
 | Edit tool | `edits[]` with tiered matching; `apply_patch` for GPT; edit mode chosen per model from eval results |
 | Compaction | Claude: server-side context editing and on-demand compaction (`compact-2026-09-04`), or a client-side summary of the whole history with thinking stripped; never client-side tool-result clearing or keep-tail, because Claude 5.5-family thinking signatures bind the unedited prefix. Chat Completions and Responses: client side, clear old tool results first, then summarize. Segments stay grep-able |
@@ -164,7 +164,7 @@ cedia is not a git client; it covers what an agent session needs and leaves the 
 | Feature | Stage | Notes |
 |---|---|---|
 | Deny list for force-push and `git reset --hard` on shared branches | 2 | Trust section |
-| Shadow-git snapshot before each turn that writes | 2 | Separate git dir, never touches the user's repo or index; covers bash edits too, which Claude Code's checkpoints do not |
+| Shadow-git snapshot around each writing call | 2 | `~/.cedia/snapshots/<project-slug>`, own index, user/system git config ignored; never touches the user's repo or index. A `snapshot{tree, callId, changed}` event names the files each call changed, bash included, which Claude Code's checkpoints do not; the ledger and receipt use it |
 | Branch and dirty count in the status line | 3 | |
 | `/diff`: working tree changes, and changes since the turn started | 3 | Like Codex and OpenCode `/diff` |
 | `/undo` and `/redo` of the last turn's files | 3 | From the shadow snapshot; says plainly it does not undo external side effects |

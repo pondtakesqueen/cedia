@@ -45,6 +45,7 @@ type EventBody =
     }
   | { kind: 'attempt'; requestId: EventId; n: number; error?: AttemptError }
   | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage }
+  | { kind: 'snapshot'; tree: string; callId?: string; changed: string[] } // shadow-git tree after a writing call
   | { kind: 'permission'; callId: string; tool: string; decision: 'allow' | 'deny'; rule: string; reason?: string }
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
   | { kind: 'tool_result'; callId: string; status: EffectStatus; output: ToolOutput }

@@ -1,12 +1,15 @@
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { runPrompt } from '../../core/loop/run.ts';
 import { preamble, BASE_SYSTEM } from '../../core/prompts.ts';
 import { resolveModel } from '../../core/providers/catalog.ts';
 import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
-import { SessionLog, sessionPath } from '../../core/session/log.ts';
-import { loadChecks, loadPolicy } from '../../core/config.ts';
+import { projectSlug, SessionLog, sessionPath } from '../../core/session/log.ts';
+import { cediaHome, loadChecks, loadPolicy, loadSandbox } from '../../core/config.ts';
+import { openSandbox } from '../../core/safety/sandbox.ts';
+import { openSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
 import type { Effort, Evidence, HeadlessResult } from '../../core/types.ts';
 import { encode } from '../../protocol/index.ts';
@@ -24,6 +27,8 @@ export type HeadlessArgs = {
   allow?: string[];
   deny?: string[];
   checks?: string[];
+  sandbox?: string;
+  allowDomains?: string[];
 };
 
 // Every run that changed files or ran checks ends with a receipt built from the ledger.
@@ -37,6 +42,10 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const model = resolveModel(args.model);
   const checks = loadChecks(args.cwd, args.checks);
   const policy = loadPolicy(args.cwd, { ...(args.permission ? { mode: args.permission } : {}), allow: args.allow ?? [], deny: args.deny ?? [] });
+  const sandboxSettings = loadSandbox({ ...(args.sandbox ? { mode: args.sandbox } : {}), allowDomains: args.allowDomains ?? [] });
+  const { sandbox, note: sandboxNote } = await openSandbox(args.cwd, sandboxSettings.mode, { allowedDomains: sandboxSettings.allowedDomains, cediaHome: cediaHome() });
+  if (sandboxNote) process.stderr.write(sandboxNote + '\n');
+  const snapshots = openSnapshots(args.cwd, join(cediaHome(), 'snapshots', projectSlug(args.cwd)), [cediaHome(), ...sandbox.placeholders]);
   const keyNote = missingKeyNote(model);
   if (keyNote) process.stderr.write(keyNote + '\n');
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? (JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) as FauxStep[]) : undefined;
@@ -56,10 +65,12 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         model,
         tools: CORE_TOOLS,
         system: BASE_SYSTEM,
-        preamble: preamble(args.cwd, { mode: policy.mode, checks }),
+        preamble: preamble(args.cwd, { mode: policy.mode, checks, sandbox }),
         cwd: args.cwd,
         permission: policy,
         checks,
+        ...(sandbox.on ? { wrap: sandbox.wrap } : {}),
+        ...(snapshots ? { snapshots } : {}),
         signal: ac.signal,
         ...(args.effort ?? model.defaultEffort ? { effort: args.effort ?? model.defaultEffort } : {}),
         ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns } : {}),
@@ -75,6 +86,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     else out(encode(result));
     return result;
   } finally {
+    await sandbox.close();
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
   }
