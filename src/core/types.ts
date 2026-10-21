@@ -26,7 +26,8 @@ export type PrivacyLevel = 'no-training' | 'zdr';
 export type ToolEffect = 'read' | 'write_workspace' | 'exec' | 'network';
 
 export type AttemptErrorCode =
-  | 'rate_limit' | 'overloaded' | 'auth' | 'bad_request' | 'network' | 'timeout' | 'server' | 'context_length';
+  | 'rate_limit' | 'overloaded' | 'auth' | 'bad_request' | 'network' | 'timeout' | 'server' | 'context_length'
+  | 'quota'; // the plan's usage limit or the account balance ran out: waiting seconds will not help
 export type AttemptError = { code: AttemptErrorCode; status?: number; retryAfterMs?: number; message: string };
 
 export type ToolDef = { name: string; description: string; schema: JsonObject };

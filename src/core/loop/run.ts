@@ -55,6 +55,9 @@ export type RunOptions = {
   // Shadow-git snapshots around every writing call; absent means changed files come from edit/write only.
   snapshots?: Snapshots;
   role?: string;
+  // Picks up from a session that stopped partway (the fallback after a spent quota). Its changed files count as
+  // writes at the start of this run, so the done gate still wants a passing check after them.
+  continues?: { sessionId: string; changed: string[] };
   effort?: Effort;
   ttl?: '5m' | '1h';
   maxTurns?: number;
@@ -142,7 +145,15 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const byName = new Map(tools.map((t) => [t.name, t]));
 
   if (!log.events.length)
-    log.append({ kind: 'session', cwd: opts.cwd, role: opts.role ?? 'code', model: model.ref, system: opts.system, tools: toolDefs(tools) });
+    log.append({
+      kind: 'session',
+      cwd: opts.cwd,
+      role: opts.role ?? 'code',
+      model: model.ref,
+      system: opts.system,
+      tools: toolDefs(tools),
+      ...(opts.continues ? { parentSession: opts.continues.sessionId } : {}),
+    });
   const header = sessionHeader(log.events);
 
   let usage: Usage = { ...ZERO_USAGE };
@@ -152,7 +163,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
   const checks = opts.checks ?? [];
   let runStart = log.events.length;
-  const entries = () => ledgerEntries(log.events.slice(runStart), checks, opts.cwd);
+  // Inherited writes sit at 0, the user prompt's slot, so any check in this run comes after them.
+  const inherited = (opts.continues?.changed ?? []).map((path) => ({ kind: 'write' as const, at: 0, tool: 'parent', path }));
+  const entries = () => [...inherited, ...ledgerEntries(log.events.slice(runStart), checks, opts.cwd)];
   let nudged = false;
   const snap: { tree?: string } = {};
   const wallStart = performance.now();

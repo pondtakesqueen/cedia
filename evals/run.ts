@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
 // Usage: bun evals/run.ts [--harness cedia|pi|claude|codex|opencode|omp] [--model <ref>] [--runs 3] [--jobs 4]
 //                         [--tasks evals/tasks] [--only id,id] [--budget <usd>] [--estimate] [--out results.jsonl]
+//                         [--public]
 //
 // Every harness binary comes from the environment (CEDIA_EVAL_<NAME>_BIN) or PATH, so the runner works on any
 // machine. Each task runs `--runs` times, each in its own clean temp dir. The task's verify command decides
-// pass or fail, never the agent's words.
+// pass or fail, never the agent's words. `--public` marks each workspace public (.cedia/public), so models that
+// train on prompts (Muse) may run: the tasks are this public repo's own files.
 
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -76,6 +78,7 @@ const HARNESSES: Record<string, (task: Task, cwd: string, model: string | null) 
       "--max-budget-usd", process.env.CEDIA_EVAL_RUN_BUDGET ?? "0.5",
       ...(task.verify ? ["--check", task.verify] : []),
       ...(model ? ["--model", model] : []),
+      "--fallback", "none", // a result measures the model it names
     ],
   }),
   pi: (task, _cwd, model) => ({ bin: process.env.CEDIA_EVAL_PI_BIN ?? "pi", args: ["-p", task.prompt, ...(model ? ["--model", model] : [])] }),
@@ -195,6 +198,10 @@ export async function runTask(task: Task, harness: string, model: string | null,
       const full = join(cwd, path);
       mkdirSync(dirname(full), { recursive: true });
       writeFileSync(full, content);
+    }
+    if (process.env.CEDIA_EVAL_PUBLIC === "1") {
+      mkdirSync(join(cwd, ".cedia"), { recursive: true });
+      writeFileSync(join(cwd, ".cedia", "public"), "");
     }
 
     const inv = make(task, cwd, model);
@@ -417,6 +424,7 @@ async function main(argv: string[]): Promise<number> {
     else if (a === "--only") only = argv[++i]!.split(",");
     else if (a === "--estimate") estimate = true;
     else if (a === "--measured") measuredPath = argv[++i]!;
+    else if (a === "--public") process.env.CEDIA_EVAL_PUBLIC = "1";
   }
 
   const tasks = loadTasks(tasksDir).filter((t) => !only || only.includes(t.id));

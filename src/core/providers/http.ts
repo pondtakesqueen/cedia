@@ -20,6 +20,9 @@ export function missingKeyNote(model: ModelSpec, env: Env = process.env): string
   return `cedia: ${names} is not set; sending ${model.ref} requests without credentials, expecting a proxy to add them`;
 }
 
+// A spent plan or balance, told apart from a per-minute rate limit by its message.
+const QUOTA = /quota|insufficient[ _](balance|credit|funds)|usage limit|limit reached|billing|out of credits/;
+
 const RETRYABLE: AttemptErrorCode[] = ['rate_limit', 'overloaded', 'network', 'timeout', 'server'];
 export const isRetryable = (e: AttemptError) => RETRYABLE.includes(e.code);
 
@@ -28,7 +31,8 @@ export function classifyStatus(status: number, body: string, retryAfter?: string
   const message = body.slice(0, 2000) || `HTTP ${status}`;
   const lower = body.toLowerCase();
   let code: AttemptErrorCode;
-  if (status === 429) code = 'rate_limit';
+  if (status === 402 || (status === 429 && QUOTA.test(lower))) code = 'quota';
+  else if (status === 429) code = 'rate_limit';
   else if (status === 529 || lower.includes('overloaded')) code = 'overloaded';
   else if (status === 401 || status === 403) code = 'auth';
   else if (status === 408) code = 'timeout';
@@ -55,6 +59,7 @@ export function networkError(err: unknown): AttemptError {
 // Error the provider reported inside an otherwise-200 stream.
 export function classifyStreamError(type: string | undefined, message: string): AttemptError {
   const t = (type ?? '').toLowerCase();
+  if (QUOTA.test(t) || QUOTA.test(message.toLowerCase())) return { code: 'quota', message };
   if (t.includes('overloaded')) return { code: 'overloaded', message };
   if (t.includes('rate')) return { code: 'rate_limit', message };
   if (t.includes('auth') || t.includes('permission')) return { code: 'auth', message };

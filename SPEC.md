@@ -11,7 +11,7 @@ The full plan, with the comparison against other harnesses and the review it wen
 | Language, runtime | TypeScript on Bun |
 | Shape | Own core, written here. Libraries as dependencies where they do not touch the core: pi-tui for the TUI, `@anthropic-ai/sandbox-runtime` for the sandbox. Not a fork: the pi-era cedia ran into pi core limits (paste expansion before hooks, provider layer) that needed a fork, and the core is where cedia differs. |
 | Plan and thinking | Claude top-tier through an API key (Anthropic Messages) |
-| Writing code | DeepSeek V4.1 Flash through OpenCode Go (ZDR), Haiku 5.5 as fallback; beam-free for volume work while it is free |
+| Writing code | DeepSeek V4.1 Flash through OpenCode Go (ZDR), Haiku 5.5 as fallback; beam-free for volume work while it is free. When the Go quota runs out, the same model on DeepSeek's own API (`deepseek-api`, paid per token) picks the task up in a new session. DeepSeek's API counts as `trains`, so under `no-training` it runs only in public repos |
 | Muse Spark | Only on repos marked public: the Contributor tier trains on prompts and completions |
 | Wire formats | Anthropic Messages, Chat Completions, OpenAI Responses |
 | Auth | API keys only, from the environment (`CEDIA_ANTHROPIC_API_KEY` stands in for `ANTHROPIC_API_KEY`, which Claude Code cloud sessions drop) or added by an egress proxy (cloud network secrets). No Claude.ai or Cursor OAuth, no request that impersonates another client |
@@ -76,7 +76,7 @@ type StreamEvent =
 type TurnEnd = { kind: 'turn_end'; reason: 'completed' | 'aborted' | 'error' | 'max_tokens' | 'budget' | 'max_turns'; cause?: 'user' | 'parent' | 'hook' };
 
 type AttemptError = {
-  code: 'rate_limit' | 'overloaded' | 'auth' | 'bad_request' | 'network' | 'timeout' | 'server' | 'context_length';
+  code: 'rate_limit' | 'overloaded' | 'auth' | 'bad_request' | 'network' | 'timeout' | 'server' | 'context_length' | 'quota';
   status?: number; retryAfterMs?: number; message: string;
 };
 
@@ -101,9 +101,10 @@ type ToolOutput = { text: string; images?: BlobRef[] };
 Rules that go with the shapes:
 
 - **Abort.** `signal` aborts the stream; the adapter emits `done` with `stop: 'aborted'` and whatever blocks were complete. Unfinished tool calls get synthetic `tool_result`s. The turn ends with `turn_end{reason:'aborted'}`.
-- **Retry.** `rate_limit`, `overloaded`, `network`, `timeout` and `server` retry with exponential backoff, at most 5 attempts, honouring `retryAfterMs`. `auth`, `bad_request` and `context_length` never retry. Each try is its own `attempt` event.
+- **Retry.** `rate_limit`, `overloaded`, `network`, `timeout` and `server` retry with exponential backoff, at most 5 attempts, honouring `retryAfterMs`. `auth`, `bad_request`, `context_length` and `quota` (HTTP 402, or a 429 whose message says the plan or balance is spent) never retry. Each try is its own `attempt` event.
 - **Request event.** Carries model, effort, `toolsHash`, `systemHash`, `bodyHash`, TTL and header names with value hashes. Never header values.
 - **Role fallback** starts a new session on the fallback model; it never swaps the model inside a session (cache rule 5).
+- **Quota fallback.** A run that ends on a `quota` error continues on its fallback model (`--fallback`, then `fallback` in `~/.cedia/settings.json`, then the built-in `deepseek` → `deepseek-api`; `none` turns it off; a repo cannot set it). The new session has `parentSession`, a logged reminder that the tree may hold part of the work, what is left of the turn and budget limits, and the first session's changed files as writes the done gate must still see verified. The result adds up both sessions' spend and turns.
 - **Mid-conversation system prompt.** Appended as a system message when `midConversationSystem` is true, otherwise as a user text block.
 - **Parallel tools.** Calls whose `ToolSpec.effect` is `read` or `network` run in a bounded pool; `write_workspace` and `exec` run alone, as ordering barriers. `tool_intent` events are written in assistant block order; results go back as one batch (Anthropic requires all results of a turn in one user message).
 - **Permission order in the log.** `assistant → permission → tool_intent (only if allowed) → tool_result`. A denied call gets `tool_result{status:'denied'}` and no `tool_intent`.

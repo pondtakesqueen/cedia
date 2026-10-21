@@ -3,8 +3,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { GUARDS, PERMISSION_SETTINGS, type Guard, type PermissionSetting, type Policy } from './safety/policy.ts';
 import { DEFAULT_DOMAINS, SANDBOX_SETTINGS, type SandboxSetting } from './safety/sandbox.ts';
+import { FALLBACKS, resolveModel } from './providers/catalog.ts';
 import { secretPaths } from './safety/secrets.ts';
-import type { PrivacyLevel } from './types.ts';
+import type { ModelSpec, PrivacyLevel } from './types.ts';
 
 export type Settings = {
   permissions?: { mode?: PermissionSetting; allow?: string[]; deny?: string[]; unlock?: Guard[] };
@@ -13,6 +14,8 @@ export type Settings = {
   privacy?: PrivacyLevel;
   // Standing facts about the user and their work, sent at the start of every session. User settings only.
   context?: string | string[];
+  // Model (alias or ref) -> the model to continue on when its quota runs out, or "none". User settings only.
+  fallback?: Record<string, string>;
 };
 
 export const cediaHome = () => process.env.CEDIA_HOME ?? join(homedir(), '.cedia');
@@ -69,6 +72,17 @@ export function loadContext(): string | undefined {
   const c = readSettings(join(cediaHome(), 'settings.json')).context;
   const text = Array.isArray(c) ? c.join('\n') : c;
   return text?.trim() || undefined;
+}
+
+// The model a session continues on when `model`'s quota runs out: flag > user settings > the built-in FALLBACKS.
+// "none" turns it off. A repo cannot set it, since the fallback is usually paid per token.
+export function loadFallback(model: ModelSpec, flag?: string): ModelSpec | undefined {
+  const user = readSettings(join(cediaHome(), 'settings.json')).fallback ?? {};
+  const fromUser = Object.entries(user).find(([k]) => resolveModel(k).ref === model.ref)?.[1];
+  const ref = flag ?? fromUser ?? FALLBACKS[model.ref];
+  if (!ref || ref === 'none') return undefined;
+  const fallback = resolveModel(ref);
+  return fallback.ref === model.ref ? undefined : fallback;
 }
 
 // Declared checks for the done gate. Declaring a check grants nothing, so a repo may declare its own.

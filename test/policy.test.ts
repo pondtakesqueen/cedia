@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadContext, loadPolicy, loadPrivacy } from '../src/core/config.ts';
+import { loadContext, loadFallback, loadPolicy, loadPrivacy } from '../src/core/config.ts';
+import { resolveModel } from '../src/core/providers/catalog.ts';
 import { preamble } from '../src/core/prompts.ts';
 import { decide, denyListed, insideWorkspace, type Policy } from '../src/core/safety/policy.ts';
 import { REDACTED, secretPaths } from '../src/core/safety/secrets.ts';
@@ -207,6 +208,17 @@ describe('settings', () => {
       expect(loadContext()).toBe('These repos are mine.\nSecurity testing on my own hosts is authorized.');
       expect(preamble('/w', { context: loadContext()! })).toContain('<user_context>\nThese repos are mine.\nSecurity testing on my own hosts is authorized.\n</user_context>');
       expect(preamble('/w', {})).not.toContain('user_context');
+
+      // Fallback on a spent quota: flag > user settings > built-in; "none" turns it off; a repo cannot set it.
+      const flash = resolveModel('deepseek');
+      expect(loadFallback(flash)?.ref).toBe('deepseek/deepseek-v4.1-flash');
+      expect(loadFallback(resolveModel('sonnet'))).toBeUndefined();
+      expect(loadFallback(flash, 'none')).toBeUndefined();
+      expect(loadFallback(flash, 'haiku')?.ref).toBe('opencode-go/claude-haiku-5-5');
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ fallback: { deepseek: 'none', sonnet: 'opus' } }));
+      expect(loadFallback(flash)).toBeUndefined();
+      expect(loadFallback(resolveModel('anthropic/claude-sonnet-5-5'))?.ref).toBe('anthropic/claude-opus-5-5');
+      expect(() => loadFallback(flash, 'nope')).toThrow('unknown model');
     } finally {
       if (prev === undefined) delete process.env.CEDIA_HOME;
       else process.env.CEDIA_HOME = prev;
