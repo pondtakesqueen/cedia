@@ -8,9 +8,9 @@ import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoffAt, loadPolicy, loadPrivacy, loadRoles, loadSandbox, loadSpawn, type RoleChoice } from '../../core/config.ts';
-import { handoffNote, MAX_HANDOFFS } from '../../core/project/handoff.ts';
+import { defaultHandoffAt, handoffNote, MAX_HANDOFFS } from '../../core/project/handoff.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
-import { spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
+import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
@@ -233,6 +233,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         ...(opts.role ? { role: opts.role } : {}),
         ...(child ? (child.thread ? { thread: child.thread } : {}) : threadId ? { thread: threadId } : {}),
         ...(writing && handoffAt !== undefined && handoffs < MAX_HANDOFFS ? { handoffAt } : {}),
+        ...(writing && spawnOn ? { spawnNudgeAt: spawnNudgeAt(handoffAt ?? defaultHandoffAt(m)) } : {}),
         ...(writing && store && threadId
           ? {
               inbox: {

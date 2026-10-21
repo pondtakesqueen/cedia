@@ -10,6 +10,7 @@ import { fauxProvider, type FauxStep } from '../src/core/providers/faux.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 import { projectKey, projectRoot, projectSlug, SessionLog } from '../src/core/session/log.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
+import { spawnNudge, spawnTool } from '../src/core/tools/spawn.ts';
 import { recallTool, threadTools } from '../src/core/tools/threads.ts';
 import type { EventOf, SessionEvent } from '../src/core/types.ts';
 
@@ -100,9 +101,9 @@ describe('thread tools', () => {
 describe('handoff in the loop', () => {
   const model = resolveModel('faux');
   const big = 'x'.repeat(40_000);
+  const bigTool = { ...CORE_TOOLS[0]!, name: 'big', effect: 'read' as const, pathOf: undefined, run: async () => ({ text: big, isError: false }) };
   const run = (script: FauxStep[], extra: Partial<Parameters<typeof runPrompt>[0]> = {}) => {
     const log = SessionLog.create();
-    const bigTool = { ...CORE_TOOLS[0]!, name: 'big', effect: 'read' as const, pathOf: undefined, run: async () => ({ text: big, isError: false }) };
     const permission = { mode: 'workspace' as const, allow: [], deny: [] };
     return runPrompt({ log, provider: fauxProvider(script), model, tools: [...CORE_TOOLS, bigTool], system: 'sys', cwd: tmp(), permission, ...extra }, 'do it').then((r) => ({ r, log }));
   };
@@ -164,6 +165,32 @@ describe('handoff in the loop', () => {
     const reminders = log.events.filter((e): e is EventOf<'reminder'> => e.kind === 'reminder');
     expect(reminders.map((e) => e.text)).toEqual(['<message from="t-1">use port 8080</message>']);
     expect(delivered).toEqual([['m1']]);
+  });
+
+  const spawner = spawnTool(async () => ({ model: 'faux/scripted', subtype: 'success', result: 'found it', costUsd: 0, changed: [], unverified: [] }));
+  const nudges = (log: SessionLog) => log.events.filter((e) => e.kind === 'reminder' && e.text.endsWith(spawnNudge(0).split('tokens')[1]!));
+
+  test('past spawnNudgeAt, a session with the spawn tool is reminded of it once', async () => {
+    const { r, log } = await run([tool('c1', 'big', {}), tool('c2', 'big', {}), reply('done')], { spawnNudgeAt: 2000, tools: [...CORE_TOOLS, spawner, bigTool] });
+    expect(r.subtype).toBe('success');
+    expect(nudges(log)).toHaveLength(1);
+    expect(nudges(log)[0]).toMatchObject({ text: expect.stringMatching(/^Your context is about 1\dk tokens/) });
+    expect(lintSession(log.events)).toEqual([]);
+  });
+
+  test('no spawn reminder without the tool, below the mark, or once the session has spawned', async () => {
+    const without = await run([tool('c1', 'big', {}), reply('done')], { spawnNudgeAt: 2000 });
+    expect(nudges(without.log)).toHaveLength(0);
+    const below = await run([tool('c1', 'big', {}), reply('done')], { spawnNudgeAt: 1_000_000, tools: [...CORE_TOOLS, spawner, bigTool] });
+    expect(nudges(below.log)).toHaveLength(0);
+    const spawned = await run([tool('s1', 'spawn', { kind: 'explore', task: 'find it' }), tool('c1', 'big', {}), reply('done')], { spawnNudgeAt: 2000, tools: [...CORE_TOOLS, spawner, bigTool] });
+    expect(nudges(spawned.log)).toHaveLength(0);
+  });
+
+  test('the handoff note request wins over the spawn reminder in the same turn', async () => {
+    const { r, log } = await run([write, tool('c1', 'big', {}), reply('the note')], { handoffAt: 2000, spawnNudgeAt: 2000, tools: [...CORE_TOOLS, spawner, bigTool] });
+    expect(r.subtype).toBe('handoff');
+    expect(nudges(log)).toHaveLength(0);
   });
 
   test('the default handoff point is half the window, at most 150k, and below a long-context price', () => {
