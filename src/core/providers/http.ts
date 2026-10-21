@@ -22,6 +22,9 @@ export function missingKeyNote(model: ModelSpec, env: Env = process.env): string
 
 // A spent plan or balance, told apart from a per-minute rate limit by its message.
 const QUOTA = /quota|insufficient[ _](balance|credit|funds)|usage limit|limit reached|billing|out of credits/;
+// A 429 that says to come back later than this is a spent plan window, not a per-minute limit: Go's free tier
+// answered "Rate limit exceeded" with retry-after 27380 s (7.6 h), and a session slept on it.
+const QUOTA_WAIT_MS = 10 * 60_000;
 
 const RETRYABLE: AttemptErrorCode[] = ['rate_limit', 'overloaded', 'network', 'timeout', 'server'];
 export const isRetryable = (e: AttemptError) => RETRYABLE.includes(e.code);
@@ -31,7 +34,7 @@ export function classifyStatus(status: number, body: string, retryAfter?: string
   const message = body.slice(0, 2000) || `HTTP ${status}`;
   const lower = body.toLowerCase();
   let code: AttemptErrorCode;
-  if (status === 402 || (status === 429 && QUOTA.test(lower))) code = 'quota';
+  if (status === 402 || (status === 429 && (QUOTA.test(lower) || (retryAfterMs ?? 0) > QUOTA_WAIT_MS))) code = 'quota';
   else if (status === 429) code = 'rate_limit';
   else if (status === 529 || lower.includes('overloaded')) code = 'overloaded';
   else if (status === 401 || status === 403) code = 'auth';
