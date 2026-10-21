@@ -18,6 +18,9 @@ const MODE_NOTE: Record<PermissionMode, string> = {
 };
 
 // Per-session facts go in the first user turn, never in the cached system prompt.
-export function preamble(cwd: string, mode: PermissionMode = 'read-only', now = new Date()): string {
-  return `<environment>\nworking directory: ${cwd}\ndate: ${now.toISOString().slice(0, 10)}\nplatform: ${process.platform}\npermission: ${MODE_NOTE[mode]}\n</environment>`;
+export function preamble(cwd: string, opts: { mode?: PermissionMode; checks?: string[] } = {}, now = new Date()): string {
+  const lines = [`working directory: ${cwd}`, `date: ${now.toISOString().slice(0, 10)}`, `platform: ${process.platform}`, `permission: ${MODE_NOTE[opts.mode ?? 'read-only']}`];
+  if (opts.checks?.length)
+    lines.push(`checks: after changing files, run ${opts.checks.map((c) => `\`${c}\``).join(' and ')} exactly as written (no pipes). The task is not done until one passes after your last change.`);
+  return `<environment>\n${lines.join('\n')}\n</environment>`;
 }

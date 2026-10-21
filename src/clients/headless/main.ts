@@ -6,9 +6,9 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { SessionLog, sessionPath } from '../../core/session/log.ts';
-import { loadPolicy } from '../../core/config.ts';
+import { loadChecks, loadPolicy } from '../../core/config.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
-import type { Effort, HeadlessResult } from '../../core/types.ts';
+import type { Effort, Evidence, HeadlessResult } from '../../core/types.ts';
 import { encode } from '../../protocol/index.ts';
 
 export type HeadlessArgs = {
@@ -23,10 +23,19 @@ export type HeadlessArgs = {
   permission?: string;
   allow?: string[];
   deny?: string[];
+  checks?: string[];
 };
+
+// Every run that changed files or ran checks ends with a receipt built from the ledger.
+export function receipt(ev: Evidence): string {
+  const list = (xs: string[]) => (xs.length ? xs.join(', ') : 'none');
+  const checks = ev.checks.map((c) => `${c.command} (exit ${c.exitCode})`);
+  return `cedia receipt: changed ${list(ev.changed)}; checks ${list(checks)}; unverified ${list(ev.unverified)}`;
+}
 
 export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
   const model = resolveModel(args.model);
+  const checks = loadChecks(args.cwd, args.checks);
   const policy = loadPolicy(args.cwd, { ...(args.permission ? { mode: args.permission } : {}), allow: args.allow ?? [], deny: args.deny ?? [] });
   const keyNote = missingKeyNote(model);
   if (keyNote) process.stderr.write(keyNote + '\n');
@@ -47,9 +56,10 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         model,
         tools: CORE_TOOLS,
         system: BASE_SYSTEM,
-        preamble: preamble(args.cwd, policy.mode),
+        preamble: preamble(args.cwd, { mode: policy.mode, checks }),
         cwd: args.cwd,
         permission: policy,
+        checks,
         signal: ac.signal,
         ...(args.effort ?? model.defaultEffort ? { effort: args.effort ?? model.defaultEffort } : {}),
         ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns } : {}),
@@ -58,7 +68,10 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       },
       args.prompt,
     );
-    if (args.outputFormat === 'text') out(result.result + (result.result.endsWith('\n') ? '' : '\n'));
+    if (args.outputFormat === 'text') {
+      out(result.result + (result.result.endsWith('\n') ? '' : '\n'));
+      if (result.evidence) process.stderr.write(receipt(result.evidence) + '\n');
+    }
     else out(encode(result));
     return result;
   } finally {

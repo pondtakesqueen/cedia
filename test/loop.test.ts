@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { CONTINUE_AFTER_LIMIT, runPrompt, type RunOptions } from '../src/core/loop/run.ts';
 import { FAUX_MODEL, resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, text, toolUse, type FauxStep } from '../src/core/providers/faux.ts';
+import { lintSession } from '../src/core/session/lint.ts';
 import { SessionLog } from '../src/core/session/log.ts';
 import { bashTool } from '../src/core/tools/bash.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
@@ -39,6 +40,7 @@ function expectPaired(events: SessionEvent[]) {
   const uses = of(events, 'assistant').flatMap((a) => a.blocks.flatMap((b) => (b.type === 'tool_use' ? [b.callId ?? b.id] : [])));
   const results = of(events, 'tool_result').map((r) => r.callId);
   expect(results.sort()).toEqual(uses.sort());
+  expect(lintSession(events)).toEqual([]);
 }
 
 describe('loop', () => {
@@ -227,5 +229,62 @@ describe('loop', () => {
     );
     await runPrompt(opts, 'go');
     expect(order).toEqual(['start r1', 'start r2', 'end r2', 'end r1', 'start w', 'end w', 'start r3', 'end r3']);
+  });
+
+  describe('done gate', () => {
+    const fixA = () => toolUse(`e${Math.random()}`, 'edit', { path: 'g.ts', edits: [{ old_text: 'x = 1', new_text: 'x = 2' }] });
+    const run = (cmd: string) => toolUse(`b${Math.random()}`, 'bash', { command: cmd });
+    const gate = (steps: FauxStep[], checks?: string[]) => {
+      const dir = mkdtempSync(join(tmpdir(), 'cedia-gate-'));
+      writeFileSync(join(dir, 'g.ts'), 'const x = 1;\n');
+      return setup(steps, { cwd: dir, tools: CORE_TOOLS, permission: { mode: 'workspace', allow: [], deny: [] }, ...(checks ? { checks } : {}) });
+    };
+
+    test('a passing declared check after the last write: success with evidence', async () => {
+      const { log, opts } = gate([{ blocks: [fixA()] }, { blocks: [run('true 2>&1')] }, { blocks: [text('fixed')] }], ['true']);
+      const res = await runPrompt(opts, 'fix');
+      expect(res.subtype).toBe('success');
+      expect(res.evidence).toEqual({ changed: ['g.ts'], checks: [{ command: 'true', exitCode: 0 }], unverified: [] });
+      expectPaired(log.events);
+    });
+
+    test('a claim without a check gets one reminder, then error_unverified_claim', async () => {
+      const { log, opts } = gate([{ blocks: [fixA()] }, { blocks: [text('done')] }, { blocks: [text('really done')] }], ['true']);
+      const res = await runPrompt(opts, 'fix');
+      expect(res.subtype).toBe('error_unverified_claim');
+      expect(res.evidence?.unverified).toEqual(['g.ts']);
+      expect(of(log.events, 'reminder').map((r) => r.text)).toEqual([expect.stringContaining('`true`')]);
+      expectPaired(log.events);
+    });
+
+    test('the reminder works when the model then runs the check', async () => {
+      const { opts } = gate([{ blocks: [fixA()] }, { blocks: [text('done')] }, { blocks: [run('true')] }, { blocks: [text('checked')] }], ['true']);
+      expect((await runPrompt(opts, 'fix')).subtype).toBe('success');
+    });
+
+    test('a failing check, a check before the write, or a piped check does not count', async () => {
+      for (const steps of [
+        [{ blocks: [fixA()] }, { blocks: [run('false')] }, { blocks: [text('done')] }, { blocks: [text('done')] }],
+        [{ blocks: [run('true')] }, { blocks: [fixA()] }, { blocks: [text('done')] }, { blocks: [text('done')] }],
+        [{ blocks: [fixA()] }, { blocks: [run('true | cat')] }, { blocks: [text('done')] }, { blocks: [text('done')] }],
+      ] as FauxStep[][]) {
+        const { opts } = gate(steps, ['true', 'false']);
+        expect((await runPrompt(opts, 'fix')).subtype).toBe('error_unverified_claim');
+      }
+    });
+
+    test('without declared checks the gate is off but the receipt still lists what is unverified', async () => {
+      const { opts } = gate([{ blocks: [fixA(), run('touch made.txt')] }, { blocks: [text('done')] }]);
+      const res = await runPrompt(opts, 'fix');
+      expect(res.subtype).toBe('success');
+      expect(res.evidence).toEqual({ changed: ['g.ts', 'bash: touch made.txt'], checks: [], unverified: ['g.ts', 'bash: touch made.txt'] });
+    });
+
+    test('a run that only reads needs no check and has no evidence', async () => {
+      const { opts } = gate([{ blocks: [run('cat g.ts')] }, { blocks: [text('x is 1')] }], ['true']);
+      const res = await runPrompt(opts, 'read');
+      expect(res.subtype).toBe('success');
+      expect(res.evidence).toBeUndefined();
+    });
   });
 });

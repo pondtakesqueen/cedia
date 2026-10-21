@@ -6,6 +6,7 @@ import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
 import { decide, READ_ONLY_POLICY, type Policy } from '../safety/policy.ts';
 import type { SessionLog } from '../session/log.ts';
+import { evidence, ledgerEntries, verified } from '../trust/ledger.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
 import {
   addUsage,
@@ -38,6 +39,8 @@ export type RunOptions = {
   cwd: string;
   // Defaults to read-only: nothing writes unless the caller opts in.
   permission?: Policy;
+  // Declared checks (task or repo). The done gate counts only these, never a command the model picked.
+  checks?: string[];
   role?: string;
   effort?: Effort;
   ttl?: '5m' | '1h';
@@ -50,6 +53,9 @@ export type RunOptions = {
 };
 
 export const CONTINUE_AFTER_LIMIT = 'Your previous reply was cut off by the output limit. Continue exactly where it stopped.';
+
+export const unverifiedReminder = (checks: string[]) =>
+  `You changed files, but no declared check has passed since the last change. Run ${checks.map((c) => `\`${c}\``).join(' or ')} exactly as written, fix what fails, then report.`;
 
 // Hash header values so the log can show which headers were sent without holding secrets.
 export function redactHeaders(h: Record<string, string>): Record<string, string> {
@@ -113,9 +119,26 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   let turns = 0;
   let lastText = '';
 
+  const checks = opts.checks ?? [];
+  let runStart = log.events.length;
+  const entries = () => ledgerEntries(log.events.slice(runStart), checks);
+  let nudged = false;
+
   const finish = (subtype: ResultSubtype, reason: TurnEndReason, result?: string): HeadlessResult => {
     log.append({ kind: 'turn_end', reason, ...(reason === 'aborted' ? { cause: 'user' as const } : {}) });
-    return { type: 'result', subtype, sessionId: log.id, numTurns: turns, usage, costUsd: cost, cacheHitRatio: hitRatio(usage), result: result ?? lastText };
+    const ev = evidence(entries());
+    const hasEvidence = ev.changed.length > 0 || ev.checks.length > 0;
+    return {
+      type: 'result',
+      subtype,
+      sessionId: log.id,
+      numTurns: turns,
+      usage,
+      costUsd: cost,
+      cacheHitRatio: hitRatio(usage),
+      result: result ?? lastText,
+      ...(hasEvidence ? { evidence: ev } : {}),
+    };
   };
 
   if (model.dataPolicy === 'trains' && !isPublicRepo(opts.cwd)) {
@@ -123,6 +146,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   }
 
   if (opts.preamble && !log.events.some((e) => e.kind === 'user')) log.append({ kind: 'reminder', as: 'user', text: opts.preamble });
+  runStart = log.events.length;
   log.append({ kind: 'user', text: prompt });
 
   while (true) {
@@ -194,6 +218,15 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     if (got.stop === 'max_tokens') {
       log.append({ kind: 'reminder', as: 'user', text: CONTINUE_AFTER_LIMIT });
       continue;
+    }
+    // Done gate: one reminder to run a declared check, then the claim is refused.
+    if (!verified(entries(), checks)) {
+      if (!nudged) {
+        nudged = true;
+        log.append({ kind: 'reminder', as: 'user', text: unverifiedReminder(checks) });
+        continue;
+      }
+      return finish('error_unverified_claim', 'completed');
     }
     return finish('success', 'completed');
   }
