@@ -24,6 +24,9 @@ export type Settings = {
   spawn?: boolean;
   // Tokens of context at which a session hands off to a new one, or "off". User settings only.
   handoffAt?: number | 'off';
+  // On a spent quota: "fallback" (the default), or "wait:<minutes>" to wait up to that long in all for it to come
+  // back before falling back. User settings only: a repo must not keep the user waiting.
+  onQuota?: string;
   // The desktop app's own settings (cedian: theme, keymap, layout and the like). cedia never reads them and checks
   // only that they are an object, so the desktop can keep them in this file without cedia knowing their shape.
   desktop?: Record<string, unknown>;
@@ -41,6 +44,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   roles: ['plan', 'code', 'review', 'swarm'],
   spawn: 'any',
   handoffAt: 'any',
+  onQuota: 'any',
   desktop: 'any',
 };
 
@@ -128,6 +132,16 @@ export function loadFallback(model: ModelSpec, flag?: string): ModelSpec | undef
   if (!ref || ref === 'none') return undefined;
   const fallback = resolveModel(ref);
   return fallback.ref === model.ref ? undefined : fallback;
+}
+
+// How long a run may wait for a spent quota that says when it comes back: flag > user settings > not at all
+// (fall back at once). Returns milliseconds, or undefined for fallback.
+export function loadQuotaWait(flag?: string): number | undefined {
+  const raw = flag ?? readSettings(join(cediaHome(), 'settings.json')).onQuota ?? 'fallback';
+  if (raw === 'fallback') return undefined;
+  const minutes = Number(/^wait:(.+)$/.exec(raw)?.[1]);
+  if (!(minutes > 0)) throw new Error(`on-quota must be fallback or wait:<minutes>: ${raw}`);
+  return minutes * 60_000;
 }
 
 // Sub-threads: flag > user settings > on.
