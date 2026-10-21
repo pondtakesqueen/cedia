@@ -154,6 +154,23 @@ Guarantees that hold whatever model runs come from the log, not the model's word
 - **Read-only** subagents get write tools and MCP stripped by `ToolSpec.effect`, not by prompt.
 - **Session linter** (`cedia lint-session <file>`, stage 2): tool_intent/tool_result pairing, `systemHash`/`toolsHash` constant except after `tools_changed`, no header values, every `request` followed by an `attempt`. Runs in CI on faux sessions.
 
+## Git
+
+cedia is not a git client; it covers what an agent session needs and leaves the rest to `git`, `gh` or lazygit through `!`.
+
+| Feature | Stage | Notes |
+|---|---|---|
+| Deny list for force-push and `git reset --hard` on shared branches | 2 | Trust section |
+| Shadow-git snapshot before each turn that writes | 2 | Separate git dir, never touches the user's repo or index; covers bash edits too, which Claude Code's checkpoints do not |
+| Branch and dirty count in the status line | 3 | |
+| `/diff`: working tree changes, and changes since the turn started | 3 | Like Codex and OpenCode `/diff` |
+| `/undo` and `/redo` of the last turn's files | 3 | From the shadow snapshot; says plainly it does not undo external side effects |
+| `/commit`: message from the `smol` role, user confirms | 4 | Stages only files the session changed unless told otherwise |
+| `/pr`: push the branch and open a PR through `gh` | 4 | Push needs approval; never to the default branch |
+| `/review`: review the diff or a PR with the `panel` role | 5 | Findings come with evidence |
+| Worktree per subagent | 5 | |
+| `/rewind` conversation and files together | 6 | |
+
 ## pstack
 
 cedia runs the original pstack without editing its files. `cedia setup` clones it to `~/.cedia/plugins/pstack`. cedia supplies what Cursor supplied: `Task`, `AskQuestion`, todo lists, per-role models from `~/.cedia/rules/pstack-models.md`, and `docs/harness/cedia.md` mapping Cursor names to cedia's. Cursor-only features are skipped with a "Skipped in cedia" line.
