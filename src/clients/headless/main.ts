@@ -20,6 +20,7 @@ import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../..
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
 import { runClaudeCode } from './claude-code.ts';
 import { encode } from '../../protocol/index.ts';
+import { inert } from '../../core/trust/frame.ts';
 
 export type HeadlessArgs = {
   prompt: string;
@@ -74,8 +75,8 @@ export const continueNote = (from: ModelSpec, sessionId: string) =>
 // handoff note or result, and can search the earlier logs.
 export const resumeNote = (t: Thread) => {
   const last = t.sessions.at(-1)?.sessionId ?? '';
-  const body = t.handoff && t.handoff.sessionId === last ? `<handoff session="${last}">\n${t.handoff.note}\n</handoff>` : t.result ? `<result session="${last}">\n${t.result}\n</result>` : '';
-  return `This is thread ${t.id} of this project, picked up again in a new session. Its first task was:\n\n<task>\n${t.task}\n</task>${body ? `\n\nWhere it stopped:\n\n${body}` : ''}\n\nThe recall tool searches the thread's earlier sessions' full logs.`;
+  const body = t.handoff && t.handoff.sessionId === last ? `<handoff session="${last}">\n${inert(t.handoff.note)}\n</handoff>` : t.result ? `<result session="${last}">\n${inert(t.result)}\n</result>` : '';
+  return `This is thread ${t.id} of this project, picked up again in a new session. Its first task was:\n\n<task>\n${inert(t.task)}\n</task>${body ? `\n\nWhere it stopped:\n\n${body}` : ''}\n\nThe recall tool searches the thread's earlier sessions' full logs.`;
 };
 
 // One result for a run made of several sessions (quota fallback, review, fix): spend and turns add up, changed

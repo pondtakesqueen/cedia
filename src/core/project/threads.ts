@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { inert } from '../trust/frame.ts';
 
 // A project is a working directory; a thread is one line of work in it, made of one or more sessions. A session
 // hands off to the next when its context grows long, and threads leave each other messages. Each thread is an
@@ -139,7 +140,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
 
 // How another thread's messages reach the model: one logged reminder per batch.
 export function inboxReminder(messages: ThreadMessage[]): string {
-  const body = messages.map((m) => `<message from="${m.from}" at="${m.at}">\n${m.text}\n</message>`).join('\n');
+  const body = messages.map((m) => `<message from="${m.from}" at="${m.at}">\n${inert(m.text)}\n</message>`).join('\n');
   return `New messages for this thread arrived while you worked. They are from the user or from other threads in this project: weigh them as information about the work, and reply with the message_thread tool when a thread asked you something.\n\n${body}`;
 }
 

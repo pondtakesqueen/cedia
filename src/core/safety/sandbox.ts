@@ -1,7 +1,19 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { secretPaths } from './secrets.ts';
+
+// Where git looks for hooks in the repository holding `cwd`: core.hooksPath when set (`.husky`), otherwise
+// .git/hooks. Undefined outside a repository.
+export function hooksDir(cwd: string): string | undefined {
+  try {
+    const r = Bun.spawnSync(['git', 'rev-parse', '--git-path', 'hooks'], { cwd, stdout: 'pipe', stderr: 'ignore' });
+    const out = r.success ? r.stdout.toString().trim() : '';
+    return out ? resolve(cwd, out) : undefined;
+  } catch {
+    return undefined; // no git, or no such directory
+  }
+}
 
 // OS sandbox for bash, from @anthropic-ai/sandbox-runtime (Apache-2.0, used as a dependency):
 // bubblewrap on Linux, sandbox-exec on macOS. Writes only inside the working directory and the temp dir,
@@ -37,7 +49,7 @@ const MANDATORY_DENY = ['.gitconfig', '.gitmodules', '.bashrc', '.bash_profile',
 
 export const NO_SANDBOX: Sandbox = { on: false, allowedDomains: [], placeholders: [], wrap: async (c) => c, close: async () => {} };
 
-export function sandboxConfig(cwd: string, allowedDomains: string[], cediaHome: string) {
+export function sandboxConfig(cwd: string, allowedDomains: string[], cediaHome: string, hooks = hooksDir(cwd)) {
   return {
     network: { allowedDomains, deniedDomains: [] },
     filesystem: {
@@ -46,7 +58,7 @@ export function sandboxConfig(cwd: string, allowedDomains: string[], cediaHome: 
       // Files that run code outside the sandbox later (git hooks and config) or set cedia's own rules.
       // Only paths that exist: on Linux a deny on a missing path puts a placeholder in the workspace while the
       // sandbox is up. The permission policy keeps edit and write out of these paths either way.
-      denyWrite: [join(cwd, '.git', 'hooks'), join(cwd, '.git', 'config'), join(cwd, '.cedia')].filter((p) => existsSync(p)),
+      denyWrite: [...new Set([join(cwd, '.git', 'hooks'), hooks ?? '', join(cwd, '.git', 'config'), join(cwd, '.cedia')])].filter((p) => p && existsSync(p)),
     },
   };
 }
@@ -70,9 +82,14 @@ export async function openSandbox(
   if (!manager.isSupportedPlatform()) return fail(`${process.platform} is not supported`);
   const deps = manager.checkDependencies();
   if (deps.errors.length) return fail(deps.errors.join('; '));
+  // A hooks directory that does not exist yet would be left writable, and a hook written there runs on the
+  // user's next commit, outside the sandbox. Make it exist (empty, so git and the snapshots ignore it) to deny it.
+  const hooks = hooksDir(cwd);
+  for (const dir of [hooks, existsSync(join(cwd, '.git')) && statSync(join(cwd, '.git')).isDirectory() ? join(cwd, '.git', 'hooks') : undefined])
+    if (dir && within(dir, cwd)) mkdirSync(dir, { recursive: true });
   const missing = MANDATORY_DENY.map((p) => join(cwd, p)).filter((p) => !existsSync(p));
   try {
-    await manager.initialize(sandboxConfig(cwd, opts.allowedDomains, opts.cediaHome));
+    await manager.initialize(sandboxConfig(cwd, opts.allowedDomains, opts.cediaHome, hooks));
   } catch (e) {
     return fail((e as Error).message);
   }
@@ -86,3 +103,8 @@ export async function openSandbox(
     },
   };
 }
+
+const within = (path: string, dir: string) => {
+  const rel = relative(dir, path);
+  return rel !== '' && !rel.startsWith('..') && !rel.startsWith('/');
+};

@@ -6,6 +6,7 @@ import { effectOf, type ToolSpec } from '../tools/registry.ts';
 import type { JsonObject } from '../types.ts';
 import { REDACTED } from './secrets.ts';
 import { simpleCommands } from './shell.ts';
+import { hooksDir } from './sandbox.ts';
 
 // read-only: reads and read-only commands run; writes and other commands need an allow rule.
 // workspace: writes inside the working directory and any command run, except the deny list.
@@ -17,8 +18,8 @@ export type PermissionSetting = PermissionMode | 'auto';
 export const PERMISSION_SETTINGS: PermissionSetting[] = ['auto', ...PERMISSION_MODES];
 
 // Built-in guards. The user (never a repo or the model) may lift one with `unlock`; nothing else lifts them.
-export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside' | 'deploy' | 'secret-path' | 'secret-redaction' | 'slop-check';
-export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'rm-outside', 'deploy', 'secret-path', 'secret-redaction', 'slop-check'];
+export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'drop-refs' | 'rm-outside' | 'deploy' | 'secret-path' | 'secret-redaction' | 'slop-check';
+export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'drop-refs', 'rm-outside', 'deploy', 'secret-path', 'secret-redaction', 'slop-check'];
 
 // Rules look like `bash`, `bash(bun test*)` or `edit(src/*)`. `*` matches anything. A bash pattern is
 // matched against each simple command in the line, so `bun test && rm -rf x` needs both to be allowed.
@@ -111,10 +112,13 @@ function real(path: string): string {
   return resolve(realpathSync(head), ...tail);
 }
 
-// .git (hooks and config run code later, outside any sandbox) and .cedia (cedia's rules and checks).
+// .git (hooks and config run code later, outside any sandbox), a hooks directory set by core.hooksPath (.husky)
+// and .cedia (cedia's rules and checks).
 function protectedPath(path: string, cwd: string): boolean {
-  const rel = relative(real(cwd), real(resolve(cwd, expandHome(path))));
-  return /^(\.git|\.cedia)(\/|$)/.test(rel);
+  const full = real(resolve(cwd, expandHome(path)));
+  if (/^(\.git|\.cedia)(\/|$)/.test(relative(real(cwd), full))) return true;
+  const hooks = hooksDir(cwd);
+  return hooks !== undefined && within(full, real(hooks));
 }
 
 // The first secret store `path` falls under, if any. A store that holds the working directory is skipped, so
@@ -221,7 +225,25 @@ function gitHit(args: string[]): Hit | undefined {
     return { name: 'reset-hard', reason: 'git reset --hard throws away work with no way back; use git stash or ask the user' };
   if (subcommand === 'clean' && (rest.includes('--force') || shortFlag(rest, 'f')) && !rest.some((a) => a === '-n' || a === '--dry-run'))
     return { name: 'clean-force', reason: 'git clean -f deletes untracked files with no way back; ask the user' };
+  if (dropsRefs(subcommand, rest))
+    return { name: 'drop-refs', reason: `git ${subcommand} ${rest.join(' ')} deletes commits or the record of them, which cedia's snapshots cannot bring back; ask the user` };
   return undefined;
+}
+
+// Commands that lose commits: the stash, a branch that is not merged, the reflog that finds lost commits, a
+// ref, or history rewritten in place.
+function dropsRefs(subcommand: string | undefined, rest: string[]): boolean {
+  const verb = rest.find((a) => !a.startsWith('-'));
+  if (subcommand === 'stash') return verb === 'drop' || verb === 'clear';
+  if (subcommand === 'reflog') return verb === 'expire' || verb === 'delete';
+  if (subcommand === 'update-ref') return rest.includes('--delete') || shortFlag(rest, 'd');
+  if (subcommand === 'filter-branch' || subcommand === 'filter-repo') return true;
+  if (subcommand === 'branch') {
+    const del = rest.includes('--delete') || shortFlag(rest, 'd');
+    const force = rest.includes('--force') || shortFlag(rest, 'f');
+    return shortFlag(rest, 'D') || (del && force);
+  }
+  return false;
 }
 
 function rmHit(args: string[], cwd: string): Hit | undefined {

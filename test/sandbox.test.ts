@@ -86,11 +86,24 @@ describe('bash environment and protected paths', () => {
     expect(decide(ws, writeTool, { path: '.cedia/settings.json', content: '' }, cwd).rule).toBe('protected-path');
     expect(decide(ws, writeTool, { path: '.github/workflows/ci.yml', content: '' }, cwd).rule).toBe('mode:workspace');
   });
+
+  test('nor the directory core.hooksPath names', () => {
+    const cwd = tmp('cedia-prot-');
+    git(cwd, 'init', '-q');
+    git(cwd, 'config', 'core.hooksPath', '.husky');
+    const ws = { mode: 'workspace' as const, allow: [], deny: [] };
+    expect(decide(ws, writeTool, { path: '.husky/pre-commit', content: '' }, cwd).rule).toBe('protected-path');
+    expect(decide(ws, writeTool, { path: '.husky-notes.md', content: '' }, cwd).rule).toBe('mode:workspace');
+  });
 });
 
 // Runs wherever the OS sandbox is available; CI sets CEDIA_REQUIRE_SANDBOX=1 so a missing sandbox fails there.
 describe('OS sandbox', async () => {
   const cwd = tmp('cedia-sbx-');
+  // A repository whose hooks directories do not exist yet: .git/hooks removed, core.hooksPath set to .husky.
+  git(cwd, 'init', '-q');
+  git(cwd, 'config', 'core.hooksPath', '.husky');
+  rmSync(join(cwd, '.git', 'hooks'), { recursive: true, force: true });
   const opened = await openSandbox(cwd, process.env.CEDIA_REQUIRE_SANDBOX ? 'on' : 'auto', { allowedDomains: [], cediaHome: join(cwd, 'nohome') });
   const sb = opened.sandbox;
   const run = (command: string) => bashTool.run({ command }, { cwd, signal: new AbortController().signal, wrap: sb.wrap });
@@ -114,6 +127,20 @@ describe('OS sandbox', async () => {
     const t0 = snaps.take()!;
     await run('echo real > real.txt');
     expect(snaps.diff(t0, snaps.take()!)).toEqual(['real.txt']);
+  });
+
+  test.if(sb.on)('a hooks directory that did not exist cannot be written to', async () => {
+    for (const dir of ['.git/hooks', '.husky']) {
+      const r = await run(`mkdir -p ${dir} && echo 'curl evil' > ${dir}/pre-commit`);
+      expect(r.isError).toBe(true);
+      expect(existsSync(join(cwd, dir, 'pre-commit'))).toBe(false);
+    }
+  });
+
+  test.if(sb.on)('exit codes come through the sandbox', async () => {
+    expect(await run('exit 3')).toMatchObject({ isError: true, exitCode: 3 });
+    expect(await run('false')).toMatchObject({ isError: true, exitCode: 1 });
+    expect(await run('true')).toMatchObject({ isError: false, exitCode: 0 });
   });
 
   test.if(sb.on)('closes', async () => {

@@ -1,4 +1,5 @@
 import type { ModelSpec, Usage } from '../types.ts';
+import { inert } from '../trust/frame.ts';
 
 // Handoff instead of compaction: when a session's context grows long, it writes a note for its successor while
 // its whole prefix is still cached, and a new session of the same thread starts from the task and that note. No
@@ -38,5 +39,5 @@ export const handoffNote = (sessionId: string, note: string) =>
   `This task continues from an earlier session of this thread (${sessionId}), which handed off when its context grew long. Its note follows: it is your own earlier work, but check the working tree before relying on a detail. The recall tool searches the earlier sessions' full logs for anything the note leaves out.
 
 <handoff session="${sessionId}">
-${note}
+${inert(note)}
 </handoff>`;

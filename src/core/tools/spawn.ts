@@ -1,5 +1,6 @@
 import type { ResultSubtype } from '../types.ts';
 import { clip, type ToolSpec } from './registry.ts';
+import { inert } from '../trust/frame.ts';
 
 // Sub-threads: a session hands a self-contained piece of work to a child session with a fresh context, and only
 // the child's report comes back. The parent's context stays small (the child's reads and dead ends never enter
@@ -18,16 +19,23 @@ export type Spawner = (task: string, kind: SpawnKind, signal: AbortSignal) => Pr
 
 // What comes back to the parent, at most.
 export const MAX_REPORT = 4000;
+// Explore sub-threads one run has going at a time, and sub-threads it may start in all: a model that fans out
+// on every question would otherwise start dozens of sessions at once and spend without bound.
+export const MAX_CONCURRENT_EXPLORE = 4;
+export const MAX_SPAWNS = 16;
 
 export function spawnReport(kind: SpawnKind, o: SpawnOutcome): string {
   const attrs = [o.thread ? `thread="${o.thread}"` : '', `kind="${kind}"`, `model="${o.model}"`, `ended="${o.subtype}"`, `cost="$${o.costUsd.toFixed(4)}"`].filter(Boolean).join(' ');
-  const lines = [`<subthread ${attrs}>`, clip(o.result.trim(), MAX_REPORT), '</subthread>'];
+  const lines = [`<subthread ${attrs}>`, clip(inert(o.result.trim()), MAX_REPORT), '</subthread>'];
   if (o.changed.length) lines.push(`Changed: ${o.changed.join(', ')}${o.unverified.length ? ` (no passing check after: ${o.unverified.join(', ')})` : ''}`);
   if (o.thread) lines.push(`Its full log stays readable with read_thread ${o.thread}.`);
   return lines.join('\n');
 }
 
-export function spawnTool(spawn: Spawner): ToolSpec {
+export function spawnTool(spawn: Spawner, limits = { concurrent: MAX_CONCURRENT_EXPLORE, total: MAX_SPAWNS }): ToolSpec {
+  let started = 0;
+  let running = 0;
+  const waiting: (() => void)[] = [];
   return {
     name: 'spawn',
     description: `Hand a self-contained piece of work to a sub-thread: a new session with a fresh context that sees only the task you write, and returns one report. Use it to keep your own context small, for work whose details you will not need afterwards: searching or reading across many files to answer one question, investigating a failure, or an independent change you can describe fully. Do it yourself when it takes a few reads or needs what you already know.
@@ -53,8 +61,24 @@ Write the task as a complete brief: the goal, the paths and facts it needs, and 
       const kind = input.kind as SpawnKind;
       if (!task) return { text: 'task is required', isError: true };
       if (!SPAWN_KINDS.includes(kind)) return { text: `kind must be one of ${SPAWN_KINDS.join(', ')}`, isError: true };
-      const o = await spawn(task, kind, ctx.signal);
-      return { text: spawnReport(kind, o), isError: o.subtype !== 'success' };
+      if (started >= limits.total) return { text: `not run: this run has started ${started} sub-threads, the most it may. Do the rest yourself or report what is left`, isError: true };
+      started++;
+      // Work runs alone already (it writes); explore waits for a free slot.
+      // A finished one hands its slot straight to the next in line, so no newcomer can take it in between.
+      if (kind === 'explore') {
+        if (running < limits.concurrent) running++;
+        else await new Promise<void>((r) => waiting.push(r));
+      }
+      try {
+        const o = await spawn(task, kind, ctx.signal);
+        return { text: spawnReport(kind, o), isError: o.subtype !== 'success' };
+      } finally {
+        if (kind === 'explore') {
+          const next = waiting.shift();
+          if (next) next();
+          else running--;
+        }
+      }
     },
   };
 }
