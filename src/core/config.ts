@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { GUARDS, PERMISSION_SETTINGS, type Guard, type PermissionSetting, type Policy } from './safety/policy.ts';
 import { DEFAULT_DOMAINS, SANDBOX_SETTINGS, type SandboxSetting } from './safety/sandbox.ts';
+import { defaultHandoffAt } from './project/handoff.ts';
 import { FALLBACKS, resolveModel } from './providers/catalog.ts';
 import { secretPaths } from './safety/secrets.ts';
 import type { ModelSpec, PrivacyLevel } from './types.ts';
@@ -19,6 +20,8 @@ export type Settings = {
   // The model for each role: an alias or ref, `claude-code[:<model>]` for plan and review, or "none". User
   // settings only: a repo must not pick what the user pays for.
   roles?: { plan?: string; code?: string; review?: string };
+  // Tokens of context at which a session hands off to a new one, or "off". User settings only.
+  handoffAt?: number | 'off';
 };
 
 // How a plan or review role runs: in cedia on a catalog model, or through the user's own Claude Code CLI.
@@ -89,6 +92,16 @@ export function loadFallback(model: ModelSpec, flag?: string): ModelSpec | undef
   if (!ref || ref === 'none') return undefined;
   const fallback = resolveModel(ref);
   return fallback.ref === model.ref ? undefined : fallback;
+}
+
+// When a writer session hands off: flag > user settings > half the window, capped (core/project/handoff.ts).
+export function loadHandoffAt(model: ModelSpec, flag?: string): number | undefined {
+  const raw = flag ?? readSettings(join(cediaHome(), 'settings.json')).handoffAt;
+  if (raw === undefined) return defaultHandoffAt(model);
+  if (raw === 'off') return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1000) throw new Error(`handoff-at must be a token count of at least 1000, or off: ${raw}`);
+  return n;
 }
 
 // Roles: flags > CEDIA_MODEL (code only) > user settings > defaults (code: deepseek; plan and review: off).

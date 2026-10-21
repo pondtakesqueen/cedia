@@ -32,10 +32,10 @@ export type AttemptError = { code: AttemptErrorCode; status?: number; retryAfter
 
 export type ToolDef = { name: string; description: string; schema: JsonObject };
 
-export type TurnEndReason = 'completed' | 'aborted' | 'error' | 'max_tokens' | 'budget' | 'max_turns';
+export type TurnEndReason = 'completed' | 'aborted' | 'error' | 'max_tokens' | 'budget' | 'max_turns' | 'handoff';
 
 type EventBody =
-  | { kind: 'session'; cwd: string; role: string; model: string; system: string; tools: ToolDef[]; parentSession?: string }
+  | { kind: 'session'; cwd: string; role: string; model: string; system: string; tools: ToolDef[]; parentSession?: string; thread?: string }
   | { kind: 'user'; text: string }
   | {
       kind: 'request';
@@ -139,8 +139,11 @@ export type Provider = {
 // flags: what the slop guard found in this run's changes (see core/trust/slop.ts).
 export type Evidence = { changed: string[]; checks: { command: string; exitCode: number }[]; unverified: string[]; flags?: string[] };
 
+// 'handoff' ends a session, never a run: the session wrote its handoff note (the result) and the client goes on
+// in a new session of the same thread.
 export type ResultSubtype =
-  | 'success' | 'error_max_turns' | 'error_max_budget_usd' | 'error_during_execution' | 'interrupted' | 'error_unverified_claim';
+  | 'success' | 'error_max_turns' | 'error_max_budget_usd' | 'error_during_execution' | 'interrupted' | 'error_unverified_claim'
+  | 'handoff';
 
 export type HeadlessResult = {
   type: 'result';
@@ -156,6 +159,9 @@ export type HeadlessResult = {
   // The plan the writer was given, and the review of its change (see core/trust/review.ts).
   plan?: Step;
   review?: Step & { verdict: 'approve' | 'changes' | 'unclear'; fixed: boolean };
+  // The thread the run belongs to, and every session it took when it handed off or fell back.
+  thread?: string;
+  sessions?: string[];
 };
 
 // A role run around the writer. `via: 'claude-code'` is the user's own Claude Code CLI (their subscription): its
