@@ -12,3 +12,6 @@ research/cc-re-map.md
 
 # eval output (baselines worth keeping go in evals/baseline/)
 results*.jsonl
+
+# control-cedia proof. The PR quotes the command output. Session text stays out of git.
+.cursor/skills/verify-cedia/artifacts/
