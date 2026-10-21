@@ -79,4 +79,10 @@ describe('miss attribution', () => {
     ]);
     expect(rows.map((r) => r.cause)).toEqual(['cold', undefined, 'system_changed', 'idle_over_ttl', 'provider']);
   });
+
+  test('a read short of the previous input by less than one cache block is not a miss', () => {
+    const rows = attributeMisses([req(0), asst(1, 0, 723), req(2), asst(3, 640, 170), req(4), asst(5, 640, 856)], { blockTokens: 128 });
+    expect(rows.map((r) => r.cause)).toEqual(['cold', undefined, 'provider']);
+    expect(rows[1]!.reusable).toBe(640);
+  });
 });

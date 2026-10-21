@@ -131,6 +131,8 @@ Per provider: Anthropic uses automatic `cache_control` plus a breakpoint at the 
 
 Reasoning tokens are a subset of `output`. Hit ratio = cacheRead / (uncached + cacheRead + cacheWrite).
 
+Providers cache in blocks (`cacheBlockTokens`): DeepSeek in 128-token blocks, and Anthropic reads stop a few tokens short at the turn boundary. A read is a miss only when it falls more than one block short of the previous input. Measured numbers live in `evals/cache/`.
+
 Claude 5.5-family models also bind thinking signatures to the prefix, so any history edit is a correctness bug, not just a cache miss. Stage 4 checks this three ways: diff captured requests turn to turn; run with `prefix_mismatch_behavior: "drop_block"` (beta `thinking-binding-controls-2026-08-01`) and log any `input_transformations`; then set the field explicitly.
 
 ## Model roles

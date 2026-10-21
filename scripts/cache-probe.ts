@@ -32,15 +32,18 @@ for (let r = 0; r < Number(values.runs); r++) {
     { log, provider: model.wire === 'faux' ? fauxStand(turns) : providerFor(model), model, tools: [readTool, bashTool], system: BASE_SYSTEM, preamble: preamble(cwd), cwd, maxTurns: turns + 3, ...(model.defaultEffort ? { effort: model.defaultEffort } : {}) },
     `There are ${turns - 1} files named part01.txt to part${String(turns - 1).padStart(2, '0')}.txt. Read them one at a time, in order, with one read call per turn (do not batch them). Then reply with the sum of all values.`,
   );
-  const rows = attributeMisses(log.events, { minTokens: model.caps.cacheMinTokens });
+  const rows = attributeMisses(log.events, { minTokens: model.caps.cacheMinTokens, blockTokens: model.caps.cacheBlockTokens });
   const later = rows.slice(1);
   const input = later.reduce((s, r) => s + r.input, 0);
   const read = later.reduce((s, r) => s + r.cacheRead, 0);
-  runs.push({ run: r + 1, subtype: result.subtype, requests: rows.length, hitAfterFirst: input ? read / input : 0, costUsd: result.costUsd, misses: rows.filter((x) => x.cause && x.cause !== 'cold'), log: log.path });
+  // Prefix reuse: cached tokens over what a perfect cache could serve. Near 1 means cedia kept the prefix stable;
+  // the hit ratio also depends on how much new text each turn adds.
+  const reusable = later.reduce((s, r) => s + r.reusable, 0);
+  runs.push({ run: r + 1, subtype: result.subtype, requests: rows.length, hitAfterFirst: input ? read / input : 0, prefixReuse: reusable ? Math.min(read, reusable) / reusable : 0, costUsd: result.costUsd, misses: rows.filter((x) => x.cause && x.cause !== 'cold'), log: log.path });
 }
 
-const hits = runs.map((r) => r.hitAfterFirst);
-console.log(JSON.stringify({ model: model.ref, turns, runs, mean: hits.reduce((a, b) => a + b, 0) / hits.length, min: Math.min(...hits), max: Math.max(...hits) }, null, 2));
+const stat = (xs: number[]) => ({ mean: xs.reduce((a, b) => a + b, 0) / xs.length, min: Math.min(...xs), max: Math.max(...xs) });
+console.log(JSON.stringify({ model: model.ref, turns, hit: stat(runs.map((r) => r.hitAfterFirst)), prefixReuse: stat(runs.map((r) => r.prefixReuse)), runs }, null, 2));
 
 // Offline stand-in that behaves like a model following the probe prompt, so the script itself can be checked.
 function fauxStand(n: number) {

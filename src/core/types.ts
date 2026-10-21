@@ -72,6 +72,7 @@ export type ModelCapabilities = {
   input: ('text' | 'image')[];
   effortLevels: Effort[];
   cacheMinTokens: number;
+  cacheBlockTokens: number; // providers cache whole blocks; a read up to one block short of the previous input is a full hit
   midConversationSystem: boolean;
   contextWindow: number;
 };

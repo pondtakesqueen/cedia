@@ -16,6 +16,7 @@ const claudeCaps: ModelCapabilities = {
   input: ['text', 'image'],
   effortLevels: EFFORTS,
   cacheMinTokens: 512,
+  cacheBlockTokens: 16, // reads land a few tokens short of the previous input (turn boundary re-render), measured on Haiku 5.5 via Go
   midConversationSystem: false,
   contextWindow: 1_000_000,
 };
@@ -27,6 +28,7 @@ const chatCaps: ModelCapabilities = {
   input: ['text'],
   effortLevels: [],
   cacheMinTokens: 64,
+  cacheBlockTokens: 128, // measured on DeepSeek V4.1 Flash via Go, 2026-10-21
   midConversationSystem: true,
   contextWindow: 1_000_000,
 };
