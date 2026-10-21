@@ -117,14 +117,15 @@ async function collect(provider: Provider, req: WireRequest, signal: AbortSignal
   return signal.aborted ? { ok: 'aborted' } : { ok: false, error: { code: 'network', message: 'stream ended without a result' } };
 }
 
-function summarizeTiming(wall: number, t: { modelMs: number; ttftMs: number; decodeMs: number; toolMs: number }, outputTokens: number): Timing {
+function summarizeTiming(wall: number, t: { modelMs: number; ttftMs: number; decodeMs: number; toolMs: number; retryMs: number }, outputTokens: number): Timing {
   const r = Math.round;
   return {
     wallMs: r(wall),
     modelMs: r(t.modelMs),
     ttftMs: r(t.ttftMs),
     toolMs: r(t.toolMs),
-    harnessMs: Math.max(0, r(wall - t.modelMs - t.toolMs)),
+    retryMs: r(t.retryMs),
+    harnessMs: Math.max(0, r(wall - t.modelMs - t.toolMs - t.retryMs)),
     outputTokPerSec: t.decodeMs > 0 ? Math.round((outputTokens / t.decodeMs) * 10_000) / 10 : 0,
   };
 }
@@ -155,7 +156,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   let nudged = false;
   const snap: { tree?: string } = {};
   const wallStart = performance.now();
-  const timing = { modelMs: 0, ttftMs: 0, decodeMs: 0, toolMs: 0 };
+  const timing = { modelMs: 0, ttftMs: 0, decodeMs: 0, toolMs: 0, retryMs: 0 };
 
   // The slop guard reads this run's changes: the patch between its first and latest snapshot, or the edit and
   // write calls when snapshots are off.
@@ -250,7 +251,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       if (!isRetryable(got.error) || n >= retryMax) return finish('error_during_execution', 'error', got.error.message);
       const base = opts.retry?.baseMs ?? 1000;
       const cap = opts.retry?.capMs ?? 30_000;
-      await sleep(got.error.retryAfterMs ?? Math.min(cap, base * 2 ** (n - 1)));
+      const wait = got.error.retryAfterMs ?? Math.min(cap, base * 2 ** (n - 1));
+      await sleep(wait);
+      timing.retryMs += wait;
       if (signal.aborted) return finish('interrupted', 'aborted');
     }
     if (!got.ok) throw new Error('unreachable');

@@ -34,7 +34,7 @@ export type Reported = {
   cacheHitRatio?: number;
   turns?: number;
   // cedia only: where the run's time went (see Timing in src/core/types.ts).
-  timing?: { modelMs: number; ttftMs: number; toolMs: number; harnessMs: number; outputTokPerSec: number };
+  timing?: { modelMs: number; ttftMs: number; toolMs: number; retryMs?: number; harnessMs: number; outputTokPerSec: number };
 };
 
 export type Result = {
@@ -354,7 +354,7 @@ function speedOf(results: Result[]): { speed?: Summary["speed"] } {
   if (!timed.length) return {};
   const sum = (f: (r: Result) => number) => timed.reduce((a, r) => a + f(r), 0);
   const t = (r: Result) => r.reported.timing!;
-  const wall = sum((r) => t(r).modelMs + t(r).toolMs + t(r).harnessMs);
+  const wall = sum((r) => t(r).modelMs + t(r).toolMs + (t(r).retryMs ?? 0) + t(r).harnessMs);
   const calls = sum((r) => r.reported.turns ?? 1);
   return {
     speed: {

@@ -156,7 +156,8 @@ export type HeadlessResult = {
 
 // Where a run's wall time went. outputTokPerSec is the model's decode rate: output tokens (thinking included)
 // over streaming time. harnessMs is everything that was neither the model nor a tool: cedia's own overhead.
-export type Timing = { wallMs: number; modelMs: number; ttftMs: number; toolMs: number; harnessMs: number; outputTokPerSec: number };
+// retryMs is time spent waiting to retry a failed provider call.
+export type Timing = { wallMs: number; modelMs: number; ttftMs: number; toolMs: number; retryMs: number; harnessMs: number; outputTokPerSec: number };
 
 export function addUsage(a: Usage, b: Usage): Usage {
   return {

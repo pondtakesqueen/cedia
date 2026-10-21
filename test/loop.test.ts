@@ -57,7 +57,7 @@ describe('loop', () => {
     const { log, opts } = setup([{ blocks: [toolUse('c1', 'read', { path: 'a.txt' })] }, { blocks: [text('ok')] }]);
     const res = await runPrompt(opts, 'go');
     const t = res.timing!;
-    for (const k of ['wallMs', 'modelMs', 'ttftMs', 'toolMs', 'harnessMs', 'outputTokPerSec'] as const) expect(typeof t[k]).toBe('number');
+    for (const k of ['wallMs', 'modelMs', 'ttftMs', 'toolMs', 'retryMs', 'harnessMs', 'outputTokPerSec'] as const) expect(typeof t[k]).toBe('number');
     expect(t.wallMs).toBeGreaterThanOrEqual(t.modelMs);
     for (const a of of(log.events, 'attempt')) expect(a).toMatchObject({ ttftMs: expect.any(Number), ms: expect.any(Number) });
   });
