@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository. `CLAUDE.md` points here.
 
 ## What this is
 
-cedia is a personal coding harness written from scratch in TypeScript on Bun. `SPEC.md` holds every settled decision and the stage order; read it before changing scope.
+cedia is a personal coding harness written from scratch in TypeScript on Bun. `SPEC.md` holds every settled decision and the stage order; read it before changing scope. `docs/ROADMAP.md` says what comes next.
 
 ## Commands
 
@@ -15,6 +15,7 @@ cedia is a personal coding harness written from scratch in TypeScript on Bun. `S
 - `bin/cedia lint-session <file.jsonl>...`: check a session log against the trust invariants. `-m faux` with `CEDIA_FAUX_SCRIPT=<steps.json>` runs offline.
 - `bun scripts/cache-probe.ts --model <ref> [--turns 20] [--runs 3]`: measure prompt-cache hits on a real model and name every miss.
 - `bun evals/run.ts --harness <name> [--model <ref>] [--runs 3] [--jobs 4] [--budget <usd>] [--only <ids>] [--cedia-arg=<flag>]`: run the eval tasks against a harness; `--estimate --model <ref> [--measured <results.jsonl>]` prices a run first. Binaries come from `CEDIA_EVAL_<NAME>_BIN` or PATH. Results go in `evals/results/`.
+- `bun evals/gate.ts [--model <ref>] [--estimate] [--update-baseline]`: the regression gate. Runs `evals/gate/suite.json`, prints the expected cost first, compares with `evals/gate/baseline/` and exits 1 when a model got worse. `--compare <results.jsonl>` re-scores a result file for free. Run it before merging a change to a prompt, default, the loop, a tool or the trust layer (`evals/gate/README.md`).
 
 ## How to work
 
