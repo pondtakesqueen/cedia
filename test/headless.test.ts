@@ -37,14 +37,23 @@ describe('cedia -p (offline, faux)', () => {
     expect(log.events.map((e) => e.kind)).toContain('tool_result');
   });
 
-  test('read-only by default; --permission workspace lets a command write', () => {
+  test('auto is read-only without the sandbox; --permission workspace lets a command write', () => {
     const script = [call('c1', 'echo hi > out.txt'), reply('done')];
-    const ro = cedia(script, ['-p', 'write it', '--output-format', 'json']);
+    const ro = cedia(script, ['-p', 'write it', '--output-format', 'json', '--sandbox', 'off']);
     expect(existsSync(join(ro.dir, 'out.txt'))).toBe(false);
-    const ws = cedia(script, ['-p', 'write it', '--permission', 'workspace']);
+    expect(ro.err).toContain('the sandbox is off, so this session is read-only');
+    const ws = cedia(script, ['-p', 'write it', '--permission', 'workspace', '--sandbox', 'off']);
     expect(ws.code).toBe(0);
     expect(existsSync(join(ws.dir, 'out.txt'))).toBe(true);
     expect(cedia(script, ['-p', 'x', '--permission', 'yolo']).err).toContain('unknown permission mode');
+    expect(cedia(script, ['-p', 'x', '--unlock', 'everything']).err).toContain('unknown guard');
+  });
+
+  // CI sets CEDIA_REQUIRE_SANDBOX=1; elsewhere this runs only where the sandbox opens.
+  test.skipIf(!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin')('auto is workspace inside the sandbox, with no prompt', () => {
+    const r = cedia([call('c1', 'echo hi > out.txt'), reply('done')], ['-p', 'write it', '--sandbox', 'on']);
+    expect(r.code).toBe(0);
+    expect(existsSync(join(r.dir, 'out.txt'))).toBe(true);
   });
 
   test('--check gates the claim, the receipt goes to stderr, and lint-session passes the log', () => {

@@ -1,6 +1,7 @@
 import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
+import { GUARDS } from './core/safety/policy.ts';
 import { lintSession } from './core/session/lint.ts';
 import { SessionLog } from './core/session/log.ts';
 import type { Effort } from './core/types.ts';
@@ -13,9 +14,12 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --max-budget-usd <x>     stop once spend reaches x
       --effort <level>         low | medium | high | xhigh | max
       --cwd <dir>              working directory (default: current)
-      --permission <mode>      read-only | workspace (default: $CEDIA_PERMISSION, ~/.cedia/settings.json, read-only)
+      --permission <mode>      auto | read-only | workspace (default: $CEDIA_PERMISSION, ~/.cedia/settings.json, auto).
+                               auto is workspace when the sandbox is on, read-only when it is off. cedia never stops to ask
       --allow <rule>           allow a call, e.g. 'bash(bun test*)' or 'edit(src/*)'; repeatable
-      --deny <rule>            deny a call; repeatable. The built-in deny list always applies
+      --deny <rule>            deny a call; repeatable. The built-in guards always apply unless unlocked
+      --unlock <guard>         lift a built-in guard: ${GUARDS.join(', ')}; repeatable
+      --privacy <level>        no-training | zdr: which models may see this repo (default: $CEDIA_PRIVACY, settings, no-training)
       --check <command>        declared check for the done gate, e.g. 'bun test'; repeatable
       --sandbox <s>            auto | on | off: OS sandbox for bash (default: $CEDIA_SANDBOX, settings, auto)
       --allow-domain <host>    let sandboxed commands reach this host; repeatable
@@ -41,6 +45,8 @@ export async function main(argv: string[]): Promise<number> {
       permission: { type: 'string' },
       allow: { type: 'string', multiple: true },
       deny: { type: 'string', multiple: true },
+      unlock: { type: 'string', multiple: true },
+      privacy: { type: 'string' },
       check: { type: 'string', multiple: true },
       sandbox: { type: 'string' },
       'allow-domain': { type: 'string', multiple: true },
@@ -76,6 +82,8 @@ export async function main(argv: string[]): Promise<number> {
       ...(values.permission ? { permission: values.permission } : {}),
       ...(values.allow ? { allow: values.allow } : {}),
       ...(values.deny ? { deny: values.deny } : {}),
+      ...(values.unlock ? { unlock: values.unlock } : {}),
+      ...(values.privacy ? { privacy: values.privacy } : {}),
       ...(values.check ? { checks: values.check } : {}),
       ...(values.sandbox ? { sandbox: values.sandbox } : {}),
       ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),

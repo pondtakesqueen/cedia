@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { secretPaths } from './secrets.ts';
 
 // OS sandbox for bash, from @anthropic-ai/sandbox-runtime (Apache-2.0, used as a dependency):
 // bubblewrap on Linux, sandbox-exec on macOS. Writes only inside the working directory and the temp dir,
@@ -37,11 +38,10 @@ const MANDATORY_DENY = ['.gitconfig', '.gitmodules', '.bashrc', '.bash_profile',
 export const NO_SANDBOX: Sandbox = { on: false, allowedDomains: [], placeholders: [], wrap: async (c) => c, close: async () => {} };
 
 export function sandboxConfig(cwd: string, allowedDomains: string[], cediaHome: string) {
-  const home = homedir();
   return {
     network: { allowedDomains, deniedDomains: [] },
     filesystem: {
-      denyRead: ['.ssh', '.aws', '.gnupg', '.config/gh', '.netrc', '.docker/config.json'].map((p) => join(home, p)).concat(cediaHome),
+      denyRead: secretPaths(cediaHome),
       allowWrite: [cwd, tmpdir()],
       // Files that run code outside the sandbox later (git hooks and config) or set cedia's own rules.
       // Only paths that exist: on Linux a deny on a missing path puts a placeholder in the workspace while the

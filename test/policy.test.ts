@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadPolicy } from '../src/core/config.ts';
+import { loadPolicy, loadPrivacy } from '../src/core/config.ts';
 import { decide, denyListed, insideWorkspace, type Policy } from '../src/core/safety/policy.ts';
+import { REDACTED, secretPaths } from '../src/core/safety/secrets.ts';
 import { simpleCommands } from '../src/core/safety/shell.ts';
 import { bashTool } from '../src/core/tools/bash.ts';
 import { editTool, writeTool } from '../src/core/tools/edit.ts';
@@ -120,21 +121,73 @@ describe('modes and rules', () => {
   });
 });
 
+describe('guards the user controls', () => {
+  const secrets = secretPaths(join(cwd, '..', 'cedia-home-x'));
+  const SAFE: Policy = { ...WS, secrets };
+
+  test('unlock lifts one guard and only that one', () => {
+    const p: Policy = { ...WS, unlock: ['deploy', 'force-push'] };
+    expect(bash(p, 'npm publish').decision).toBe('allow');
+    expect(bash(p, 'git push --force origin main').decision).toBe('allow');
+    expect(bash(p, 'git reset --hard').rule).toBe('deny-list:reset-hard');
+  });
+
+  test('credential stores are denied to read and to bash, however they are named', () => {
+    const read = (path: string, policy = SAFE) => decide(policy, readTool, { path }, cwd);
+    expect(read('~/.ssh/id_ed25519').rule).toBe('deny-list:secret-path');
+    expect(read(join(homedir(), '.aws', 'credentials')).rule).toBe('deny-list:secret-path');
+    expect(read('src/app.ts').decision).toBe('allow');
+    for (const command of ['cat ~/.ssh/id_rsa', 'cat $HOME/.netrc', 'base64 < ~/.aws/credentials', `tar czf x.tgz ${homedir()}/.gnupg`, 'grep -r token "${HOME}/.config/gh"'])
+      expect([command, bash(SAFE, command).rule]).toEqual([command, 'deny-list:secret-path']);
+    for (const command of ['cat ~/.sshrc', 'ls ~/projects', 'cat .npmrc', 'echo ~/.ssh-notes'])
+      expect([command, bash(SAFE, command).decision]).toEqual([command, 'allow']);
+    expect(read('~/.ssh/config', { ...SAFE, unlock: ['secret-path'] }).decision).toBe('allow');
+    expect(decide({ ...SAFE, allow: ['read'] }, readTool, { path: '~/.ssh/id_rsa' }, cwd).decision).toBe('deny'); // allow rules do not lift it
+  });
+
+  test('a store that holds the working directory does not lock the session out of it', () => {
+    expect(decide({ ...WS, secrets: [join(cwd, '..')] }, readTool, { path: 'src/app.ts' }, cwd).decision).toBe('allow');
+  });
+
+  test('a write that carries the redaction placeholder is denied', () => {
+    expect(decide(WS, writeTool, { path: '.env', content: `KEY=${REDACTED}\n` }, cwd).rule).toBe('redacted-placeholder');
+    expect(decide(WS, editTool, { path: '.env', edits: [{ old_text: 'A=1', new_text: `A=${REDACTED}` }] }, cwd).rule).toBe('redacted-placeholder');
+    expect(bash(WS, `echo "TOKEN=${REDACTED}" > .env`).rule).toBe('redacted-placeholder');
+    expect(bash(WS, `grep -n "${REDACTED}" .env`).decision).toBe('allow');
+  });
+});
+
 describe('settings', () => {
-  test('flags > env > user settings > read-only; a repo can only add deny rules', () => {
+  test('flags > env > user settings > auto; a repo can only add deny rules', () => {
     const home = mkdtempSync(join(tmpdir(), 'cedia-home-'));
     const repo = mkdtempSync(join(tmpdir(), 'cedia-repo-'));
     const prev = process.env.CEDIA_HOME;
     process.env.CEDIA_HOME = home;
     try {
-      expect(loadPolicy(repo, {}, {})).toEqual({ mode: 'read-only', allow: [], deny: [] });
-      writeFileSync(join(home, 'settings.json'), JSON.stringify({ permissions: { mode: 'workspace', allow: ['bash(make*)'] } }));
+      const rules = (p: Policy) => ({ mode: p.mode, allow: p.allow, deny: p.deny, unlock: p.unlock });
+      expect(rules(loadPolicy(repo, {}, {}))).toEqual({ mode: 'read-only', allow: [], deny: [], unlock: [] });
+      expect(loadPolicy(repo, {}, {}, true).mode).toBe('workspace'); // auto with the sandbox on
+      expect(loadPolicy(repo, {}, {}).secrets).toContain(join(homedir(), '.ssh'));
+      expect(loadPolicy(repo, {}, {}).secrets).toContain(home);
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ permissions: { mode: 'workspace', allow: ['bash(make*)'], unlock: ['deploy'] } }));
       mkdirSync(join(repo, '.cedia'));
-      writeFileSync(join(repo, '.cedia', 'settings.json'), JSON.stringify({ permissions: { mode: 'workspace', allow: ['bash'], deny: ['bash(curl*)'] } }));
-      expect(loadPolicy(repo, {}, {})).toEqual({ mode: 'workspace', allow: ['bash(make*)'], deny: ['bash(curl*)'] });
-      expect(loadPolicy(repo, {}, { CEDIA_PERMISSION: 'read-only' }).mode).toBe('read-only');
-      expect(loadPolicy(repo, { mode: 'workspace', allow: ['edit'] }, { CEDIA_PERMISSION: 'read-only' })).toEqual({ mode: 'workspace', allow: ['edit', 'bash(make*)'], deny: ['bash(curl*)'] });
+      writeFileSync(join(repo, '.cedia', 'settings.json'), JSON.stringify({ permissions: { mode: 'workspace', allow: ['bash'], deny: ['bash(curl*)'], unlock: ['force-push'] } }));
+      expect(rules(loadPolicy(repo, {}, {}))).toEqual({ mode: 'workspace', allow: ['bash(make*)'], deny: ['bash(curl*)'], unlock: ['deploy'] });
+      expect(loadPolicy(repo, {}, { CEDIA_PERMISSION: 'read-only' }, true).mode).toBe('read-only');
+      expect(rules(loadPolicy(repo, { mode: 'workspace', allow: ['edit'], unlock: ['rm-outside'] }, { CEDIA_PERMISSION: 'read-only' }))).toEqual({
+        mode: 'workspace',
+        allow: ['edit', 'bash(make*)'],
+        deny: ['bash(curl*)'],
+        unlock: ['rm-outside', 'deploy'],
+      });
       expect(() => loadPolicy(repo, { mode: 'yolo' }, {})).toThrow('unknown permission mode');
+      expect(() => loadPolicy(repo, { unlock: ['all'] }, {})).toThrow('unknown guard');
+
+      expect(loadPrivacy(repo, undefined, {})).toBe('no-training');
+      expect(loadPrivacy(repo, 'zdr', {})).toBe('zdr');
+      writeFileSync(join(repo, '.cedia', 'settings.json'), JSON.stringify({ privacy: 'zdr' }));
+      expect(loadPrivacy(repo, 'no-training', {})).toBe('zdr'); // a repo may tighten, never loosen
+      expect(() => loadPrivacy(repo, 'none', {})).toThrow('unknown privacy level');
     } finally {
       if (prev === undefined) delete process.env.CEDIA_HOME;
       else process.env.CEDIA_HOME = prev;

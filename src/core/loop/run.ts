@@ -5,6 +5,7 @@ import { hash } from '../hash.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
 import { decide, READ_ONLY_POLICY, type Policy } from '../safety/policy.ts';
+import { redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
 import { evidence, ledgerEntries, verified } from '../trust/ledger.ts';
@@ -19,6 +20,7 @@ import {
   type EventOf,
   type HeadlessResult,
   type ModelSpec,
+  type PrivacyLevel,
   type Provider,
   type ResultSubtype,
   type SessionEvent,
@@ -40,6 +42,8 @@ export type RunOptions = {
   cwd: string;
   // Defaults to read-only: nothing writes unless the caller opts in.
   permission?: Policy;
+  // Defaults to no-training.
+  privacy?: PrivacyLevel;
   // Declared checks (task or repo). The done gate counts only these, never a command the model picked.
   checks?: string[];
   // Puts bash inside the OS sandbox; absent means unsandboxed.
@@ -149,6 +153,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
   if (model.dataPolicy === 'trains' && !isPublicRepo(opts.cwd)) {
     return finish('error_during_execution', 'error', `${model.ref} trains on prompts; it runs only in repos marked public with a .cedia/public file`);
+  }
+  if (opts.privacy === 'zdr' && model.dataPolicy !== 'zdr') {
+    return finish('error_during_execution', 'error', `${model.ref} keeps prompts (${model.dataPolicy}); privacy is set to zdr, so only zero-data-retention models may see this repo`);
   }
 
   if (opts.preamble && !log.events.some((e) => e.kind === 'user')) log.append({ kind: 'reminder', as: 'user', text: opts.preamble });
@@ -303,9 +310,12 @@ async function runTools(
     }
   }
   await Promise.all(pool.map(run));
+  // Secrets are replaced before the result is logged, so neither the log nor the provider ever holds them.
+  const redact = !opts.permission?.unlock?.includes('secret-redaction');
   for (const c of calls) {
     const callId = callIdOf(c);
     const { status, ...output } = results.get(callId)!;
-    log.append({ kind: 'tool_result', callId, status, output });
+    const r = redact ? redactSecrets(output.text) : { text: output.text, count: 0 };
+    log.append({ kind: 'tool_result', callId, status, output: r.count ? { ...output, text: r.text, redacted: r.count } : output });
   }
 }

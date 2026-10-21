@@ -1,4 +1,4 @@
-import type { PermissionMode } from './safety/policy.ts';
+import type { Guard, PermissionMode } from './safety/policy.ts';
 
 // cedia's own base prompt. Stable across sessions: no paths, dates or per-process values (cache rule 1).
 export const BASE_SYSTEM = `You are cedia, a coding agent working in the user's repository through tools.
@@ -12,14 +12,29 @@ Work method:
 - A permission policy decides each tool call. When a call is denied, do not try to get the same effect another way: report what you needed and why.
 - Finish with a short report: what changed, how it was checked, and anything left open.`;
 
-const MODE_NOTE: Record<PermissionMode, string> = {
-  'read-only': 'read-only: file writes and commands that may write are denied unless an allow rule covers them. If the task needs a write, say what you would change and stop.',
-  workspace: 'workspace: you may change files inside the working directory and run commands. Force-push, git reset --hard, rm -r outside the working directory and deploys are always denied.',
+const GUARD_NOTE: Partial<Record<Guard, string>> = {
+  'force-push': 'force-push',
+  'reset-hard': 'git reset --hard',
+  'clean-force': 'git clean -f',
+  'rm-outside': 'rm -r outside the working directory',
+  deploy: 'publishing and deploys',
+  'secret-path': 'credential stores such as ~/.ssh',
 };
 
+function modeNote(mode: PermissionMode, unlock: Guard[]): string {
+  if (mode === 'read-only')
+    return 'read-only: file writes and commands that may write are denied unless an allow rule covers them. If the task needs a write, say what you would change and stop.';
+  const denied = Object.entries(GUARD_NOTE).filter(([g]) => !unlock.includes(g as Guard)).map(([, note]) => note);
+  return `workspace: you may change files inside the working directory and run commands without asking.${denied.length ? ` Denied: ${denied.join(', ')}.` : ''}`;
+}
+
 // Per-session facts go in the first user turn, never in the cached system prompt.
-export function preamble(cwd: string, opts: { mode?: PermissionMode; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] } } = {}, now = new Date()): string {
-  const lines = [`working directory: ${cwd}`, `date: ${now.toISOString().slice(0, 10)}`, `platform: ${process.platform}`, `permission: ${MODE_NOTE[opts.mode ?? 'read-only']}`];
+export function preamble(
+  cwd: string,
+  opts: { mode?: PermissionMode; unlock?: Guard[]; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] } } = {},
+  now = new Date(),
+): string {
+  const lines = [`working directory: ${cwd}`, `date: ${now.toISOString().slice(0, 10)}`, `platform: ${process.platform}`, `permission: ${modeNote(opts.mode ?? 'read-only', opts.unlock ?? [])}`];
   if (opts.sandbox)
     lines.push(
       opts.sandbox.on
