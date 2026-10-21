@@ -45,6 +45,7 @@ type EventBody =
     }
   | { kind: 'attempt'; requestId: EventId; n: number; error?: AttemptError }
   | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage }
+  | { kind: 'permission'; callId: string; tool: string; decision: 'allow' | 'deny'; rule: string; reason?: string }
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
   | { kind: 'tool_result'; callId: string; status: EffectStatus; output: ToolOutput }
   | { kind: 'reminder'; text: string; as: 'system' | 'user' }

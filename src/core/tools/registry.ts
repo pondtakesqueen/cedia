@@ -4,6 +4,10 @@ export type ToolCtx = { cwd: string; signal: AbortSignal };
 
 export type ToolSpec = ToolDef & {
   effect: ToolEffect;
+  // Narrower effect for a given input, e.g. a bash command that only reads. Defaults to `effect`.
+  effectOf?(input: JsonObject): ToolEffect;
+  // The workspace path a write touches, so the policy can keep writes inside the working directory.
+  pathOf?(input: JsonObject): string | undefined;
   replay: 'safe' | 'unsafe';
   run(input: JsonObject, ctx: ToolCtx): Promise<ToolOutput>;
 };
@@ -12,6 +16,8 @@ export type ToolSpec = ToolDef & {
 export function toolDefs(tools: ToolSpec[]): ToolDef[] {
   return tools.map(({ name, description, schema }) => ({ name, description, schema }));
 }
+
+export const effectOf = (spec: ToolSpec, input: JsonObject): ToolEffect => spec.effectOf?.(input) ?? spec.effect;
 
 export const MAX_OUTPUT_CHARS = 30_000;
 
