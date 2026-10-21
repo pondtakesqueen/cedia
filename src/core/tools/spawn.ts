@@ -1,5 +1,6 @@
 import type { ResultSubtype } from '../types.ts';
 import { clip, type ToolSpec } from './registry.ts';
+import { inert } from '../trust/frame.ts';
 
 // Sub-threads: a session hands a self-contained piece of work to a child session with a fresh context, and only
 // the child's report comes back. The parent's context stays small (the child's reads and dead ends never enter
@@ -21,7 +22,7 @@ export const MAX_REPORT = 4000;
 
 export function spawnReport(kind: SpawnKind, o: SpawnOutcome): string {
   const attrs = [o.thread ? `thread="${o.thread}"` : '', `kind="${kind}"`, `model="${o.model}"`, `ended="${o.subtype}"`, `cost="$${o.costUsd.toFixed(4)}"`].filter(Boolean).join(' ');
-  const lines = [`<subthread ${attrs}>`, clip(o.result.trim(), MAX_REPORT), '</subthread>'];
+  const lines = [`<subthread ${attrs}>`, clip(inert(o.result.trim()), MAX_REPORT), '</subthread>'];
   if (o.changed.length) lines.push(`Changed: ${o.changed.join(', ')}${o.unverified.length ? ` (no passing check after: ${o.unverified.join(', ')})` : ''}`);
   if (o.thread) lines.push(`Its full log stays readable with read_thread ${o.thread}.`);
   return lines.join('\n');
