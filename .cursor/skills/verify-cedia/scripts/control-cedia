@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(cd "$script_dir/../../../.." && pwd)
+bin="$repo/bin/cedia"
+usage_line='usage: cedia -p "<prompt>" [options]   (prompt may also come on stdin)'
+
+die() {
+  printf '%s\n' "$*" >&2
+  exit 2
+}
+
+require_run() {
+  [ -n "${CEDIA_VERIFY_ID:-}" ] || die "CEDIA_VERIFY_ID is unset. Eval the output of launch first."
+  root="/tmp/cedia-verify-$CEDIA_VERIFY_ID"
+  [ -f "$root/state.env" ] || die "no verify run at $root"
+  work="$root/work"
+  home="$root/home"
+  evidence="$repo/.cursor/skills/verify-cedia/artifacts/$CEDIA_VERIFY_ID"
+  [ -d "$work" ] && [ -d "$home" ] && [ -d "$evidence" ] || die "verify run $CEDIA_VERIFY_ID is incomplete"
+  [ "${CEDIA_HOME:-}" = "$home" ] || die "CEDIA_HOME does not match $home"
+  [ "${CEDIA_VERIFY_WORK:-}" = "$work" ] || die "CEDIA_VERIFY_WORK does not match $work"
+  real_home=$(cd "$HOME" && pwd)/.cedia
+  [ "$home" != "$real_home" ] || die "refusing to touch $real_home"
+}
+
+emit_id() {
+  bun -e 'process.stdout.write(crypto.randomUUID().slice(0, 8))'
+}
+
+cmd_launch() {
+  command -v bun >/dev/null 2>&1 || die "bun is not on PATH. Install Bun 1.4.2 from .github/workflows/ci.yml, then run bun install --frozen-lockfile in $repo."
+  [ -x "$bin" ] || die "missing $bin"
+  id=$(emit_id)
+  root="/tmp/cedia-verify-$id"
+  work="$root/work"
+  home="$root/home"
+  evidence="$repo/.cursor/skills/verify-cedia/artifacts/$id"
+  mkdir -p "$work" "$home" "$evidence"
+  help=$("$bin" -h)
+  first=${help%%$'\n'*}
+  [ "$first" = "$usage_line" ] || die "cedia -h first line was: $first"
+  threads=$(CEDIA_HOME="$home" "$bin" threads --cwd "$work")
+  [ "$threads" = "no threads in this project" ] || die "empty home printed: $threads"
+  printf '%s\n' "$help" > "$evidence/launch.help.txt"
+  printf '%s\n' "$threads" > "$evidence/launch.threads.txt"
+  {
+    printf 'export CEDIA_VERIFY_ID=%q\n' "$id"
+    printf 'export CEDIA_VERIFY_ROOT=%q\n' "$root"
+    printf 'export CEDIA_VERIFY_WORK=%q\n' "$work"
+    printf 'export CEDIA_HOME=%q\n' "$home"
+    printf 'export CEDIA_VERIFY_EVIDENCE=%q\n' "$evidence"
+  } | tee "$root/state.env"
+}
+
+key_state() {
+  local name=$1
+  if [ -n "${!name:-}" ]; then
+    printf '%s=set' "$name"
+  else
+    printf '%s=unset' "$name"
+  fi
+}
+
+cmd_doctor() {
+  require_run
+  command -v bun >/dev/null 2>&1 || die "bun is not on PATH"
+  ver=$(bun --version)
+  help=$("$bin" -h)
+  first=${help%%$'\n'*}
+  [ "$first" = "$usage_line" ] || die "cedia -h first line was: $first"
+  threads=$(CEDIA_HOME="$home" "$bin" threads --cwd "$work")
+  bwrap=$(command -v bwrap || true)
+  socat=$(command -v socat || true)
+  if [ -n "$bwrap" ] && [ -n "$socat" ]; then
+    sandbox="available"
+  else
+    sandbox="unavailable"
+  fi
+  {
+    printf 'bun: %s\n' "$ver"
+    printf 'cedia: usage ok\n'
+    printf 'home: %s\n' "$home"
+    printf 'work: %s\n' "$work"
+    printf 'threads: %s\n' "$threads"
+    printf 'sandbox: %s\n' "$sandbox"
+    printf 'bwrap: %s\n' "${bwrap:-missing}"
+    printf 'socat: %s\n' "${socat:-missing}"
+    printf 'keys: %s %s %s %s\n' "$(key_state ANTHROPIC_API_KEY)" "$(key_state CEDIA_ANTHROPIC_API_KEY)" "$(key_state OPENCODE_API_KEY)" "$(key_state DEEPSEEK_API_KEY)"
+    printf 'drivable: faux\n'
+  } | tee "$evidence/doctor.txt"
+}
+
+record() {
+  local name=$1
+  local do_trace=$2
+  shift 2
+  set +e
+  if [ "$do_trace" = 1 ]; then
+    CEDIA_HOME="$home" strace -f -e trace=connect,sendto,sendmsg -o "$evidence/$name.strace" "$@" > "$evidence/$name.stdout" 2> "$evidence/$name.stderr"
+  else
+    CEDIA_HOME="$home" "$@" > "$evidence/$name.stdout" 2> "$evidence/$name.stderr"
+  fi
+  local code=$?
+  set -e
+  printf '%s\n' "$code" > "$evidence/$name.exit"
+  cat "$evidence/$name.stdout"
+  cat "$evidence/$name.stderr" >&2
+  return "$code"
+}
+
+parse_name() {
+  name=""
+  do_trace=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --name)
+        [ $# -ge 2 ] || die "missing value for --name"
+        name=$2
+        shift 2
+        ;;
+      --trace)
+        do_trace=1
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+  [ -n "$name" ] || die "pass --name <label> before --"
+  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die "label must be letters, digits, dots, underscores, or hyphens"
+  args=("$@")
+}
+
+cmd_run() {
+  require_run
+  parse_name "$@"
+  local arg
+  for arg in "${args[@]}"; do
+    [ "$arg" != "--cwd" ] || die "do not pass --cwd. The harness sets the work directory."
+  done
+  if [ "$do_trace" = 1 ]; then
+    command -v strace >/dev/null 2>&1 || die "strace is not on PATH"
+  fi
+  # lint-session treats every argument as a file. threads and -p both honor --cwd.
+  if [ "${args[0]:-}" = "lint-session" ]; then
+    record "$name" "$do_trace" "$bin" "${args[@]}"
+  else
+    record "$name" "$do_trace" "$bin" "${args[@]}" --cwd "$work"
+  fi
+}
+
+cmd_capture() {
+  require_run
+  parse_name "$@"
+  [ "$do_trace" = 0 ] || die "capture does not take --trace"
+  set +e
+  (
+    cd "$work"
+    CEDIA_HOME="$home" "${args[@]}" > "$evidence/$name.stdout" 2> "$evidence/$name.stderr"
+  )
+  local code=$?
+  set -e
+  printf '%s\n' "$code" > "$evidence/$name.exit"
+  cat "$evidence/$name.stdout"
+  cat "$evidence/$name.stderr" >&2
+  return "$code"
+}
+
+cmd_cleanup() {
+  require_run
+  rm -rf "$root"
+  [ ! -e "$root" ] || die "failed to remove $root"
+  [ -d "$evidence" ] || die "evidence directory disappeared: $evidence"
+  printf 'removed %s\n' "$root"
+  printf 'evidence %s\n' "$evidence"
+}
+
+[ $# -ge 1 ] || die "usage: control-cedia launch|doctor|run|capture|cleanup"
+
+case "$1" in
+  launch) cmd_launch ;;
+  doctor) cmd_doctor ;;
+  run) shift; cmd_run "$@" ;;
+  capture) shift; cmd_capture "$@" ;;
+  cleanup) cmd_cleanup ;;
+  *) die "usage: control-cedia launch|doctor|run|capture|cleanup" ;;
+esac
