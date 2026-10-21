@@ -46,7 +46,7 @@ type EventBody =
       ttl?: '5m' | '1h';
       headers: Record<string, string>; // header name -> hash of the value, never the value
     }
-  // ttftMs: until the first streamed event; ms: the whole attempt.
+  // ttftMs: until the first generated token; ms: the whole attempt.
   | { kind: 'attempt'; requestId: EventId; n: number; error?: AttemptError; ttftMs?: number; ms?: number }
   | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage }
   | { kind: 'snapshot'; tree: string; callId?: string; changed: string[]; ms?: number } // shadow-git tree after a writing call
@@ -96,6 +96,9 @@ export type ModelSpec = {
   defaultEffort?: Effort;
   price: Price & { offPeak?: Price & { isOffPeak: (d: Date) => boolean }; above?: { tokens: number; price: Price } };
   dataPolicy: 'zdr' | 'retained' | 'trains';
+  // Anthropic fast mode: the same model decoding up to 2.5x faster at a premium price. Its own catalog entry,
+  // because a speed change invalidates the prompt cache and changes the price.
+  speed?: 'fast';
   caps: ModelCapabilities;
 };
 

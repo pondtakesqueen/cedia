@@ -24,6 +24,7 @@ The full plan, with the comparison against other harnesses and the review it wen
 | Session | Append-only JSONL tree; a `request` event before every model call so each request can be rebuilt from the log. Header values are never logged: names plus value hashes only |
 | Protocol | JSONL over stdio; ACP later |
 | Cache | Target ≥ 90% hit ratio per session with every miss attributed; TTL 5 minutes, 1 hour optional after measuring cost |
+| Speed | cedia's own share of a run's time is measured, not assumed: `attempt` events carry `ttftMs` and `ms`, snapshots carry `ms`, and every result has `timing` (wall, model, time to first token, tool, harness, decode tok/s); `evals/run.ts` prints it per model. Speed comes from the model and the number of round trips, so cedia keeps its overhead near zero, runs read-only calls in parallel, and offers Opus 5.5 fast mode as its own model (`opus-fast`: up to 2.5x decode, 2x price, Claude API only) |
 | Spend | Warn when daily spend passes $20 |
 | Config precedence | flags > env > project `.cedia/` > user `~/.cedia/` > defaults; arrays union and dedupe |
 | Public repo marker | A `.cedia/public` file in the repo. Without it, models with `dataPolicy: trains` are refused |

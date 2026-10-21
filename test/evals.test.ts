@@ -71,6 +71,14 @@ describe("evals runner", () => {
     const s = summarize([r("a", 1, true, true, 0.01), r("a", 2, true, true, 0.01), r("b", 1, true, true, 0.01), r("b", 2, false, true, 0.01), outage]);
     expect(s).toMatchObject({ tasks: 2, runs: 4, pass1: 0.75, passAll: 0.5, falseDone: 0.25, refused: 0, infraErrors: 1, cacheHitRatio: 0.9 });
     expect(s.costPerPass).toBeCloseTo(0.04 / 3);
+    expect(s.speed).toBeUndefined();
+
+    const timed = (ms: number, tps: number): Result => ({ ...r("c", 1, true, true, 0), reported: { turns: 2, timing: { modelMs: ms, ttftMs: 1000, toolMs: 100, harnessMs: 10, outputTokPerSec: tps } } });
+    const sp = summarize([timed(900, 100), timed(1900, 200)]).speed!;
+    expect(sp.outputTokPerSec).toBe(150);
+    expect(sp.ttftMs).toBe(500);
+    expect(sp.modelShare).toBeCloseTo(2800 / 3020);
+    expect(sp.harnessShare).toBeCloseTo(20 / 3020);
   });
 
   test("estimates cost from measured tokens at the target model's price", () => {

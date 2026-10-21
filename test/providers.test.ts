@@ -139,6 +139,11 @@ describe('request bodies', () => {
     expect(b.system).toEqual([{ type: 'text', text: 'SYS', cache_control: { type: 'ephemeral' } }]);
     expect(b.cache_control).toEqual({ type: 'ephemeral' });
     expect(b.output_config).toEqual({ effort: 'medium' });
+    expect(b.speed).toBeUndefined();
+    const fast = resolveModel('opus-fast');
+    expect(anthropicBody(req('opus-fast')) as any).toMatchObject({ model: 'claude-opus-5-5', speed: 'fast' });
+    expect(fast.headers).toEqual({ 'anthropic-beta': 'fast-mode-2026-02-01' });
+    expect(fast.price.output).toBe(2 * resolveModel('opus').price.output);
     expect(b.messages[1].content[0]).toEqual({ type: 'thinking', thinking: 'hmm', signature: 'sig' });
     // The mid-conversation note becomes a reminder in the same user turn as the tool result.
     expect(b.messages[2].content.map((c: any) => c.type)).toEqual(['tool_result', 'text']);

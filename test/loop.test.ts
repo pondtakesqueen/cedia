@@ -53,6 +53,15 @@ describe('loop', () => {
     expectPaired(log.events);
   });
 
+  test('every result says where its time went, and attempts carry their timing', async () => {
+    const { log, opts } = setup([{ blocks: [toolUse('c1', 'read', { path: 'a.txt' })] }, { blocks: [text('ok')] }]);
+    const res = await runPrompt(opts, 'go');
+    const t = res.timing!;
+    for (const k of ['wallMs', 'modelMs', 'ttftMs', 'toolMs', 'harnessMs', 'outputTokPerSec'] as const) expect(typeof t[k]).toBe('number');
+    expect(t.wallMs).toBeGreaterThanOrEqual(t.modelMs);
+    for (const a of of(log.events, 'attempt')) expect(a).toMatchObject({ ttftMs: expect.any(Number), ms: expect.any(Number) });
+  });
+
   test('maxTurns stops with error_max_turns', async () => {
     const loop: FauxStep = () => ({ blocks: [toolUse(`c${Math.random()}`, 'read', { path: 'a.txt' })] });
     const { log, opts } = setup([loop, loop, loop, loop], { maxTurns: 3 });

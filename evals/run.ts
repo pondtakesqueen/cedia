@@ -33,6 +33,8 @@ export type Reported = {
   tokens?: { input: number; cacheRead: number; output: number };
   cacheHitRatio?: number;
   turns?: number;
+  // cedia only: where the run's time went (see Timing in src/core/types.ts).
+  timing?: { modelMs: number; ttftMs: number; toolMs: number; harnessMs: number; outputTokPerSec: number };
 };
 
 export type Result = {
@@ -147,6 +149,7 @@ export function parseReported(stdout: string): { reported: Reported; text: strin
         tokens: { input: (u.uncached ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0), cacheRead: u.cacheRead ?? 0, output: u.output ?? 0 },
         cacheHitRatio: Number(j.cacheHitRatio),
         turns: Number(j.numTurns),
+        ...(j.timing ? { timing: j.timing as Reported["timing"] } : {}),
       },
     };
   }
@@ -314,6 +317,8 @@ export type Summary = {
   costPerPass?: number;
   tokens?: { input: number; output: number };
   cacheHitRatio?: number;
+  // From runs that report timing: mean decode rate, time to first token per model call, and cedia's own share.
+  speed?: { outputTokPerSec: number; ttftMs: number; harnessShare: number; modelShare: number };
 };
 
 export function summarize(all: Result[]): Summary {
@@ -340,6 +345,24 @@ export function summarize(all: Result[]): Summary {
     avgMs: n ? Math.round(results.reduce((a, r) => a + r.wallMs, 0) / n) : 0,
     ...(costUsd !== undefined ? { costUsd, ...(passes ? { costPerPass: costUsd / passes } : {}) } : {}),
     ...(tok.length ? { tokens: { input, output: tok.reduce((a, t) => a + t!.output, 0) }, cacheHitRatio: input ? cacheRead / input : 0 } : {}),
+    ...speedOf(results),
+  };
+}
+
+function speedOf(results: Result[]): { speed?: Summary["speed"] } {
+  const timed = results.filter((r) => r.reported.timing);
+  if (!timed.length) return {};
+  const sum = (f: (r: Result) => number) => timed.reduce((a, r) => a + f(r), 0);
+  const t = (r: Result) => r.reported.timing!;
+  const wall = sum((r) => t(r).modelMs + t(r).toolMs + t(r).harnessMs);
+  const calls = sum((r) => r.reported.turns ?? 1);
+  return {
+    speed: {
+      outputTokPerSec: Math.round((sum((r) => t(r).outputTokPerSec) / timed.length) * 10) / 10,
+      ttftMs: Math.round(sum((r) => t(r).ttftMs) / calls),
+      harnessShare: wall ? sum((r) => t(r).harnessMs) / wall : 0,
+      modelShare: wall ? sum((r) => t(r).modelMs) / wall : 0,
+    },
   };
 }
 
@@ -366,6 +389,7 @@ export function formatSummary(s: Summary): string {
     `  pass@1 ${pct(s.pass1)}  pass^k ${pct(s.passAll)}  false-done ${pct(s.falseDone)}  refused claims ${pct(s.refused)}`,
     `  avg ${(s.avgMs / 1000).toFixed(1)}s per run` +
       (s.tokens ? `, ${Math.round(s.tokens.input / s.runs)} input / ${Math.round(s.tokens.output / s.runs)} output tokens per run, cache hit ${pct(s.cacheHitRatio ?? 0)}` : ""),
+    ...(s.speed ? [`  speed ${s.speed.outputTokPerSec} output tok/s, ${(s.speed.ttftMs / 1000).toFixed(2)}s to first token per call; model ${pct(s.speed.modelShare)} of time, cedia ${pct(s.speed.harnessShare)}`] : []),
     s.costUsd !== undefined ? `  cost $${s.costUsd.toFixed(4)} total, ${s.costPerPass !== undefined ? `$${s.costPerPass.toFixed(4)} per passed run` : "no passes"}` : "  cost not reported",
   ].join("\n");
 }
