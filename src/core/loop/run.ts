@@ -327,7 +327,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       // doubled since the session's first reply, so a session that starts large (a long note, a big task) does
       // not hand off again straight away. And the session must have changed a file itself: a note cannot carry
       // what was read, so a session that only read would leave its successor to read it all again (in the repo
-      // evals, sessions that handed off before any change did exactly that, six in a row on one run).
+      // evals, sessions that handed off before any change did exactly that, five in a row on one run).
       const added = log.events.slice(before).reduce((n, e) => n + (e.kind === 'tool_result' ? Math.ceil(e.output.text.length / 4) : 0), 0);
       const size = contextSize(got.usage) + added;
       const first = log.events.find((e): e is EventOf<'assistant'> => e.kind === 'assistant')!;

@@ -85,3 +85,26 @@ Files: `2026-10-21-wide-cedia-haiku-5-5-{spawn-off,spawn-on,handoff-30k}.jsonl`,
 - Haiku 5.5 still found all four bug-hunt violations in every run, the drifted table included.
 - Hidden tests caught three places where the module comments did not say what the tests expected (a diacritic the list left out, spaces around a duration, whether expired entries count toward capacity). Each failing run had read the comment as written, so the comments were fixed, not the tests. The one failure above is the last of those three, before its fix.
 - No run spawned and none handed off, even at 30k: the runs took 4 to 11 turns and their context stayed under it. The arms differ by noise, not by setup (all three are the same harness on these runs). These tasks do not exercise sub-threads or handoff; that needs a real repository with a task that spans many files, where one session's context grows past 100k.
+
+## 2026-10-21: real repository (cedia's own history)
+
+Three tasks that redo real commits of this repository from their parent (`evals/tasks/real-*/`): `real-threads` (8d44c2a: threads, handoff, recall, thread messages; 8 source files), `real-subthreads` (4ead389: the spawn tool; 9 files) and `real-slop-guard` (7009c5a: the slop guard and detected checks; 8 files). The workspace is the tree at the parent, about 100k to 125k tokens, with the commit's own new tests in sight; verify is the whole `bun test` suite. Haiku 5.5 on the Claude API writing, 2 runs per task and arm, 1200 s per run. A public repository (hono) was the first choice, but running its code here was refused, and the tasks only reach models allowed for private code.
+
+| Setup | pass@1 | Peak context, mean (max) | Runs past 100k | Sub-threads / handoffs | Avg time | Output tokens per run | Cost | Cost per passed run |
+|---|---|---|---|---|---|---|---|---|
+| spawn off, handoff off | 100% | 157k (211k) | 5 of 6 | - | 381 s | 76,939 | $1.758 | $0.293 |
+| spawn on, handoff off | 100% | 130k (173k) | 4 of 6 | 0 sub-threads | 305 s | 61,923 | $1.300 | $0.217 |
+| handoff at 90k | 83.3% | 103k (114k) | 4 of 6 | 19 handoffs | 665 s | 135,803 | $1.027 | $0.205 |
+| handoff at 90k, only after a change | 83.3% | 125k (162k) | 4 of 6 | 16 handoffs | 614 s | 125,980 | $1.156 | $0.231 |
+
+Per task, mean cost per run (spawn off / spawn on / handoff / handoff after a change): `real-slop-guard` $0.059 / $0.041 / $0.069 / $0.053, `real-subthreads` $0.313 / $0.263 / $0.125 / $0.193, `real-threads` $0.507 / $0.346 / $0.320 / $0.332.
+
+Files: `2026-10-21-real-cedia-haiku-5-5-{spawn-off,spawn-on,handoff-90k,handoff-90k-changed-first}.jsonl`, with each run's printed summary in the matching `.log`.
+
+- Context does grow past 100k on a real codebase: 5 of 6 single-context runs did, up to 211k, where every request costs Haiku's long-context price (5x).
+- Haiku never spawned, in any of 6 runs, even at 170k. The two arms run the same behaviour, so the 26% cost gap between them is noise; at 2 runs a task, differences under about a quarter mean nothing here.
+- Handoff at 90k halves the cost of the larger tasks (`real-subthreads` $0.31 to $0.13-0.19), but nearly doubles wall time and output (each new session re-reads what it needs, and writes a note), and costs more on the small task. Both failures are `real-threads` hitting the 1200 s limit after 5 handoffs, not wrong work.
+- Requests still went past 100k in handoff runs: the size is checked after a turn, so a turn that reads several files jumps past the price line, and the note request carries the whole context.
+- The first pilot found a real bug: the bash tool dropped `GIT_CONFIG_KEY_n` as secret-looking but kept `GIT_CONFIG_COUNT`, so every git command in a tool call failed; the count, keys and values now go together. And it showed that the agent's sandbox cannot open another sandbox inside it, so the repo tasks skip that one test inside it (verify still runs it).
+- In the first handoff round, 12 of 19 handoffs came from sessions that had changed no file (by the evidence ledger), and the failed run handed off five times in a row without a change, then timed out. A session now hands off only after it has changed a file: none of the 16 handoffs in the second round came before a change. Pass rate and cost stayed within noise; peaks rose, since a session now reads on past 90k until its first change.
+- Reading: on a codebase this size handoff is the lever that pays, at the price of time; spawn has no measured value until the model uses it. Next: hand off before a turn would cross the price line rather than after, and test whether a reminder at high context gets Haiku to spawn explore sub-threads.

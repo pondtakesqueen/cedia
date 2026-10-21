@@ -1,0 +1,15 @@
+Running 3 tasks x 2 runs on cedia (anthropic/claude-haiku-5-5), 3 at a time...
+  PASS real-slop-guard#1 (241.5s $0.0510, 1 handoff, peak 94k)
+  PASS real-slop-guard#2 (286.0s $0.0540, 1 handoff, peak 95k)
+  PASS real-subthreads#1 (391.6s $0.1446, 2 handoff, peak 128k)
+  PASS real-subthreads#2 (612.1s $0.2419, 3 handoff, peak 162k)
+  PASS real-threads#2 (955.4s $0.2619, 4 handoff, peak 131k)
+  FAIL real-threads#1 (1200.0s $0.4028, 5 handoff, peak 141k)
+
+Results written to /tmp/claude-0/-home-user-cedia/1e489d0b-f442-5fbc-b55f-efe70be3de69/scratchpad/C2.jsonl
+cedia (anthropic/claude-haiku-5-5): 3 tasks, 6 scored runs
+  pass@1 83.3%  pass^k 66.7%  false-done 0.0%  refused claims 0.0%
+  avg 614.4s per run, 2570931 input / 125980 output tokens per run, cache hit 87.7%
+  peak context 125k mean, 162k max, 4 of 6 runs past 100k; 16 handoffs, 0 sub-threads
+  speed 246.4 output tok/s, 1.08s to first token per call; model 93.0% of time, cedia 1.6%
+  cost $1.1563 total, $0.2313 per passed run
