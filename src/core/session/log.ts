@@ -1,5 +1,6 @@
+import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { EventId, NewEvent, SessionEvent } from '../types.ts';
 
@@ -45,8 +46,21 @@ export function projectSlug(cwd: string): string {
   return cwd.replace(/^\//, '').replace(/[^A-Za-z0-9._-]+/g, '-') || 'root';
 }
 
+// The directory a project is known by. Every git worktree of a repository is the same project, keyed by the main
+// worktree's root, so threads started in different worktrees list, message and recall one another. Outside git,
+// or in a bare repository, the working directory itself.
+export function projectRoot(cwd: string): string {
+  const r = spawnSync('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd, encoding: 'utf8' });
+  const common = r.status === 0 ? r.stdout.trim() : '';
+  return common && basename(common) === '.git' ? dirname(common) : cwd;
+}
+
+// The slug threads and sessions are filed under. Snapshots stay per working directory: each worktree has its own
+// tree to diff.
+export const projectKey = (cwd: string) => projectSlug(projectRoot(cwd));
+
 export function sessionPath(cwd: string, id: string, home = process.env.CEDIA_HOME ?? join(homedir(), '.cedia')): string {
-  return join(home, 'sessions', projectSlug(cwd), `${id}.jsonl`);
+  return join(home, 'sessions', projectKey(cwd), `${id}.jsonl`);
 }
 
 export function sessionExists(path: string): boolean {

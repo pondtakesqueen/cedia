@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPrompt } from '../src/core/loop/run.ts';
@@ -8,7 +8,7 @@ import { foldThread, threadsDir, ThreadStore, titleOf } from '../src/core/projec
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, type FauxStep } from '../src/core/providers/faux.ts';
 import { lintSession } from '../src/core/session/lint.ts';
-import { projectSlug, SessionLog } from '../src/core/session/log.ts';
+import { projectKey, projectRoot, projectSlug, SessionLog } from '../src/core/session/log.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
 import { recallTool, threadTools } from '../src/core/tools/threads.ts';
 import type { EventOf, SessionEvent } from '../src/core/types.ts';
@@ -367,5 +367,43 @@ describe('sub-threads (offline, faux)', () => {
     const log = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
     expect(head(log.events).tools.map((t) => t.name)).not.toContain('spawn');
     expect(cedia(tmp(), [], ['-p', 'x', '--spawn', 'maybe']).err).toContain('--spawn must be on or off');
+  });
+});
+
+describe('project identity across git worktrees', () => {
+  const git = (cwd: string, ...args: string[]) => {
+    const r = Bun.spawnSync(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], { cwd });
+    if (r.exitCode !== 0) throw new Error(r.stderr.toString());
+  };
+  const repoWithWorktree = () => {
+    const dir = tmp();
+    const main = join(dir, 'repo');
+    mkdirSync(main);
+    git(main, 'init', '-q');
+    git(main, 'commit', '-q', '--allow-empty', '-m', 'init');
+    git(main, 'worktree', 'add', '-q', join(dir, 'wt'));
+    return { dir, main: realpathSync(main), wt: realpathSync(join(dir, 'wt')) };
+  };
+
+  test('every worktree of a repository is the main worktree’s project; elsewhere the directory is', () => {
+    const { main, wt } = repoWithWorktree();
+    expect(projectRoot(wt)).toBe(main);
+    expect(projectRoot(join(main))).toBe(main);
+    expect(projectKey(wt)).toBe(projectSlug(main));
+    const plain = tmp();
+    expect(projectRoot(plain)).toBe(plain);
+  });
+
+  test('a thread started in a worktree is listed, and its session filed, under the main worktree’s project', () => {
+    const { dir, main, wt } = repoWithWorktree();
+    const scriptPath = join(dir, 'script.json');
+    writeFileSync(scriptPath, JSON.stringify([reply('ok')]));
+    const env = { ...process.env, CEDIA_FAUX_SCRIPT: scriptPath, CEDIA_HOME: join(dir, 'home') };
+    const run = Bun.spawnSync([BIN, '-m', 'faux', '--cwd', wt, '-p', 'work in the worktree', '--output-format', 'json'], { env, stdin: 'ignore' });
+    const result = JSON.parse(run.stdout.toString());
+    const listed = Bun.spawnSync([BIN, 'threads', 'list', '--cwd', main], { env }).stdout.toString();
+    expect(listed).toContain(result.thread);
+    const log = SessionLog.load(join(dir, 'home', 'sessions', projectSlug(main), `${result.sessionId}.jsonl`));
+    expect(head(log.events).cwd).toBe(wt);
   });
 });
