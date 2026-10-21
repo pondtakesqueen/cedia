@@ -24,39 +24,45 @@ Over the tasks both runs have, with provider-error runs left out:
 |---|---|
 | pass@1 | lower, and a one-sided Fisher exact test gives p < `passP` (0.1). Lower but not significant is shown as `~` |
 | tasks broken | a task passed every baseline run and fails every candidate run (at least 2) |
-| false-done | its rate is higher at all: it is the trust guarantee failing |
-| cost per task set | the sum of each task's mean cost rises by more than `costRise` (25%) and $0.002 |
-| time per task set | the same for wall time, `timeRise` (30%) and 10 s; skipped when `--jobs` differs from the baseline's |
-| turns per task set | never: shown to explain a cost or time change |
+| false-done | its rate is higher at all: it is the trust guarantee failing. Tasks with hidden tests are left out of this check: there the run's own checks passed and a spec it could not see failed, which is a failed run, counted above |
+| cost | the typical task's cost (geometric mean of per-task ratios) rises by more than `costRise` (15%), or the whole set's (sum of per-task means) by more than `totalRise` (40%); either way by more than $0.002 |
+| time | the same for wall time, `timeRise` (20%) and `totalRise`, by more than 10 s; skipped when `--jobs` differs from the baseline's |
+| turns | never: shown to explain a cost or time change |
 
-Cost and time are paired by task, so a run that lost a task to provider errors does not look cheaper. A task whose content changed since the baseline is left out until the baseline is updated. A run with other cedia flags than the baseline's (`--cedia-arg`) is still compared, with a note: that is how an A/B of a flag is read.
+Cost and time are paired by task, so a run that lost a task to provider errors does not look cheaper. Two limits, because one expensive task is noisy: `real-slop-guard` is 40% of the suite's spend and moved 60% between two runs of the same commit, which put the whole set at +21% with no change; the typical task moved -1% on the same pair. A rise on that one task alone has to pass 40% of the whole set to fail the gate. A task whose content changed since the baseline is left out until the baseline is updated. A run with other cedia flags than the baseline's (`--cedia-arg`) is still compared, with a note: that is how an A/B of a flag is read.
 
-The limits were set on existing result files with `--compare`, before any paid run. Pairs that run the same behaviour pass, pairs with a real change fail:
+The limits were set by experiment, with `--compare` on existing result files and on a second run of the same commit. Pairs that run the same behaviour pass, pairs with a real change fail (cost and time shown as typical task / whole set):
 
-| Candidate against baseline (Haiku 5.5) | Verdict | Why |
-|---|---|---|
-| hard rerun / hard first round | pass | +3.5% cost, +5.4% time |
-| hard spawn on / spawn off (no spawn happened) | pass | -6.9% cost |
-| wide spawn on / spawn off | pass | -14% cost and time |
-| real spawn on / spawn off | pass | -26% cost: the noise of 2 runs on large tasks |
-| hard handoff at 20k / spawn off | regressed | +28% cost, +49% time |
-| hard with Sonnet review / rerun | regressed | +580% cost, +61% time |
+| Candidate against baseline | Verdict | Cost | Time |
+|---|---|---|---|
+| Gate suite, Haiku 5.5, second run of e967722 (18f1760) | pass | -1% / +21% | -2% / +12% |
+| Gate suite, DeepSeek Flash, second run of e967722 (18f1760) | pass | +2% / +17% | -6% / -18% |
+| Hard set, Haiku rerun / first round | pass | +3% / +3% | +5% / +5% |
+| Hard set, spawn on / spawn off (no spawn happened) | pass | -8% / -7% | -6% / -7% |
+| Wide set, spawn on / spawn off | pass | -15% / -14% | -15% / -14% |
+| Real set, spawn on / spawn off | pass | -26% / -26% | -19% / -20% |
+| Hard set, handoff at 20k / spawn off | regressed | +18% / +28% | +27% / +49% |
+| Hard set, Sonnet review / rerun | regressed | +711% / +580% | +80% / +61% |
+
+The 4- and 7-task sets move up to 15% on noise; the 24-task gate suite moves under 3%.
+
+The second run also found a task problem, not a cedia one: 3 of 4 Flash runs of `wide-three-features` read the slug comment's cut rule one way and the hidden test the other, one of them as a false done. The comment now says a "-" right after the first max characters counts; the four Haiku and four Flash runs after the change all passed, and that task's baseline rows were replaced with `--only wide-three-features --update-baseline`.
 
 At 2 runs on 24 tasks the pass check needs 5 failures more than the baseline's (47/48 down to 42/48, p = 0.056; 43/48 gives p = 0.102), so most regressions are caught by the tasks-broken check instead: one task that breaks outright is enough. A smaller spread-out drop shows as `~`; rerun with `--runs 3` or more to settle it.
 
 ## Baselines
 
-Stored at e967722 (2026-10-21):
+Stored at e967722 (2026-10-21), with `wide-three-features` rerun at 46b5ea2 after its comment fix:
 
 | Model | pass@1 | pass^2 | False-done | Cost per run of the suite | Avg time per run | Failures |
 |---|---|---|---|---|---|---|
 | Haiku 5.5 | 97.9% (47/48) | 95.8% | 0% | $0.27 | 33 s | `hard-redact-bugs#2` (claim refused) |
-| DeepSeek V4.1 Flash | 97.9% (47/48) | 95.8% | 0% | $0.38 | 68 s | `wide-three-features#1` |
+| DeepSeek V4.1 Flash | 100% (48/48) | 100% | 0% | $0.39 | 70 s | none |
 
-A whole gate run costs about $0.65 and takes about 35 minutes, most of it Flash.
+A whole gate run costs about $0.65 and takes about 35 minutes, most of it Flash. The second run (18f1760) cost $0.77: Haiku 47/48 ($0.32), Flash 46/48 ($0.45).
 
 ## When to update the baseline
 
 - A change meant to move the numbers (a new default, a cheaper path): run `--update-baseline` in the same PR and say in it why the new numbers are right.
-- A change to a gate task: its old numbers stop counting until the baseline is updated.
+- A change to a gate task: its old numbers stop counting until the baseline is updated, which `--only <task> --update-baseline` does for that task alone.
 - Never to make a red gate green: read the failing runs' rows first.

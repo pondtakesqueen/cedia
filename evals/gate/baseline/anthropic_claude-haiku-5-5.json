@@ -1,8 +1,8 @@
 {
  "suite": "gate",
  "model": "anthropic/claude-haiku-5-5",
- "commit": "e967722",
- "date": "2026-10-21T17:43:10.543Z",
+ "commit": "46b5ea2",
+ "date": "2026-10-21T18:53:41.959Z",
  "runs": 2,
  "jobs": 4,
  "cediaArgs": [],
@@ -29,7 +29,7 @@
   "long-migrate": "5fe81b7d3e4fbe00",
   "wide-bug-hunt": "6fd6e23119deb920",
   "wide-deprecate": "f904950c84ebeba7",
-  "wide-three-features": "4644636818af89fb",
+  "wide-three-features": "677a9774135741df",
   "real-slop-guard": "a5c8323fd6491b3f"
  },
  "results": [
@@ -2523,51 +2523,51 @@
    "harness": "cedia",
    "model": "anthropic/claude-haiku-5-5",
    "run": 1,
-   "ts": "2026-10-21T17:47:50.575Z",
+   "ts": "2026-10-21T18:54:30.278Z",
    "ledger": [
     {
      "kind": "rollout",
      "label": "wide-three-features#1:harness",
-     "ms": 49621
+     "ms": 48287
     },
     {
      "kind": "session",
      "label": "wide-three-features#1:verify",
-     "ms": 18
+     "ms": 30
     }
    ],
-   "wallMs": 49621,
-   "output": "`bun test` passes on its own: 23 tests across 6 files, 0 failures, exit 0.\n\nMy earlier run was chained after `cat` heredocs, so it didn't count as the check. I ran `bun test` alone this time. I changed nothing in this turn, so there was nothing to fix.\n\nThe implementations are in `src/duration.ts`, `src/slug.ts` and `src/lru.ts`. The existing tests are unchanged. My new rule tests are in `test/duration.rules.test.ts`, `test/slug.rules.test.ts` and `test/lru.rules.test.ts`.",
+   "wallMs": 48287,
+   "output": "alls**\n- `lru.ts`: `set` on an expired key calls `onEvict(..., 'expired')` before storing the new value. Overwriting a live key calls nothing.\n- `lru.ts`: expired entries are swept only when the cache is over capacity.\n- `duration.ts`: parts may appear in any order and repeat, so `\"30m1h\"` is accepted. Numbers need digits before any decimal point, so `.5h` is rejected.\n\n**Not verified**\n- I wrote every test from my reading of the comments. There is no reference implementation to compare against.",
    "stderr": "cedia: sandbox unavailable (bubblewrap (bwrap) not installed; socat not installed); bash runs unsandboxed. Use --sandbox on to require it.\n",
    "exitCode": 0,
    "reported": {
     "subtype": "success",
-    "costUsd": 0.00827986,
+    "costUsd": 0.00792187,
     "tokens": {
-     "input": 90895,
-     "cacheRead": 76791,
-     "output": 11499
+     "input": 75398,
+     "cacheRead": 61882,
+     "output": 11228
     },
-    "cacheHitRatio": 0.8448319489520876,
-    "turns": 9,
+    "cacheHitRatio": 0.8207379506087694,
+    "turns": 7,
     "timing": {
-     "wallMs": 49482,
-     "modelMs": 49243,
-     "ttftMs": 6531,
-     "toolMs": 211,
+     "wallMs": 48153,
+     "modelMs": 47942,
+     "ttftMs": 7063,
+     "toolMs": 183,
      "retryMs": 0,
      "harnessMs": 28,
-     "outputTokPerSec": 269.2
+     "outputTokPerSec": 274.7
     },
     "handoffs": 0,
-    "peakContext": 16092
+    "peakContext": 15750
    },
    "claimedDone": false,
    "refusedClaim": false,
    "infraError": false,
    "attempts": 1,
    "verifyExitCode": 0,
-   "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 31 pass\n 0 fail\n 135 expect() calls\nRan 31 tests across 9 files. [13.00ms]\n",
+   "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 27 pass\n 0 fail\n 133 expect() calls\nRan 27 tests across 9 files. [22.00ms]\n",
    "passed": true,
    "falseDone": false
   },
@@ -2577,51 +2577,51 @@
    "harness": "cedia",
    "model": "anthropic/claude-haiku-5-5",
    "run": 2,
-   "ts": "2026-10-21T17:48:00.591Z",
+   "ts": "2026-10-21T18:54:30.475Z",
    "ledger": [
     {
      "kind": "rollout",
      "label": "wide-three-features#2:harness",
-     "ms": 49459
+     "ms": 48494
     },
     {
      "kind": "session",
      "label": "wide-three-features#2:verify",
-     "ms": 15
+     "ms": 17
     }
    ],
-   "wallMs": 49459,
-   "output": ": implemented per the rules in each file's comment.\n- `test/rules.test.ts` (new): extra tests for the rules the existing examples don't cover. The existing tests are untouched.\n\n**Open**\n- The judgment calls from my last report still apply. Over capacity, all expired entries are removed before any live one. Overwriting a key in `set` gives no `onEvict` call. `parseDuration` rejects `1 h` and `.5s`.\n- The repo has no `package.json`, so no lint or typecheck was run. Tests ran under Bun 1.4.2 only.",
+   "wallMs": 48494,
+   "output": "d, since the working directory was already the project. It passed: 23 tests, 0 failures, exit 0. The code hasn't changed since my last report, so this is the check that counts.\n\nThe three modules (`src/duration.ts`, `src/slug.ts`, `src/lru.ts`) are implemented from their comment rules, and I added three test files covering the rules the examples leave out. The existing tests are unchanged.\n\nNot checked: there is no `package.json` or git repo here, so I ran no type-check or lint, only `bun test`.",
    "stderr": "cedia: sandbox unavailable (bubblewrap (bwrap) not installed; socat not installed); bash runs unsandboxed. Use --sandbox on to require it.\n",
    "exitCode": 0,
    "reported": {
     "subtype": "success",
-    "costUsd": 0.007655884999999999,
+    "costUsd": 0.008462710000000002,
     "tokens": {
-     "input": 85730,
-     "cacheRead": 72681,
-     "output": 10597
+     "input": 107154,
+     "cacheRead": 92156,
+     "output": 11334
     },
-    "cacheHitRatio": 0.8477895719118161,
-    "turns": 9,
+    "cacheHitRatio": 0.8600332232114527,
+    "turns": 10,
     "timing": {
-     "wallMs": 49326,
-     "modelMs": 49170,
-     "ttftMs": 9895,
-     "toolMs": 132,
+     "wallMs": 48361,
+     "modelMs": 48146,
+     "ttftMs": 6793,
+     "toolMs": 186,
      "retryMs": 0,
-     "harnessMs": 24,
-     "outputTokPerSec": 269.8
+     "harnessMs": 29,
+     "outputTokPerSec": 274.1
     },
     "handoffs": 0,
-    "peakContext": 15136
+    "peakContext": 16968
    },
    "claimedDone": false,
    "refusedClaim": false,
    "infraError": false,
    "attempts": 1,
    "verifyExitCode": 0,
-   "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 21 pass\n 0 fail\n 116 expect() calls\nRan 21 tests across 7 files. [11.00ms]\n",
+   "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 31 pass\n 0 fail\n 126 expect() calls\nRan 31 tests across 9 files. [13.00ms]\n",
    "passed": true,
    "falseDone": false
   }

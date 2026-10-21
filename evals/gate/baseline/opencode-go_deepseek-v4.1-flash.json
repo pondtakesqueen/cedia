@@ -1,8 +1,8 @@
 {
  "suite": "gate",
  "model": "opencode-go/deepseek-v4.1-flash",
- "commit": "e967722",
- "date": "2026-10-21T17:43:10.543Z",
+ "commit": "46b5ea2",
+ "date": "2026-10-21T18:53:41.959Z",
  "runs": 2,
  "jobs": 4,
  "cediaArgs": [],
@@ -29,7 +29,7 @@
   "long-migrate": "5fe81b7d3e4fbe00",
   "wide-bug-hunt": "6fd6e23119deb920",
   "wide-deprecate": "f904950c84ebeba7",
-  "wide-three-features": "4644636818af89fb",
+  "wide-three-features": "677a9774135741df",
   "real-slop-guard": "a5c8323fd6491b3f"
  },
  "results": [
@@ -2523,52 +2523,52 @@
    "harness": "cedia",
    "model": "opencode-go/deepseek-v4.1-flash",
    "run": 1,
-   "ts": "2026-10-21T18:01:29.242Z",
+   "ts": "2026-10-21T18:56:20.917Z",
    "ledger": [
     {
      "kind": "rollout",
      "label": "wide-three-features#1:harness",
-     "ms": 96639
+     "ms": 110413
     },
     {
      "kind": "session",
      "label": "wide-three-features#1:verify",
-     "ms": 17
+     "ms": 21
     }
    ],
-   "wallMs": 96639,
-   "output": "he spec says expired entries are removed first when a `set` goes over capacity, but doesn't say whether *all* expired entries are purged or only as many as needed. I implemented a full purge of expired entries when over capacity (then live LRU eviction if still over). This is only observable when two or more expired entries coexist while one removal would suffice; no existing test distinguishes the two readings. `uniqueSlug` likewise does not mutate `taken`, since the comment doesn't ask for it.",
+   "wallMs": 110413,
+   "output": "reasons, ttl not refreshed by `get`, expired-before-live eviction, capacity counting expired entries, delete semantics, `size`/`keys` filtering and order, zero capacity.\n\n## Verification\n\n`bun test` → **28 pass, 0 fail** (143 assertions, 6 files). I also spot-checked `slugify` truncation and `parseDuration` error messages manually.\n\n## Note\n\nNo `package.json` or `tsconfig.json` exists in the repo, so there is no type-check step to run — only `bun test` (which strips types without checking them).",
    "stderr": "cedia: sandbox unavailable (bubblewrap (bwrap) not installed; socat not installed); bash runs unsandboxed. Use --sandbox on to require it.\ncedia: OPENCODE_API_KEY is not set; sending opencode-go/deepseek-v4.1-flash requests without credentials, expecting a proxy to add them\n",
    "exitCode": 0,
    "reported": {
     "subtype": "success",
-    "costUsd": 0.014667042,
+    "costUsd": 0.015165444,
     "tokens": {
-     "input": 142555,
-     "cacheRead": 120064,
-     "output": 18222
+     "input": 144082,
+     "cacheRead": 120448,
+     "output": 18765
     },
-    "cacheHitRatio": 0.8422293150012276,
+    "cacheHitRatio": 0.8359684068794159,
     "turns": 11,
     "timing": {
-     "wallMs": 96522,
-     "modelMs": 96231,
-     "ttftMs": 20265,
-     "toolMs": 263,
+     "wallMs": 110263,
+     "modelMs": 110012,
+     "ttftMs": 20005,
+     "toolMs": 223,
      "retryMs": 0,
-     "harnessMs": 29,
-     "outputTokPerSec": 239.9
+     "harnessMs": 28,
+     "outputTokPerSec": 208.5
     },
     "handoffs": 0,
-    "peakContext": 22446
+    "peakContext": 23783
    },
    "claimedDone": false,
    "refusedClaim": false,
    "infraError": false,
    "attempts": 1,
-   "verifyExitCode": 1,
-   "verifyOutput": "Be('');\n11 |   expect(slugify('a really long title here', 12)).toBe('a-really');\n12 |   expect(slugify('a really long title here', 13)).toBe('a-really-long');\n                                                       ^\nerror: expect(received).toBe(expected)\n\nExpected: \"a-really-long\"\nReceived: \"a-really\"\n\n      at <anonymous> (/tmp/cedia-eval-wide-three-features-SxQcah/test/slug.spec.test.ts:12:51)\n(fail) slugify [0.34ms]\n\n 39 pass\n 1 fail\n 168 expect() calls\nRan 40 tests across 9 files. [13.00ms]\n",
-   "passed": false,
+   "verifyExitCode": 0,
+   "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 36 pass\n 0 fail\n 195 expect() calls\nRan 36 tests across 9 files. [16.00ms]\n",
+   "passed": true,
    "falseDone": false
   },
   {
@@ -2577,51 +2577,51 @@
    "harness": "cedia",
    "model": "opencode-go/deepseek-v4.1-flash",
    "run": 2,
-   "ts": "2026-10-21T18:01:54.520Z",
+   "ts": "2026-10-21T18:57:19.816Z",
    "ledger": [
     {
      "kind": "rollout",
      "label": "wide-three-features#2:harness",
-     "ms": 109889
+     "ms": 169313
     },
     {
      "kind": "session",
      "label": "wide-three-features#2:verify",
-     "ms": 17
+     "ms": 18
     }
    ],
-   "wallMs": 109889,
-   "output": "n the number and unit are rejected (`\"1 m\"` throws), since a part is defined as `<number><unit>`.\n- `formatDuration` rounds fractional milliseconds.\n- Letters not listed and not decomposable (e.g. Cyrillic) become separators, per \"any other character … is a separator\".\n- When over capacity with several expired entries, entries are removed one at a time until back at capacity (live eviction only if none expired remains); the tests avoid asserting how many extra expired entries linger beyond that.",
+   "wallMs": 169313,
+   "output": "hange:\n\n```\n23 pass, 0 fail, 98 expect() calls, 6 files\n```\n\n**Note / interpretation left open**\n\nFor `LRU.set` when over capacity, I read “Expired entries are removed first” as clearing *all* currently expired entries (LRU→MRU order), then evicting one live LRU entry only if still over capacity. The comments don’t explicitly settle whether only enough expired entries to get back under capacity should be removed; the all-expired reading matches the wording and the “expired or not” capacity note.",
    "stderr": "cedia: sandbox unavailable (bubblewrap (bwrap) not installed; socat not installed); bash runs unsandboxed. Use --sandbox on to require it.\ncedia: OPENCODE_API_KEY is not set; sending opencode-go/deepseek-v4.1-flash requests without credentials, expecting a proxy to add them\n",
    "exitCode": 0,
    "reported": {
     "subtype": "success",
-    "costUsd": 0.017686602,
+    "costUsd": 0.029249952,
     "tokens": {
-     "input": 173935,
-     "cacheRead": 147584,
-     "output": 22152
+     "input": 280316,
+     "cacheRead": 237184,
+     "output": 36781
     },
-    "cacheHitRatio": 0.8485008767643085,
+    "cacheHitRatio": 0.8461307952453659,
     "turns": 11,
     "timing": {
-     "wallMs": 109762,
-     "modelMs": 109494,
-     "ttftMs": 16699,
-     "toolMs": 237,
+     "wallMs": 169179,
+     "modelMs": 168940,
+     "ttftMs": 15568,
+     "toolMs": 208,
      "retryMs": 0,
-     "harnessMs": 32,
-     "outputTokPerSec": 238.7
+     "harnessMs": 31,
+     "outputTokPerSec": 239.8
     },
     "handoffs": 0,
-    "peakContext": 26490
+    "peakContext": 43804
    },
    "claimedDone": false,
    "refusedClaim": false,
    "infraError": false,
    "attempts": 1,
    "verifyExitCode": 0,
-   "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 53 pass\n 0 fail\n 198 expect() calls\nRan 53 tests across 9 files. [13.00ms]\n",
+   "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 31 pass\n 0 fail\n 150 expect() calls\nRan 31 tests across 9 files. [13.00ms]\n",
    "passed": true,
    "falseDone": false
   }

@@ -284,7 +284,9 @@ export function historyOf(model: string, dir: string): Result[] {
 }
 
 const gitHead = () => Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"], { cwd: REPO_ROOT }).stdout.toString().trim();
-const gitDirty = () => Bun.spawnSync(["git", "status", "--porcelain", "--untracked-files=no"], { cwd: REPO_ROOT }).stdout.toString().trim() !== "";
+// Results and baselines are what the gate writes, not the code it measures.
+const gitDirty = () =>
+  Bun.spawnSync(["git", "status", "--porcelain", "--untracked-files=no", "--", ".", ":!evals/results", ":!evals/gate/baseline"], { cwd: REPO_ROOT }).stdout.toString().trim() !== "";
 
 async function main(argv: string[]): Promise<number> {
   let suitePath = DEFAULT_SUITE;
