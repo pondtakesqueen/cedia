@@ -44,7 +44,7 @@ The limits were set by experiment, with `--compare` on existing result files and
 | Hard set, handoff at 20k / spawn off | regressed | +18% / +28% | +27% / +49% |
 | Hard set, Sonnet review / rerun | regressed | +711% / +580% | +80% / +61% |
 
-The 4- and 7-task sets move up to 15% on noise; the 24-task gate suite moves under 3%.
+The 3- to 7-task sets move up to 26% on noise; the 24-task gate suite moves under 3% for the typical task.
 
 The second run also found a task problem, not a cedia one: 3 of 4 Flash runs of `wide-three-features` read the slug comment's cut rule one way and the hidden test the other, one of them as a false done. The comment now says a "-" right after the first max characters counts; the four Haiku and four Flash runs after the change all passed, and that task's baseline rows were replaced with `--only wide-three-features --update-baseline`.
 
