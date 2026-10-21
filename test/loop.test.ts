@@ -111,6 +111,17 @@ describe('loop', () => {
     }
   });
 
+  test('abort during a retry wait ends at once with interrupted', async () => {
+    const ac = new AbortController();
+    const { opts } = setup([{ error: { code: 'rate_limit', status: 429, retryAfterMs: 600_000, message: 'later' } }, { blocks: [text('unreachable')] }], { signal: ac.signal, retry: {} });
+    const p = runPrompt(opts, 'wait');
+    setTimeout(() => ac.abort(), 10);
+    const start = Date.now();
+    const res = await p;
+    expect(res.subtype).toBe('interrupted');
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
+
   test('abort mid-stream ends with interrupted and turn_end aborted', async () => {
     const ac = new AbortController();
     const { log, opts } = setup([{ hang: true }], { signal: ac.signal });

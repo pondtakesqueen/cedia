@@ -210,6 +210,8 @@ describe('http', () => {
     expect(classifyStatus(402, '{"error":{"message":"Insufficient Balance"}}').code).toBe('quota');
     expect(classifyStatus(429, '{"error":{"message":"You have reached your usage limit for this period"}}').code).toBe('quota');
     expect(classifyStatus(429, 'slow down').code).toBe('rate_limit');
+    expect(classifyStatus(429, '{"error":{"message":"Rate limit exceeded. Please try again later."}}', '27380').code).toBe('quota');
+    expect(classifyStatus(429, 'slow down', '600').code).toBe('rate_limit');
     expect(isRetryable(classifyStatus(402, ''))).toBe(false);
   });
 

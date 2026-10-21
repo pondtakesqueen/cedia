@@ -150,7 +150,11 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const now = opts.now ?? (() => new Date());
   const maxTurns = opts.maxTurns ?? 50;
   const retryMax = opts.retry?.max ?? 5;
-  const sleep = opts.retry?.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  // A retry wait ends early on abort, so SIGTERM (the eval's run timeout) is not held up by a long retry-after.
+  const sleep = opts.retry?.sleep ?? ((ms: number) => new Promise<void>((r) => {
+    const t = setTimeout(r, ms);
+    signal.addEventListener('abort', () => (clearTimeout(t), r()), { once: true });
+  }));
   const byName = new Map(tools.map((t) => [t.name, t]));
 
   if (!log.events.length)
