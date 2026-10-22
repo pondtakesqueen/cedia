@@ -33,7 +33,7 @@ function modeNote(mode: PermissionMode, unlock: Guard[]): string {
 // Per-session facts go in the first user turn, never in the cached system prompt.
 export function preamble(
   cwd: string,
-  opts: { mode?: PermissionMode; unlock?: Guard[]; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] }; context?: string } = {},
+  opts: { mode?: PermissionMode; unlock?: Guard[]; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] }; context?: string; instructions?: string } = {},
   now = new Date(),
 ): string {
   const lines = [`working directory: ${cwd}`, `date: ${now.toISOString().slice(0, 10)}`, `platform: ${process.platform}`, `permission: ${modeNote(opts.mode ?? 'read-only', opts.unlock ?? [])}`];
@@ -47,5 +47,8 @@ export function preamble(
     lines.push(`checks: after changing files, run ${opts.checks.map((c) => `\`${c}\``).join(' and ')} exactly as written (no pipes). The task is not done until one passes after your last change.`);
   const env = `<environment>\n${lines.join('\n')}\n</environment>`;
   // The user's standing context (who they are, what they work on, what is authorized). Only from their own settings.
-  return opts.context?.trim() ? `${env}\n<user_context>\n${opts.context.trim()}\n</user_context>` : env;
+  const user = opts.context?.trim() ? `\n<user_context>\n${opts.context.trim()}\n</user_context>` : '';
+  // The repository's AGENTS.md files (core/project/instructions.ts), already framed.
+  const repo = opts.instructions?.trim() ? `\n${opts.instructions.trim()}` : '';
+  return `${env}${user}${repo}`;
 }

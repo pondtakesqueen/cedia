@@ -10,6 +10,7 @@ import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from 
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
+import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
 import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
@@ -194,7 +195,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     if (store && threadId) store.append(threadId, { kind: 'session', sessionId: log.id, model: m.ref, role: 'code', why, ...(log.path ? { path: log.path } : {}) });
     if (!earlier.some((s) => s.id === log.id)) earlier.push({ id: log.id, events: () => log.events });
   };
-  const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}) });
+  const instructions = instructionsBlock(loadInstructions(args.cwd));
+  const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}) });
   // Where each writer session of this run started in its log, for the change the run made.
   const writerRuns: { log: SessionLog; from: number }[] = [];
   // The change the run made: the first snapshot (taken before the first write) to the last, across its sessions.
@@ -207,7 +209,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       return undefined;
     }
   };
-  const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}) });
+  const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}) });
 
   const ac = new AbortController();
   const onSignal = () => ac.abort();
