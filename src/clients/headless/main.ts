@@ -16,6 +16,7 @@ import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { openSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
+import type { ToolSpec } from '../../core/tools/registry.ts';
 import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
 import { runClaudeCode } from './claude-code.ts';
@@ -212,8 +213,14 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   let handoffs = 0;
   // Quota waits add up across the run's sessions, against the one ceiling.
   let quotaWaited = 0;
-  // child: a sub-thread's session, which gets the core tools only (no spawn, recall, threads, inbox or handoff).
-  type RunOpts = { continues?: { sessionId: string; changed: string[] }; note?: string; role?: 'plan' | 'review' | 'explore'; child?: { thread?: string } };
+  // child: a sub-thread's session, which gets the core tools only (no spawn, threads or inbox). A work sub-thread
+  // hands off like the writer, and a session it handed off to gets recall over the sub-thread's earlier sessions.
+  type RunOpts = {
+    continues?: { sessionId: string; changed: string[] };
+    note?: string;
+    role?: 'plan' | 'review' | 'explore';
+    child?: { thread?: string; handoff?: boolean; recall?: ToolSpec };
+  };
   const run = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}) => {
     const { continues } = opts;
     const reviewer = opts.role !== undefined; // plan, review and explore read and never write
@@ -224,7 +231,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // thread has an earlier session, and the thread tools once the project has another thread.
     const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
     const extra = [...(spawnOn ? [spawn] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : [])];
-    const tools = reviewer ? REVIEW_TOOLS : child ? CORE_TOOLS : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
+    const tools = reviewer ? REVIEW_TOOLS : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : [])] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
     if (writing) writerRuns.push({ log, from: log.events.length });
     const result = await runPrompt(
       {
@@ -246,7 +253,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         ...(continues ? { continues } : {}),
         ...(opts.role ? { role: opts.role } : {}),
         ...(child ? (child.thread ? { thread: child.thread } : {}) : threadId ? { thread: threadId } : {}),
-        ...(writing && handoffAt !== undefined && handoffs < MAX_HANDOFFS ? { handoffAt } : {}),
+        ...(handoffAt !== undefined && (writing ? handoffs < MAX_HANDOFFS : child?.handoff) ? { handoffAt } : {}),
         ...(writing && spawnOn ? { spawnNudgeAt: spawnNudgeAt(handoffAt ?? defaultHandoffAt(m)) } : {}),
         ...(writing && store && threadId
           ? {
@@ -298,27 +305,47 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const explorer = privacy === 'zdr' && roles.swarm.dataPolicy !== 'zdr' ? model : roles.swarm;
   let subthreads = 0;
   // An explore sub-thread whose swarm model is out of quota (Beam's free tier answers with hours to wait) goes on
-  // in a new session on the writer's model, as the writer itself would.
+  // in a new session on the writer's model, as the writer itself would. A work sub-thread whose context grows long
+  // hands off to a new session of the sub-thread, as the writer does: on Haiku a sub-thread past 100k tokens would
+  // pay the long-context price on every turn. Explore never hands off, since a session that only read cannot
+  // (core/loop/run.ts).
   const spawner: Spawner = async (brief: string, kind: SpawnKind) => {
     subthreads++;
     let m = kind === 'explore' ? explorer : writer.model;
     const sub = store?.open(brief, threadId ? { parent: threadId } : {});
-    const once = async (why: SessionWhy) => {
+    const prompt = subtaskPrompt(brief, threadId, kind);
+    // The sub-thread's sessions so far: what recall searches once one has handed off.
+    const mine: EarlierSession[] = [];
+    const recallMine = recallTool(() => mine.slice(0, -1));
+    let handoffsHere = 0;
+    let cost = 0;
+    const once = async (why: SessionWhy, opts: RunOpts = {}) => {
       const log = openLog();
       if (store && sub) store.append(sub, { kind: 'session', sessionId: log.id, model: m.ref, role: kind === 'explore' ? 'explore' : 'code', why, ...(log.path ? { path: log.path } : {}) });
-      return { log, r: await run(m, log, subtaskPrompt(brief, threadId, kind), { ...(kind === 'explore' ? { role: 'explore' as const } : {}), child: sub ? { thread: sub } : {} }) };
+      mine.push({ id: log.id, events: () => log.events });
+      const child = { ...(sub ? { thread: sub } : {}), ...(kind === 'work' && handoffsHere < MAX_HANDOFFS ? { handoff: true } : {}), ...(mine.length > 1 ? { recall: recallMine } : {}) };
+      const r = await run(m, log, prompt, { ...opts, ...(kind === 'explore' ? { role: 'explore' as const } : {}), child });
+      cost += r.costUsd;
+      return { log, r };
     };
     let r: HeadlessResult;
     try {
-      const first = await once('start');
-      r = first.r;
-      if (kind === 'explore' && m !== writer.model && r.subtype === 'error_during_execution' && quotaSpent(first.log.events)) {
+      let last = await once('start');
+      r = last.r;
+      if (kind === 'explore' && m !== writer.model && r.subtype === 'error_during_execution' && quotaSpent(last.log.events)) {
         process.stderr.write(`cedia: ${m.ref} is out of quota; the explore sub-thread goes on on ${writer.model.ref}\n`);
         m = writer.model;
-        const spent = r.costUsd;
         r = (await once('quota')).r;
-        r = { ...r, costUsd: r.costUsd + spent };
       }
+      while (r.subtype === 'handoff') {
+        handoffsHere++;
+        const from = last.log;
+        if (store && sub) store.append(sub, { kind: 'handoff', sessionId: from.id, note: r.result });
+        process.stderr.write(`cedia: a sub-thread's context reached ${handoffAt} tokens; handing it off to a new session\n`);
+        last = await once('handoff', { continues: { sessionId: from.id, changed: r.evidence?.changed ?? [] }, note: handoffNote(from.id, r.result) });
+        r = last.r;
+      }
+      r = { ...r, costUsd: cost };
     } catch (e) {
       if (store && sub) store.append(sub, { kind: 'state', state: 'failed', result: (e as Error).message });
       throw e;

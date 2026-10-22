@@ -10,7 +10,8 @@ import { inert } from '../trust/frame.ts';
 //   work     may write, on the code model, under the run's policy, sandbox and checks. It runs alone, between two
 //            snapshots, so the parent's ledger records what it changed and the done gate still wants a check.
 //
-// A child cannot spawn. One that finishes its task archives its thread; one that fails stays listed.
+// A child cannot spawn. A work child whose context grows long hands off to a new session of its own thread, as
+// the writer does. One that finishes its task archives its thread; one that fails stays listed.
 
 export type SpawnKind = 'explore' | 'work';
 export const SPAWN_KINDS: SpawnKind[] = ['explore', 'work'];

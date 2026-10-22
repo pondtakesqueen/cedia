@@ -354,6 +354,52 @@ describe('sub-threads (offline, faux)', () => {
     expect(threadsCli(dir, '--all').out).toContain(`(sub-thread of ${result.thread}) (archived)`);
   });
 
+  test('a long work sub-thread hands off to a new session of the sub-thread, which can recall and must still verify', () => {
+    const dir = tmp();
+    const script = [
+      tool('s1', 'spawn', { kind: 'work', task: 'Write good to f.txt, then run grep -q good f.txt.' }),
+      call('c1', 'echo good > f.txt && seq 1 6000'),
+      reply('Wrote f.txt. Next: run grep -q good f.txt.'),
+      call('c2', 'grep -q good f.txt'),
+      reply('Wrote good to f.txt; grep -q good f.txt passes.'),
+      call('c3', 'grep -q good f.txt'),
+      reply('done, checked'),
+    ];
+    const run = cedia(dir, script, ['-p', 'make f.txt say good', ...ws, '--handoff-at', '2000']);
+    const result = JSON.parse(run.out);
+    expect(result).toMatchObject({ subtype: 'success', result: 'done, checked', evidence: { unverified: [] } });
+    expect(run.err).toContain("a sub-thread's context reached 2000 tokens; handing it off to a new session");
+    // The parent itself did not hand off: one writer session.
+    expect(result.sessions).toHaveLength(1);
+    const parent = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
+    const report = parent.events.find((e): e is EventOf<'tool_result'> => e.kind === 'tool_result' && e.callId === 's1')!;
+    expect(report).toMatchObject({ status: 'completed' });
+    expect(report.output.text).toContain('Wrote good to f.txt; grep -q good f.txt passes.');
+    expect(report.output.text).toContain('Changed: f.txt');
+    expect(report.output.text).not.toContain('Wrote f.txt. Next:');
+
+    const sub = storeOf(dir).list().find((t) => t.parent === result.thread)!;
+    expect(sub).toMatchObject({ state: 'done', archived: true });
+    expect(sub.sessions.map((s) => [s.role, s.why])).toEqual([['code', 'start'], ['code', 'handoff']]);
+    const [first, second] = sub.sessions.map((s) => sessionsOf(dir).find((l) => l.id === s.sessionId)!);
+    expect(sub.handoff).toEqual({ sessionId: first!.id, note: 'Wrote f.txt. Next: run grep -q good f.txt.' });
+    expect(head(second!.events)).toMatchObject({ thread: sub.id, parentSession: first!.id });
+    expect(userText(second!.events)).toContain(`<handoff session="${first!.id}">\nWrote f.txt. Next: run grep -q good f.txt.\n</handoff>`);
+    expect(userText(second!.events)).toContain('Write good to f.txt, then run grep -q good f.txt.');
+    expect(head(first!.events).tools.map((t) => t.name)).toEqual(['read', 'edit', 'write', 'bash']);
+    expect(head(second!.events).tools.map((t) => t.name)).toEqual(['read', 'edit', 'write', 'bash', 'recall']);
+    for (const l of [parent, first!, second!]) expect(lintSession(l.events)).toEqual([]);
+
+    // The new session inherits the first one's write, so its claim still needs a check after it.
+    const lazyDir = tmp();
+    const lazy = cedia(lazyDir, [script[0], script[1], script[2], reply('done'), reply('done'), call('c3', 'grep -q good f.txt'), reply('fixed it myself')], ['-p', 'make f.txt say good', ...ws, '--handoff-at', '2000']);
+    const lazyResult = JSON.parse(lazy.out);
+    expect(lazyResult.subtype).toBe('success');
+    const lazyParent = sessionsOf(lazyDir).find((l) => l.id === lazyResult.sessionId)!;
+    expect(lazyParent.events.find((e) => e.kind === 'tool_result')).toMatchObject({ status: 'failed' });
+    expect(lazyParent.events.find((e) => e.kind === 'tool_result')!.output.text).toContain('ended="error_unverified_claim"');
+  });
+
   test('explore runs read-only on the swarm model, even from a read-only session; work is refused there', () => {
     const dir = tmp();
     const ro = ['--output-format', 'json', '--sandbox', 'off', '--swarm', 'faux/fallback'];
