@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { bounded } from '../src/core/loop/run.ts';
-import { spawnTool, type Spawner } from '../src/core/tools/spawn.ts';
+import { spawnReport, spawnTool, type Spawner } from '../src/core/tools/spawn.ts';
 
 const ctx = { cwd: '.', signal: new AbortController().signal };
 
@@ -39,4 +39,18 @@ test('the parallel pool keeps at most its limit in flight and starts calls in or
   });
   expect([peak, started]).toEqual([8, [...Array(20).keys()]]);
   await bounded([], 8, async () => {});
+});
+
+test('a report names the files written whole by a tool, and whose version was kept', () => {
+  const report = spawnReport('work', {
+    model: 'm',
+    subtype: 'success',
+    result: 'done',
+    costUsd: 0,
+    changed: ['bun.lock', 'gen/api.ts'],
+    unverified: [],
+    worktree: { applied: ['bun.lock'], refused: [], conflicts: [], newest: [{ file: 'bun.lock', kept: 'its' }, { file: 'gen/api.ts', kept: 'yours' }] },
+  });
+  expect(report).toContain('Both of you changed bun.lock, gen/api.ts, which a tool writes whole');
+  expect(report).toContain('(bun.lock: its, gen/api.ts: yours)');
 });

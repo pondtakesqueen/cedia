@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { applyWorktree, openWorktree, type Worktree } from '../src/core/project/worktree.ts';
@@ -79,6 +79,54 @@ describe('worktree per work sub-thread', () => {
     expect(late).toEqual({ files: [], refused: [], conflicts: ['src/a.txt'] });
     expect(existsSync(join(r.work, 'made-by-c.txt'))).toBe(false);
     for (const w of [a, b, c] as Worktree[]) w.close();
+  });
+
+  test('a lockfile or generated file both changed is not merged by lines: the one written last wins it whole', () => {
+    const r = repo();
+    writeFileSync(join(r.work, 'bun.lock'), 'a@1\nb@1\nc@1\n');
+    writeFileSync(join(r.work, '.gitattributes'), 'gen/** linguist-generated\n');
+    mkdirSync(join(r.work, 'gen'));
+    writeFileSync(join(r.work, 'gen', 'api.ts'), '1\n2\n3\n4\n5\n6\n');
+    const at = (file: string, s: number) => utimesSync(file, s, s);
+    const wt = open(r, 't-lww');
+    // The child changed both and wrote them last; the parent changed both first. The generated file's changes
+    // would merge by lines (first and last line), yet it is taken whole.
+    writeFileSync(join(r.work, 'bun.lock'), 'a@2\nb@1\nc@1\n');
+    writeFileSync(join(r.work, 'gen', 'api.ts'), 'parent\n2\n3\n4\n5\n6\n');
+    writeFileSync(join(wt.cwd, 'bun.lock'), 'a@3\nb@1\nc@1\n');
+    writeFileSync(join(wt.cwd, 'gen', 'api.ts'), '1\n2\n3\n4\n5\nchild\n');
+    writeFileSync(join(wt.cwd, 'src', 'a.txt'), '1 parent\n2\n3\n4\n5\n6\n7\n8 child\n');
+    at(join(r.work, 'bun.lock'), 1000);
+    at(join(r.work, 'gen', 'api.ts'), 1000);
+    at(join(wt.cwd, 'bun.lock'), 2000);
+    at(join(wt.cwd, 'gen', 'api.ts'), 2000);
+    const applied = applyWorktree(wt, r.parent, none);
+    expect(applied.conflicts).toEqual([]);
+    expect(applied.files.sort()).toEqual(['bun.lock', 'gen/api.ts', 'src/a.txt']);
+    expect(applied.newest).toEqual(expect.arrayContaining([{ file: 'bun.lock', kept: 'its' }, { file: 'gen/api.ts', kept: 'its' }]));
+    expect(readFileSync(join(r.work, 'bun.lock'), 'utf8')).toBe('a@3\nb@1\nc@1\n');
+    expect(readFileSync(join(r.work, 'gen', 'api.ts'), 'utf8')).toBe('1\n2\n3\n4\n5\nchild\n');
+    wt.close();
+
+    // Now the parent wrote last: its lockfile stays, and the child's other change still lands.
+    const late = open(r, 't-lww-late');
+    writeFileSync(join(late.cwd, 'bun.lock'), 'a@4\nb@1\nc@1\n');
+    writeFileSync(join(late.cwd, 'made.txt'), 'x\n');
+    writeFileSync(join(r.work, 'bun.lock'), 'a@5\nb@1\nc@1\n');
+    at(join(late.cwd, 'bun.lock'), 3000);
+    at(join(r.work, 'bun.lock'), 4000);
+    expect(applyWorktree(late, r.parent, none)).toEqual({ files: ['made.txt'], refused: [], conflicts: [], newest: [{ file: 'bun.lock', kept: 'yours' }] });
+    expect(readFileSync(join(r.work, 'bun.lock'), 'utf8')).toBe('a@5\nb@1\nc@1\n');
+    late.close();
+
+    // A real conflict elsewhere still writes nothing, the lockfile included.
+    const both = open(r, 't-lww-conflict');
+    writeFileSync(join(both.cwd, 'bun.lock'), 'a@6\nb@1\nc@1\n');
+    writeFileSync(join(both.cwd, 'new.txt'), 'child\n');
+    writeFileSync(join(r.work, 'new.txt'), 'parent\n');
+    expect(applyWorktree(both, r.parent, none)).toEqual({ files: [], refused: [], conflicts: ['new.txt'] });
+    expect(readFileSync(join(r.work, 'bun.lock'), 'utf8')).toBe('a@5\nb@1\nc@1\n');
+    both.close();
   });
 
   test("the parent's own edits since the child started stay; a refused file is left out and named", () => {

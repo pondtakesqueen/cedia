@@ -26,7 +26,7 @@ export type SpawnOutcome = {
   changed: string[];
   unverified: string[];
   // A work sub-thread in a worktree: how its changes came back to the parent's files.
-  worktree?: { applied: string[]; refused: string[]; conflicts: string[]; kept?: string; why?: string };
+  worktree?: { applied: string[]; refused: string[]; conflicts: string[]; newest?: { file: string; kept: 'yours' | 'its' }[]; kept?: string; why?: string };
 };
 export type Spawner = (task: string, kind: SpawnKind, ctx: { signal: AbortSignal; write?: <T>(fn: () => Promise<T> | T) => Promise<T> }) => Promise<SpawnOutcome>;
 
@@ -47,6 +47,7 @@ export function spawnReport(kind: SpawnKind, o: SpawnOutcome): string {
     // File names are the child's to choose: framed like its report.
     const names = (fs: string[]) => inert(fs.join(', '));
     if (w.applied.length) lines.push(`Applied to your files: ${names(w.applied)}`);
+    if (w.newest?.length) lines.push(`Both of you changed ${names(w.newest.map((n) => n.file))}, which a tool writes whole (a lockfile, generated code): the one written last was kept whole instead of merged (${inert(w.newest.map((n) => `${n.file}: ${n.kept}`).join(', '))}). Regenerate it if both changes must be in it.`);
     if (w.conflicts.length) lines.push(`Not applied: its changes conflict with yours (or another sub-thread's) in ${names(w.conflicts)}. Nothing of it was written.`);
     if (w.refused.length) lines.push(`Not applied, since you may not write them: ${names(w.refused)}`);
     if (w.why) lines.push(`Not applied: ${inert(w.why)}.`);

@@ -181,7 +181,8 @@
         "handoff",
         "plan",
         "review",
-        "ask"
+        "ask",
+        "worktree.newest-wins"
       ]
     },
     "Check": {
