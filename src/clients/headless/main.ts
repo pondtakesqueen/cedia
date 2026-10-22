@@ -32,6 +32,7 @@ import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
 import { ADVISOR_SYSTEM, adviceOf, advicePrompt, adviceReminder, turnDigest } from '../../core/trust/advisor.ts';
 import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
+import { goalContinuePrompt, goalPrompt, MAX_GOAL_ROUNDS, parseGoal, type GoalRound } from '../../core/trust/goal.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
 import { runClaudeCode } from './claude-code.ts';
 import { encode } from '../../protocol/index.ts';
@@ -76,6 +77,10 @@ export type HeadlessArgs = {
   checks?: string[];
   sandbox?: string;
   allowDomains?: string[];
+  // Keep going until a separate judge finds this condition holds (core/trust/goal.ts), judged by goalJudge (a
+  // model ref; default the writer's model, in a fresh read-only session).
+  goal?: string;
+  goalJudge?: string;
 };
 
 // Every run that changed files or ran checks ends with a receipt built from the ledger. A check another thread ran
@@ -194,6 +199,11 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   }
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? (JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) as FauxStep[]) : undefined;
   const handoffAt = loadHandoffAt(model, args.handoffAt);
+  const goalJudge = args.goal ? (args.goalJudge ? resolveModel(args.goalJudge) : model) : undefined;
+  if (goalJudge && goalJudge !== model) {
+    const note = missingKeyNote(goalJudge);
+    if (note) process.stderr.write(note + '\n');
+  }
   const handoffVia = loadHandoff(args.handoff);
   const escalate = args.escalate === 'off' ? undefined : ((args.escalate ?? 'high') as Effort);
   // Every run belongs to a thread of the project, unless nothing is written to disk.
@@ -300,7 +310,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   type RunOpts = {
     continues?: { sessionId: string; changed: string[] };
     note?: string;
-    role?: 'plan' | 'review' | 'explore' | 'advisor';
+    role?: 'plan' | 'review' | 'explore' | 'goal' | 'advisor';
     child?: { thread?: string; handoff?: boolean; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots; wrap: (command: string) => Promise<string> } };
     // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
     seed?: { from: SessionLog; compaction: NonNullable<HeadlessResult['compaction']> };
@@ -348,7 +358,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         ...(opts.role === 'advisor' ? {} : { preamble: reviewer ? reviewPreamble : opts.note ? `${place?.preamble ?? basePreamble}\n\n${opts.note}` : (place?.preamble ?? basePreamble) }),
         cwd: place?.cwd ?? args.cwd,
         // They may also run the declared checks, to see what fails instead of only reading.
-        permission: reviewer ? { ...policy, mode: 'read-only', allow: [...policy.allow, ...checks.map((c) => `bash(${c})`)] } : policy,
+        // The run's own allow rules are the writer's: one such as bash(git *) would let a reviewer write.
+        permission: reviewer ? { ...policy, mode: 'read-only', allow: checks.map((c) => `bash(${c})`) } : policy,
         privacy,
         // Stop hooks judge the writer's claim of done, not a plan, a review or a sub-thread's report.
         ...(hooked ? { hooks: writing ? hooks : { ...hooks, stop: [] }, hookHome: cediaHome() } : {}),
@@ -618,8 +629,11 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // A spent quota does not end the task: a new session on the fallback model picks it up (a session never
     // switches model, so its cache stays valid). Nor does a history the provider refuses: a new session on the
     // same model starts from the task and the working tree. Each happens at most once a run.
+    // It applies to every writer pass: the first, a review's fix and a goal's next round.
     let fellBack = false;
     let restarted = false;
+    const recover = async (r: HeadlessResult): Promise<HeadlessResult> => {
+    let result = r;
     while (result.subtype === 'error_during_execution') {
       const from = writer;
       const changed = result.evidence?.changed ?? [];
@@ -640,6 +654,9 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         result = await write(from.model, log, task, { continues: { sessionId: from.log.id, changed }, note: rejectedNote(from.model, from.log.id) });
       } else break;
     }
+    return result;
+    };
+    result = await recover(result);
     // Review: after the writer's claim passed the done gate, a second model reads the change. Changes it asks
     // for go back to the writer's own session once.
     let review: ReviewOutcome | undefined;
@@ -648,16 +665,36 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       const { verdict, findings } = r.ok ? parseVerdict(r.text) : { verdict: 'unclear' as const, findings: '' };
       review = { ...r.step, verdict, fixed: false };
       if (verdict === 'changes') {
-        result = await write(writer.model, writer.log, fixPrompt(r.step.model, findings));
+        result = await recover(await write(writer.model, writer.log, fixPrompt(r.step.model, findings)));
         review.fixed = true;
       } else if (verdict === 'unclear') process.stderr.write(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
     }
+    // Goal: a separate judge decides whether the condition holds; while it does not, the writer goes on in its
+    // own session with what the judge found missing, up to MAX_GOAL_ROUNDS more passes.
+    let goal: HeadlessResult['goal'];
+    if (args.goal && goalJudge) {
+      const rounds: GoalRound[] = [];
+      while (result.subtype === 'success' && !ac.signal.aborted) {
+        const log = openLog();
+        if (store && threadId) store.append(threadId, { kind: 'session', sessionId: log.id, model: goalJudge.ref, role: 'goal', why: 'start', ...(log.path ? { path: log.path } : {}) });
+        // The receipt of the whole run so far: a later round's own pass changed only part of it.
+        const r = await run(goalJudge, log, goalPrompt(args.goal, args.prompt, result.result, combine(parts, result, children).evidence, changesPatch()), { role: 'goal' });
+        const judged = r.subtype === 'success' ? parseGoal(r.result) : undefined;
+        rounds.push({ verdict: judged?.verdict ?? 'not_met', reason: judged?.reason ?? `the judge's session ended with ${r.subtype}`, judge: goalJudge.ref, sessionId: log.id, costUsd: r.costUsd });
+        // A judge that could not finish says nothing about the work, so the writer is not sent back on it.
+        if (!judged || judged.verdict !== 'not_met' || rounds.length > MAX_GOAL_ROUNDS) break;
+        process.stderr.write(`cedia goal: not met yet (round ${rounds.length}); the writer goes on with what the judge found missing\n`);
+        result = await recover(await write(writer.model, writer.log, goalContinuePrompt(args.goal, goalJudge.ref, judged.reason)));
+      }
+      const last = rounds.at(-1);
+      goal = { condition: args.goal, verdict: last?.verdict ?? 'not_met', rounds };
+    }
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
     const advice = adv.log ? { model: roles.advisor!.ref, via: 'cedia' as const, sessionId: adv.log.id, costUsd: adv.costUsd, turns: adv.turns, notes: adv.notes } : undefined;
-    result = { ...combine(parts, result, new Set([...children, ...advised]), advised), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(advice ? { advice } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
+    result = { ...combine(parts, result, new Set([...children, ...advised]), advised), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(advice ? { advice } : {}), ...(goal ? { goal } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
     recordTurn();
     if (store && threadId && result.question) store.append(threadId, { run: runId, kind: 'question', sessionId: result.sessionId, ...result.question });
-    if (store && threadId) store.append(threadId, { run: runId, kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
+    if (store && threadId) store.append(threadId, { run: runId, kind: 'state', state: goal && goal.verdict !== 'met' && result.subtype === 'success' ? 'failed' : stateOf(result), result: result.result.slice(0, MAX_RESULT) });
     // The receipt goes in the writer's log too, so a thread rebuilt from the files shows it. Quiet: a stream-json
     // client gets it as the result line below.
     writer.log.append({ kind: 'result', result }, { quiet: true });
@@ -665,6 +702,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       out(result.result + (result.result.endsWith('\n') ? '' : '\n'));
       if (result.evidence) process.stderr.write(receipt(result.evidence, result.thread) + '\n');
       if (result.plan) process.stderr.write(`cedia plan: by ${result.plan.model}\n`);
+      if (result.goal) process.stderr.write(`cedia goal: ${result.goal.verdict.replace('_', ' ')} after ${result.goal.rounds.length} judgement${result.goal.rounds.length === 1 ? '' : 's'} by ${goalJudge!.ref}${result.goal.verdict === 'met' ? '' : `: ${result.goal.rounds.at(-1)?.reason.split('\n')[0] ?? ''}`}\n`);
       if (result.advice) process.stderr.write(`cedia advisor: ${result.advice.model} read ${result.advice.turns} turn${result.advice.turns === 1 ? '' : 's'} and left ${result.advice.notes} note${result.advice.notes === 1 ? '' : 's'}\n`);
       if (result.review) process.stderr.write(`cedia review: ${result.review.model} ${result.review.verdict === 'changes' ? 'asked for changes, sent back to the writer once' : result.review.verdict === 'approve' ? 'approved' : 'gave no verdict'}\n`);
       if (threadId) process.stderr.write(`cedia thread: ${threadId}${handoffs ? ` (${handoffs} handoff${handoffs === 1 ? '' : 's'})` : ''}; go on with --thread ${threadId}\n`);
