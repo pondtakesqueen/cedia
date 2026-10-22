@@ -121,6 +121,8 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
     : undefined;
   const { evidence: _, timing: __, ...rest } = last;
   const peakContext = Math.max(0, ...parts.filter((r) => !children.has(r)).map((r) => r.peakContext ?? 0));
+  const inputRepairs: Record<string, number> = {};
+  for (const r of parts) for (const [k, v] of Object.entries(r.inputRepairs ?? {})) inputRepairs[k] = (inputRepairs[k] ?? 0) + v;
   const cacheMisses = parts.flatMap((r) => r.cacheMisses ?? []);
   return {
     ...rest,
@@ -130,6 +132,7 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
     usage,
     costUsd: parts.reduce((c, r) => c + r.costUsd, 0),
     cacheHitRatio: hitRatio(usage),
+    ...(Object.keys(inputRepairs).length ? { inputRepairs } : {}),
     ...(cacheMisses.length ? { cacheMisses } : {}),
     ...(evidence ? { evidence } : {}),
   };
