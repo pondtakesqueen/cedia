@@ -1,6 +1,6 @@
-{"at":"2026-10-22T07:22:16.912Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
-{"at":"2026-10-22T07:22:16.935Z","kind":"session","sessionId":"44e07582-a759-490f-8d70-3c1b6c49a6cf","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/44e07582-a759-490f-8d70-3c1b6c49a6cf.jsonl"}
-{"at":"2026-10-22T07:22:16.977Z","kind":"handoff","sessionId":"44e07582-a759-490f-8d70-3c1b6c49a6cf","note":"Wrote f.txt. Next: run the check."}
-{"at":"2026-10-22T07:22:16.979Z","kind":"session","sessionId":"712b46a8-838c-4aa5-b8ec-303c79157b4e","model":"faux/scripted","role":"code","why":"handoff","path":"/fixture/home/sessions/fixture-repo/712b46a8-838c-4aa5-b8ec-303c79157b4e.jsonl"}
-{"at":"2026-10-22T07:22:16.999Z","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["44e07582-a759-490f-8d70-3c1b6c49a6cf","712b46a8-838c-4aa5-b8ec-303c79157b4e"]}
-{"at":"2026-10-22T07:22:16.999Z","kind":"state","state":"done","result":"done"}
+{"at":"2026-10-22T08:36:35.872Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
+{"at":"2026-10-22T08:36:35.897Z","kind":"session","sessionId":"5d34b1be-915e-4e6a-88ab-9b94b501115b","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/5d34b1be-915e-4e6a-88ab-9b94b501115b.jsonl"}
+{"at":"2026-10-22T08:36:35.947Z","kind":"handoff","sessionId":"5d34b1be-915e-4e6a-88ab-9b94b501115b","note":"Wrote f.txt. Next: run the check."}
+{"at":"2026-10-22T08:36:35.950Z","kind":"session","sessionId":"885f679a-1655-49a7-b203-76dea836b62e","model":"faux/scripted","role":"code","why":"handoff","path":"/fixture/home/sessions/fixture-repo/885f679a-1655-49a7-b203-76dea836b62e.jsonl"}
+{"at":"2026-10-22T08:36:35.961Z","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["5d34b1be-915e-4e6a-88ab-9b94b501115b","885f679a-1655-49a7-b203-76dea836b62e"]}
+{"at":"2026-10-22T08:36:35.961Z","kind":"state","state":"done","result":"done"}
