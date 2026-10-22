@@ -175,7 +175,8 @@ export type HeadlessResult = {
   usage: Usage;
   costUsd: number;
   cacheHitRatio: number;
-  // Calls whose input was repaired, by kind of repair (absent when none was).
+  // Calls whose input was repaired, keyed `<tool>: <kind of repair>` (absent when none was). A call the policy then
+  // denied counts too: the count is of what the model sent.
   inputRepairs?: Record<string, number>;
   result: string;
   evidence?: Evidence;

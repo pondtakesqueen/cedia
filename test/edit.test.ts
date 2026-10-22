@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { applyEdit, editsOf, editTool, writeTool } from '../src/core/tools/edit.ts';
+import { applyEdit, editRepair, editsOf, editTool, writeTool } from '../src/core/tools/edit.ts';
 
 const cwd = mkdtempSync(join(tmpdir(), 'cedia-edit-'));
 const ctx = { cwd, signal: new AbortController().signal };
@@ -103,4 +103,14 @@ describe('input repair in the loop', () => {
     expect(res.inputRepairs).toEqual({ 'edit: top-level old_text/new_text': 1, 'edit: edits as a JSON string': 1 });
     expect(lintSession(log.events)).toEqual([]);
   });
+});
+
+test('repair keeps replace_all and reads the broken string shape', () => {
+  expect(editRepair({ path: 'f', edits: '[{"old_text">a', new_text: 'b', replace_all: true })).toEqual({ input: { path: 'f', edits: [{ old_text: 'a', new_text: 'b', replace_all: true }] }, repairs: ['broken edits string'] });
+  expect(editRepair({ path: 'f', edits: '[{"old_text":"a","new_text":"b"}]', replace_all: true })).toEqual({
+    input: { path: 'f', edits: [{ old_text: 'a', new_text: 'b', replace_all: true }] },
+    repairs: ['edits as a JSON string', 'top-level replace_all'],
+  });
+  expect(editRepair({ path: 'f', edits: [{ old_text: 'a', new_text: 'b' }] })).toBeUndefined();
+  expect(editRepair({ path: 'f', edits: 'nonsense' })).toBeUndefined();
 });
