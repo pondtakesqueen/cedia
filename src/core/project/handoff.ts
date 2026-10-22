@@ -1,4 +1,5 @@
-import type { ModelSpec, Usage } from '../types.ts';
+import { costUsd } from '../providers/catalog.ts';
+import type { EventOf, ModelSpec, SessionEvent, Usage } from '../types.ts';
 import { inert } from '../trust/frame.ts';
 
 // Handoff instead of compaction: when a session's context grows long, it writes a note for its successor while
@@ -42,3 +43,31 @@ export const handoffNote = (sessionId: string, note: string) =>
 <handoff session="${sessionId}">
 ${inert(note)}
 </handoff>`;
+
+// Resuming a thread whose last session's cache has expired re-reads its whole context at the uncached price; a new
+// session from the thread's note or result starts small and re-reads only what it needs. A session this small or
+// smaller is always resumed, since losing its context costs more than re-reading it.
+export const COLD_RESUME_MIN = 30_000;
+
+export type ResumeChoice = { cold: boolean; idleMs: number; contextTokens: number; resumeUsd: number; freshUsd: number; fresh: boolean };
+
+// What re-sending `tokens` of prompt costs when none of it is cached: a cache write where the provider prices one,
+// the input price where caching is automatic.
+const coldUsd = (model: ModelSpec, tokens: number, at: Date) =>
+  costUsd(model, model.price.cacheWrite > 0 ? { uncached: 0, cacheRead: 0, cacheWrite: tokens, output: 0 } : { uncached: tokens, cacheRead: 0, cacheWrite: 0, output: 0 }, at);
+
+// Whether to resume a session or start a new one from the thread's note: new when the session's cache has expired,
+// its context is past COLD_RESUME_MIN, and re-reading it costs more than twice what the new session's start does
+// (the margin pays for what the new session reads again). `freshTokens` is that start: system prompt, tools,
+// preamble, note and task.
+export function resumeChoice(events: SessionEvent[], model: ModelSpec, freshTokens: number, now = new Date()): ResumeChoice | undefined {
+  const reply = events.findLast((e): e is EventOf<'assistant'> => e.kind === 'assistant');
+  const request = events.findLast((e): e is EventOf<'request'> => e.kind === 'request');
+  if (!reply || !request) return undefined;
+  const idleMs = now.getTime() - Date.parse(reply.at);
+  const cold = idleMs > (request.ttl === '1h' ? 3_600_000 : 300_000);
+  const contextTokens = contextSize(reply.usage);
+  const resumeUsd = cold ? coldUsd(model, contextTokens, now) : costUsd(model, { uncached: 0, cacheRead: contextTokens, cacheWrite: 0, output: 0 }, now);
+  const freshUsd = coldUsd(model, freshTokens, now);
+  return { cold, idleMs, contextTokens, resumeUsd, freshUsd, fresh: cold && contextTokens >= COLD_RESUME_MIN && resumeUsd > 2 * freshUsd };
+}

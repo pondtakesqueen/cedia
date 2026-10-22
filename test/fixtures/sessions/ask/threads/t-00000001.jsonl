@@ -1,4 +1,5 @@
-{"at":"2026-10-22T03:49:49.057Z","kind":"open","title":"make f.txt say good or great","task":"make f.txt say good or great"}
-{"at":"2026-10-22T03:49:49.061Z","kind":"session","sessionId":"025addf3-e854-473e-8d3d-26c51d7f93f5","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/025addf3-e854-473e-8d3d-26c51d7f93f5.jsonl"}
-{"at":"2026-10-22T03:49:49.099Z","kind":"question","sessionId":"025addf3-e854-473e-8d3d-26c51d7f93f5","question":"Should f.txt say good or great? The task allows both; I wrote good.","options":["good","great"]}
-{"at":"2026-10-22T03:49:49.100Z","kind":"state","state":"asking","result":"Should f.txt say good or great? The task allows both; I wrote good."}
+{"at":"2026-10-22T07:04:03.132Z","kind":"open","title":"make f.txt say good or great","task":"make f.txt say good or great"}
+{"at":"2026-10-22T07:04:03.136Z","kind":"session","sessionId":"0987a463-b451-4585-9dd6-5530ac543cb8","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/0987a463-b451-4585-9dd6-5530ac543cb8.jsonl"}
+{"at":"2026-10-22T07:04:03.177Z","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["0987a463-b451-4585-9dd6-5530ac543cb8"]}
+{"at":"2026-10-22T07:04:03.177Z","kind":"question","sessionId":"0987a463-b451-4585-9dd6-5530ac543cb8","question":"Should f.txt say good or great? The task allows both; I wrote good.","options":["good","great"]}
+{"at":"2026-10-22T07:04:03.177Z","kind":"state","state":"asking","result":"Should f.txt say good or great? The task allows both; I wrote good."}
