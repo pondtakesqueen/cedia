@@ -13,9 +13,23 @@ import { hooksDir } from './sandbox.ts';
 // cedia never stops to ask for permission: a denied call returns its reason to the model and the run goes on.
 export type PermissionMode = 'read-only' | 'workspace';
 export const PERMISSION_MODES: PermissionMode[] = ['read-only', 'workspace'];
-// auto (the default setting): workspace when the OS sandbox is on, read-only when it is not.
-export type PermissionSetting = PermissionMode | 'auto';
-export const PERMISSION_SETTINGS: PermissionSetting[] = ['auto', ...PERMISSION_MODES];
+// auto (the default setting): workspace when the OS sandbox is on, read-only when it is not. plan: read-only, and
+// the writer is asked for a plan and the owner's go-ahead (ask_user) instead of the change; the change is a later
+// run the owner lets write.
+export type PermissionSetting = PermissionMode | 'auto' | 'plan';
+export const PERMISSION_SETTINGS: PermissionSetting[] = ['auto', 'read-only', 'plan', 'workspace'];
+// `cedia permissions --json`: the settings a client may offer for a run (`--permission`), and the one a run takes
+// when it names none.
+export type PermissionEntry = { mode: PermissionSetting; label: string; description: string };
+export type PermissionList = { default: PermissionSetting; modes: PermissionEntry[] };
+export const PERMISSION_ENTRIES: PermissionEntry[] = [
+  { mode: 'auto', label: 'Auto', description: 'may edit when the OS sandbox is on, read only when it is off' },
+  { mode: 'read-only', label: 'Read only', description: 'reads and read-only commands; no file writes' },
+  { mode: 'plan', label: 'Plan first', description: 'read only, ending with a plan and the question whether to go ahead; the change is a later run' },
+  { mode: 'workspace', label: 'May edit', description: 'writes inside the working directory and any command, except the deny list and guards' },
+];
+// What a run ran under, as its `run` thread event records it.
+export type RunPermission = PermissionMode | 'plan';
 
 // Built-in guards. The user (never a repo or the model) may lift one with `unlock`; nothing else lifts them.
 export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'drop-refs' | 'rm-outside' | 'deploy' | 'secret-path' | 'secret-redaction' | 'slop-check';
@@ -24,7 +38,7 @@ export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'drop
 // Rules look like `bash`, `bash(bun test*)` or `edit(src/*)`. `*` matches anything. A bash pattern is
 // matched against each simple command in the line, so `bun test && rm -rf x` needs both to be allowed.
 // `secrets` are credential stores no tool may read or write (see secretPaths).
-export type Policy = { mode: PermissionMode; allow: string[]; deny: string[]; unlock?: Guard[]; secrets?: string[] };
+export type Policy = { mode: PermissionMode; plan?: boolean; allow: string[]; deny: string[]; unlock?: Guard[]; secrets?: string[] };
 export const READ_ONLY_POLICY: Policy = { mode: 'read-only', allow: [], deny: [] };
 
 export type Decision = { decision: 'allow' | 'deny'; rule: string; reason?: string };

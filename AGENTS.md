@@ -16,6 +16,7 @@ cedia is a personal coding harness written from scratch in TypeScript on Bun. `S
 - `bin/cedia schedules [list | due | add <when> <prompt> --thread <id> [--every <dur>] | cancel|pause|resume|fire <id>] [--json]`: the project's scheduled prompts. cedia only says what is due; the desktop's daemon (or cron) fires and runs each one.
 - `bin/cedia memory [list | add <text> | forget <id>]`: the project's memory, which every new session gets in its first turn.
 - `bin/cedia models [--json]`: the models a session may use (`core/providers/models.ts`), which have a key here (env or Keychain), and `default`, the one the code role takes now; for a client's model picker. The JSON is `ModelList` in the protocol schema.
+- `bin/cedia permissions [--json]`: the permission modes a run may take (`--permission auto|read-only|plan|workspace`) and the default, for a client's picker. `plan` is read-only and ends with a plan and `ask_user` for the go-ahead.
 - `bin/cedia commands [--json]`: what a client offers for `/`: each skill here (`CommandList`). A prompt that starts with `/<skill>` asks the writer to load that skill first.
 - `bin/cedia skills`: the skills a session here can load (`~/.cedia/skills`, and the repository's `.agents/skills`, `.claude/skills`, `.cursor/skills`); the model loads one with the `skill` tool.
 - MCP servers come from `mcpServers` in `~/.cedia/settings.json` only (`src/core/mcp/`); `test/mcp/server.ts` is a fake stdio server for tests.

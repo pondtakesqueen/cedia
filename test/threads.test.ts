@@ -441,6 +441,41 @@ describe('cedia threads (offline, faux)', () => {
     expect(t.question).toBeUndefined();
   });
 
+  test('--permission plan: read-only with ask_user, the run records its mode, and a run under another mode is told', () => {
+    const dir = tmp();
+    const q = { question: 'Plan: write good to f.txt, then grep it. Go ahead?' };
+    const plan = cedia(dir, [call('c1', 'echo good > f.txt'), tool('a1', 'ask_user', q)], ['-p', 'make f.txt say good', '--output-format', 'json', '--sandbox', 'off', '--permission', 'plan']);
+    const asked = JSON.parse(plan.out);
+    expect(asked).toMatchObject({ subtype: 'asked', question: q });
+    expect(existsSync(join(dir, 'f.txt'))).toBe(false);
+    const log = sessionsOf(dir).find((l) => l.id === asked.sessionId)!;
+    expect(head(log.events).tools.map((t) => t.name)).toContain('ask_user');
+    expect(userText(log.events)).toContain('permission: plan: this run is for a plan, not the change.');
+    expect(log.events.find((e) => e.kind === 'tool_result')).toMatchObject({ status: 'denied' });
+    expect(storeOf(dir).read(asked.thread).runs.map((r) => r.permission)).toEqual(['plan']);
+
+    // The go-ahead runs with writes, in the same session, which is told the mode changed.
+    const done = JSON.parse(cedia(dir, [call('c2', 'echo good > f.txt'), call('c3', 'grep -q good f.txt'), reply('done')], ['-p', 'go ahead', ...base, '--thread', asked.thread]).out);
+    expect(done).toMatchObject({ subtype: 'success', sessionId: asked.sessionId });
+    const users = sessionsOf(dir).find((l) => l.id === asked.sessionId)!.events.filter((e): e is EventOf<'user'> => e.kind === 'user').map((e) => e.text);
+    expect(users.at(-1)).toStartWith('<permission>\nworkspace: you may change files');
+    expect(storeOf(dir).read(asked.thread).runs.map((r) => r.permission)).toEqual(['plan', 'workspace']);
+    // The same mode again says nothing.
+    cedia(dir, [reply('nothing to do')], ['-p', 'anything else?', ...base, '--thread', asked.thread]);
+    const again = sessionsOf(dir).find((l) => l.id === asked.sessionId)!.events.filter((e): e is EventOf<'user'> => e.kind === 'user').map((e) => e.text);
+    expect(again.at(-1)).not.toContain('<permission>');
+  });
+
+  test('cedia permissions --json lists the modes and the default', () => {
+    const dir = tmp();
+    const run = (env: Record<string, string> = {}) => Bun.spawnSync([BIN, 'permissions', '--json'], { env: { ...process.env, CEDIA_PERMISSION: '', CEDIA_HOME: join(dir, 'home'), ...env } });
+    const list = JSON.parse(run().stdout.toString());
+    expect(list.default).toBe('auto');
+    expect(list.modes.map((m: { mode: string }) => m.mode)).toEqual(['auto', 'read-only', 'plan', 'workspace']);
+    expect(JSON.parse(run({ CEDIA_PERMISSION: 'plan' }).stdout.toString()).default).toBe('plan');
+    expect(run({ CEDIA_PERMISSION: 'ask' }).stderr.toString()).toContain('unknown permission mode "ask"');
+  });
+
   test('without --ask the writer has no ask_user, and a bad question is an error result that does not end the run', () => {
     const dir = tmp();
     const off = JSON.parse(cedia(dir, [reply('done')], ['-p', 'x', ...base, '--check', 'true']).out);

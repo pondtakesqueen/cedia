@@ -23,7 +23,11 @@ const GUARD_NOTE: Partial<Record<Guard, string>> = {
   'secret-path': 'credential stores such as ~/.ssh',
 };
 
-function modeNote(mode: PermissionMode, unlock: Guard[]): string {
+// What the writer is told it may do. A plan run is read-only and ends with a plan, and the go-ahead asked of the
+// owner when the run can ask (a thread's writer); the change is a later run.
+export function modeNote(mode: PermissionMode, unlock: Guard[], plan?: { ask: boolean }): string {
+  if (plan)
+    return `plan: this run is for a plan, not the change. File writes and commands that may write are denied. Read what you need, then write the plan: what you would change, where, and how you would check it.${plan.ask ? ' End by asking the owner with ask_user whether to go ahead; the change is made in a later run.' : ' The change is made in a later run.'}`;
   if (mode === 'read-only')
     return 'read-only: file writes and commands that may write are denied unless an allow rule covers them. If the task needs a write, say what you would change and stop.';
   const denied = Object.entries(GUARD_NOTE).filter(([g]) => !unlock.includes(g as Guard)).map(([, note]) => note);
@@ -33,10 +37,10 @@ function modeNote(mode: PermissionMode, unlock: Guard[]): string {
 // Per-session facts go in the first user turn, never in the cached system prompt.
 export function preamble(
   cwd: string,
-  opts: { mode?: PermissionMode; unlock?: Guard[]; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] }; context?: string; instructions?: string; memory?: string; skills?: string; profile?: { name: string; instructions: string } } = {},
+  opts: { mode?: PermissionMode; plan?: { ask: boolean }; unlock?: Guard[]; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] }; context?: string; instructions?: string; memory?: string; skills?: string; profile?: { name: string; instructions: string } } = {},
   now = new Date(),
 ): string {
-  const lines = [`working directory: ${cwd}`, `date: ${now.toISOString().slice(0, 10)}`, `platform: ${process.platform}`, `permission: ${modeNote(opts.mode ?? 'read-only', opts.unlock ?? [])}`];
+  const lines = [`working directory: ${cwd}`, `date: ${now.toISOString().slice(0, 10)}`, `platform: ${process.platform}`, `permission: ${modeNote(opts.mode ?? 'read-only', opts.unlock ?? [], opts.plan)}`];
   if (opts.sandbox)
     lines.push(
       opts.sandbox.on

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { checkLedgerIdentity, claimsDone, estimateCost, formatSummary, loadTasks, parseReported, REPO_ROOT, repoTask, runTask, spawnedNote, splitCommand, summarize, type Result, type Task } from "../evals/run.ts";
+import { checkLedgerIdentity, claimsDone, defaultOut, estimateCost, formatSummary, loadTasks, parseReported, REPO_ROOT, repoTask, runTask, spawnedNote, splitCommand, summarize, type Result, type Task } from "../evals/run.ts";
 
 describe("evals runner", () => {
   test("splitCommand keeps quoted arguments together", () => {
@@ -144,5 +144,11 @@ describe("evals runner", () => {
       delete process.env.CEDIA_SANDBOX;
       delete process.env.CEDIA_HOME;
     }
+  });
+
+  test("each run writes its own results file in evals/results/ unless --out names one", () => {
+    const at = new Date("2026-10-22T13:05:09Z");
+    expect(defaultOut("cedia", "opencode-go/deepseek-v4.1-flash", at)).toBe(join(REPO_ROOT, "evals", "results", "2026-10-22-cedia-opencode-go_deepseek-v4.1-flash-130509.jsonl"));
+    expect(defaultOut("claude", null, at)).toEndWith("2026-10-22-claude-default-130509.jsonl");
   });
 });

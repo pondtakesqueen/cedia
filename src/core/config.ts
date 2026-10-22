@@ -112,6 +112,13 @@ function readSettings(path: string): Settings {
 
 const union = <T>(...lists: (T[] | undefined)[]) => [...new Set(lists.flatMap((l) => l ?? []))];
 
+// The permission setting a run takes: flag > env > user settings > auto.
+export function loadPermissionSetting(flag?: string, env = process.env): PermissionSetting {
+  const setting = flag || env.CEDIA_PERMISSION || readSettings(join(cediaHome(), 'settings.json')).permissions?.mode || 'auto';
+  if (!PERMISSION_SETTINGS.includes(setting as PermissionSetting)) throw new Error(`unknown permission mode "${setting}" (use ${PERMISSION_SETTINGS.join(', ')})`);
+  return setting as PermissionSetting;
+}
+
 // Precedence: flags > env > user ~/.cedia/settings.json > auto. `auto` is workspace when the sandbox is on and
 // read-only when it is not. Rule arrays union. A repo's own .cedia/settings.json can only add deny rules: a
 // cloned repo must not grant itself writes or unlock a guard.
@@ -123,13 +130,13 @@ export function loadPolicy(
 ): Policy {
   const user = readSettings(join(cediaHome(), 'settings.json')).permissions ?? {};
   const project = readSettings(join(cwd, '.cedia', 'settings.json')).permissions ?? {};
-  const setting = flags.mode || env.CEDIA_PERMISSION || user.mode || 'auto';
-  if (!PERMISSION_SETTINGS.includes(setting as PermissionSetting)) throw new Error(`unknown permission mode "${setting}" (use ${PERMISSION_SETTINGS.join(', ')})`);
+  const setting = loadPermissionSetting(flags.mode, env);
   const unlock = union<string>(flags.unlock, user.unlock);
   const unknown = unlock.find((g) => !GUARDS.includes(g as Guard));
   if (unknown) throw new Error(`unknown guard "${unknown}" to unlock (use ${GUARDS.join(', ')})`);
   return {
-    mode: setting === 'auto' ? (sandboxOn ? 'workspace' : 'read-only') : (setting as Policy['mode']),
+    mode: setting === 'auto' ? (sandboxOn ? 'workspace' : 'read-only') : setting === 'plan' ? 'read-only' : (setting as Policy['mode']),
+    ...(setting === 'plan' ? { plan: true } : {}),
     allow: union(flags.allow, user.allow),
     deny: union(flags.deny, user.deny, project.deny),
     unlock: unlock as Guard[],
