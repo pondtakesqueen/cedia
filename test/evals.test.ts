@@ -106,6 +106,12 @@ describe("evals runner", () => {
     const rs = summarize([repaired, repaired]);
     expect(rs.inputRepairs).toEqual({ "edit: top-level old_text/new_text": 4 });
     expect(formatSummary(rs)).toContain("repaired inputs: 4 edit: top-level old_text/new_text");
+    const missLine = JSON.stringify({ type: "result", subtype: "success", costUsd: 0.01, usage: {}, cacheMisses: [{ session: "s", request: 4, cause: "idle_over_ttl", tokens: 9000 }, { session: "s", request: 9, cause: "provider", tokens: 1000 }] });
+    const missed: Result = { ...r("e", 1, true, true, 0), reported: parseReported(missLine)!.reported };
+    expect(missed.reported.cacheMisses).toEqual({ count: { idle_over_ttl: 1, provider: 1 }, tokens: 10_000 });
+    const ms = summarize([missed, missed, r("e", 2, true, true, 0)]);
+    expect(ms.cacheMisses).toEqual({ count: { idle_over_ttl: 2, provider: 2 }, tokens: 20_000 });
+    expect(formatSummary(ms)).toContain("cache misses 4 (2 idle_over_ttl, 2 provider), 20k tokens the cache could have served");
   });
 
   test("estimates cost from measured tokens at the target model's price", () => {

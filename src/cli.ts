@@ -1,3 +1,5 @@
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
@@ -5,7 +7,8 @@ import { GUARDS } from './core/safety/policy.ts';
 import { cediaHome } from './core/config.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { lintSession } from './core/session/lint.ts';
-import { projectKey, SessionLog } from './core/session/log.ts';
+import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
+import { formatUsage, isUsageEvent, readEventsLenient, usageReport, type SessionInput } from './core/session/usage.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
 import { versionInfo } from './protocol/version.ts';
 
@@ -50,6 +53,9 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --no-session-file        keep the session log in memory only
 
        cedia lint-session <file.jsonl>...   check session logs against the trust invariants
+       cedia usage [<file.jsonl>... | --thread <id> | --last <n>] [--json] [--cwd <dir>]
+                                            where the spend went: input by source, the costliest tool results,
+                                            cache misses by cause (default: this project's last 20 sessions)
        cedia threads [--all] [--cwd <dir>]  list this project's threads (--all: archived ones too)
        cedia threads show <id>              a thread's task, state, sessions, handoff note, result and messages
        cedia threads send <id> <text>       leave a message the thread sees at its next turn; prints the message id
@@ -69,6 +75,7 @@ export async function main(argv: string[]): Promise<number> {
   }
   if (argv[0] === 'lint-session') return lintFiles(argv.slice(1));
   if (argv[0] === 'threads') return threads(argv.slice(1));
+  if (argv[0] === 'usage') return usage(argv.slice(1));
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -175,6 +182,41 @@ function lintFiles(files: string[]): number {
     if (findings.length) bad++;
   }
   return bad ? 1 : 0;
+}
+
+function usage(argv: string[]): number {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { cwd: { type: 'string' }, thread: { type: 'string' }, last: { type: 'string' }, json: { type: 'boolean' } },
+  });
+  const cwd = values.cwd ?? process.cwd();
+  let files = positionals;
+  try {
+    if (!files.length && values.thread) {
+      const store = new ThreadStore(threadsDir(cediaHome(), projectKey(cwd)));
+      // The thread and every sub-thread under it, however deep.
+      const all = store.list();
+      const ids = [values.thread];
+      for (let i = 0; i < ids.length; i++) ids.push(...all.filter((t) => t.parent === ids[i]).map((t) => t.id));
+      files = ids.flatMap((id) => store.read(id).sessions.map((s) => s.path ?? sessionPath(cwd, s.sessionId, cediaHome())));
+    } else if (!files.length) {
+      const dir = join(cediaHome(), 'sessions', projectKey(cwd));
+      const all = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => join(dir, f)) : [];
+      files = all.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs).slice(0, Number(values.last ?? 20));
+    }
+    const sessions: SessionInput[] = files.filter(existsSync).map((f) => ({ id: basename(f).replace(/\.jsonl$/, ''), events: readEventsLenient(readFileSync(f, 'utf8')).filter(isUsageEvent) }));
+    if (!sessions.length) {
+      console.error('cedia: no session logs to read');
+      return 1;
+    }
+    const report = usageReport(sessions);
+    console.log(values.json ? JSON.stringify(report) : formatUsage(report));
+    return 0;
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 1;
+  }
 }
 
 function threads(argv: string[]): number {

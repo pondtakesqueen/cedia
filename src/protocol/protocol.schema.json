@@ -135,6 +135,38 @@
         "quota"
       ]
     },
+    "CacheMiss": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "type": "string"
+        },
+        "request": {
+          "type": "number"
+        },
+        "cause": {
+          "type": "string",
+          "enum": [
+            "system_changed",
+            "tools_changed",
+            "model_changed",
+            "idle_over_ttl",
+            "below_minimum",
+            "provider"
+          ]
+        },
+        "tokens": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "session",
+        "request",
+        "cause",
+        "tokens"
+      ],
+      "additionalProperties": false
+    },
     "Capability": {
       "type": "string",
       "enum": [
@@ -393,6 +425,12 @@
           "type": "object",
           "additionalProperties": {
             "type": "number"
+          }
+        },
+        "cacheMisses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CacheMiss"
           }
         },
         "result": {

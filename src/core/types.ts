@@ -198,6 +198,8 @@ export type HeadlessResult = {
   // Calls whose input was repaired, keyed `<tool>: <kind of repair>` (absent when none was). A call the policy then
   // denied counts too: the count is of what the model sent.
   inputRepairs?: Record<string, number>;
+  // Requests after a session's first that missed the cache, with the cause (absent when none did).
+  cacheMisses?: CacheMiss[];
   result: string;
   evidence?: Evidence;
   timing?: Timing;
@@ -220,6 +222,12 @@ export type HeadlessResult = {
   question?: Question;
 };
 
+// Why a request read less from the prompt cache than the request before it had sent. Causes come from what the
+// log proves (hashes, model, time since the last reply), most specific first; 'provider' means the prefix did
+// not change.
+export type MissCause = 'cold' | 'system_changed' | 'tools_changed' | 'model_changed' | 'idle_over_ttl' | 'below_minimum' | 'provider';
+// One such request: its session, its number there, and the tokens the cache could have served and did not.
+export type CacheMiss = { session: string; request: number; cause: Exclude<MissCause, 'cold'>; tokens: number };
 // A question the writer asked the owner: open, or with 2 to 4 answers to pick from, recommended one first.
 export type Question = { question: string; options?: string[] };
 
