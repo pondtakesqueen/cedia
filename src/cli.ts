@@ -26,7 +26,7 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
                                (default high). Claude 5.5 models only: the change is a message, so the cache stays
       --cwd <dir>              working directory (default: current)
       --permission <mode>      auto | read-only | workspace (default: $CEDIA_PERMISSION, ~/.cedia/settings.json, auto).
-                               auto is workspace when the sandbox is on, read-only when it is off. cedia never stops to ask
+                               auto is workspace when the sandbox is on, read-only when it is off. cedia never stops to ask for permission
       --allow <rule>           allow a call, e.g. 'bash(bun test*)' or 'edit(src/*)'; repeatable
       --deny <rule>            deny a call; repeatable. The built-in guards always apply unless unlocked
       --unlock <guard>         lift a built-in guard: ${GUARDS.join(', ')}; repeatable
@@ -38,6 +38,9 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --review <ref>           the review role, after the done gate passes: a model, claude-code[:<model>]
                                (default sonnet there), or none. Changes it asks for go back to the writer once
       --spawn <on|off>         let the writer hand self-contained work to sub-threads (default: settings, on)
+      --ask <on|off>           give the writer ask_user, to end the run with one question for you when only you can
+                               decide; the thread waits as 'asking' and your answer is its next prompt
+                               (default: settings ask, off)
       --swarm <ref>            the model explore sub-threads run on (default: roles.swarm in settings, beam)
       --thread <id>            go on with a thread of this project instead of opening a new one
       --handoff-at <n|off>     hand off to a new session of the thread once the context reaches n tokens
@@ -94,6 +97,7 @@ export async function main(argv: string[]): Promise<number> {
       'on-quota': { type: 'string' },
       thread: { type: 'string' },
       spawn: { type: 'string' },
+      ask: { type: 'string' },
       swarm: { type: 'string' },
       'handoff-at': { type: 'string' },
       handoff: { type: 'string' },
@@ -146,6 +150,7 @@ export async function main(argv: string[]): Promise<number> {
       ...(values['on-quota'] ? { onQuota: values['on-quota'] } : {}),
       ...(values.thread ? { thread: values.thread } : {}),
       ...(values.spawn ? { spawn: values.spawn } : {}),
+      ...(values.ask ? { ask: values.ask } : {}),
       ...(values.swarm ? { swarm: values.swarm } : {}),
       ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
       ...(values.handoff ? { handoff: values.handoff } : {}),
@@ -155,8 +160,10 @@ export async function main(argv: string[]): Promise<number> {
       ...(values.sandbox ? { sandbox: values.sandbox } : {}),
       ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),
     });
-    if (result.subtype !== 'success' && format === 'text') console.error(`cedia: ${result.subtype}`);
-    return result.subtype === 'success' ? 0 : 1;
+    // A question for the owner is not a failure: the thread waits for the answer.
+    const ok = result.subtype === 'success' || result.subtype === 'asked';
+    if (!ok && format === 'text') console.error(`cedia: ${result.subtype}`);
+    return ok ? 0 : 1;
   } catch (e) {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
@@ -233,6 +240,7 @@ function threads(argv: string[]): number {
       if (t.handoff) lines.push('', `handoff from ${t.handoff.sessionId}:`, t.handoff.note);
       if (t.result) lines.push('', 'result:', t.result);
       for (const m of t.messages) lines.push('', `message ${m.id} from ${m.from} at ${m.at}${m.unsent ? ' (unsent)' : t.pending.includes(m) ? ' (not seen yet)' : ''}:`, m.text);
+      if (t.question) lines.push('', `question from ${t.question.sessionId}:`, t.question.question, ...(t.question.options ?? []).map((o, i) => `  ${i + 1}. ${o}`), `answer with: cedia -p "<answer>" --thread ${t.id}`);
       for (const r of t.ratings) lines.push('', `rated ${r.rating} at ${r.at}${r.sessionId ? ` (session ${r.sessionId})` : ''}${r.note ? `: ${r.note}` : ''}`);
       console.log(lines.join('\n'));
       return 0;

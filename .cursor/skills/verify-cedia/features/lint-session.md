@@ -24,18 +24,18 @@ Preconditions:
 
 ```
 .cursor/skills/verify-cedia/scripts/control-cedia capture --name session-path -- find "$CEDIA_HOME/sessions" -name '*.jsonl'
-log=$(cat "$CEDIA_VERIFY_EVIDENCE/session-path.stdout")
 ```
 
-  Exit code `0`. Stdout is one absolute `*.jsonl` path.
+  Exit code `0`. Stdout is one absolute `*.jsonl` path per line. A second `cedia -p` adds another line.
 
-- **Lint it.**
+- **Lint it.** Pass each path as its own argument.
 
 ```
-.cursor/skills/verify-cedia/scripts/control-cedia run --name lint -- lint-session "$log"
+mapfile -t logs < "$CEDIA_VERIFY_EVIDENCE/session-path.stdout"
+.cursor/skills/verify-cedia/scripts/control-cedia run --name lint -- lint-session "${logs[@]}"
 ```
 
-  Exit code `0`. Stdout and stderr are empty.
+  Exit code `0`. Stdout and stderr are empty. Quoting the whole find output as one argument makes `lint-session` look up a path that contains a newline. That call throws a Bun stack from `SessionLog.load` and exits 1.
 
 - **Usage.** Run `control-cedia run --name lint-usage -- lint-session`. Exit code `2`. Stderr is `usage: cedia lint-session <file.jsonl>...`.
 

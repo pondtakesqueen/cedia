@@ -14,5 +14,9 @@
   {
     "name": "subthread",
     "what": "a work sub-thread writes in its own session and thread; only its report comes back"
+  },
+  {
+    "name": "ask",
+    "what": "the writer asks the owner a question with ask_user: an asked result, a question thread event and the asking state"
   }
 ]
