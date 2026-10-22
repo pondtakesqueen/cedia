@@ -28,6 +28,12 @@ export type Settings = {
   // Whether writer sessions of a thread get ask_user, to end a run with a question for the owner (default false: a
   // headless run has nobody to answer). The desktop turns it on. User settings only.
   ask?: boolean;
+  // Whether writer sessions of a thread get the todo tool, a list of steps kept as the thread's progress (default
+  // false). The desktop turns it on. User settings only.
+  todo?: boolean;
+  // Named sets of defaults for a run, picked with --profile (core/profiles.ts). User settings only: a repo must not
+  // pick a model or a permission.
+  profiles?: Record<string, unknown>;
   // Tokens of context at which a session hands off to a new one, or "off". User settings only.
   handoffAt?: number | 'off';
   // How a session hands off: "note" (the model writes one) or "compact" (the provider summarizes, on models that
@@ -58,6 +64,8 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   roles: ['plan', 'code', 'review', 'swarm', 'advisor'],
   spawn: 'any',
   ask: 'any',
+  todo: 'any',
+  profiles: 'any',
   handoffAt: 'any',
   handoff: 'any',
   onQuota: 'any',
@@ -178,6 +186,15 @@ export function loadAsk(flag?: string): boolean {
   if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--ask must be on or off: ${flag}`);
   return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).ask ?? false);
 }
+
+// todo: flag > user settings > off.
+export function loadTodo(flag?: string): boolean {
+  if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--todo must be on or off: ${flag}`);
+  return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).todo ?? false);
+}
+
+// The user's profiles as written, for core/profiles.ts to check.
+export const loadProfiles = (): Record<string, unknown> => readSettings(join(cediaHome(), 'settings.json')).profiles ?? {};
 
 // The user's MCP servers, checked: each a command (with args, env, cwd) or a URL (with headers), optionally
 // readOnly and timeoutSec. A bad entry is an error, like any bad setting.

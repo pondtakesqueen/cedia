@@ -41,21 +41,30 @@ const open = (r: ReturnType<typeof repo>, name: string) => {
 const none = () => false;
 
 describe('worktree per work sub-thread', () => {
-  test("the child starts from the parent's working tree, uncommitted changes included, with ignored paths linked", () => {
+  test("the child starts from the parent's working tree, uncommitted changes included, with ignored paths brought in", () => {
     const r = repo();
     const wt = open(r, 't-1');
     expect(readFileSync(join(wt.cwd, 'src', 'a.txt'), 'utf8')).toStartWith('1 parent\n');
     expect(readFileSync(join(wt.cwd, 'new.txt'), 'utf8')).toBe('not committed\n');
     expect(existsSync(join(wt.cwd, 'gone.txt'))).toBe(false);
-    expect(lstatSync(join(wt.cwd, 'deps')).isSymbolicLink()).toBe(true);
     expect(readFileSync(join(wt.cwd, 'deps', 'lib.js'), 'utf8')).toBe('module\n');
+    // An ignored directory is a clone where the filesystem can make one (always on macOS's APFS), else a link.
+    const cloned = !lstatSync(join(wt.cwd, 'deps')).isSymbolicLink();
+    if (process.platform === 'darwin') expect(cloned).toBe(true);
+    if (cloned) {
+      // The child may write it, as an install or a build does; the parent's stays as it was.
+      writeFileSync(join(wt.cwd, 'deps', 'lib.js'), 'rebuilt\n');
+      writeFileSync(join(wt.cwd, 'deps', 'added.js'), 'installed\n');
+      expect(readFileSync(join(r.work, 'deps', 'lib.js'), 'utf8')).toBe('module\n');
+      expect(existsSync(join(r.work, 'deps', 'added.js'))).toBe(false);
+    }
     // An ignored file is a copy: what the child writes there stays there.
     expect(lstatSync(join(wt.cwd, '.env')).isSymbolicLink()).toBe(false);
     writeFileSync(join(wt.cwd, '.env'), 'A=2\n');
     expect(readFileSync(join(r.work, '.env'), 'utf8')).toBe('A=1\n');
     // git works there, and sees the parent's changes as the parent does.
     expect(git(wt.cwd, 'status', '--porcelain')).toContain('src/a.txt');
-    // Nothing changed: nothing to apply, and the link is not a change.
+    // Nothing changed: nothing to apply. The ignored directory is not a change, written to or not.
     expect(applyWorktree(wt, r.parent, none)).toEqual({ files: [], refused: [], conflicts: [] });
     wt.close();
     expect(existsSync(wt.dir)).toBe(false);
@@ -328,6 +337,21 @@ describe('--spawn worktree (offline, faux)', () => {
     expect(result.spawned).toMatchObject({ work: 2 });
     // Both worktrees are gone: the kept one once applied, the other once dropped.
     expect(git(r.work, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
+  });
+
+  // The sandbox that keeps a child's bash inside its worktree, as runs have it; Seatbelt is always there on macOS.
+  test.skipIf(process.platform !== 'darwin')('a sandboxed child may install into its cloned ignored directory; only its tracked change comes back', () => {
+    const r = repo();
+    const out = cedia(
+      r.work,
+      [{ blocks: [spawnCall('s1', 'alpha-task: install and write')] }, ...child('alpha-task', 'echo installed > deps/added.js && echo rebuilt > deps/lib.js && echo good > one.txt', 'alpha done'), call('p1', 'true'), reply('done')],
+      ['-p', 'install and write', '--spawn', 'worktree', '--sandbox', 'on'],
+    );
+    expect(out.result()).toMatchObject({ subtype: 'success' });
+    expect(report(out.result(), r.work, 's1')).toContain('Applied to your files: one.txt');
+    expect(readFileSync(join(r.work, 'one.txt'), 'utf8')).toBe('good\n');
+    expect(readFileSync(join(r.work, 'deps', 'lib.js'), 'utf8')).toBe('module\n');
+    expect(existsSync(join(r.work, 'deps', 'added.js'))).toBe(false);
   });
 
   test('a change that conflicts is not applied: the report says so and the worktree stays to be read', () => {

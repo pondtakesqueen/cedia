@@ -7,14 +7,16 @@ import { inert } from '../trust/frame.ts';
 // append-only JSONL file, so two cedia processes can write to one without locking: a line is one small append.
 
 // asking: the last run ended with a question for the owner (core/tools/ask.ts); the answer is the thread's next prompt.
-export type ThreadState = 'working' | 'done' | 'failed' | 'stopped' | 'asking';
+// queued: another thread opened it (core/tools/open.ts) and no run of it has started yet.
+export type ThreadState = 'queued' | 'working' | 'done' | 'failed' | 'stopped' | 'asking';
 // rejected: the provider refused the last session's history, so the thread went on in a new one.
 // rewind: a copy of a session as it was before a run, which the thread goes on from (core/project/rewind.ts).
 export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota' | 'rejected' | 'rewind';
 
 type ThreadBody =
-  // parent: the thread that spawned this one as a sub-thread.
-  | { kind: 'open'; title: string; task: string; parent?: string }
+  // parent: the thread that spawned this one as a sub-thread. by: the thread that opened it with open_thread, for a
+  // client to run. profile: the profile its runs take unless another is named (core/profiles.ts).
+  | { kind: 'open'; title: string; task: string; parent?: string; by?: string; profile?: string }
   | { kind: 'session'; sessionId: string; model: string; role: string; why: SessionWhy; path?: string }
   // Written when a session hands off: the note the next session starts from.
   | { kind: 'handoff'; sessionId: string; note: string }
@@ -28,6 +30,8 @@ type ThreadBody =
   // The user's thumbs up or down on an answer: the session that gave it, if known. It picks eval cases and never
   // reaches a model.
   | { kind: 'rate'; rating: Rating; sessionId?: string; note?: string }
+  // The writer's list of steps, whole each time (core/tools/todo.ts): what a client draws as the thread's progress.
+  | { kind: 'todo'; items: TodoItem[] }
   // The question a session asked the owner, written just before the 'asking' state.
   | { kind: 'question'; sessionId: string; question: string; options?: string[] }
   | { kind: 'state'; state: ThreadState; result?: string }
@@ -47,6 +51,9 @@ export type RunFrom = { sessionId: string; path: string; events: number; model: 
 // `run`: the run that wrote it, on what a run writes (core/project/rewind.ts).
 export type ThreadEvent = { at: string; run?: string } & ThreadBody;
 
+export type TodoState = 'pending' | 'doing' | 'done';
+export type TodoItem = { text: string; state: TodoState };
+
 export type Rating = 'up' | 'down';
 export const RATINGS: Rating[] = ['up', 'down'];
 
@@ -58,6 +65,8 @@ export type Thread = {
   task: string;
   state: ThreadState;
   parent?: string;
+  by?: string;
+  profile?: string;
   archived: boolean;
   sessions: (Extract<ThreadEvent, { kind: 'session' }> & { rewound?: boolean })[];
   handoff?: { sessionId: string; note: string };
@@ -75,6 +84,8 @@ export type Thread = {
   rewound: string[];
   // The last run has not ended yet (no state since it began): it is going on, or it was killed.
   running: boolean;
+  // The latest todo list, if the writer kept one.
+  todo?: TodoItem[];
   // The open question while the thread is asking.
   question?: { sessionId: string; question: string; options?: string[]; at: string };
   updatedAt: string;
@@ -115,9 +126,9 @@ export class ThreadStore {
     appendFileSync(this.path(id), JSON.stringify({ at: now.toISOString(), ...body }) + '\n');
   }
 
-  open(task: string, opts: { parent?: string; now?: Date } = {}): string {
+  open(task: string, opts: { parent?: string; by?: string; profile?: string; title?: string; now?: Date } = {}): string {
     const id = newThreadId();
-    this.append(id, { kind: 'open', title: titleOf(task), task, ...(opts.parent ? { parent: opts.parent } : {}) }, opts.now);
+    this.append(id, { kind: 'open', title: titleOf(opts.title || task), task, ...(opts.parent ? { parent: opts.parent } : {}), ...(opts.by ? { by: opts.by } : {}), ...(opts.profile ? { profile: opts.profile } : {}) }, opts.now);
     return id;
   }
 
@@ -178,8 +189,10 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     id,
     title: open?.title ?? id,
     task: open?.task ?? '',
-    state: 'working',
+    state: open?.by ? 'queued' : 'working',
     ...(open?.parent ? { parent: open.parent } : {}),
+    ...(open?.by ? { by: open.by } : {}),
+    ...(open?.profile ? { profile: open.profile } : {}),
     archived: false,
     sessions: [],
     messages: [],
@@ -202,11 +215,15 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     else if (e.kind === 'message') t.messages.push({ id: e.id, from: e.from, text: e.text, at: e.at });
     else if (e.kind === 'delivered') for (const m of e.ids) delivered.add(m);
     else if (e.kind === 'unsend') for (const m of e.ids) unsent.add(m);
+    else if (e.kind === 'todo') t.todo = e.items;
     else if (e.kind === 'question') t.question = { sessionId: e.sessionId, question: e.question, ...(e.options ? { options: e.options } : {}), at: e.at };
     else if (e.kind === 'rate') t.ratings.push({ rating: e.rating, ...(e.sessionId ? { sessionId: e.sessionId } : {}), ...(e.note ? { note: e.note } : {}), at: e.at });
     else if (e.kind === 'archived') t.archived = e.archived;
     else if (e.kind === 'turn') t.turns.push({ ...(t.lastTurn = { cwd: e.cwd, before: e.before, after: e.after, sessions: e.sessions, at: e.at }), runs: t.runs.length });
-    else if (e.kind === 'run') t.runs.push(e);
+    else if (e.kind === 'run') {
+      t.runs.push(e);
+      if (t.state === 'queued') t.state = 'working';
+    }
     else if (e.kind === 'state') {
       t.state = e.state;
       if (e.result !== undefined) t.result = e.result;
@@ -256,5 +273,6 @@ export function inboxReminder(messages: ThreadMessage[]): string {
 // One line per thread for the threads tool and `cedia threads`.
 export function threadLine(t: Thread): string {
   const latest = (t.result ?? t.handoff?.note ?? '').trim().split('\n')[0] ?? '';
-  return `${t.id}  ${t.state.padEnd(7)}  ${t.parent ? `(sub-thread of ${t.parent}) ` : ''}${t.archived ? '(archived) ' : ''}${t.title}${latest ? `\n    ${latest.length > 120 ? `${latest.slice(0, 117)}...` : latest}` : ''}`;
+  const done = t.todo?.filter((i) => i.state === 'done').length;
+  return `${t.id}  ${t.state.padEnd(7)}  ${t.parent ? `(sub-thread of ${t.parent}) ` : ''}${t.by ? `(opened by ${t.by}) ` : ''}${t.archived ? '(archived) ' : ''}${t.todo?.length ? `[${done}/${t.todo.length}] ` : ''}${t.title}${latest ? `\n    ${latest.length > 120 ? `${latest.slice(0, 117)}...` : latest}` : ''}`;
 }

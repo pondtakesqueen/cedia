@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import type { Snapshots } from '../safety/snapshot.ts';
 import { projectSlug } from '../session/log.ts';
+import { cloneTree } from './clone.ts';
 import { newestWins, writtenAt } from './newest.ts';
 
 // A work sub-thread's own copy of the working tree: a git worktree of the user's repository, detached at HEAD and
@@ -16,8 +17,10 @@ import { newestWins, writtenAt } from './newest.ts';
 //
 // The worktree lives in the temp dir, in a directory only this user can enter; the child's sandbox lets bash
 // write only inside its own worktree. What git ignores in the parent is brought in so the checks run there and
-// never recorded or applied: directories (node_modules, build output) as links, which the child's sandbox keeps
-// it from writing through, and small files (.env) as copies. Its snapshots run git with the worktree as the work
+// never recorded or applied: directories (node_modules, build output) as copy-on-write clones (clone.ts), which
+// the child may write, installing or building there without touching the parent's, or, where the filesystem
+// cannot clone, as links, which the child's sandbox keeps it from writing through; and small files (.env) as
+// copies. Its snapshots run git with the worktree as the work
 // tree but cedia's own git dir, and only once its directory is checked to be the one made, so neither a swapped
 // directory nor what the child wrote in its .git file is followed.
 
@@ -40,7 +43,8 @@ export type Worktree = {
 // `newest`: the files both sides changed that are written whole by a tool, and whose version was kept.
 export type Applied = { files: string[]; refused: string[]; conflicts: string[]; newest?: { file: string; kept: 'yours' | 'its' }[] };
 
-// What git ignores and the child gets, at most; an ignored file larger than MAX_COPY is linked, not copied.
+// What git ignores and the child gets, at most; an ignored file larger than MAX_COPY is cloned or linked, not
+// copied.
 const MAX_LINKS = 500;
 const MAX_COPY = 1024 * 1024;
 
@@ -104,7 +108,7 @@ export function openWorktree(cwd: string, parent: Snapshots, base: string, name:
       const st = lstatSync(from);
       if (st.isSymbolicLink()) symlinkSync(readlinkSync(from), to);
       else if (st.isFile() && st.size <= MAX_COPY) copyFileSync(from, to);
-      else symlinkSync(from, to);
+      else if (!cloneTree(from, to)) symlinkSync(from, to);
     }
     // The directories from the worktree's root down to the child's, as they were made.
     const chain = [dir, ...rel.split('/').filter(Boolean).map((_, i, parts) => join(dir, ...parts.slice(0, i + 1)))].map((p) => ({ p, st: lstatSync(p) }));
