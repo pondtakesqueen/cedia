@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CONTINUE_AFTER_LIMIT, EMPTY_REPLY, escalationTarget, runPrompt, spillOutput, type RunOptions } from '../src/core/loop/run.ts';
+import { CONTINUE_AFTER_LIMIT, EMPTY_REPLY, escalationTarget, nearCheck, runPrompt, spillOutput, type RunOptions } from '../src/core/loop/run.ts';
 import { FAUX_MODEL, resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, text, toolUse, type FauxStep } from '../src/core/providers/faux.ts';
 import { decide } from '../src/core/safety/policy.ts';
@@ -475,6 +475,19 @@ describe('loop', () => {
         const { opts } = gate(steps, ['true', 'false']);
         expect((await runPrompt(opts, 'fix')).subtype).toBe('error_unverified_claim');
       }
+    });
+
+    test('a piped declared check is named in its own result, the exact check is not', async () => {
+      const { log, opts } = gate([{ blocks: [fixA()] }, { blocks: [run('echo hi && true | cat')] }, { blocks: [run('true | cat')] }, { blocks: [text('fixed')] }], ['true | cat']);
+      // 'true | cat' is the declared check here; running it after `echo hi &&` is a longer command.
+      expect((await runPrompt(opts, 'fix')).subtype).toBe('success');
+      const results = of(log.events, 'tool_result').map((r) => r.output.text);
+      expect(results[1]).toContain('[cedia: this command holds the declared check `true | cat` but is not just it');
+      expect(results.filter((t) => t.includes('[cedia: this command holds'))).toHaveLength(1);
+      expect(nearCheck('true | cat', ['true | cat'])).toBeUndefined();
+      expect(nearCheck('bun test 2>&1 | tail -20', ['bun test'])).toBe('bun test');
+      expect(nearCheck('ls', ['bun test'])).toBeUndefined();
+      expect(nearCheck('bun test', [])).toBeUndefined();
     });
 
     test('without declared checks the gate is off but the receipt still lists what is unverified', async () => {

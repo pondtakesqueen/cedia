@@ -13,7 +13,7 @@ import { decide, READ_ONLY_POLICY, ruleMatches, type Policy } from '../safety/po
 import { redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
-import { evidence, ledgerEntries, verified } from '../trust/ledger.ts';
+import { evidence, ledgerEntries, matchCheck, verified } from '../trust/ledger.ts';
 import type { Verdict } from '../trust/classifier.ts';
 import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
@@ -771,10 +771,24 @@ async function runTools(
     const callId = callIdOf(c);
     const { status, ...output } = results.get(callId)!;
     if (shared.has(callId)) output.text += `\n[cedia: more than one call in your reply shared this id; only the first ran. Call the others again if you need them.]`;
+    const command = jobs.find((j) => j.callId === callId && j.spec.name === 'bash')?.input.command;
+    const near = typeof command === 'string' && (status === 'completed' || status === 'failed') ? nearCheck(command, opts.checks ?? [], opts.cwd) : undefined;
+    if (near) output.text += `\n${nearCheckNote(near)}`;
     const r = redact ? redactSecrets(output.text) : { text: output.text, count: 0 };
     log.append({ kind: 'tool_result', callId, status, output: r.count ? { ...output, text: r.text, redacted: r.count } : output });
   }
 }
+
+// A command that holds a declared check but is not just it (`bun test 2>&1 | tail`, `bun test; echo`) does not
+// count for the done gate, which cannot see the check's own exit code there. Saying so in that call's result, when
+// the model can still act on it, saves the turns a done-gate reminder after its report would cost.
+export function nearCheck(command: string, checks: string[], cwd?: string): string | undefined {
+  if (!checks.length || matchCheck(command, checks, cwd)) return undefined;
+  const flat = command.replace(/\s+/g, ' ');
+  return checks.find((k) => flat.includes(k.trim().replace(/\s+/g, ' ')));
+}
+export const nearCheckNote = (check: string) =>
+  `[cedia: this command holds the declared check \`${check}\` but is not just it, so it does not count as the check: the done gate needs that command's own exit code. When you verify, run \`${check}\` exactly, on its own.]`;
 
 export const MAX_STOP_REFUSALS = 2;
 
