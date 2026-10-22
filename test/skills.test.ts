@@ -25,6 +25,9 @@ describe('skills', () => {
     expect(frontMatter('---\nname: a-b\ndescription: "Use: when, quoted"\n---\nbody')).toEqual({ fields: { name: 'a-b', description: 'Use: when, quoted' }, body: 'body' });
     expect(frontMatter('---\nname: x\ndescription: >\n  first line\n  second line\nlicense: MIT\n---\n')!.fields).toEqual({ name: 'x', description: 'first line second line', license: 'MIT' });
     expect(frontMatter('# just markdown')).toBeUndefined();
+    expect(frontMatter('---\nname: b # a comment\ndescription: one\n  two three\n---\n')!.fields).toEqual({ name: 'b', description: 'one two three' });
+    expect(frontMatter('---\ndescription: "say \\"hi\\"" # c\nname: \'it\'\'s\'\n---\n')!.fields).toEqual({ description: 'say "hi"', name: "it's" });
+    expect(frontMatter('---\n---\nbody\n---\nnot: front matter\n')).toEqual({ fields: {}, body: 'body\n---\nnot: front matter\n' });
   });
 
   test("the user's and the repository's, nearest first; the user's win a name; bad ones and ones outside the repository are left out", () => {
@@ -39,6 +42,10 @@ describe('skills', () => {
     const outside = mkdtempSync(join(tmpdir(), 'cedia-skills-out-'));
     skill(outside, 'stolen', 'name: stolen\ndescription: from outside');
     symlinkSync(join(outside, 'stolen'), join(dir, '.agents', 'skills', 'stolen'));
+    // A SKILL.md that links to a file outside the repository is left out too.
+    writeFileSync(join(outside, 'notes.md'), '---\nname: notes\ndescription: private notes\n---\n');
+    mkdirSync(join(dir, '.agents', 'skills', 'notes'));
+    symlinkSync(join(outside, 'notes.md'), join(dir, '.agents', 'skills', 'notes', 'SKILL.md'));
     const found = loadSkills(join(dir, 'pkg'), home);
     expect(found.map((s) => [s.name, s.source, s.description])).toEqual([
       ['deploy', 'user', "the user's deploy steps"],
@@ -60,6 +67,7 @@ describe('skills', () => {
     mkdirSync(join(at, 'scripts'));
     writeFileSync(join(at, 'scripts', 'release.sh'), 'echo release\n');
     writeFileSync(join(at, '.env'), 'TOKEN=hunter2');
+    writeFileSync(join(at, 'id_rsa'), 'KEY');
     writeFileSync(join(dir, 'secret.txt'), 'outside');
     const tool = skillTool(loadSkills(dir, mkdtempSync(join(tmpdir(), 'h-'))));
     const loaded = await tool.run({ name: 'release' }, ctx);
@@ -68,10 +76,13 @@ describe('skills', () => {
     expect(loaded.text).not.toContain('description: cut a release');
     expect(loaded.text).toContain('Files in this skill (read one with the skill tool and `file`): scripts/release.sh');
     expect(loaded.text).not.toContain('.env');
+    expect(loaded.text).not.toContain('id_rsa');
     expect((await tool.run({ name: 'release', file: 'scripts/release.sh' }, ctx)).text).toBe('echo release\n');
     expect((await tool.run({ name: 'release', file: '../../../secret.txt' }, ctx)).text).toContain('outside skill release');
     expect((await tool.run({ name: 'release', file: '.env' }, ctx)).text).toContain('looks like a secret');
     expect((await tool.run({ name: 'nope' }, ctx)).text).toBe('no skill nope; the skills are: release');
+    // A resumed session keeps the tool after its skills are gone; a call says so.
+    expect((await skillTool([]).run({ name: 'release' }, ctx)).text).toBe('no skill release; the skills are: ');
   });
 
   test('a headless run lists the skills in the first turn and the model loads one with the tool', () => {

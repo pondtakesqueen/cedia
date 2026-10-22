@@ -256,7 +256,7 @@ function skills(argv: string[]): number {
   }
   const found = loadSkills(resolve(parsed.values.cwd ?? process.cwd()), cediaHome());
   // A repository's description could carry terminal escapes; they are shown as text.
-  const shown = (t: string) => t.replace(/[\x00-\x1f\x7f\x9b]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+  const shown = (t: string) => t.replace(/[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
   console.log(found.length ? found.map((s) => `${s.name}  (${s.source})  ${shown(s.dir)}\n    ${shown(s.description)}`).join('\n') : 'no skills here');
   return 0;
 }

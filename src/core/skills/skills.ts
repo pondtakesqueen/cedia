@@ -29,10 +29,10 @@ const MAX_LISTED_FILES = 50;
 
 // The front matter's top-level keys: plain, quoted, or a `>`/`|` block of indented lines.
 export function frontMatter(text: string): { fields: Record<string, string>; body: string } | undefined {
-  const m = /^﻿?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+  const m = /^\uFEFF?---\r?\n(?:([\s\S]*?)\r?\n)??---[ \t]*(?:\r?\n|$)/.exec(text);
   if (!m) return undefined;
   const fields: Record<string, string> = {};
-  const lines = m[1]!.split(/\r?\n/);
+  const lines = (m[1] ?? '').split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const kv = /^([A-Za-z][\w-]*):[ \t]*(.*)$/.exec(lines[i]!);
     if (!kv) continue;
@@ -41,8 +41,14 @@ export function frontMatter(text: string): { fields: Record<string, string>; bod
       const block: string[] = [];
       while (i + 1 < lines.length && (/^\s/.test(lines[i + 1]!) || !lines[i + 1]!.trim())) block.push(lines[++i]!.trim());
       value = value.startsWith('>') ? block.join(' ').replace(/\s+/g, ' ').trim() : block.join('\n').trim();
-    } else if (/^(['"]).*\1$/.test(value)) {
-      value = value.slice(1, -1);
+    } else if (/^"(?:[^"\\]|\\.)*"\s*(?:#.*)?$/.test(value)) {
+      value = value.replace(/^"((?:[^"\\]|\\.)*)"[\s\S]*$/, '$1').replace(/\\(.)/g, (_, c: string) => (c === 'n' ? '\n' : c === 't' ? '\t' : c));
+    } else if (/^'(?:[^']|'')*'\s*(?:#.*)?$/.test(value)) {
+      value = value.replace(/^'((?:[^']|'')*)'[\s\S]*$/, '$1').replace(/''/g, "'");
+    } else {
+      // A plain value: a comment after it is not part of it, and indented lines after it continue it.
+      value = value.replace(/(^|\s+)#.*$/, '');
+      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1]!)) value += ` ${lines[++i]!.trim()}`;
     }
     fields[kv[1]!] = value;
   }
@@ -51,13 +57,17 @@ export function frontMatter(text: string): { fields: Record<string, string>; bod
 
 function readSkill(dir: string, source: Skill['source']): Skill | undefined {
   try {
-    const path = join(dir, 'SKILL.md');
+    // SKILL.md itself must be in the folder too: a link to a file elsewhere would put that file's text in the turn.
+    const path = real(join(dir, 'SKILL.md'));
+    const folder = real(dir);
+    if (!path || !folder || !inside(folder, path)) return undefined;
     const st = statSync(path);
     if (!st.isFile() || st.size > MAX_FILE_BYTES) return undefined;
     const fm = frontMatter(readFileSync(path, 'utf8'));
     if (!fm) return undefined;
     const name = fm.fields.name ?? basename(dir);
-    const description = (fm.fields.description ?? '').replace(/\s+/g, ' ').trim();
+    // Redacted before it is cut, so a cut cannot split a secret past the redaction.
+    const description = redactSecrets((fm.fields.description ?? '').replace(/\s+/g, ' ').trim()).text;
     if (!NAME.test(name) || !description) return undefined;
     return { name, description: description.slice(0, MAX_DESCRIPTION), dir, source };
   } catch {
@@ -108,7 +118,7 @@ export function skillsBlock(skills: Skill[], max = MAX_SKILLS_BLOCK): string {
   const lines: string[] = [];
   let used = 0;
   for (const s of skills) {
-    const line = `- ${s.name}${s.source === 'user' ? ' (the user\'s)' : ' (the repository\'s)'}: ${inert(redactSecrets(s.description).text)}`;
+    const line = `- ${s.name}${s.source === 'user' ? ' (the user\'s)' : ' (the repository\'s)'}: ${inert(s.description)}`;
     if (used + line.length > max) break;
     lines.push(line);
     used += line.length + 1;
@@ -132,7 +142,7 @@ function skillFiles(dir: string): string[] {
       if (e.name.startsWith('.')) continue;
       const p = join(d, e.name);
       if (e.isDirectory()) walk(p, depth + 1);
-      else if (e.isFile() && p !== join(dir, 'SKILL.md') && out.length < MAX_LISTED_FILES) out.push(relative(dir, p));
+      else if (e.isFile() && p !== join(dir, 'SKILL.md') && !SECRET_NAME.test(e.name) && out.length < MAX_LISTED_FILES) out.push(relative(dir, p));
     }
   };
   walk(dir, 0);
@@ -182,9 +192,9 @@ export function skillTool(skills: Skill[]): ToolSpec {
       if ('error' in f) return { text: f.error, isError: true };
       const body = (frontMatter(f.text)?.body ?? f.text).trim();
       const files = skillFiles(real(skill.dir) ?? skill.dir);
-      const where = skill.source === 'repository' ? ` Its folder is ${skill.dir}.` : '';
+      const where = skill.source === 'repository' ? ` Its folder is ${inert(skill.dir)}.` : '';
       return {
-        text: `Skill ${skill.name}, ${skill.source === 'user' ? 'from the user' : 'from the repository'}: how to do this kind of task.${where}\n\n${inert(body)}${files.length ? `\n\nFiles in this skill (read one with the skill tool and \`file\`): ${files.join(', ')}` : ''}`,
+        text: `Skill ${skill.name}, ${skill.source === 'user' ? 'from the user' : 'from the repository'}: how to do this kind of task.${where}\n\n${inert(body)}${files.length ? `\n\nFiles in this skill (read one with the skill tool and \`file\`): ${inert(files.join(', '))}` : ''}`,
         isError: false,
       };
     },
