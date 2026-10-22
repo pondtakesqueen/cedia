@@ -335,6 +335,8 @@ export class CediaTui {
     const parts = [r.subtype === 'success' ? 'done' : r.subtype, `${r.numTurns} turn${r.numTurns === 1 ? '' : 's'}`, `$${r.costUsd.toFixed(4)}`, `cache ${Math.round(r.cacheHitRatio * 100)}%`];
     this.say(dim(parts.join(' · ')));
     if (r.evidence) this.say(dim(receipt(r.evidence, r.thread)));
+    // The thread waits on the owner: what is typed next is the answer.
+    if (r.question) this.say(yellow([printable(r.question.question), ...(r.question.options ?? []).map((o, i) => `  ${i + 1}. ${printable(o)}`), 'your next message is the answer'].join('\n')));
   }
 
   command(line: string) {

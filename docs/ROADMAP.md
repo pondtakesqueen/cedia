@@ -20,15 +20,15 @@ From here on:
 - A PR meant to move the numbers (a new default, a cheaper path) runs `--update-baseline` in the same PR and says why the new numbers are the right ones.
 - A PR that changes a gate task invalidates that task's baseline; the gate leaves it out until the baseline is updated.
 
-## 3. Security and stability (P1 from `research/NOTES.md`)
+## 3. Security and stability (P1 from `research/NOTES.md`) (done)
 
-Fixed in #17 and #18: frame tags, bash process groups, hooks directories, the bounded tool pool and sub-thread cap, ref-losing git commands, and the redaction misses. Left, each with a faux test:
+Fixed in #17 and #18: frame tags, bash process groups, hooks directories, the bounded tool pool and sub-thread cap, ref-losing git commands, and the redaction misses. Then, each with a faux test:
 
-- Large bash output goes to a file with a preview, instead of being cut in the middle at 30k characters.
-- The failure classes the changelog names: sandbox exit codes under another shell; malformed turns (a thinking-only reply, a tool name over 200 characters, a tool result that is not a string, unparseable calls alternating with `max_tokens`, an unpaired `tool_use` on abort); redaction on long token-like text without freezing.
-- Thinking rejected by the API: recover in a new session from a handoff note, as quota fallback does, since cedia never edits history.
-
-Done when: every item has a test, and the gate passes on both models.
+- Malformed turns (`c7fb551`): a thinking-only reply, a tool name over 200 characters, a tool result that is not a string, unparseable calls alternating with `max_tokens`, shared call ids. An abort between two calls of a reply leaves the rest `not_started` instead of running them past the stop.
+- History refused by the API, thinking signatures included (`e7b8a79`): the run goes on in a new session from a note, as quota fallback does.
+- Redaction on long token-like text runs in linear time (`test/secrets.test.ts`).
+- Sandbox exit codes: a failing declared check inside the sandbox ends the run `error_unverified_claim` with exit 1 under bash, zsh and sh as the login shell (`test/headless.test.ts`).
+- Large bash output goes whole to a redacted file with a preview of its start and end, instead of losing its middle at 30k characters (SPEC "Tool output").
 
 ## 4. Make spawn work
 
