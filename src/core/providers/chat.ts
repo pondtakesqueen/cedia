@@ -59,6 +59,7 @@ export function chatBody(req: WireRequest): JsonObject {
     messages: chatMessages(req),
     ...(tools.length ? { tools } : {}),
     ...(req.effort && req.model.caps.effortLevels.length ? { reasoning_effort: req.effort } : {}),
+    ...(req.model.body ?? {}),
   };
 }
 

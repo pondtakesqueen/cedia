@@ -253,6 +253,17 @@ describe('http', () => {
     expect(isRetryable(classifyStatus(402, ''))).toBe(false);
   });
 
+  test('DeepSeek through OpenRouter: only endpoints that keep no prompts, its routing in every request body', () => {
+    const or = resolveModel('deepseek-or');
+    expect(or).toMatchObject({ ref: 'openrouter/deepseek-v4.1-flash', id: 'deepseek/deepseek-v4.1-flash-1017', url: 'https://openrouter.ai/api/v1/chat/completions', dataPolicy: 'zdr', auth: { env: 'OPENROUTER_API_KEY', scheme: 'bearer' } });
+    expect(or.price).toEqual(resolveModel('deepseek').price);
+    const b = chatBody({ ...req('deepseek'), model: or }) as any;
+    expect(b).toMatchObject({ model: 'deepseek/deepseek-v4.1-flash-1017', provider: { zdr: true, data_collection: 'deny' } });
+    expect(b.messages).toEqual((chatBody(req('deepseek')) as any).messages);
+    expect((chatBody(req('deepseek')) as any).provider).toBeUndefined();
+    expect(FALLBACKS[or.ref]).toBe('anthropic/claude-haiku-5-5');
+  });
+
   test("DeepSeek's own API counts as training on prompts; the quota fallback is Haiku on the Claude API", () => {
     const api = resolveModel('deepseek-api');
     expect(api).toMatchObject({ id: 'deepseek-v4.1-flash', url: 'https://api.deepseek.com/chat/completions', dataPolicy: 'trains', auth: { env: 'DEEPSEEK_API_KEY' } });

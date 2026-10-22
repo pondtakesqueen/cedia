@@ -11,6 +11,8 @@ const GO = 'https://opencode.ai/inference/go';
 const GO_AUTH = { env: 'OPENCODE_API_KEY', scheme: 'bearer' } as const;
 const DEEPSEEK = 'https://api.deepseek.com/chat/completions';
 const DEEPSEEK_AUTH = { env: 'DEEPSEEK_API_KEY', scheme: 'bearer' } as const;
+const OPENROUTER = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_AUTH = { env: 'OPENROUTER_API_KEY', scheme: 'bearer' } as const;
 
 const claudeCaps: ModelCapabilities = {
   reasoning: 'anthropic-thinking',
@@ -113,6 +115,23 @@ export const CATALOG: ModelSpec[] = [
     dataPolicy: 'trains',
     caps: chatCaps,
   },
+  // The same model through OpenRouter, paid per token (prices read from its models API, 2026-10-22: $0.15/$0.6,
+  // cache read $0.003, twice that at DeepSeek's peak hours, as through DeepSeek itself). OpenRouter serves it from
+  // about 30 endpoints, DeepSeek's own among them; only those that keep no prompts are allowed (`zdr`,
+  // `data_collection: deny`), so it counts as zdr like the Go route. Endpoints differ in quantization and
+  // caching, so a run on it is not the same arm as a run through Go.
+  {
+    ref: 'openrouter/deepseek-v4.1-flash',
+    id: 'deepseek/deepseek-v4.1-flash-1017',
+    wire: 'chat-completions',
+    url: OPENROUTER,
+    auth: OPENROUTER_AUTH,
+    maxOutput: 32_000,
+    price: deepseekFlashPrice,
+    dataPolicy: 'zdr',
+    body: { provider: { zdr: true, data_collection: 'deny' } },
+    caps: chatCaps,
+  },
 ];
 
 export const FAUX_MODEL: ModelSpec = {
@@ -140,6 +159,7 @@ export const ALIASES: Record<string, string> = {
   haiku: 'opencode-go/claude-haiku-5-5',
   deepseek: 'opencode-go/deepseek-v4.1-flash',
   'deepseek-api': 'deepseek/deepseek-v4.1-flash',
+  'deepseek-or': 'openrouter/deepseek-v4.1-flash',
   'deepseek-pro': 'opencode-go/deepseek-v4-pro',
   beam: 'opencode-go/beam-free',
   muse: 'opencode-go/muse-spark-1.3-contributor',
@@ -151,6 +171,7 @@ export const ALIASES: Record<string, string> = {
 // and kept from training: Haiku 5.5 on the Claude API passed as many hard evals as Go's DeepSeek Flash for less.
 export const FALLBACKS: Record<string, string> = {
   'opencode-go/deepseek-v4.1-flash': 'anthropic/claude-haiku-5-5',
+  'openrouter/deepseek-v4.1-flash': 'anthropic/claude-haiku-5-5',
 };
 
 export function resolveModel(ref: string): ModelSpec {
