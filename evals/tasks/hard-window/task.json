@@ -1,0 +1,7 @@
+{
+  "id": "hard-window",
+  "category": "refactor",
+  "source": "synthetic: a correct but quadratic sliding-window count to make fast without changing what it returns; hidden tests compare it with the original on random input and time it on 200k events",
+  "prompt": "`distinctInWindow` in window.ts is correct but far too slow: production calls it with up to 200,000 events and it takes minutes. Make it return the same results for every input in under a second for 200,000 events. Its behaviour is its contract, including the doc comment; keep all of it. Do not change the existing tests; add tests for the cases you had to keep. Run `bun test` before you finish.",
+  "verify": "bun test"
+}
