@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
+import type { TuiArgs } from './clients/tui/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
 import { GUARDS } from './core/safety/policy.ts';
 import { cediaHome } from './core/config.ts';
@@ -11,7 +12,8 @@ import { projectKey, SessionLog } from './core/session/log.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
 import { versionInfo } from './protocol/version.ts';
 
-const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on stdin)
+const USAGE = `usage: cedia [options]                 the TUI, at a terminal: each prompt is a turn of one thread
+       cedia -p "<prompt>" [options]   (prompt may also come on stdin)
        cedia --version [--json]             the version; --json adds the protocol hash and capabilities
 
   -m, --model <ref>            the code role: model alias or ref (default: $CEDIA_MODEL, roles.code in settings, deepseek)
@@ -114,12 +116,6 @@ export async function main(argv: string[]): Promise<number> {
     console.log(USAGE);
     return 0;
   }
-  let prompt = values.print ?? positionals.join(' ');
-  if (!prompt && !process.stdin.isTTY) prompt = (await new Response(Bun.stdin.stream()).text()).trim();
-  if (!prompt) {
-    console.error(USAGE);
-    return 2;
-  }
   for (const [flag, v] of [['effort', values.effort], ['escalate', values.escalate]] as const)
     if (v !== undefined && !EFFORTS.includes(v as Effort) && !(flag === 'escalate' && v === 'off')) {
       console.error(`unknown --${flag} ${v}`);
@@ -130,36 +126,51 @@ export async function main(argv: string[]): Promise<number> {
     console.error(`unknown --output-format ${format}`);
     return 2;
   }
+  const base: TuiArgs = {
+    ...(values.model ? { model: values.model } : {}),
+    cwd: values.cwd ?? process.cwd(),
+    ...(values['max-turns'] ? { maxTurns: Number(values['max-turns']) } : {}),
+    ...(values['max-budget-usd'] ? { maxBudgetUsd: Number(values['max-budget-usd']) } : {}),
+    ...(values.effort ? { effort: values.effort as Effort } : {}),
+    ...(values.escalate ? { escalate: values.escalate } : {}),
+    ...(values['no-session-file'] ? { noSessionFile: true } : {}),
+    ...(values.permission ? { permission: values.permission } : {}),
+    ...(values.allow ? { allow: values.allow } : {}),
+    ...(values.deny ? { deny: values.deny } : {}),
+    ...(values.unlock ? { unlock: values.unlock } : {}),
+    ...(values.privacy ? { privacy: values.privacy } : {}),
+    ...(values.fallback ? { fallback: values.fallback } : {}),
+    ...(values['on-quota'] ? { onQuota: values['on-quota'] } : {}),
+    ...(values.thread ? { thread: values.thread } : {}),
+    ...(values.spawn ? { spawn: values.spawn } : {}),
+    ...(values.ask ? { ask: values.ask } : {}),
+    ...(values.swarm ? { swarm: values.swarm } : {}),
+    ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
+    ...(values.handoff ? { handoff: values.handoff } : {}),
+    ...(values.review ? { review: values.review } : {}),
+    ...(values.plan ? { plan: values.plan } : {}),
+    ...(values.check ? { checks: values.check } : {}),
+    ...(values.sandbox ? { sandbox: values.sandbox } : {}),
+    ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),
+  };
+  let prompt = values.print ?? positionals.join(' ');
+  // No prompt at a terminal: the interactive client, on the same run path.
+  if (!prompt && process.stdin.isTTY && process.stdout.isTTY && values.print === undefined) {
+    if (base.noSessionFile) {
+      console.error('cedia: the TUI keeps its turns in a thread, so it needs session files');
+      return 2;
+    }
+    // Loaded only here, so a headless run never pays for the terminal library.
+    const { runTui } = await import('./clients/tui/main.ts');
+    return runTui(base);
+  }
+  if (!prompt && !process.stdin.isTTY) prompt = (await new Response(Bun.stdin.stream()).text()).trim();
+  if (!prompt) {
+    console.error(USAGE);
+    return 2;
+  }
   try {
-    const result = await runHeadless({
-      prompt,
-      ...(values.model ? { model: values.model } : {}),
-      cwd: values.cwd ?? process.cwd(),
-      outputFormat: format,
-      ...(values['max-turns'] ? { maxTurns: Number(values['max-turns']) } : {}),
-      ...(values['max-budget-usd'] ? { maxBudgetUsd: Number(values['max-budget-usd']) } : {}),
-      ...(values.effort ? { effort: values.effort as Effort } : {}),
-      ...(values.escalate ? { escalate: values.escalate } : {}),
-      ...(values['no-session-file'] ? { noSessionFile: true } : {}),
-      ...(values.permission ? { permission: values.permission } : {}),
-      ...(values.allow ? { allow: values.allow } : {}),
-      ...(values.deny ? { deny: values.deny } : {}),
-      ...(values.unlock ? { unlock: values.unlock } : {}),
-      ...(values.privacy ? { privacy: values.privacy } : {}),
-      ...(values.fallback ? { fallback: values.fallback } : {}),
-      ...(values['on-quota'] ? { onQuota: values['on-quota'] } : {}),
-      ...(values.thread ? { thread: values.thread } : {}),
-      ...(values.spawn ? { spawn: values.spawn } : {}),
-      ...(values.ask ? { ask: values.ask } : {}),
-      ...(values.swarm ? { swarm: values.swarm } : {}),
-      ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
-      ...(values.handoff ? { handoff: values.handoff } : {}),
-      ...(values.review ? { review: values.review } : {}),
-      ...(values.plan ? { plan: values.plan } : {}),
-      ...(values.check ? { checks: values.check } : {}),
-      ...(values.sandbox ? { sandbox: values.sandbox } : {}),
-      ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),
-    });
+    const result = await runHeadless({ ...base, prompt, outputFormat: format });
     // A question for the owner is not a failure: the thread waits for the answer.
     const ok = result.subtype === 'success' || result.subtype === 'asked';
     if (!ok && format === 'text') console.error(`cedia: ${result.subtype}`);
