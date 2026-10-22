@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkSettings, loadHooks } from '../src/core/config.ts';
@@ -164,7 +164,8 @@ describe('hooks and the workspace', () => {
   test('a hook runs in its own home: an interpreter does not load a file planted in the workspace', async () => {
     const work = mkdtempSync(join(tmpdir(), 'cedia-hooks-work-'));
     writeFileSync(join(work, 'json.py'), 'import sys\nsys.exit(3)\n');
-    const home = mkdtempSync(join(tmpdir(), 'cedia-hooks-home-'));
+    // Real path: on macOS the temp dir is under /var, a symlink to /private/var, and getcwd gives the latter.
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'cedia-hooks-home-')));
     const spec = { command: ['python3', '-c', 'import json, os; print(json.dumps({"note": os.getcwd()}))'] };
     const o = await runHook(spec, { ...input, cwd: work }, home);
     expect(o).toEqual({ decision: 'allow', note: home });
