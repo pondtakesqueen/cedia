@@ -148,7 +148,8 @@
         "spawn",
         "handoff",
         "plan",
-        "review"
+        "review",
+        "ask"
       ]
     },
     "Check": {
@@ -531,6 +532,9 @@
             "of"
           ],
           "additionalProperties": false
+        },
+        "question": {
+          "$ref": "#/definitions/Question"
         }
       },
       "required": [
@@ -549,6 +553,24 @@
       "type": "object",
       "additionalProperties": {}
     },
+    "Question": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "additionalProperties": false
+    },
     "Rating": {
       "type": "string",
       "enum": [
@@ -565,7 +587,8 @@
         "error_during_execution",
         "interrupted",
         "error_unverified_claim",
-        "handoff"
+        "handoff",
+        "asked"
       ]
     },
     "SessionEvent": {
@@ -1893,6 +1916,37 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "question"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "question": {
+              "type": "string"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "kind",
+            "question",
+            "sessionId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "state"
             },
             "state": {
@@ -1940,7 +1994,8 @@
         "working",
         "done",
         "failed",
-        "stopped"
+        "stopped",
+        "asking"
       ]
     },
     "Timing": {
@@ -2039,7 +2094,8 @@
         "max_tokens",
         "budget",
         "max_turns",
-        "handoff"
+        "handoff",
+        "asked"
       ]
     },
     "Usage": {

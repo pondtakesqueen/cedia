@@ -1,3 +1,3 @@
-{"at":"2026-10-22T03:03:43.659Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
-{"at":"2026-10-22T03:03:43.662Z","kind":"session","sessionId":"6e189071-a08b-4c40-8077-c6f7c1c61285","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/6e189071-a08b-4c40-8077-c6f7c1c61285.jsonl"}
-{"at":"2026-10-22T03:03:43.714Z","kind":"state","state":"done","result":"f.txt now says good, and grep -q good f.txt passes."}
+{"at":"2026-10-22T05:31:42.398Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
+{"at":"2026-10-22T05:31:42.402Z","kind":"session","sessionId":"59335942-3aa5-42ea-ab91-b1dcec4c4a3f","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/59335942-3aa5-42ea-ab91-b1dcec4c4a3f.jsonl"}
+{"at":"2026-10-22T05:31:42.454Z","kind":"state","state":"done","result":"f.txt now says good, and grep -q good f.txt passes."}

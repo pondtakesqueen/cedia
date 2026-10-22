@@ -1,0 +1,4 @@
+{"at":"2026-10-22T05:31:42.807Z","kind":"open","title":"make f.txt say good or great","task":"make f.txt say good or great"}
+{"at":"2026-10-22T05:31:42.811Z","kind":"session","sessionId":"3fb12594-b055-495f-a8f3-10b55ce1d914","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/3fb12594-b055-495f-a8f3-10b55ce1d914.jsonl"}
+{"at":"2026-10-22T05:31:42.847Z","kind":"question","sessionId":"3fb12594-b055-495f-a8f3-10b55ce1d914","question":"Should f.txt say good or great? The task allows both; I wrote good.","options":["good","great"]}
+{"at":"2026-10-22T05:31:42.847Z","kind":"state","state":"asking","result":"Should f.txt say good or great? The task allows both; I wrote good."}
