@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildMessages, sessionHeader } from '../context/build.ts';
 import { contextSize, HANDOFF_NO_TOOLS, HANDOFF_PROMPT } from '../project/handoff.ts';
@@ -631,9 +632,17 @@ async function runTools(
       jobs.push({ callId, spec, input: c.input, parallel: effect === 'read' || effect === 'network' });
     }
   }
+  // Secrets are replaced before the result is logged, so neither the log nor the provider ever holds them.
+  const redact = !opts.permission?.unlock?.includes('secret-redaction');
   const run = async (j: Job) => {
+    // A stop between two calls of a reply leaves the rest unstarted rather than running them unstoppable.
+    if (signal.aborted) {
+      results.set(j.callId, { status: 'not_started', text: 'not run: the run was stopped', isError: true });
+      return;
+    }
     try {
-      const out = asOutput(await j.spec.run(j.input, { cwd: opts.cwd, signal, ...(opts.wrap ? { wrap: opts.wrap } : {}) }));
+      const spill = (text: string) => spillOutput(log.id, j.callId, redact ? redactSecrets(text).text : text);
+      const out = asOutput(await j.spec.run(j.input, { cwd: opts.cwd, signal, spill, ...(opts.wrap ? { wrap: opts.wrap } : {}) }));
       results.set(j.callId, { ...out, status: signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed' });
     } catch (e) {
       results.set(j.callId, { status: 'failed', text: `tool crashed: ${e instanceof Error ? e.message : String(e)}`, isError: true });
@@ -641,6 +650,8 @@ async function runTools(
   };
   // A writing call runs between two snapshots, so the log names every file it changed.
   const runWriting = async (j: Job) => {
+    // A call left unstarted by a stop changes nothing, so it needs no snapshots.
+    if (signal.aborted) return run(j);
     const snapshots = opts.snapshots;
     if (snapshots && !snap.tree) {
       const t0 = performance.now();
@@ -668,14 +679,43 @@ async function runTools(
     }
   }
   await bounded(pool, MAX_PARALLEL_TOOLS, run);
-  // Secrets are replaced before the result is logged, so neither the log nor the provider ever holds them.
-  const redact = !opts.permission?.unlock?.includes('secret-redaction');
   for (const c of calls) {
     const callId = callIdOf(c);
     const { status, ...output } = results.get(callId)!;
     if (shared.has(callId)) output.text += `\n[cedia: more than one call in your reply shared this id; only the first ran. Call the others again if you need them.]`;
     const r = redact ? redactSecrets(output.text) : { text: output.text, count: 0 };
     log.append({ kind: 'tool_result', callId, status, output: r.count ? { ...output, text: r.text, redacted: r.count } : output });
+  }
+}
+
+// A whole output too long for a result, in a file only its owner can read. Outside cedia's home, which the
+// policy keeps tools out of, and in the temp dir the sandbox lets bash read, so grep and read can reach it.
+// The temp dir is shared, so each directory on the way must be a real one this user owns: a symlink or another
+// user's directory planted there would take the output elsewhere. Any doubt, and the result is clipped instead.
+// Session directories older than a week are removed as new ones are made.
+export function spillOutput(sessionId: string, callId: string, text: string, root = join(tmpdir(), `cedia-output-${process.getuid?.() ?? 'user'}`)): string | undefined {
+  const ours = (dir: string) => {
+    const st = lstatSync(dir);
+    return st.isDirectory() && !st.isSymbolicLink() && (process.getuid === undefined || st.uid === process.getuid()) && (st.mode & 0o077) === 0;
+  };
+  try {
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    if (!ours(root)) return undefined;
+    const dir = join(root, sessionId.replace(/[^\w.-]/g, '_'));
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { mode: 0o700 });
+      const weekAgo = Date.now() - 7 * 86_400_000;
+      for (const old of readdirSync(root)) {
+        const p = join(root, old);
+        if (p !== dir && lstatSync(p).mtimeMs < weekAgo) rmSync(p, { recursive: true, force: true });
+      }
+    }
+    if (!ours(dir)) return undefined;
+    const path = join(dir, `${callId.replace(/[^\w.-]/g, '_')}.txt`);
+    writeFileSync(path, text, { mode: 0o600 });
+    return path;
+  } catch {
+    return undefined;
   }
 }
 
