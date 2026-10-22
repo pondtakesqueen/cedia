@@ -18,7 +18,8 @@ export type Capability =
   | 'spawn' // sub-threads
   | 'handoff' // a long session hands off to a new session of its thread
   | 'plan' // --plan
-  | 'review'; // --review
+  | 'review' // --review
+  | 'ask'; // --ask: ask_user, the 'asked' result, the 'question' thread event and the 'asking' state
 
 export type VersionInfo = { name: 'cedia'; version: string; protocol: string; capabilities: Capability[] };
 
@@ -26,7 +27,7 @@ export type VersionInfo = { name: 'cedia'; version: string; protocol: string; ca
 export const PROTOCOL = hash(schemaText as unknown as string);
 
 export function versionInfo(): VersionInfo {
-  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review'];
+  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask'];
   if (processKeychain()) capabilities.push('keychain');
   return { name: 'cedia', version: VERSION, protocol: PROTOCOL, capabilities };
 }

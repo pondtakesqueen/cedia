@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Terminal } from '@mariozechner/pi-tui';
-import { callLine, CediaTui, printable } from '../src/clients/tui/main.ts';
+import { callLine, CediaTui, printable, type TuiArgs } from '../src/clients/tui/main.ts';
 import { SessionLog } from '../src/core/session/log.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 
@@ -52,10 +52,10 @@ afterAll(() => {
   }
 });
 
-function app() {
+function app(more: Partial<TuiArgs> = {}) {
   const term = new FakeTerminal();
   let left = false;
-  const a = new CediaTui({ cwd: dir, model: 'faux', permission: 'workspace', sandbox: 'off', spawn: 'off' }, term, undefined, () => (left = true));
+  const a = new CediaTui({ cwd: dir, model: 'faux', permission: 'workspace', sandbox: 'off', spawn: 'off', ...more }, term, undefined, () => (left = true));
   a.start();
   const type = (text: string) => {
     term.input(text);
@@ -151,6 +151,20 @@ describe('the TUI (offline, faux)', () => {
     await Bun.sleep(20);
     expect(t.left()).toBe(true);
     expect(t.shown()).toContain('interrupted');
+  });
+
+  test('a question the writer asks is shown with its options, and the next message answers it', async () => {
+    const t = app({ ask: 'on' });
+    t.script([{ blocks: [{ type: 'tool_use', id: 'q1', name: 'ask_user', input: { question: 'Keep the old API?', options: ['yes, deprecate it', 'no, remove it'] } }] }]);
+    t.type('change the API');
+    await t.a.idle();
+    expect(t.shown()).toContain('Keep the old API?');
+    expect(t.shown()).toContain('2. no, remove it');
+    expect(t.shown()).toContain('your next message is the answer');
+    t.script([reply('kept it, deprecated')]);
+    t.type('1');
+    await t.a.idle();
+    expect(t.shown()).toContain('kept it, deprecated');
   });
 
   test('escapes and control characters from commands never reach the screen', () => {
