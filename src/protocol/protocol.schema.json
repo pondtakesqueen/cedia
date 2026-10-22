@@ -22,6 +22,9 @@
     "ModelList": {
       "$ref": "#/definitions/ModelList"
     },
+    "PermissionList": {
+      "$ref": "#/definitions/PermissionList"
+    },
     "VersionInfo": {
       "$ref": "#/definitions/VersionInfo"
     }
@@ -197,7 +200,8 @@
         "profiles",
         "open_thread",
         "schedules",
-        "models"
+        "models",
+        "permissions"
       ]
     },
     "Check": {
@@ -740,6 +744,67 @@
       ],
       "additionalProperties": false
     },
+    "PermissionEntry": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/PermissionSetting"
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "label",
+        "description"
+      ],
+      "additionalProperties": false
+    },
+    "PermissionList": {
+      "type": "object",
+      "properties": {
+        "default": {
+          "$ref": "#/definitions/PermissionSetting"
+        },
+        "modes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PermissionEntry"
+          }
+        }
+      },
+      "required": [
+        "default",
+        "modes"
+      ],
+      "additionalProperties": false
+    },
+    "PermissionMode": {
+      "type": "string",
+      "enum": [
+        "read-only",
+        "workspace"
+      ]
+    },
+    "PermissionSetting": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PermissionMode"
+        },
+        {
+          "type": "string",
+          "const": "auto"
+        },
+        {
+          "type": "string",
+          "const": "plan"
+        }
+      ]
+    },
     "Question": {
       "type": "object",
       "properties": {
@@ -801,6 +866,17 @@
         "model"
       ],
       "additionalProperties": false
+    },
+    "RunPermission": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PermissionMode"
+        },
+        {
+          "type": "string",
+          "const": "plan"
+        }
+      ]
     },
     "Schedule": {
       "type": "object",
@@ -2565,6 +2641,9 @@
             },
             "from": {
               "$ref": "#/definitions/RunFrom"
+            },
+            "permission": {
+              "$ref": "#/definitions/RunPermission"
             },
             "at": {
               "type": "string"

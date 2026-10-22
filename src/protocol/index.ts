@@ -9,6 +9,7 @@ export type { SessionEvent } from '../core/types.ts';
 export type { ThreadEvent } from '../core/project/threads.ts';
 export type { Schedule, ScheduleEvent } from '../core/project/schedules.ts';
 export type { ModelEntry, ModelList } from '../core/providers/models.ts';
+export type { PermissionEntry, PermissionList } from '../core/safety/policy.ts';
 export type { Capability, VersionInfo } from './version.ts';
 
 export type CoreMessage = { type: 'event'; event: SessionEvent } | { type: 'stream'; event: StreamEvent } | HeadlessResult;
