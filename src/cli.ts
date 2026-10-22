@@ -11,9 +11,10 @@ import { modelLine, modelList } from './core/providers/models.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
 import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Schedule } from './core/project/schedules.ts';
-import { loadSkills } from './core/skills/skills.ts';
+import { commandList, loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
 import { rewindThread, rewoundText, runLines } from './core/project/rewind.ts';
+import { forkThread } from './core/project/fork.ts';
 import { workspaceSnapshots } from './core/safety/snapshot.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
@@ -102,6 +103,10 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                             conversation and files together: the thread goes on from there, and
                                             every file a later run changed is put back. It refuses while the thread
                                             is working, or when such a file changed since (--force: anyway).
+       cedia threads fork <id> <n|run> [--json]
+                                            a new thread whose conversation is this one's just before run n (or the
+                                            run with that id), for sending its message again, edited; the original
+                                            thread and the files are left as they are
                                             Without n, lists the runs
        cedia schedules [list | due] [--json]
                                             the project's scheduled prompts, or the ones due now. Whoever runs
@@ -116,6 +121,9 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia models [--json]                the models a session may use, which of them have a key here, and the
                                             one the code role takes now (marked *)
        cedia permissions [--json]           the permission modes a run may take (--permission) and the default
+       cedia commands [--json] [--cwd <dir>]
+                                            what a client offers for /: each skill here; a prompt that starts with
+                                            /<skill> asks the writer to load it first
        cedia skills [--cwd <dir>]           the skills a session here can load: the user's (~/.cedia/skills) and the
                                             repository's (.agents/skills, .claude/skills, .cursor/skills)
 
@@ -132,6 +140,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'memory') return memory(argv.slice(1));
   if (argv[0] === 'schedules') return schedules(argv.slice(1));
   if (argv[0] === 'skills') return skills(argv.slice(1));
+  if (argv[0] === 'commands') return commands(argv.slice(1));
   if (argv[0] === 'permissions') return permissions(argv.slice(1));
   if (argv[0] === 'models') return models(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
@@ -305,7 +314,7 @@ function threads(argv: string[]): number {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' } },
+    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' }, json: { type: 'boolean' } },
   });
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(values.cwd ?? process.cwd())));
   const [cmd = 'list', id, ...rest] = positionals;
@@ -364,6 +373,13 @@ function threads(argv: string[]): number {
       console.log(rewoundText(r));
       return 0;
     }
+    if (cmd === 'fork' && id && rest.length === 1) {
+      if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
+      const r = forkThread(store, id, rest[0]!, { sessionFile: (cwd, sid) => sessionPath(cwd, sid) });
+      if ('error' in r) throw new Error(r.error);
+      console.log(values.json ? JSON.stringify({ thread: r.thread, run: r.run.id, ...(r.sessionId ? { sessionId: r.sessionId } : {}) }) : `forked ${id} at run ${JSON.stringify(r.run.prompt.split('\n')[0])} into ${r.thread}; send the edited message with cedia -p <text> --thread ${r.thread}`);
+      return 0;
+    }
     if (cmd === 'diff' && id) {
       if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
       const change = threadTurn(store, id);
@@ -381,7 +397,7 @@ function threads(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] | redo <id> [--force] | rewind <id> [<n>] [--force] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
+  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] | redo <id> [--force] | rewind <id> [<n>] [--force] | fork <id> <n|run> [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
   return 2;
 }
 
@@ -439,6 +455,20 @@ function permissions(argv: string[]): number {
     return 1;
   }
   console.log(parsed.values.json ? JSON.stringify(list) : list.modes.map((m) => `${m.mode === list.default ? '*' : ' '} ${m.mode.padEnd(10)} ${m.description}`).join('\n'));
+  return 0;
+}
+
+function commands(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { cwd: { type: 'string' }, json: { type: 'boolean' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const list = commandList(loadSkills(resolve(parsed.values.cwd ?? process.cwd()), cediaHome()));
+  const shown = (t: string) => t.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
+  console.log(parsed.values.json ? JSON.stringify(list) : list.commands.map((c) => `/${c.name}${c.argumentHint ? ` ${shown(c.argumentHint)}` : ''}  ${shown(c.description)}`).join('\n') || 'no commands here');
   return 0;
 }
 

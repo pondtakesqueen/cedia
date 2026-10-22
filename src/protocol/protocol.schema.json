@@ -25,6 +25,9 @@
     "PermissionList": {
       "$ref": "#/definitions/PermissionList"
     },
+    "CommandList": {
+      "$ref": "#/definitions/CommandList"
+    },
     "VersionInfo": {
       "$ref": "#/definitions/VersionInfo"
     }
@@ -201,7 +204,9 @@
         "open_thread",
         "schedules",
         "models",
-        "permissions"
+        "permissions",
+        "commands",
+        "threads.fork"
       ]
     },
     "Check": {
@@ -294,6 +299,53 @@
           "additionalProperties": false
         }
       ]
+    },
+    "CommandEntry": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "skill"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "user",
+            "repository"
+          ]
+        },
+        "argumentHint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "kind",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "CommandList": {
+      "type": "object",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CommandEntry"
+          }
+        }
+      },
+      "required": [
+        "commands"
+      ],
+      "additionalProperties": false
     },
     "CompactionBlock": {
       "type": "object",
@@ -413,6 +465,22 @@
         "changed",
         "checks",
         "unverified"
+      ],
+      "additionalProperties": false
+    },
+    "ForkOf": {
+      "type": "object",
+      "properties": {
+        "thread": {
+          "type": "string"
+        },
+        "run": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread",
+        "run"
       ],
       "additionalProperties": false
     },
@@ -1965,7 +2033,8 @@
         "handoff",
         "quota",
         "rejected",
-        "rewind"
+        "rewind",
+        "fork"
       ]
     },
     "Spawned": {
@@ -2290,6 +2359,9 @@
             },
             "profile": {
               "type": "string"
+            },
+            "forkOf": {
+              "$ref": "#/definitions/ForkOf"
             },
             "at": {
               "type": "string"

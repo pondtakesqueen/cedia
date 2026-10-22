@@ -12,7 +12,7 @@ import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../..
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
 import { memoryBlock, memoryPath, MemoryStore, rememberTool } from '../../core/project/memory.ts';
-import { loadSkills, skillsBlock, skillTool } from '../../core/skills/skills.ts';
+import { loadSkills, skillCommand, skillsBlock, skillTool } from '../../core/skills/skills.ts';
 import { mcpStub, startMcp, type McpServers } from '../../core/mcp/tools.ts';
 import { webFetchTool } from '../../core/tools/web.ts';
 import { runTurn } from '../../core/project/undo.ts';
@@ -484,7 +484,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     return { ok: r.subtype === 'success', text: r.result, step: { model: choice.model.ref, via: 'cedia', sessionId: log.id, costUsd: r.costUsd } };
   };
   // A thread that asked the owner a question goes on with their answer, framed as one.
-  let task = resumed?.question ? answerPrompt(resumed.question.question, args.prompt) : args.prompt;
+  let task = resumed?.question ? answerPrompt(resumed.question.question, args.prompt) : (skillCommand(args.prompt, skills) ?? args.prompt);
   // The advisor: one session for the run, which reads each of the writer's turns and answers OK or a note. A
   // failed advisor (its quota, an error) is left out for the rest of the run; the writer goes on without it.
   const adv = { log: undefined as SessionLog | undefined, turns: 0, notes: 0, costUsd: 0, off: false };
