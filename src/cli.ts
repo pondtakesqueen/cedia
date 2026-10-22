@@ -8,6 +8,7 @@ import { GUARDS } from './core/safety/policy.ts';
 import { cediaHome } from './core/config.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
+import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Schedule } from './core/project/schedules.ts';
 import { loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
 import { rewindThread, rewoundText, runLines } from './core/project/rewind.ts';
@@ -58,6 +59,11 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --ask <on|off>           give the writer ask_user, to end the run with one question for you when only you can
                                decide; the thread waits as 'asking' and your answer is its next prompt
                                (default: settings ask, off)
+      --todo <on|off>          give the writer a todo list, kept in the thread as its progress (default: settings
+                               todo, off)
+      --profile <name>         a named set of defaults under these flags: model, permission, tools, instructions
+                               (settings profiles; built in: coordinator, which opens threads with open_thread).
+                               A thread goes on with the profile it was opened with
       --swarm <ref>            the model explore sub-threads run on (default: roles.swarm in settings, beam)
       --thread <id>            go on with a thread of this project instead of opening a new one
       --handoff-at <n|off>     hand off to a new session of the thread once the context reaches n tokens
@@ -92,6 +98,13 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                             every file a later run changed is put back. It refuses while the thread
                                             is working, or when such a file changed since (--force: anyway).
                                             Without n, lists the runs
+       cedia schedules [list | due] [--json]
+                                            the project's scheduled prompts, or the ones due now. Whoever runs
+                                            threads (the desktop's daemon, cron) runs each due one with
+                                            cedia -p <prompt> --thread <thread> after cedia schedules fire <id>
+       cedia schedules add <when> <prompt> --thread <id> [--every <dur>]
+                                            when: an ISO time or a delay (30m, 2h); every: 1h, 1d, 1w (at least 5m)
+       cedia schedules cancel|pause|resume|fire <id>
        cedia memory [list | add <text> | forget <id>]
                                             the project's memory: short facts every new session gets in its first
                                             turn; writer sessions add to it with the remember tool
@@ -109,6 +122,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'lint-session') return lintFiles(argv.slice(1));
   if (argv[0] === 'threads') return threads(argv.slice(1));
   if (argv[0] === 'memory') return memory(argv.slice(1));
+  if (argv[0] === 'schedules') return schedules(argv.slice(1));
   if (argv[0] === 'skills') return skills(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
   const { values, positionals } = parseArgs({
@@ -134,6 +148,8 @@ export async function main(argv: string[]): Promise<number> {
       spawn: { type: 'string' },
       lsp: { type: 'string' },
       ask: { type: 'string' },
+      todo: { type: 'string' },
+      profile: { type: 'string' },
       swarm: { type: 'string' },
       'handoff-at': { type: 'string' },
       handoff: { type: 'string' },
@@ -182,6 +198,8 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.spawn ? { spawn: values.spawn } : {}),
     ...(values.lsp ? { lsp: values.lsp } : {}),
     ...(values.ask ? { ask: values.ask } : {}),
+    ...(values.todo ? { todo: values.todo } : {}),
+    ...(values.profile ? { profile: values.profile } : {}),
     ...(values.swarm ? { swarm: values.swarm } : {}),
     ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
     ...(values.handoff ? { handoff: values.handoff } : {}),
@@ -287,12 +305,13 @@ function threads(argv: string[]): number {
     }
     if (cmd === 'show' && id) {
       const t = store.read(id);
-      const lines = [`${t.id}  ${t.state}  ${t.title}`, '', t.task, ''];
+      const lines = [`${t.id}  ${t.state}  ${t.title}`, ...(t.by ? [`opened by ${t.by}`] : []), ...(t.profile ? [`profile ${t.profile}`] : []), '', t.task, ''];
       for (const s of t.sessions) lines.push(`session ${s.sessionId}  ${s.model}  ${s.why}${s.rewound ? '  (rewound)' : ''}${s.path ? `  ${s.path}` : ''}`);
       if (t.runs.length) lines.push('', ...runLines(t));
       if (t.handoff) lines.push('', `handoff from ${t.handoff.sessionId}:`, t.handoff.note);
       if (t.result) lines.push('', 'result:', t.result);
       for (const m of t.messages) lines.push('', `message ${m.id} from ${m.from} at ${m.at}${m.unsent ? ' (unsent)' : t.pending.includes(m) ? ' (not seen yet)' : ''}:`, m.text);
+      if (t.todo?.length) lines.push('', `todo ${t.todo.filter((i) => i.state === 'done').length}/${t.todo.length}:`, ...t.todo.map((i) => `  ${i.state === 'done' ? '[x]' : i.state === 'doing' ? '[>]' : '[ ]'} ${i.text}`));
       if (t.question) lines.push('', `question from ${t.question.sessionId}:`, t.question.question, ...(t.question.options ?? []).map((o, i) => `  ${i + 1}. ${o}`), `answer with: cedia -p "<answer>" --thread ${t.id}`);
       for (const r of t.ratings) lines.push('', `rated ${r.rating} at ${r.at}${r.sessionId ? ` (session ${r.sessionId})` : ''}${r.note ? `: ${r.note}` : ''}`);
       console.log(lines.join('\n'));
@@ -371,6 +390,56 @@ function skills(argv: string[]): number {
   const shown = (t: string) => t.replace(/[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
   console.log(found.length ? found.map((s) => `${s.name}  (${s.source})  ${shown(s.dir)}\n    ${shown(s.description)}`).join('\n') : 'no skills here');
   return 0;
+}
+
+function schedules(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' }, json: { type: 'boolean' }, every: { type: 'string' }, thread: { type: 'string' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const { values, positionals } = parsed;
+  const cwd = resolve(values.cwd ?? process.cwd());
+  const store = new ScheduleStore(schedulesPath(cediaHome(), projectKey(cwd)));
+  const [cmd = 'list', ...rest] = positionals;
+  const show = (list: Schedule[]) => console.log(values.json ? JSON.stringify(list) : list.length ? list.map(scheduleLine).join('\n') : 'no schedules');
+  try {
+    if (cmd === 'list') {
+      show(store.list());
+      return 0;
+    }
+    if (cmd === 'due') {
+      show(store.due());
+      return 0;
+    }
+    if (cmd === 'add' && rest.length >= 2 && values.thread) {
+      const threads = new ThreadStore(threadsDir(cediaHome(), projectKey(cwd)));
+      if (!threads.has(values.thread)) throw new Error(`no thread ${values.thread} in this project`);
+      const first = whenOf(rest[0]!);
+      if (!first) throw new Error(`not a time: ${rest[0]} (an ISO time, or a delay like 30m or 2h)`);
+      const every = values.every === undefined ? undefined : minutesOf(values.every);
+      if (values.every !== undefined && every === undefined) throw new Error(`not a duration: ${values.every} (like 1h or 1d)`);
+      show([store.add({ prompt: rest.slice(1).join(' '), thread: values.thread, first, ...(every ? { every } : {}) })]);
+      return 0;
+    }
+    if (rest.length === 1 && (cmd === 'cancel' || cmd === 'pause' || cmd === 'resume' || cmd === 'fire')) {
+      const id = rest[0]!;
+      if (cmd === 'cancel') store.cancel(id);
+      else if (cmd === 'fire') {
+        show([store.fire(id)]);
+        return 0;
+      } else store.setEnabled(id, cmd === 'resume');
+      console.log(`${cmd === 'cancel' ? 'cancelled' : cmd === 'pause' ? 'paused' : 'resumed'} ${id}`);
+      return 0;
+    }
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 1;
+  }
+  console.error('usage: cedia schedules [list | due | add <when> <prompt> --thread <id> [--every <dur>] | cancel|pause|resume|fire <id>] [--json] [--cwd <dir>]');
+  return 2;
 }
 
 function memory(argv: string[]): number {

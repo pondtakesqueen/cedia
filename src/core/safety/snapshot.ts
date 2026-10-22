@@ -16,6 +16,8 @@ export type Snapshots = {
   // Three-way merge of trees, as git merges commits: the changes from `base` to `theirs` laid over `ours`. The
   // merged tree, or the files both sides changed in ways that do not combine.
   merge(base: string, ours: string, theirs: string): { tree: string; conflicts: string[] };
+  // `tree` with `files` as `from` has them: taken from it, or removed where it has none.
+  pick(tree: string, files: string[], from: string): string;
   // Another working directory recorded in the same store, with its own index: its trees can be merged with these
   // and restored here. `exclude` lists paths under it never to record.
   at(cwd: string, name: string, exclude?: string[]): (Snapshots & { drop(): void }) | undefined;
@@ -52,11 +54,11 @@ export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [
   // A sibling's paths not to record go in its own excludes file, so the store's info/exclude stays this one's.
   const excludesFile = name ? join(gitDir, 'info', `exclude-${name}`) : undefined;
   const config = ['-c', 'core.autocrlf=false', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0', '-c', 'commit.gpgSign=false', ...(excludesFile ? ['-c', `core.excludesFile=${excludesFile}`] : [])];
-  const gitRaw = (args: string[]) => {
+  const gitRaw = (args: string[], index?: string, stdin?: string) => {
     // Another cedia process (a /diff beside a run) may hold the shadow index for a moment: wait for it rather
     // than lose a snapshot.
     for (let tries = 0; ; tries++) {
-      const p = Bun.spawnSync(['git', ...config, ...args], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
+      const p = Bun.spawnSync(['git', ...config, ...args], { cwd: root, env: index ? { ...env, GIT_INDEX_FILE: index } : env, stdin: stdin === undefined ? 'ignore' : Buffer.from(stdin), stdout: 'pipe', stderr: 'pipe' });
       if (p.exitCode === 0) return p.stdout;
       // merge-tree says "conflicts" with exit code 1, and still writes the merged tree.
       if (p.exitCode === 1 && args[0] === 'merge-tree') return p.stdout;
@@ -163,6 +165,28 @@ export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [
       const commit = (tree: string) => git(['commit-tree', '-m', 'cedia', tree]).trim();
       const out = git(['merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', `--merge-base=${commit(base)}`, commit(ours), commit(theirs)]).split('\0');
       return { tree: out[0]!.trim(), conflicts: [...new Set(out.slice(1).filter(Boolean))] };
+    },
+    // Built in an index of its own, so neither this tree's index nor a sibling's moves.
+    pick(tree, files, from) {
+      if (!files.length) return tree;
+      const index = join(gitDir, `cedia-pick-${process.pid}-${crypto.randomUUID().slice(0, 8)}`);
+      try {
+        gitRaw(['read-tree', tree], index);
+        const wanted = new Set(files);
+        const entries = new Map<string, string>();
+        for (const line of git(['ls-tree', '-r', '-z', '--full-tree', from]).split('\0').filter(Boolean)) {
+          const tab = line.indexOf('\t');
+          const path = line.slice(tab + 1);
+          const [mode, type, blob] = line.slice(0, tab).split(' ');
+          if (wanted.has(path) && type === 'blob') entries.set(path, `${mode} ${blob}`);
+        }
+        // Mode 0 removes a path from the index.
+        const info = files.map((f) => `${entries.get(f) ?? `0 ${'0'.repeat(40)}`}\t${f}\0`).join('');
+        gitRaw(['update-index', '-z', '--index-info'], index, info);
+        return gitRaw(['write-tree'], index).toString().trim();
+      } finally {
+        rmSync(index, { force: true });
+      }
     },
     at(cwd, sibling, siblingExclude = []) {
       const id = sibling.replace(/[^\w.-]/g, '_');

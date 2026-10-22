@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { applyWorktree, openWorktree, type Worktree } from '../src/core/project/worktree.ts';
@@ -41,21 +41,30 @@ const open = (r: ReturnType<typeof repo>, name: string) => {
 const none = () => false;
 
 describe('worktree per work sub-thread', () => {
-  test("the child starts from the parent's working tree, uncommitted changes included, with ignored paths linked", () => {
+  test("the child starts from the parent's working tree, uncommitted changes included, with ignored paths brought in", () => {
     const r = repo();
     const wt = open(r, 't-1');
     expect(readFileSync(join(wt.cwd, 'src', 'a.txt'), 'utf8')).toStartWith('1 parent\n');
     expect(readFileSync(join(wt.cwd, 'new.txt'), 'utf8')).toBe('not committed\n');
     expect(existsSync(join(wt.cwd, 'gone.txt'))).toBe(false);
-    expect(lstatSync(join(wt.cwd, 'deps')).isSymbolicLink()).toBe(true);
     expect(readFileSync(join(wt.cwd, 'deps', 'lib.js'), 'utf8')).toBe('module\n');
+    // An ignored directory is a clone where the filesystem can make one (always on macOS's APFS), else a link.
+    const cloned = !lstatSync(join(wt.cwd, 'deps')).isSymbolicLink();
+    if (process.platform === 'darwin') expect(cloned).toBe(true);
+    if (cloned) {
+      // The child may write it, as an install or a build does; the parent's stays as it was.
+      writeFileSync(join(wt.cwd, 'deps', 'lib.js'), 'rebuilt\n');
+      writeFileSync(join(wt.cwd, 'deps', 'added.js'), 'installed\n');
+      expect(readFileSync(join(r.work, 'deps', 'lib.js'), 'utf8')).toBe('module\n');
+      expect(existsSync(join(r.work, 'deps', 'added.js'))).toBe(false);
+    }
     // An ignored file is a copy: what the child writes there stays there.
     expect(lstatSync(join(wt.cwd, '.env')).isSymbolicLink()).toBe(false);
     writeFileSync(join(wt.cwd, '.env'), 'A=2\n');
     expect(readFileSync(join(r.work, '.env'), 'utf8')).toBe('A=1\n');
     // git works there, and sees the parent's changes as the parent does.
     expect(git(wt.cwd, 'status', '--porcelain')).toContain('src/a.txt');
-    // Nothing changed: nothing to apply, and the link is not a change.
+    // Nothing changed: nothing to apply. The ignored directory is not a change, written to or not.
     expect(applyWorktree(wt, r.parent, none)).toEqual({ files: [], refused: [], conflicts: [] });
     wt.close();
     expect(existsSync(wt.dir)).toBe(false);
@@ -79,6 +88,54 @@ describe('worktree per work sub-thread', () => {
     expect(late).toEqual({ files: [], refused: [], conflicts: ['src/a.txt'] });
     expect(existsSync(join(r.work, 'made-by-c.txt'))).toBe(false);
     for (const w of [a, b, c] as Worktree[]) w.close();
+  });
+
+  test('a lockfile or generated file both changed is not merged by lines: the one written last wins it whole', () => {
+    const r = repo();
+    writeFileSync(join(r.work, 'bun.lock'), 'a@1\nb@1\nc@1\n');
+    writeFileSync(join(r.work, '.gitattributes'), 'gen/** linguist-generated\n');
+    mkdirSync(join(r.work, 'gen'));
+    writeFileSync(join(r.work, 'gen', 'api.ts'), '1\n2\n3\n4\n5\n6\n');
+    const at = (file: string, s: number) => utimesSync(file, s, s);
+    const wt = open(r, 't-lww');
+    // The child changed both and wrote them last; the parent changed both first. The generated file's changes
+    // would merge by lines (first and last line), yet it is taken whole.
+    writeFileSync(join(r.work, 'bun.lock'), 'a@2\nb@1\nc@1\n');
+    writeFileSync(join(r.work, 'gen', 'api.ts'), 'parent\n2\n3\n4\n5\n6\n');
+    writeFileSync(join(wt.cwd, 'bun.lock'), 'a@3\nb@1\nc@1\n');
+    writeFileSync(join(wt.cwd, 'gen', 'api.ts'), '1\n2\n3\n4\n5\nchild\n');
+    writeFileSync(join(wt.cwd, 'src', 'a.txt'), '1 parent\n2\n3\n4\n5\n6\n7\n8 child\n');
+    at(join(r.work, 'bun.lock'), 1000);
+    at(join(r.work, 'gen', 'api.ts'), 1000);
+    at(join(wt.cwd, 'bun.lock'), 2000);
+    at(join(wt.cwd, 'gen', 'api.ts'), 2000);
+    const applied = applyWorktree(wt, r.parent, none);
+    expect(applied.conflicts).toEqual([]);
+    expect(applied.files.sort()).toEqual(['bun.lock', 'gen/api.ts', 'src/a.txt']);
+    expect(applied.newest).toEqual(expect.arrayContaining([{ file: 'bun.lock', kept: 'its' }, { file: 'gen/api.ts', kept: 'its' }]));
+    expect(readFileSync(join(r.work, 'bun.lock'), 'utf8')).toBe('a@3\nb@1\nc@1\n');
+    expect(readFileSync(join(r.work, 'gen', 'api.ts'), 'utf8')).toBe('1\n2\n3\n4\n5\nchild\n');
+    wt.close();
+
+    // Now the parent wrote last: its lockfile stays, and the child's other change still lands.
+    const late = open(r, 't-lww-late');
+    writeFileSync(join(late.cwd, 'bun.lock'), 'a@4\nb@1\nc@1\n');
+    writeFileSync(join(late.cwd, 'made.txt'), 'x\n');
+    writeFileSync(join(r.work, 'bun.lock'), 'a@5\nb@1\nc@1\n');
+    at(join(late.cwd, 'bun.lock'), 3000);
+    at(join(r.work, 'bun.lock'), 4000);
+    expect(applyWorktree(late, r.parent, none)).toEqual({ files: ['made.txt'], refused: [], conflicts: [], newest: [{ file: 'bun.lock', kept: 'yours' }] });
+    expect(readFileSync(join(r.work, 'bun.lock'), 'utf8')).toBe('a@5\nb@1\nc@1\n');
+    late.close();
+
+    // A real conflict elsewhere still writes nothing, the lockfile included.
+    const both = open(r, 't-lww-conflict');
+    writeFileSync(join(both.cwd, 'bun.lock'), 'a@6\nb@1\nc@1\n');
+    writeFileSync(join(both.cwd, 'new.txt'), 'child\n');
+    writeFileSync(join(r.work, 'new.txt'), 'parent\n');
+    expect(applyWorktree(both, r.parent, none)).toEqual({ files: [], refused: [], conflicts: ['new.txt'] });
+    expect(readFileSync(join(r.work, 'bun.lock'), 'utf8')).toBe('a@5\nb@1\nc@1\n');
+    both.close();
   });
 
   test("the parent's own edits since the child started stay; a refused file is left out and named", () => {
@@ -252,6 +309,49 @@ describe('--spawn worktree (offline, faux)', () => {
     expect(report(result, r.work, 's1')).toContain('Applied to your files: one.txt');
     expect(report(result, r.work, 's2')).toContain('Applied to your files: two.txt');
     expect(git(r.work, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
+  });
+
+  test('best of N: each approach runs in a worktree of its own, cedia runs the checks in each, and only the one that passes most is applied', () => {
+    const r = repo();
+    const race = { type: 'tool_use', id: 's1', name: 'spawn', input: { kind: 'work', task: 'make out.txt', approaches: ['approach-bad: write bad', 'approach-good: write good'] } };
+    const out = cedia(
+      r.work,
+      [
+        { blocks: [race] },
+        ...child('approach-bad', 'echo bad > out.txt && echo extra > bad-only.txt', 'bad done'),
+        ...child('approach-good', 'echo good > out.txt', 'good done'),
+        call('p1', 'grep -q good out.txt'),
+        reply('kept the good one'),
+      ],
+      ['-p', 'make out.txt', '--spawn', 'worktree', '--check', 'grep -q good out.txt'],
+    );
+    const result = out.result();
+    expect(result).toMatchObject({ subtype: 'success', result: 'kept the good one' });
+    expect(readFileSync(join(r.work, 'out.txt'), 'utf8')).toBe('good\n');
+    expect(existsSync(join(r.work, 'bad-only.txt'))).toBe(false);
+    const text = report(result, r.work, 's1');
+    expect(text).toContain("Best of 2: kept approach 2; the others' changes were dropped.");
+    expect(text).toContain('1. approach-bad: write bad: 1/2 checks passed');
+    expect(text).toContain('2. approach-good: write good: 2/2 checks passed, ended success');
+    expect(text).toContain('Applied to your files: out.txt');
+    expect(result.spawned).toMatchObject({ work: 2 });
+    // Both worktrees are gone: the kept one once applied, the other once dropped.
+    expect(git(r.work, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
+  });
+
+  // The sandbox that keeps a child's bash inside its worktree, as runs have it; Seatbelt is always there on macOS.
+  test.skipIf(process.platform !== 'darwin')('a sandboxed child may install into its cloned ignored directory; only its tracked change comes back', () => {
+    const r = repo();
+    const out = cedia(
+      r.work,
+      [{ blocks: [spawnCall('s1', 'alpha-task: install and write')] }, ...child('alpha-task', 'echo installed > deps/added.js && echo rebuilt > deps/lib.js && echo good > one.txt', 'alpha done'), call('p1', 'true'), reply('done')],
+      ['-p', 'install and write', '--spawn', 'worktree', '--sandbox', 'on'],
+    );
+    expect(out.result()).toMatchObject({ subtype: 'success' });
+    expect(report(out.result(), r.work, 's1')).toContain('Applied to your files: one.txt');
+    expect(readFileSync(join(r.work, 'one.txt'), 'utf8')).toBe('good\n');
+    expect(readFileSync(join(r.work, 'deps', 'lib.js'), 'utf8')).toBe('module\n');
+    expect(existsSync(join(r.work, 'deps', 'added.js'))).toBe(false);
   });
 
   test('a change that conflicts is not applied: the report says so and the worktree stays to be read', () => {

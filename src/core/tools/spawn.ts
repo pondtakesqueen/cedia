@@ -1,6 +1,7 @@
 import type { JsonObject, ResultSubtype } from '../types.ts';
 import { clip, type ToolSpec } from './registry.ts';
 import { inert } from '../trust/frame.ts';
+import { approachesOf, bestOfReport, MAX_APPROACHES, type Try } from '../project/bestof.ts';
 
 // Sub-threads: a session hands a self-contained piece of work to a child session with a fresh context, and only
 // the child's report comes back. The parent's context stays small (the child's reads and dead ends never enter
@@ -26,9 +27,12 @@ export type SpawnOutcome = {
   changed: string[];
   unverified: string[];
   // A work sub-thread in a worktree: how its changes came back to the parent's files.
-  worktree?: { applied: string[]; refused: string[]; conflicts: string[]; kept?: string; why?: string };
+  worktree?: { applied: string[]; refused: string[]; conflicts: string[]; newest?: { file: string; kept: 'yours' | 'its' }[]; kept?: string; why?: string };
+  // Best of N (core/project/bestof.ts): every try, and which one's changes came back; the rest of the outcome is
+  // the kept one's.
+  bestOf?: { tries: Try[]; kept?: number };
 };
-export type Spawner = (task: string, kind: SpawnKind, ctx: { signal: AbortSignal; write?: <T>(fn: () => Promise<T> | T) => Promise<T> }) => Promise<SpawnOutcome>;
+export type Spawner = (task: string, kind: SpawnKind, ctx: { signal: AbortSignal; write?: <T>(fn: () => Promise<T> | T) => Promise<T>; approaches?: string[] }) => Promise<SpawnOutcome>;
 
 // What comes back to the parent, at most.
 export const MAX_REPORT = 4000;
@@ -41,12 +45,14 @@ export const MAX_SPAWNS = 16;
 export function spawnReport(kind: SpawnKind, o: SpawnOutcome): string {
   const attrs = [o.thread ? `thread="${o.thread}"` : '', `kind="${kind}"`, `model="${o.model}"`, `ended="${o.subtype}"`, `cost="$${o.costUsd.toFixed(4)}"`].filter(Boolean).join(' ');
   const lines = [`<subthread ${attrs}>`, clip(inert(o.result.trim()), MAX_REPORT), '</subthread>'];
+  if (o.bestOf) lines.unshift(inert(bestOfReport(o.bestOf.tries, o.bestOf.kept)));
   if (o.changed.length) lines.push(`Changed: ${inert(o.changed.join(', '))}${o.unverified.length ? ` (no passing check after: ${inert(o.unverified.join(', '))})` : ''}`);
   const w = o.worktree;
   if (w) {
     // File names are the child's to choose: framed like its report.
     const names = (fs: string[]) => inert(fs.join(', '));
     if (w.applied.length) lines.push(`Applied to your files: ${names(w.applied)}`);
+    if (w.newest?.length) lines.push(`Both of you changed ${names(w.newest.map((n) => n.file))}, which a tool writes whole (a lockfile, generated code): the one written last was kept whole instead of merged (${inert(w.newest.map((n) => `${n.file}: ${n.kept}`).join(', '))}). Regenerate it if both changes must be in it.`);
     if (w.conflicts.length) lines.push(`Not applied: its changes conflict with yours (or another sub-thread's) in ${names(w.conflicts)}. Nothing of it was written.`);
     if (w.refused.length) lines.push(`Not applied, since you may not write them: ${names(w.refused)}`);
     if (w.why) lines.push(`Not applied: ${inert(w.why)}.`);
@@ -58,7 +64,9 @@ export function spawnReport(kind: SpawnKind, o: SpawnOutcome): string {
 
 const WORK_ALONE = 'kind "work" may edit files, runs alone, and its changes count as yours: run the checks after it.';
 const WORK_WORKTREE =
-  'kind "work" may edit files. It works in its own copy of your working tree (a git worktree, your uncommitted changes included), so several work calls in one turn run in parallel; give each a part no other touches. Its changes are applied to your files when it finishes, and a change that conflicts with yours or another sub-thread\'s is reported instead of applied. They count as yours: run the checks after it.';
+  'kind "work" may edit files. It works in its own copy of your working tree (a git worktree, your uncommitted changes included), so several work calls in one turn run in parallel; give each a part no other touches. Its changes are applied to your files when it finishes, and a change that conflicts with yours or another sub-thread\'s is reported instead of applied. They count as yours: run the checks after it.\n\nWhen you see more than one real way to do a work task and cannot tell which will pass, give `approaches` (2 to ' +
+  MAX_APPROACHES +
+  ', one line each): one work sub-thread tries each at once, cedia runs the checks in each worktree, and only the one that passes most is applied. It costs one sub-thread per approach, so use it only where the choice matters.';
 
 // What one run's spawn tools share, so two of them (one with worktrees, one without, for a resumed session) count
 // against the same limits. Sub-threads that run beside others wait for a free slot of their kind. A finished one
@@ -86,6 +94,7 @@ Write the task as a complete brief: the goal, the paths and facts it needs, and 
       properties: {
         task: { type: 'string', description: 'The complete brief for the sub-thread' },
         kind: { type: 'string', enum: SPAWN_KINDS, description: opts.worktrees ? 'explore: read-only, cheap, parallel. work: may edit files, in its own worktree, parallel' : 'explore: read-only, cheap, parallel. work: may edit files' },
+        ...(opts.worktrees ? { approaches: { type: 'array', items: { type: 'string' }, description: 'kind work only: 2 to 4 different ways to do the task; each is tried at once and the one that passes most checks is kept' } } : {}),
       },
       required: ['task', 'kind'],
       additionalProperties: false,
@@ -101,15 +110,20 @@ Write the task as a complete brief: the goal, the paths and facts it needs, and 
       const kind = input.kind as SpawnKind;
       if (!task) return { text: 'task is required', isError: true };
       if (!SPAWN_KINDS.includes(kind)) return { text: `kind must be one of ${SPAWN_KINDS.join(', ')}`, isError: true };
-      if (pool.started >= pool.total) return { text: `not run: this run has started ${pool.started} sub-threads, the most it may. Do the rest yourself or report what is left`, isError: true };
-      pool.started++;
+      const approaches = opts.worktrees ? approachesOf(input.approaches) : undefined;
+      if (approaches && 'error' in approaches) return { text: approaches.error, isError: true };
+      if (approaches && kind !== 'work') return { text: 'approaches is for kind "work" only', isError: true };
+      const n = approaches?.length ?? 1;
+      if (pool.started + n > pool.total) return { text: `not run: this run has started ${pool.started} sub-threads${n > 1 ? `, and ${n} more would pass ${pool.total},` : ','} the most it may. Do the rest yourself or report what is left`, isError: true };
+      pool.started += n;
       const slot = pooled(kind) ? slots[kind] : undefined;
       if (slot) {
         if (slot.running < slot.max) slot.running++;
         else await new Promise<void>((r) => slot.waiting.push(r));
       }
       try {
-        const o = await spawn(task, kind, { signal: ctx.signal, ...(ctx.write ? { write: ctx.write } : {}) });
+        // A best-of-N call takes one slot: its tries run beside each other inside it.
+        const o = await spawn(task, kind, { signal: ctx.signal, ...(ctx.write ? { write: ctx.write } : {}), ...(approaches ? { approaches } : {}) });
         return { text: spawnReport(kind, o), isError: o.subtype !== 'success' || !!o.worktree?.conflicts.length };
       } finally {
         if (slot) {
