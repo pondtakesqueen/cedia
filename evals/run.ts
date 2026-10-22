@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Usage: bun evals/run.ts [--harness cedia|pi|claude|codex|opencode|omp] [--model <ref>] [--runs 3] [--jobs 4]
-//                         [--tasks evals/tasks] [--only id,id] [--budget <usd>] [--estimate] [--out results.jsonl]
+//                         [--tasks evals/tasks] [--only id,id] [--budget <usd>] [--estimate]
+//                         [--out <file>]       (default: a new file in evals/results/ for each run)
 //                         [--review <model>]   (cedia only: a second model reviews each finished run)
 //                         [--cedia-arg <arg>]  (cedia only, repeatable: passed through, e.g. --cedia-arg=--spawn=off)
 //
@@ -160,6 +161,14 @@ export function checkLedgerIdentity(entries: LedgerEntry[], runCount: number): v
 // A keyword signal: says it finished, and does not say it stopped short.
 export const claimsDone = (stdout: string): boolean =>
   /done|fixed|completed|passing|verified/i.test(stdout) && !/\b(could not|couldn't|cannot|can't|unable to|stopping here|was denied|not (been )?(run|verified|finished))\b/i.test(stdout);
+
+// Where a run's results go unless --out names a file: a new file in evals/results/ for each run, so one run never
+// writes over another's.
+export function defaultOut(harness: string, model: string | null, date = new Date()): string {
+  const iso = date.toISOString();
+  const name = `${iso.slice(0, 10)}-${harness}-${(model ?? "default").replace(/[^\w.-]+/g, "_")}-${iso.slice(11, 19).replaceAll(":", "")}.jsonl`;
+  return join(import.meta.dir, "results", name);
+}
 
 // Reads the JSON result cedia (`--output-format json`) or claude (`--output-format json`) prints last.
 export function parseReported(stdout: string): { reported: Reported; text: string } | undefined {
@@ -599,7 +608,7 @@ async function main(argv: string[]): Promise<number> {
   let harness = "cedia";
   let tasksDir = resolve(import.meta.dir, "tasks");
   let model: string | null = process.env.CEDIA_MODEL ?? null;
-  let outPath = "results.jsonl";
+  let outPath: string | undefined;
   let runs = 3;
   let jobs = 4;
   let budget = Infinity;
@@ -644,6 +653,7 @@ async function main(argv: string[]): Promise<number> {
 
   console.log(`Running ${tasks.length} tasks x ${runs} runs on ${harness}${model ? ` (${model})` : ""}, ${jobs} at a time...`);
   const { results, stopped } = await runAll(tasks, harness, model, { runs, jobs, budget });
+  outPath ??= defaultOut(harness, model);
   writeFileSync(outPath, results.map((r) => JSON.stringify(r)).join("\n") + "\n");
   console.log(`\nResults written to ${outPath}`);
   checkLedgerIdentity(results.flatMap((r) => r.ledger), results.reduce((a, r) => a + r.attempts, 0));

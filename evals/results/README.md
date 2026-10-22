@@ -207,3 +207,18 @@ Files: `2026-10-22-long-cedia-haiku-5-5-three-changes-spawn-off-{note,compact}.j
 - A first compact arm on three-changes reported false dones that were not: the eval's verify ran the old commit's tests, which ran its own eval runner with the `CEDIA_EVAL_ARGS` the runner had set (`--handoff=compact`, unknown to that commit). `evals/run.ts` now verifies with the runner's `CEDIA_EVAL_*` settings removed; rerun, 3/3 passed. File: `...-three-changes-spawn-off-compact-leaked-args.jsonl`.
 - Rerun after the change (`...-three-changes-spawn-off-compact-fixed.jsonl`, on main after #32, where Haiku starts at `low` effort): 3/3, $0.054 a run, 219 s, 4 handoffs, no request past 100k of input in any session. In one run the session that started from a summary at 63k compacted again at 85k, which the doubling rule would have held until 126k. Cost is not comparable with the rows above, since the effort default changed in between.
 - Reading: compaction is at least as cheap as the note and keeps the newest turns word for word, but a compacted session has less room before its next handoff (it starts at 40k-63k, a note session at about 5k), so it hands off more often. The default stays `note` until a set that can tell the two apart on quality.
+
+## 2026-10-22: Flash writing, Claude Code reviewing on the owner's subscription
+
+Five tasks Flash has missed before or that run long (`wide-three-features`, `real-slop-guard`, `hard-redact-bugs`, `hard-shell-split`, `wide-bug-hunt`), 2 runs each, run on the owner's Mac. B adds `--review claude-code`, so the review runs in the owner's own Claude Code and its use is not in the cost column.
+
+| Setup | pass@1 | pass^2 | Reviews asking for changes | Avg time | Tokens per run (in / out) | Cache hit | Cost (API only) |
+|---|---|---|---|---|---|---|---|
+| A: Flash alone | 90% | 80% | - | 241.2 s | 1,209,580 / 24,843 | 95.6% | $0.264 |
+| B: Flash + Claude Code review | 100% | 100% | 6 of 10 | 299.4 s | 1,897,997 / 35,641 | 96.6% | $0.367 |
+
+Files: `2026-10-22-ab-B-flash-review-claude-code.jsonl` stayed on the owner's machine; A's rows were lost because the runner then wrote every run to `results.jsonl` in the working directory, and the second run wrote over the first. It now writes a new file in `evals/results/` for each run unless `--out` names one.
+
+- A's one miss, `hard-shell-split#2`, ran out the 300 s task timeout after $0.0005 and 2k tokens of context: the provider stalled, not the model. The 9 against 10 is not a signal.
+- The review asked for changes on all six `hard-*` and `real-slop-guard` runs, which A passed without it, so on these verify commands it costs 39% more API spend, 24% more time and subscription use for the same score, as the Haiku and Sonnet round found. Two B runs ended within a second of the 300 s timeout, so a task with review needs more time.
+- Reading: no review by default. Turn it on per run (`--review claude-code`) where the checks do not cover what matters.
