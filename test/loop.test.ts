@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CONTINUE_AFTER_LIMIT, EMPTY_REPLY, escalationTarget, runPrompt, spillOutput, type RunOptions } from '../src/core/loop/run.ts';
@@ -12,7 +12,7 @@ import { SessionLog } from '../src/core/session/log.ts';
 import { bashTool } from '../src/core/tools/bash.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
 import { readTool } from '../src/core/tools/read.ts';
-import { MAX_OUTPUT_CHARS } from '../src/core/tools/registry.ts';
+import { MAX_OUTPUT_CHARS, preview } from '../src/core/tools/registry.ts';
 import { EFFORTS, type EventOf, type SessionEvent } from '../src/core/types.ts';
 import { hash } from '../src/core/hash.ts';
 
@@ -74,6 +74,26 @@ describe('long bash output', () => {
     const d = decide({ mode: 'read-only', allow: [], deny: [], secrets: secretPaths(join(tmpdir(), 'no-cedia-home')) }, readTool, { path }, cwd);
     expect(d.decision).toBe('allow');
     expect((await readTool.run({ path }, { cwd, signal: new AbortController().signal })).text).toContain('whole output');
+  });
+
+  test('the preview states exactly how much it leaves out', () => {
+    for (const len of [30_001, 45_678, 1_000_000]) {
+      const text = 'x'.repeat(len);
+      const shown = preview(text, '/tmp/p.txt');
+      const stated = Number(/\[\.\.\. (\d+) characters not shown/.exec(shown)![1]);
+      const head = shown.indexOf('\n\n[... ');
+      const tail = shown.length - (shown.lastIndexOf(' ...]\n\n') + ' ...]\n\n'.length);
+      expect([head + tail + stated, shown.length <= MAX_OUTPUT_CHARS]).toEqual([len, true]);
+    }
+  });
+
+  test('a spill directory someone else planted is not used', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cedia-spill-root-'));
+    const elsewhere = mkdtempSync(join(tmpdir(), 'cedia-spill-elsewhere-'));
+    symlinkSync(elsewhere, join(root, 's1'));
+    expect(spillOutput('s1', 'c1', 'secret output', root)).toBeUndefined();
+    chmodSync(root, 0o777);
+    expect(spillOutput('s2', 'c1', 'x', root)).toBeUndefined();
   });
 
   test('output under the limit stays in the result and writes no file', async () => {

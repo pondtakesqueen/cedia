@@ -35,7 +35,8 @@ export function clip(text: string, max = MAX_OUTPUT_CHARS): string {
 // within the same budget as `clip`.
 export function preview(text: string, path: string, max = MAX_OUTPUT_CHARS): string {
   const lines = text.split('\n').length;
-  const note = `[... ${text.length - max} characters not shown. The whole output (${text.length} characters, ${lines} lines) is in ${path}: grep it, or read it with offset and limit ...]`;
-  const side = Math.floor((max - note.length - 4) / 2);
-  return `${text.slice(0, side)}\n\n${note}\n\n${text.slice(-side)}`;
+  // The note's own length depends on the count it states; sized for the longest count, it always fits.
+  const note = (hidden: number) => `[... ${hidden} characters not shown. The whole output (${text.length} characters, ${lines} lines) is in ${path}: grep it, or read it with offset and limit ...]`;
+  const side = Math.floor((max - note(text.length).length - 4) / 2);
+  return `${text.slice(0, side)}\n\n${note(text.length - 2 * side)}\n\n${text.slice(-side)}`;
 }

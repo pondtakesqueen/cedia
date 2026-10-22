@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildMessages, sessionHeader } from '../context/build.ts';
@@ -555,6 +555,8 @@ async function runTools(
   };
   // A writing call runs between two snapshots, so the log names every file it changed.
   const runWriting = async (j: Job) => {
+    // A call left unstarted by a stop changes nothing, so it needs no snapshots.
+    if (signal.aborted) return run(j);
     const snapshots = opts.snapshots;
     if (snapshots && !snap.tree) {
       const t0 = performance.now();
@@ -593,10 +595,27 @@ async function runTools(
 
 // A whole output too long for a result, in a file only its owner can read. Outside cedia's home, which the
 // policy keeps tools out of, and in the temp dir the sandbox lets bash read, so grep and read can reach it.
-export function spillOutput(sessionId: string, callId: string, text: string, root = join(tmpdir(), 'cedia-output')): string | undefined {
+// The temp dir is shared, so each directory on the way must be a real one this user owns: a symlink or another
+// user's directory planted there would take the output elsewhere. Any doubt, and the result is clipped instead.
+// Session directories older than a week are removed as new ones are made.
+export function spillOutput(sessionId: string, callId: string, text: string, root = join(tmpdir(), `cedia-output-${process.getuid?.() ?? 'user'}`)): string | undefined {
+  const ours = (dir: string) => {
+    const st = lstatSync(dir);
+    return st.isDirectory() && !st.isSymbolicLink() && (process.getuid === undefined || st.uid === process.getuid()) && (st.mode & 0o077) === 0;
+  };
   try {
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    if (!ours(root)) return undefined;
     const dir = join(root, sessionId.replace(/[^\w.-]/g, '_'));
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { mode: 0o700 });
+      const weekAgo = Date.now() - 7 * 86_400_000;
+      for (const old of readdirSync(root)) {
+        const p = join(root, old);
+        if (p !== dir && lstatSync(p).mtimeMs < weekAgo) rmSync(p, { recursive: true, force: true });
+      }
+    }
+    if (!ours(dir)) return undefined;
     const path = join(dir, `${callId.replace(/[^\w.-]/g, '_')}.txt`);
     writeFileSync(path, text, { mode: 0o600 });
     return path;

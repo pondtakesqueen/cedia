@@ -58,8 +58,10 @@ describe('cedia -p (offline, faux)', () => {
   });
 
   // Claude Code's Linux sandbox once reported 0 for failed commands when the user's shell was zsh. The done gate
-  // trusts the exit code of the declared check, so a failing check inside the sandbox must stay a failure.
-  test.skipIf(!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin')('a failing check inside the sandbox stays a failure under any login shell', () => {
+  // trusts the exit code of the declared check. cedia runs bash inside the sandbox whatever $SHELL says (neither
+  // the bash tool nor the sandbox wrapper reads it), and this keeps it so: a change that took the login shell
+  // would have to keep a failing check a failure under each of these.
+  test.skipIf(!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin')('a failing check inside the sandbox stays a failure whatever the login shell', () => {
     for (const shell of ['/bin/bash', '/usr/bin/zsh', '/bin/sh']) {
       if (!existsSync(shell)) continue;
       const script = [call('c1', 'echo hi > out.txt'), call('c2', 'false'), reply('done'), reply('done')];
