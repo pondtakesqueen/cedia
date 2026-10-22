@@ -32,12 +32,20 @@ export function resultText(r: McpCallResult): string {
   return parts.join('\n') || '(no output)';
 }
 
-// A schema the providers take: an object at the top, without the keys some of them refuse.
+// A schema the providers take: an object at the top, without the keys some of them refuse. A schema they would
+// refuse anyway (properties not an object, required not a list of names) or one too big for every request to
+// carry becomes an open object, so one server's tool cannot break each request of the run.
+const MAX_SCHEMA_CHARS = 16_000;
 function schemaOf(t: McpTool): JsonObject {
-  const s: JsonObject = t.inputSchema && typeof t.inputSchema === 'object' ? { ...t.inputSchema } : {};
+  const s: JsonObject = t.inputSchema && typeof t.inputSchema === 'object' && !Array.isArray(t.inputSchema) ? { ...t.inputSchema } : {};
   delete s.$schema;
   delete s.$id;
-  return { ...s, type: 'object', properties: (s.properties as JsonObject | undefined) ?? {} };
+  const props = s.properties ?? {};
+  const okProps = typeof props === 'object' && props !== null && !Array.isArray(props) && Object.values(props).every((v) => typeof v === 'object' && v !== null && !Array.isArray(v));
+  const okRequired = s.required === undefined || (Array.isArray(s.required) && s.required.every((r) => typeof r === 'string'));
+  const out: JsonObject = { ...s, type: 'object', properties: okProps ? (props as JsonObject) : {} };
+  if (!okProps || !okRequired || JSON.stringify(out).length > MAX_SCHEMA_CHARS) return { type: 'object', properties: {}, additionalProperties: true };
+  return out;
 }
 
 export function mcpToolSpec(client: McpClient, t: McpTool, name: string): ToolSpec {

@@ -77,6 +77,51 @@ describe('MCP', () => {
     }
   });
 
+  test('a URL server that holds a stream open for a notification, or ends one without the answer, does not hang the run', async () => {
+    const http = Bun.serve({
+      port: 0,
+      idleTimeout: 0,
+      async fetch(req) {
+        if (req.method === 'DELETE') return new Response(null, { status: 204 });
+        const m = (await req.json()) as { id?: number; method: string; params?: { name?: string } };
+        // A notification answered with a stream that never ends.
+        if (m.id === undefined) {
+          let t: Timer;
+          const body = new ReadableStream({
+            start(c) {
+              t = setInterval(() => c.enqueue(new TextEncoder().encode(': keepalive\n\n')), 100);
+            },
+            cancel() {
+              clearInterval(t);
+            },
+          });
+          return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+        }
+        const json = (result: unknown) => Response.json({ jsonrpc: '2.0', id: m.id, result });
+        if (m.method === 'initialize') return json({ protocolVersion: '2025-06-18', capabilities: {} });
+        if (m.method === 'tools/list')
+          return json({ tools: [{ name: 'lost', inputSchema: { type: 'object', properties: 'x' } }, { name: 'big', inputSchema: { type: 'object', properties: { a: { type: 'string', description: 'y'.repeat(20_000) } } } }] });
+        // A stream that ends with only a progress notification in it.
+        return new Response('data: {"jsonrpc":"2.0","method":"notifications/progress","params":{}}\n\n', { headers: { 'content-type': 'text/event-stream' } });
+      },
+    });
+    try {
+      const started = Date.now();
+      const m = await startMcp({ odd: { url: `http://localhost:${http.port}/mcp`, timeoutSec: 30 } });
+      expect(m.notes).toEqual([]);
+      // Schemas a provider would refuse, or too big to send on every request, become an open object.
+      expect(m.tools.map((t) => t.schema)).toEqual([
+        { type: 'object', properties: {}, additionalProperties: true },
+        { type: 'object', properties: {}, additionalProperties: true },
+      ]);
+      expect(await m.tools[0]!.run({}, ctx())).toEqual({ text: "MCP server odd: the server's response to tools/call ended without an answer", isError: true });
+      expect(Date.now() - started).toBeLessThan(5_000);
+      await m.close();
+    } finally {
+      http.stop(true);
+    }
+  });
+
   test('a server that does not start is left out with a note; the others still work', async () => {
     const m = await startMcp({ gone: { command: '/nonexistent/mcp-server' }, fake: server });
     try {
