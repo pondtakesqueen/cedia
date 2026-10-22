@@ -33,7 +33,7 @@ function modeNote(mode: PermissionMode, unlock: Guard[]): string {
 // Per-session facts go in the first user turn, never in the cached system prompt.
 export function preamble(
   cwd: string,
-  opts: { mode?: PermissionMode; unlock?: Guard[]; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] }; context?: string; instructions?: string } = {},
+  opts: { mode?: PermissionMode; unlock?: Guard[]; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] }; context?: string; instructions?: string; memory?: string } = {},
   now = new Date(),
 ): string {
   const lines = [`working directory: ${cwd}`, `date: ${now.toISOString().slice(0, 10)}`, `platform: ${process.platform}`, `permission: ${modeNote(opts.mode ?? 'read-only', opts.unlock ?? [])}`];
@@ -50,5 +50,7 @@ export function preamble(
   const user = opts.context?.trim() ? `\n<user_context>\n${opts.context.trim()}\n</user_context>` : '';
   // The repository's AGENTS.md files (core/project/instructions.ts), already framed.
   const repo = opts.instructions?.trim() ? `\n${opts.instructions.trim()}` : '';
-  return `${env}${user}${repo}`;
+  // The project's memory notes (core/project/memory.ts), already framed.
+  const kept = opts.memory?.trim() ? `\n${opts.memory.trim()}` : '';
+  return `${env}${user}${repo}${kept}`;
 }

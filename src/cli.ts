@@ -4,6 +4,7 @@ import { ALIASES } from './core/providers/catalog.ts';
 import { GUARDS } from './core/safety/policy.ts';
 import { cediaHome } from './core/config.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
+import { memoryPath, MemoryStore } from './core/project/memory.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, SessionLog } from './core/session/log.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
@@ -55,6 +56,9 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
                                             rate an answer (default: the thread's latest) for picking eval cases;
                                             no model ever sees it
        cedia threads archive|unarchive <id> hide a thread from the list, or bring it back
+       cedia memory [list | add <text> | forget <id>]
+                                            the project's memory: short facts every new session gets in its first
+                                            turn; writer sessions add to it with the remember tool
 
 models: ${Object.keys(ALIASES).join(', ')}`;
 
@@ -66,6 +70,7 @@ export async function main(argv: string[]): Promise<number> {
   }
   if (argv[0] === 'lint-session') return lintFiles(argv.slice(1));
   if (argv[0] === 'threads') return threads(argv.slice(1));
+  if (argv[0] === 'memory') return memory(argv.slice(1));
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -221,6 +226,33 @@ function threads(argv: string[]): number {
     return 1;
   }
   console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
+  return 2;
+}
+
+function memory(argv: string[]): number {
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' } } });
+  const store = new MemoryStore(memoryPath(cediaHome(), projectKey(values.cwd ?? process.cwd())));
+  const [cmd = 'list', ...rest] = positionals;
+  try {
+    if (cmd === 'list') {
+      const notes = store.notes();
+      console.log(notes.length ? notes.map((n) => `${n.id}  ${n.at.slice(0, 10)}  ${n.from}: ${n.text}`).join('\n') : 'no notes for this project');
+      return 0;
+    }
+    if (cmd === 'add' && rest.length) {
+      console.log(`kept as note ${store.add(rest.join(' '), 'user').id}`);
+      return 0;
+    }
+    if (cmd === 'forget' && rest.length === 1) {
+      store.forget(rest[0]!);
+      console.log(`forgot ${rest[0]}`);
+      return 0;
+    }
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 1;
+  }
+  console.error('usage: cedia memory [list | add <text> | forget <id>] [--cwd <dir>]');
   return 2;
 }
 
