@@ -17,8 +17,12 @@ function assistantContent(blocks: AssistantBlock[], sameWire: boolean): JsonObje
   });
 }
 
+// Per-message effort: a role "system" message with no content changes the level from the latest user turn with
+// new input on, and leaves everything before it (and so the cached prefix) as it was.
+export const EFFORT_BETA = 'mid-conversation-output-config-2026-07-01';
+
 export function anthropicMessages(messages: Message[], midConversationSystem: boolean): JsonObject[] {
-  const out: { role: 'user' | 'assistant'; content: JsonObject[] }[] = [];
+  const out: ({ role: 'user' | 'assistant'; content: JsonObject[] } | { role: 'system'; content: []; output_config: JsonObject })[] = [];
   const push = (role: 'user' | 'assistant', content: JsonObject[]) => {
     if (!content.length) return;
     const last = out.at(-1);
@@ -26,7 +30,8 @@ export function anthropicMessages(messages: Message[], midConversationSystem: bo
     else out.push({ role, content });
   };
   for (const m of messages) {
-    if (m.role === 'assistant') push('assistant', assistantContent(m.blocks, m.wire === WIRE));
+    if (m.role === 'effort') out.push({ role: 'system', content: [], output_config: { effort: m.effort } });
+    else if (m.role === 'assistant') push('assistant', assistantContent(m.blocks, m.wire === WIRE));
     else if (m.role === 'system') push('user', [{ type: 'text', text: midConversationSystem ? m.text : `<system-reminder>\n${m.text}\n</system-reminder>` }]);
     else
       push(
@@ -142,13 +147,23 @@ export async function* parseAnthropic(body: ReadableStream<Uint8Array>): AsyncGe
   yield { type: 'done', blocks: a.finish(stop === 'max_tokens'), stop, usage };
 }
 
+// The model's own headers, with the per-message effort beta added once the conversation holds an effort change.
+// Adding it partway through keeps the cache (tried on Haiku 5.5, 2026-10-22).
+function betaHeaders(req: WireRequest): Record<string, string> {
+  const headers = { ...(req.model.headers ?? {}) };
+  if (!req.messages.some((m) => m.role === 'effort')) return headers;
+  const beta = headers['anthropic-beta'];
+  headers['anthropic-beta'] = beta ? `${beta},${EFFORT_BETA}` : EFFORT_BETA;
+  return headers;
+}
+
 export function anthropicProvider(fetcher?: Fetcher): Provider {
   const p: Provider = {
     wire: WIRE,
     body: anthropicBody,
     headers: (req) => ({
       'anthropic-version': '2023-06-01',
-      ...(req.model.headers ?? {}),
+      ...betaHeaders(req),
       ...(req.model.sessionHeader ? { [req.model.sessionHeader]: req.sessionId } : {}),
       ...authHeaders(req.model),
     }),

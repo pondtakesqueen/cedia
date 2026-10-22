@@ -69,6 +69,17 @@ History:
 | 18f1760 (same code) | 47/48, $0.32, 37 s | 46/48, $0.45, 56 s | second run; found the `wide-three-features` comment and the cost-noise rules |
 | 32774a7 (main) | 48/48, $0.26, 29 s | 48/48, $0.39, 50 s | after #21 (spawn reminder, handoff note carries the plan): PASS on both against the earlier baseline, typical task cost -6% and -3%, time -9% and -8% |
 | 26ffc46 (spawn on long tasks) | 47/48, $0.23, 30 s | 48/48, $0.63 at peak price ($0.80 against $0.77 at one price), 55 s | first-session handoff, sub-thread budget meter: PASS on both; `real-three-delegated` added to the suite and its rows stored at 82363a0 |
+| 6ef1dfd | 48/48, $0.16, 21 s | (not rerun) | Haiku starts at `low` and escalates to `high` when the done gate refuses a claim: PASS, typical task cost -14%, whole set -36%, time -14%. About half the runs escalated, and every reply after an escalation read the whole previous input from cache. On the 24-task suite; main then added `real-three-delegated`, and the re-record on 25 tasks stopped when the API credit ran out, so `baseline/anthropic_claude-haiku-5-5.json` is still main's at `medium`: run `bun evals/gate.ts -m anthropic/claude-haiku-5-5 --update-baseline` once credit is back |
+
+Effort arms on Haiku 5.5 (2026-10-22, one gate run each, against the 32774a7 baseline at `medium`):
+
+| Arm | pass@1 | Typical task cost | Whole set | Note |
+|---|---|---|---|---|
+| `medium`, escalate to `high` on a refused claim | 48/48 | +2% | -3% | time +9% |
+| `low`, no escalation | 48/48 | -18% | -33% | |
+| `low`, escalate on a refused claim or a check failing after a change | 46/48 | -21% | -36% | `hard-redact-bugs` refused twice: after the failed-check note ("cedia raised your effort level") Haiku stopped sooner. That trigger was dropped |
+| `low`, escalate on a refused claim (the default) | 48/48 | -21% | -35% | rerun with `--update-baseline`: 48/48, -14%, -36% |
+| same, with keep-working, real-check and scope lines from the 5.5 prompting guides in `BASE_SYSTEM` | 47/48 | -16% | -32% | no gain on Haiku; DeepSeek ran at peak-hour prices, so its cost could not be read. Not adopted |
 
 ## When to update the baseline
 

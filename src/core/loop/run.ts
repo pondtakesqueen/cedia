@@ -15,6 +15,7 @@ import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
 import { spawnNudge } from '../tools/spawn.ts';
 import {
   addUsage,
+  EFFORTS,
   hitRatio,
   ZERO_USAGE,
   type AssistantBlock,
@@ -74,6 +75,10 @@ export type RunOptions = {
   // is logged, so a crash in between shows a message twice rather than never.
   inbox?: { pending(): { ids: string[]; text: string } | undefined; delivered(ids: string[]): void };
   effort?: Effort;
+  // The level the session moves to, once, when the done gate refuses a claim: cheap work up front, more thought
+  // where it went wrong. Only upward from `effort`, and only on models with per-message effort, so the cached
+  // prefix stays.
+  escalate?: Effort;
   ttl?: '5m' | '1h';
   maxTurns?: number;
   maxBudgetUsd?: number;
@@ -134,6 +139,13 @@ export const CONTINUE_AFTER_LIMIT = 'Your previous reply was cut off by the outp
 // A reply with no text and no tool call (thinking only, or nothing at all) ends no task: an earlier turn's text
 // would otherwise stand as the result.
 export const EMPTY_REPLY = 'Your last reply had no text and no tool call. Go on with the task, or reply with what you found or did.';
+
+// The level a session escalates to, or undefined when it cannot: no per-message effort on this model, a level the
+// model lacks, or no step up from where it starts.
+export function escalationTarget(model: ModelSpec, start: Effort | undefined, to: Effort | undefined): Effort | undefined {
+  if (!to || !start || !model.caps.midConversationEffort || !model.caps.effortLevels.includes(to)) return undefined;
+  return EFFORTS.indexOf(to) > EFFORTS.indexOf(start) ? to : undefined;
+}
 
 export const unverifiedReminder = (checks: string[]) =>
   `cedia has no record of a declared check passing since your last change, so the task is not done yet. A check counts only when the whole bash command is ${checks.map((c) => `\`${c}\``).join(' or ')} (a leading \`cd\` to the working directory is fine; pipes, \`;\` or other commands are not). Run it that way now, fix what fails, then report.`;
@@ -254,6 +266,14 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   // 0: working; 1: asked for the note; 2: asked again after a tool call; 'off': gave up on handing off.
   let handoff: 0 | 1 | 2 | 'off' = 0;
   let spawnNudged = false;
+  // Soft checks were found, not declared: they never refuse a claim, so they never escalate either.
+  const escalateTo = opts.softChecks ? undefined : escalationTarget(model, opts.effort ?? model.defaultEffort, opts.escalate);
+  // Escalation: logged right after the gate's reminder, the user turn that carries it, so the change applies from
+  // that turn on (core/providers/anthropic.ts). Not on a failed check: a turn of tool results alone is not new
+  // input, and the note that would carry it made Haiku at low effort give up sooner (SPEC.md, effort escalation).
+  const escalate = () => {
+    if (escalateTo && !log.events.some((e) => e.kind === 'effort')) log.append({ kind: 'effort', effort: escalateTo });
+  };
   const wallStart = performance.now();
   const timing = { modelMs: 0, ttftMs: 0, decodeMs: 0, toolMs: 0, retryMs: 0 };
   // The largest context any reply of this run saw: what handoff and sub-threads are meant to keep down.
@@ -469,6 +489,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       if (!nudged) {
         nudged = true;
         log.append({ kind: 'reminder', as: 'user', text: unverifiedReminder(checks) });
+        escalate();
         continue;
       }
       if (!opts.softChecks) return finish('error_unverified_claim', 'completed');

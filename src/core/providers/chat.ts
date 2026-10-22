@@ -30,6 +30,8 @@ export function chatMessages(req: WireRequest): JsonObject[] {
   });
   const out: JsonObject[] = [{ role: 'system', content: req.system }];
   req.messages.forEach((m: Message, i) => {
+    // Chat Completions has no per-message effort; the loop never sends one here.
+    if (m.role === 'effort') return;
     if (m.role === 'system') out.push(midConversationSystem ? { role: 'system', content: m.text } : { role: 'user', content: `<system-reminder>\n${m.text}\n</system-reminder>` });
     else if (m.role === 'assistant') {
       const withReasoning =
