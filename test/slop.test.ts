@@ -50,6 +50,26 @@ describe('findSlop', () => {
       ]),
     ).toEqual([]);
   });
+
+  test('a type escape in a comment, a string or a regex is prose, not code', () => {
+    expect(
+      rules([
+        change('src/a.ts', [
+          '// The rule matches: any key, as any reader can see',
+          ' * note: any value is fine here',
+          'const n = count(x); // returns: any number of lines',
+          "const msg = 'pass as any string';",
+          "const re = /\\bas any\\b|:\\s*any\\b/;",
+          "  { rule: 'type-escape', re: /\\bas any\\b|<any>/, files: /\\.ts$/ },",
+        ]),
+      ]),
+    ).toEqual([]);
+    expect(rules([change('src/a.ts', ['const x = f(\'//\') as any;', 'let y: any = 1; // fine', 'const half = a / 2 as any;'])])).toEqual([
+      'type-escape src/a.ts',
+      'type-escape src/a.ts',
+      'type-escape src/a.ts',
+    ]);
+  });
 });
 
 test('changesFromPatch reads a -U0 git patch', () => {
