@@ -12,6 +12,12 @@ export type Snapshots = {
   patch(from: string, to: string, opts?: { context?: number }): string;
   restore(tree: string): void;
   restoreFiles(tree: string, files: string[]): void;
+  // Three-way merge of trees, as git merges commits: the changes from `base` to `theirs` laid over `ours`. The
+  // merged tree, or the files both sides changed in ways that do not combine.
+  merge(base: string, ours: string, theirs: string): { tree: string; conflicts: string[] };
+  // Another working directory recorded in the same store, with its own index: its trees can be merged with these
+  // and restored here. `exclude` lists paths under it never to record.
+  at(cwd: string, name: string, exclude?: string[]): (Snapshots & { drop(): void }) | undefined;
 };
 
 const SLOW_MS = 10_000;
@@ -20,7 +26,7 @@ const SLOW_MS = 10_000;
 export const workspaceSnapshots = (cwd: string, home: string, exclude: string[] = []) => openSnapshots(cwd, join(home, 'snapshots', slugOf(cwd)), [home, ...exclude]);
 
 // `exclude` lists paths never to record, such as cedia's own home when it sits inside the working directory.
-export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = []): Snapshots | undefined {
+export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [], name?: string): Snapshots | undefined {
   const root = resolve(cwd);
   if (root === '/' || root === homedir()) return undefined; // too broad to snapshot on every write
   const env = {
@@ -28,17 +34,29 @@ export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [
     HOME: gitDir,
     GIT_DIR: gitDir,
     GIT_WORK_TREE: root,
-    GIT_INDEX_FILE: join(gitDir, 'cedia-index'),
+    GIT_INDEX_FILE: join(gitDir, name ? `cedia-index-${name}` : 'cedia-index'),
     GIT_CONFIG_NOSYSTEM: '1',
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_TERMINAL_PROMPT: '0',
+    // Merges are commits of the store's own, never the user's: a fixed author, and no signing.
+    GIT_AUTHOR_NAME: 'cedia',
+    GIT_AUTHOR_EMAIL: 'cedia@localhost',
+    GIT_AUTHOR_DATE: '1970-01-01T00:00:00Z',
+    GIT_COMMITTER_NAME: 'cedia',
+    GIT_COMMITTER_EMAIL: 'cedia@localhost',
+    GIT_COMMITTER_DATE: '1970-01-01T00:00:00Z',
   };
+  // A sibling's paths not to record go in its own excludes file, so the store's info/exclude stays this one's.
+  const excludesFile = name ? join(gitDir, 'info', `exclude-${name}`) : undefined;
+  const config = ['-c', 'core.autocrlf=false', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0', '-c', 'commit.gpgSign=false', ...(excludesFile ? ['-c', `core.excludesFile=${excludesFile}`] : [])];
   const gitRaw = (args: string[]) => {
     // Another cedia process (a /diff beside a run) may hold the shadow index for a moment: wait for it rather
     // than lose a snapshot.
     for (let tries = 0; ; tries++) {
-      const p = Bun.spawnSync(['git', '-c', 'core.autocrlf=false', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0', ...args], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
+      const p = Bun.spawnSync(['git', ...config, ...args], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
       if (p.exitCode === 0) return p.stdout;
+      // merge-tree says "conflicts" with exit code 1, and still writes the merged tree.
+      if (p.exitCode === 1 && args[0] === 'merge-tree') return p.stdout;
       const err = p.stderr.toString().trim();
       if (!err.includes('.lock') || tries >= 40) throw new Error(`git ${args[0]}: ${err}`);
       Bun.sleepSync(50);
@@ -52,7 +70,7 @@ export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [
     }
     const inside = [gitDir, ...exclude].map((p) => relative(root, resolve(p))).filter((r) => r && !r.startsWith('..') && !isAbsolute(r));
     mkdirSync(join(gitDir, 'info'), { recursive: true });
-    writeFileSync(join(gitDir, 'info', 'exclude'), inside.map((r) => `/${r}\n`).join(''));
+    writeFileSync(excludesFile ?? join(gitDir, 'info', 'exclude'), inside.map((r) => `/${r}\n`).join(''));
   } catch {
     return undefined;
   }
@@ -132,6 +150,17 @@ export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [
           chmodSync(abs, entry.mode === '100755' ? 0o755 : 0o644);
         }
       }
+    },
+    merge(base, ours, theirs) {
+      const commit = (tree: string) => git(['commit-tree', '-m', 'cedia', tree]).trim();
+      const out = git(['merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', `--merge-base=${commit(base)}`, commit(ours), commit(theirs)]).split('\0');
+      return { tree: out[0]!.trim(), conflicts: [...new Set(out.slice(1).filter(Boolean))] };
+    },
+    at(cwd, sibling, siblingExclude = []) {
+      const id = sibling.replace(/[^\w.-]/g, '_');
+      const s = openSnapshots(cwd, gitDir, siblingExclude, id);
+      // Its index and excludes go with it; the trees it wrote stay, as the store's own do.
+      return s && { ...s, drop: () => [`cedia-index-${id}`, join('info', `exclude-${id}`)].forEach((f) => rmSync(join(gitDir, f), { force: true })) };
     },
   };
 }

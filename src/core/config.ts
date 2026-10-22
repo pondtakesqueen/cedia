@@ -20,8 +20,9 @@ export type Settings = {
   // The model for each role: an alias or ref, `claude-code[:<model>]` for plan and review, or "none". User
   // settings only: a repo must not pick what the user pays for.
   roles?: { plan?: string; code?: string; review?: string; swarm?: string };
-  // Whether writer sessions get the spawn tool for sub-threads (default true). User settings only.
-  spawn?: boolean;
+  // Whether writer sessions get the spawn tool for sub-threads (default true), and "worktree" to run each work
+  // sub-thread in a git worktree of its own, several at once. User settings only.
+  spawn?: boolean | 'worktree';
   // Whether writer sessions of a thread get ask_user, to end a run with a question for the owner (default false: a
   // headless run has nobody to answer). The desktop turns it on. User settings only.
   ask?: boolean;
@@ -153,9 +154,12 @@ export function loadQuotaWait(flag?: string): number | undefined {
 }
 
 // Sub-threads: flag > user settings > on.
-export function loadSpawn(flag?: string): boolean {
-  if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--spawn must be on or off: ${flag}`);
-  return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).spawn ?? true);
+export type SpawnMode = 'on' | 'off' | 'worktree';
+export function loadSpawn(flag?: string): SpawnMode {
+  if (flag !== undefined && flag !== 'on' && flag !== 'off' && flag !== 'worktree') throw new Error(`--spawn must be on, off or worktree: ${flag}`);
+  if (flag) return flag;
+  const s = readSettings(join(cediaHome(), 'settings.json')).spawn ?? true;
+  return s === 'worktree' ? 'worktree' : s ? 'on' : 'off';
 }
 
 // ask_user: flag > user settings > off.

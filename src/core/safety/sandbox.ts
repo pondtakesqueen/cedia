@@ -47,6 +47,10 @@ export const DEFAULT_DOMAINS = [
 // placeholder at each one that is missing until reset(). Keep in step when the pinned version changes.
 const MANDATORY_DENY = ['.gitconfig', '.gitmodules', '.bashrc', '.bash_profile', '.zshrc', '.zprofile', '.profile', '.ripgreprc', '.mcp.json', '.vscode', '.idea', '.claude/commands', '.claude/agents'];
 
+// A path (relative to the working directory) the sandbox never lets bash write there: what reaches the working
+// directory another way, such as a worktree's changes, must not write it either.
+export const sandboxGuarded = (rel: string) => MANDATORY_DENY.some((p) => rel === p || rel.startsWith(`${p}/`));
+
 export const NO_SANDBOX: Sandbox = { on: false, allowedDomains: [], placeholders: [], wrap: async (c) => c, close: async () => {} };
 
 export function sandboxConfig(cwd: string, allowedDomains: string[], cediaHome: string, hooks = hooksDir(cwd)) {

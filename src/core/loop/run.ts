@@ -632,11 +632,23 @@ async function runTools(
       }
       log.append({ kind: 'tool_intent', callId, tool: c.name, input: c.input });
       const effect = effectOf(spec, c.input);
-      jobs.push({ callId, spec, input: c.input, parallel: effect === 'read' || effect === 'network' });
+      jobs.push({ callId, spec, input: c.input, parallel: effect === 'read' || effect === 'network' || spec.isolated?.(c.input) === true });
     }
   }
   // Secrets are replaced before the result is logged, so neither the log nor the provider ever holds them.
   const redact = !opts.permission?.unlock?.includes('secret-redaction');
+  // The writes of isolated calls, one at a time.
+  let writing = Promise.resolve();
+  const writeFor =
+    (j: Job) =>
+    <T>(fn: () => Promise<T> | T): Promise<T> => {
+      const turn = writing.then(() => between(j, fn));
+      writing = turn.then(
+        () => {},
+        () => {},
+      );
+      return turn;
+    };
   const run = async (j: Job) => {
     // A stop between two calls of a reply leaves the rest unstarted rather than running them unstoppable.
     if (signal.aborted) {
@@ -645,16 +657,15 @@ async function runTools(
     }
     try {
       const spill = (text: string) => spillOutput(log.id, j.callId, redact ? redactSecrets(text).text : text);
-      const out = asOutput(await j.spec.run(j.input, { cwd: opts.cwd, signal, spill, ...(opts.wrap ? { wrap: opts.wrap } : {}) }));
+      const write = j.parallel && j.spec.isolated?.(j.input) ? { write: writeFor(j) } : {};
+      const out = asOutput(await j.spec.run(j.input, { cwd: opts.cwd, signal, spill, ...(opts.wrap ? { wrap: opts.wrap } : {}), ...write }));
       results.set(j.callId, { ...out, status: signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed' });
     } catch (e) {
       results.set(j.callId, { status: 'failed', text: `tool crashed: ${e instanceof Error ? e.message : String(e)}`, isError: true });
     }
   };
   // A writing call runs between two snapshots, so the log names every file it changed.
-  const runWriting = async (j: Job) => {
-    // A call left unstarted by a stop changes nothing, so it needs no snapshots.
-    if (signal.aborted) return run(j);
+  async function between<T>(j: Job, fn: () => Promise<T> | T): Promise<T> {
     const snapshots = opts.snapshots;
     if (snapshots && !snap.tree) {
       const t0 = performance.now();
@@ -664,14 +675,21 @@ async function runTools(
         log.append({ kind: 'snapshot', tree: base, changed: [], ms: Math.round(performance.now() - t0) });
       }
     }
-    await run(j);
-    if (!snapshots || !snap.tree) return;
-    const t1 = performance.now();
-    const after = snapshots.take();
-    if (!after) return;
-    log.append({ kind: 'snapshot', tree: after, callId: j.callId, changed: snapshots.diff(snap.tree, after), ms: Math.round(performance.now() - t1) });
-    snap.tree = after;
-  };
+    try {
+      return await fn();
+    } finally {
+      if (snapshots && snap.tree) {
+        const t1 = performance.now();
+        const after = snapshots.take();
+        if (after) {
+          log.append({ kind: 'snapshot', tree: after, callId: j.callId, changed: snapshots.diff(snap.tree, after), ms: Math.round(performance.now() - t1) });
+          snap.tree = after;
+        }
+      }
+    }
+  }
+  // A call left unstarted by a stop changes nothing, so it needs no snapshots.
+  const runWriting = (j: Job) => (signal.aborted ? run(j) : between(j, () => run(j)));
   let pool: Job[] = [];
   for (const j of jobs) {
     if (j.parallel) pool.push(j);

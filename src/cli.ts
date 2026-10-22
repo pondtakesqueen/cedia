@@ -39,7 +39,9 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
                                before falling back (default: settings onQuota, fallback)
       --review <ref>           the review role, after the done gate passes: a model, claude-code[:<model>]
                                (default sonnet there), or none. Changes it asks for go back to the writer once
-      --spawn <on|off>         let the writer hand self-contained work to sub-threads (default: settings, on)
+      --spawn <on|off|worktree>
+                               let the writer hand self-contained work to sub-threads (default: settings, on);
+                               worktree runs each work sub-thread in a git worktree of its own, several at once
       --ask <on|off>           give the writer ask_user, to end the run with one question for you when only you can
                                decide; the thread waits as 'asking' and your answer is its next prompt
                                (default: settings ask, off)

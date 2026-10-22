@@ -308,7 +308,11 @@ describe('settings keys', () => {
       writeFileSync(join(home, 'settings.json'), JSON.stringify({ spwan: false, desktop: { theme: 'dark' } }));
       expect(() => loadSpawn()).toThrow('unknown setting "spwan"');
       writeFileSync(join(home, 'settings.json'), JSON.stringify({ spawn: false, desktop: { theme: 'dark' } }));
-      expect(loadSpawn()).toBe(false);
+      expect(loadSpawn()).toBe('off');
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ spawn: 'worktree' }));
+      expect(loadSpawn()).toBe('worktree');
+      expect(loadSpawn('on')).toBe('on');
+      expect(() => loadSpawn('yes')).toThrow('--spawn must be on, off or worktree');
     } finally {
       if (prev === undefined) delete process.env.CEDIA_HOME;
       else process.env.CEDIA_HOME = prev;

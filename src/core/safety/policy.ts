@@ -114,7 +114,7 @@ function real(path: string): string {
 
 // .git (hooks and config run code later, outside any sandbox), a hooks directory set by core.hooksPath (.husky)
 // and .cedia (cedia's rules and checks).
-function protectedPath(path: string, cwd: string): boolean {
+export function protectedPath(path: string, cwd: string): boolean {
   const full = real(resolve(cwd, expandHome(path)));
   if (/^(\.git|\.cedia)(\/|$)/.test(relative(real(cwd), full))) return true;
   const hooks = hooksDir(cwd);
