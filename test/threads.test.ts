@@ -645,7 +645,7 @@ describe('sub-threads (offline, faux)', () => {
     const result = JSON.parse(cedia(dir, [reply('ok')], ['-p', 'hi', '--output-format', 'json', '--spawn', 'off']).out);
     const log = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
     expect(head(log.events).tools.map((t) => t.name)).not.toContain('spawn');
-    expect(cedia(tmp(), [], ['-p', 'x', '--spawn', 'maybe']).err).toContain('--spawn must be on or off');
+    expect(cedia(tmp(), [], ['-p', 'x', '--spawn', 'maybe']).err).toContain('--spawn must be on, off or worktree');
   });
 });
 

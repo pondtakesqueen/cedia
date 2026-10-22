@@ -43,7 +43,9 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
                                (default sonnet there), or none. Changes it asks for go back to the writer once
       --advisor <ref|none>     the advisor role: a model that reads each of the writer's turns and may leave it a
                                note before the next (default: settings roles.advisor, none). One reply a turn
-      --spawn <on|off>         let the writer hand self-contained work to sub-threads (default: settings, on)
+      --spawn <on|off|worktree>
+                               let the writer hand self-contained work to sub-threads (default: settings, on);
+                               worktree runs each work sub-thread in a git worktree of its own, several at once
       --ask <on|off>           give the writer ask_user, to end the run with one question for you when only you can
                                decide; the thread waits as 'asking' and your answer is its next prompt
                                (default: settings ask, off)

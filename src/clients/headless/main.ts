@@ -17,12 +17,17 @@ import { mcpStub, startMcp, type McpServers } from '../../core/mcp/tools.ts';
 import { webFetchTool } from '../../core/tools/web.ts';
 import { runTurn } from '../../core/project/undo.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
-import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
+import { spawnNudgeAt, spawnPool, spawnTool, subtaskPrompt, type SpawnKind, type SpawnOutcome, type Spawner } from '../../core/tools/spawn.ts';
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
+import { applyWorktree, openWorktree, type Worktree } from '../../core/project/worktree.ts';
+import { decide } from '../../core/safety/policy.ts';
+import { editTool } from '../../core/tools/edit.ts';
+import { sandboxGuarded } from '../../core/safety/sandbox.ts';
+import type { Snapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
 import { ADVISOR_SYSTEM, adviceOf, advicePrompt, adviceReminder, turnDigest } from '../../core/trust/advisor.ts';
@@ -150,7 +155,8 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
 
 export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
   const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}), ...(args.advisor ? { advisor: args.advisor } : {}) });
-  const spawnOn = loadSpawn(args.spawn);
+  const spawnMode = loadSpawn(args.spawn);
+  const spawnOn = spawnMode !== 'off';
   const askOn = loadAsk(args.ask);
   const model = roles.code;
   const declared = loadChecks(args.cwd, args.checks);
@@ -291,7 +297,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     continues?: { sessionId: string; changed: string[] };
     note?: string;
     role?: 'plan' | 'review' | 'explore' | 'advisor';
-    child?: { thread?: string; handoff?: boolean; recall?: ToolSpec };
+    child?: { thread?: string; handoff?: boolean; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots; wrap: (command: string) => Promise<string> } };
     // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
     seed?: { from: SessionLog; compaction: NonNullable<HeadlessResult['compaction']> };
   };
@@ -314,6 +320,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // A resumed session keeps the tools it was opened with (its cached prefix); new ones get recall once the
     // thread has an earlier session, and the thread tools once the project has another thread.
     const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
+    const spawnHere = header?.tools.some((d) => d.name === 'spawn' && d.description === spawnOther.description) ? spawnOther : spawn;
     // With skills, or on a resumed session that had the tool: its tool list stays as it was even when the skills
     // are gone since, and a call to one that is gone says so.
     const withSkill = skills.length > 0 || !!header?.tools.some((d) => d.name === 'skill');
@@ -321,8 +328,10 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // server is gone keeps the tool, and a call to it says the server is not there.
     const mcpTools = [...(mcp?.tools ?? []), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map(mcpStub)];
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
-    const extra = [...(spawnOn ? [spawn] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
+    const extra = [...(spawnOn ? [spawnHere] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
     const tools = opts.role === 'advisor' ? [] : reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
+    // A work sub-thread in a worktree works there: its own directory, environment line and snapshots.
+    const place = child?.place;
     if (writing) writerRuns.push({ log, from: log.events.length });
     const result = await runPrompt(
       {
@@ -332,8 +341,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         // Plan and review get no write tools, and their policy is read-only whatever the run's mode.
         tools,
         system: opts.role === 'advisor' ? ADVISOR_SYSTEM : BASE_SYSTEM,
-        ...(opts.role === 'advisor' ? {} : { preamble: reviewer ? reviewPreamble : opts.note ? `${basePreamble}\n\n${opts.note}` : basePreamble }),
-        cwd: args.cwd,
+        ...(opts.role === 'advisor' ? {} : { preamble: reviewer ? reviewPreamble : opts.note ? `${place?.preamble ?? basePreamble}\n\n${opts.note}` : (place?.preamble ?? basePreamble) }),
+        cwd: place?.cwd ?? args.cwd,
         // They may also run the declared checks, to see what fails instead of only reading.
         permission: reviewer ? { ...policy, mode: 'read-only', allow: [...policy.allow, ...checks.map((c) => `bash(${c})`)] } : policy,
         privacy,
@@ -341,8 +350,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         ...(hooked ? { hooks: writing ? hooks : { ...hooks, stop: [] }, hookHome: cediaHome() } : {}),
         checks: reviewer ? [] : checks,
         ...(softChecks && !reviewer ? { softChecks } : {}),
-        ...(sandbox.on ? { wrap: sandbox.wrap } : {}),
-        ...(snapshots && !reviewer ? { snapshots } : {}),
+        ...(sandbox.on ? { wrap: place?.wrap ?? sandbox.wrap } : {}),
+        ...(place ? { snapshots: place.snapshots } : snapshots && !reviewer ? { snapshots } : {}),
         ...(continues ? { continues } : {}),
         ...(opts.role ? { role: opts.role } : {}),
         ...(child ? (child.thread ? { thread: child.thread } : {}) : threadId ? { thread: threadId } : {}),
@@ -436,12 +445,34 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   // hands off to a new session of the sub-thread, as the writer does: on Haiku a sub-thread past 100k tokens would
   // pay the long-context price on every turn. Explore never hands off, since a session that only read cannot
   // (core/loop/run.ts).
-  const spawner: Spawner = async (brief: string, kind: SpawnKind) => {
+  // A work sub-thread with worktrees on runs in a git worktree of its own (core/project/worktree.ts), beside the
+  // others; only applying its changes runs alone, through ctx.write. Where no worktree can be made (no git, no
+  // commit yet) it runs in place as it would without them, through ctx.write as a whole.
+  const spawner: Spawner = async (brief: string, kind: SpawnKind, ctx) => {
+    let wt: Worktree | undefined;
+    if (kind === 'work' && ctx.write) {
+      const base = snapshots?.take();
+      const w = snapshots && base ? openWorktree(args.cwd, snapshots, base, `${threadId ?? 'run'}-${subthreads + 1}-${crypto.randomUUID().slice(0, 8)}`) : { error: 'cedia cannot record this working tree' };
+      if ('error' in w) {
+        process.stderr.write(`cedia: no worktree for the work sub-thread (${w.error}); it runs in place, alone\n`);
+        return ctx.write(() => spawner(brief, kind, { signal: ctx.signal }));
+      }
+      wt = w;
+    }
     subthreads++;
     spawned[kind]++;
     let m = kind === 'explore' ? explorer : writer.model;
-    const sub = store?.open(brief, threadId ? { parent: threadId } : {});
-    const prompt = subtaskPrompt(brief, threadId, kind);
+    let sub: string | undefined;
+    let place: NonNullable<RunOpts['child']>['place'];
+    try {
+      sub = store?.open(brief, threadId ? { parent: threadId } : {});
+      // Its bash writes only in its worktree: the parent's files change only when its changes are applied.
+      place = wt && { cwd: wt.cwd, snapshots: wt.snapshots, preamble: preamble(wt.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}) }), wrap: sandbox.within(wt.dir) };
+    } catch (e) {
+      wt?.close();
+      throw e;
+    }
+    const prompt = subtaskPrompt(brief, threadId, kind, wt?.cwd);
     // The sub-thread's sessions so far: what recall searches once one has handed off.
     const mine: EarlierSession[] = [];
     const recallMine = recallTool(() => mine.slice(0, -1));
@@ -451,7 +482,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       const log = openLog();
       if (store && sub) store.append(sub, { kind: 'session', sessionId: log.id, model: m.ref, role: kind === 'explore' ? 'explore' : 'code', why, ...(log.path ? { path: log.path } : {}) });
       mine.push({ id: log.id, events: () => log.events });
-      const child = { ...(sub ? { thread: sub } : {}), ...(kind === 'work' && handoffsHere < MAX_HANDOFFS ? { handoff: true } : {}), ...(mine.length > 1 ? { recall: recallMine } : {}) };
+      const child = { ...(sub ? { thread: sub } : {}), ...(kind === 'work' && handoffsHere < MAX_HANDOFFS ? { handoff: true } : {}), ...(mine.length > 1 ? { recall: recallMine } : {}), ...(place ? { place } : {}) };
       const r = await run(m, log, prompt, { ...opts, ...(kind === 'explore' ? { role: 'explore' as const } : {}), child });
       cost += r.costUsd;
       spawned.peakContext = Math.max(spawned.peakContext, r.peakContext ?? 0);
@@ -477,16 +508,45 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       }
       r = { ...r, costUsd: cost };
     } catch (e) {
+      wt?.close();
       if (store && sub) store.append(sub, { kind: 'state', state: 'failed', result: (e as Error).message });
       throw e;
     }
-    if (store && sub) {
-      store.append(sub, { kind: 'state', state: stateOf(r), result: r.result.slice(0, MAX_RESULT) });
-      if (r.subtype === 'success') store.append(sub, { kind: 'archived', archived: true });
+    // Its changes reach the parent's files whole or not at all (a conflict writes nothing), however it ended, as
+    // they would have in place: a child whose check cannot pass until another child's part lands is common, and
+    // the parent's done gate wants a check after them either way. Only a stop leaves them out. What did not come
+    // back stays in the worktree for the parent to read, unless the run was stopped.
+    let worktree: SpawnOutcome['worktree'];
+    if (wt && ctx.write) {
+      const w = wt;
+      // What the parent's own edit could not write: its deny rules, secret stores and protected paths, and
+      // what the sandbox keeps bash from writing.
+      const refuse = (f: string) => decide(policy, editTool, { path: f }, args.cwd).decision === 'deny' || sandboxGuarded(f);
+      try {
+        // A stop that came while it waited for the parent's files is still a stop.
+        const applied = r.subtype !== 'interrupted' && !ac.signal.aborted ? await ctx.write(() => (ac.signal.aborted ? undefined : applyWorktree(w, snapshots!, refuse))) : undefined;
+        const keep = !ac.signal.aborted && (!applied || applied.conflicts.length > 0 || applied.refused.length > 0);
+        worktree = { applied: applied?.files ?? [], refused: applied?.refused ?? [], conflicts: applied?.conflicts ?? [], ...(applied ? {} : { why: `the sub-thread ended with ${ac.signal.aborted ? 'a stop' : r.subtype}` }), ...(keep ? { kept: w.cwd } : {}) };
+        if (keep) w.keep();
+        else w.close();
+      } catch (e) {
+        // A worktree that is no longer the one made is not offered to be read: it may lead anywhere now.
+        const intact = w.intact();
+        if (intact) w.keep();
+        else w.close();
+        worktree = { applied: [], refused: [], conflicts: [], why: (e as Error).message, ...(intact ? { kept: w.cwd } : {}) };
+      }
     }
-    return { ...(sub ? { thread: sub } : {}), model: m.ref, subtype: r.subtype, result: r.result, costUsd: r.costUsd, changed: r.evidence?.changed ?? [], unverified: r.evidence?.unverified ?? [] };
+    if (store && sub) {
+      store.append(sub, { kind: 'state', state: worktree?.conflicts.length ? 'failed' : stateOf(r), result: r.result.slice(0, MAX_RESULT) });
+      if (r.subtype === 'success' && !worktree?.conflicts.length) store.append(sub, { kind: 'archived', archived: true });
+    }
+    return { ...(sub ? { thread: sub } : {}), model: m.ref, subtype: r.subtype, result: r.result, costUsd: r.costUsd, changed: r.evidence?.changed ?? [], unverified: r.evidence?.unverified ?? [], ...(worktree ? { worktree } : {}) };
   };
-  const spawn = spawnTool(spawner);
+  const pool = spawnPool();
+  const spawn = spawnTool(spawner, undefined, { worktrees: spawnMode === 'worktree', pool });
+  // A resumed session keeps the spawn tool it was opened with, worktrees or not, so its tool list stays the same.
+  const spawnOther = spawnTool(spawner, undefined, { worktrees: spawnMode !== 'worktree', pool });
   // Runs the writer and follows its handoffs: each note opens a new session of the thread on the same model,
   // which starts from the task (and the fix it was on, if any) and the note.
   const write = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}) => {
