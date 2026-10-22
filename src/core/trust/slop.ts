@@ -13,14 +13,24 @@ const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|
 const PROSE = /\.(md|mdx|markdown|txt|rst|adoc)$/i;
 const ASSERTION = /\b(expect|assert\w*|should)\b|\b(it|test|describe)\s*\(/;
 
-const ADDED: { rule: SlopRule; re: RegExp; files?: RegExp }[] = [
+// The code of a line without its comments, strings and regex literals, for rules about code that prose may
+// name: "the rule matches: any key" in a comment, or a detector's own pattern, is not a type escape.
+export function codeOf(line: string): string {
+  if (/^\s*(\/\/|\/?\*)/.test(line)) return '';
+  return line
+    .replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, '""')
+    .replace(/(^|[=(,:;!&|?{}[\]]\s*)\/(?![/*])(?:\\.|\[(?:\\.|[^\]])*\]|[^/\\[])+\/[a-z]*/g, '$1/re/')
+    .replace(/\/\/.*$|\/\*.*?(\*\/|$)/g, '');
+}
+
+const ADDED: { rule: SlopRule; re: RegExp; files?: RegExp; code?: boolean }[] = [
   { rule: 'test-skipped', re: /\.(skip|only|todo)\s*\(|\bx(it|describe|test)\s*\(|@pytest\.mark\.(skip|xfail)|\bt\.Skip\(|#\[ignore\]|@(Disabled|Ignore)\b/ },
   { rule: 'suppression', re: /@ts-(ignore|nocheck|expect-error)|eslint-disable|biome-ignore|#\s*type:\s*ignore|#\s*noqa|\/\/\s*nolint|#!?\[allow\(|@SuppressWarnings/ },
   {
     rule: 'swallowed-error',
     re: /catch\s*(\([^)]*\))?\s*\{\s*\}|except(\s+[\w.]+(\s+as\s+\w+)?)?\s*:\s*pass\b|\.catch\(\s*\(\s*\w*\s*\)\s*=>\s*(\{\s*\}|undefined|null)\s*\)/,
   },
-  { rule: 'type-escape', re: /\bas any\b|:\s*any\b(?![\w$])|<any>/, files: /\.[cm]?tsx?$/ },
+  { rule: 'type-escape', re: /\bas any\b|:\s*any\b(?![\w$])|<any>/, files: /\.[cm]?tsx?$/, code: true },
   { rule: 'stub', re: /not implemented|NotImplementedError|unimplemented!\(|todo!\(/i },
 ];
 
@@ -38,8 +48,8 @@ export function findSlop(changes: FileChange[]): SlopFinding[] {
     }
     if (PROSE.test(c.path)) continue;
     for (const line of c.added)
-      for (const { rule, re, files } of ADDED)
-        if ((!files || files.test(c.path)) && re.test(line)) out.push({ rule, path: c.path, line: line.trim().slice(0, 120) });
+      for (const { rule, re, files, code } of ADDED)
+        if ((!files || files.test(c.path)) && re.test(code ? codeOf(line) : line)) out.push({ rule, path: c.path, line: line.trim().slice(0, 120) });
   }
   return out;
 }
