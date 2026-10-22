@@ -14,6 +14,7 @@ import { evidence, ledgerEntries, verified } from '../trust/ledger.ts';
 import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
 import { spawnNudge } from '../tools/spawn.ts';
+import { ASK_TOOL, questionOf } from '../tools/ask.ts';
 import {
   addUsage,
   EFFORTS,
@@ -27,6 +28,7 @@ import {
   type EventOf,
   type HeadlessResult,
   type ModelSpec,
+  type Question,
   type PrivacyLevel,
   type Provider,
   type ResultSubtype,
@@ -499,6 +501,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       await runTools(calls, byName, opts, signal, log, snap, shared);
       await warm.stop();
       timing.toolMs += performance.now() - toolStart;
+      // A question for the owner ends the run once the turn's other calls are done; the answer is the next prompt.
+      const asked = askedIn(log.events.slice(before), calls);
+      if (asked) return { ...finish('asked', 'asked', asked.question), question: asked };
       // Hand off at a turn boundary, while the whole prefix is still cached: the note costs one cheap turn.
       // The size is the last reply's usage plus chars/4 for the results just added. The context must also have
       // doubled since the session's first reply, so a session that starts large (a long note, a big task) does
@@ -575,6 +580,17 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     }
     return finish('success', 'completed');
   }
+}
+
+// The question of an ask_user call that ran and succeeded in this turn's results, if any (the first one).
+function askedIn(results: SessionEvent[], calls: Extract<AssistantBlock, { type: 'tool_use' }>[]): Question | undefined {
+  for (const c of calls) {
+    if (c.name !== ASK_TOOL) continue;
+    const r = results.find((e): e is EventOf<'tool_result'> => e.kind === 'tool_result' && e.callId === callIdOf(c));
+    const q = r?.status === 'completed' && !r.output.isError ? questionOf(c.input) : undefined;
+    if (q && typeof q !== 'string') return q;
+  }
+  return undefined;
 }
 
 // A guard's denial is final; a command cedia could not read can be rewritten, since nothing was refused.

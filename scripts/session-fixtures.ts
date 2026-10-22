@@ -56,6 +56,16 @@ export const SCENARIOS: Scenario[] = [
     ],
     args: [...ws, '--check', 'grep -q good f.txt'],
   },
+  {
+    name: 'ask',
+    what: 'the writer asks the owner a question with ask_user: an asked result, a question thread event and the asking state',
+    prompt: 'make f.txt say good or great',
+    script: [
+      bash('c1', 'echo good > f.txt'),
+      tool('a1', 'ask_user', { question: 'Should f.txt say good or great? The task allows both; I wrote good.', options: ['good', 'great'] }),
+    ],
+    args: [...ws, '--check', 'grep -q good f.txt', '--ask', 'on'],
+  },
 ];
 
 const BIN = join(import.meta.dir, '..', 'bin', 'cedia');
