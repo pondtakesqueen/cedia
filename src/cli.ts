@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
+import type { TuiArgs } from './clients/tui/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
 import { GUARDS } from './core/safety/policy.ts';
 import { cediaHome } from './core/config.ts';
@@ -9,6 +10,7 @@ import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
 import { loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
+import { rewindThread, rewoundText, runLines } from './core/project/rewind.ts';
 import { workspaceSnapshots } from './core/safety/snapshot.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
@@ -16,7 +18,8 @@ import { formatUsage, isUsageEvent, readEventsLenient, usageReport, type Session
 import { EFFORTS, type Effort } from './core/types.ts';
 import { versionInfo } from './protocol/version.ts';
 
-const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on stdin)
+const USAGE = `usage: cedia [options]                 the TUI, at a terminal: each prompt is a turn of one thread
+       cedia -p "<prompt>" [options]   (prompt may also come on stdin)
        cedia --version [--json]             the version; --json adds the protocol hash and capabilities
 
   -m, --model <ref>            the code role: model alias or ref (default: $CEDIA_MODEL, roles.code in settings, deepseek)
@@ -41,7 +44,15 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
                                before falling back (default: settings onQuota, fallback)
       --review <ref>           the review role, after the done gate passes: a model, claude-code[:<model>]
                                (default sonnet there), or none. Changes it asks for go back to the writer once
-      --spawn <on|off>         let the writer hand self-contained work to sub-threads (default: settings, on)
+      --goal <condition>       keep going until a separate judge finds the condition holds: after each claim of done
+                               it reads the change and answers met, not met (the writer goes on with what is
+                               missing, at most 3 more times) or impossible. Exit 1 unless met
+      --goal-judge <ref>       the judge's model (default: the writer's, in a fresh read-only session)
+      --advisor <ref|none>     the advisor role: a model that reads each of the writer's turns and may leave it a
+                               note before the next (default: settings roles.advisor, none). One reply a turn
+      --spawn <on|off|worktree>
+                               let the writer hand self-contained work to sub-threads (default: settings, on);
+                               worktree runs each work sub-thread in a git worktree of its own, several at once
       --lsp <on|off>           after each edit, add the file's errors from a language server when one is installed
                                (typescript-language-server, pyright-langserver, gopls; more in settings "lsp"). Default on
       --ask <on|off>           give the writer ask_user, to end the run with one question for you when only you can
@@ -75,6 +86,12 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
                                             put the files that turn changed back (or forward again), from cedia's
                                             snapshots; a file changed since is left unless --force. Commands the turn
                                             ran are not undone. The thread is told at its next turn
+       cedia threads rewind <id> [<n>] [--force]
+                                            go back to just before the thread's run n (threads show numbers them),
+                                            conversation and files together: the thread goes on from there, and
+                                            every file a later run changed is put back. It refuses while the thread
+                                            is working, or when such a file changed since (--force: anyway).
+                                            Without n, lists the runs
        cedia memory [list | add <text> | forget <id>]
                                             the project's memory: short facts every new session gets in its first
                                             turn; writer sessions add to it with the remember tool
@@ -121,6 +138,9 @@ export async function main(argv: string[]): Promise<number> {
       'handoff-at': { type: 'string' },
       handoff: { type: 'string' },
       review: { type: 'string' },
+      goal: { type: 'string' },
+      'goal-judge': { type: 'string' },
+      advisor: { type: 'string' },
       plan: { type: 'string' },
       check: { type: 'string', multiple: true },
       sandbox: { type: 'string' },
@@ -133,12 +153,6 @@ export async function main(argv: string[]): Promise<number> {
     console.log(USAGE);
     return 0;
   }
-  let prompt = values.print ?? positionals.join(' ');
-  if (!prompt && !process.stdin.isTTY) prompt = (await new Response(Bun.stdin.stream()).text()).trim();
-  if (!prompt) {
-    console.error(USAGE);
-    return 2;
-  }
   for (const [flag, v] of [['effort', values.effort], ['escalate', values.escalate]] as const)
     if (v !== undefined && !EFFORTS.includes(v as Effort) && !(flag === 'escalate' && v === 'off')) {
       console.error(`unknown --${flag} ${v}`);
@@ -149,41 +163,59 @@ export async function main(argv: string[]): Promise<number> {
     console.error(`unknown --output-format ${format}`);
     return 2;
   }
+  const base: TuiArgs = {
+    ...(values.model ? { model: values.model } : {}),
+    cwd: values.cwd ?? process.cwd(),
+    ...(values['max-turns'] ? { maxTurns: Number(values['max-turns']) } : {}),
+    ...(values['max-budget-usd'] ? { maxBudgetUsd: Number(values['max-budget-usd']) } : {}),
+    ...(values.effort ? { effort: values.effort as Effort } : {}),
+    ...(values.escalate ? { escalate: values.escalate } : {}),
+    ...(values['no-session-file'] ? { noSessionFile: true } : {}),
+    ...(values.permission ? { permission: values.permission } : {}),
+    ...(values.allow ? { allow: values.allow } : {}),
+    ...(values.deny ? { deny: values.deny } : {}),
+    ...(values.unlock ? { unlock: values.unlock } : {}),
+    ...(values.privacy ? { privacy: values.privacy } : {}),
+    ...(values.fallback ? { fallback: values.fallback } : {}),
+    ...(values['on-quota'] ? { onQuota: values['on-quota'] } : {}),
+    ...(values.thread ? { thread: values.thread } : {}),
+    ...(values.spawn ? { spawn: values.spawn } : {}),
+    ...(values.lsp ? { lsp: values.lsp } : {}),
+    ...(values.ask ? { ask: values.ask } : {}),
+    ...(values.swarm ? { swarm: values.swarm } : {}),
+    ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
+    ...(values.handoff ? { handoff: values.handoff } : {}),
+    ...(values.review ? { review: values.review } : {}),
+    ...(values.goal ? { goal: values.goal } : {}),
+    ...(values['goal-judge'] ? { goalJudge: values['goal-judge'] } : {}),
+    ...(values.advisor ? { advisor: values.advisor } : {}),
+    ...(values.plan ? { plan: values.plan } : {}),
+    ...(values.check ? { checks: values.check } : {}),
+    ...(values.sandbox ? { sandbox: values.sandbox } : {}),
+    ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),
+  };
+  let prompt = values.print ?? positionals.join(' ');
+  // No prompt at a terminal: the interactive client, on the same run path.
+  if (!prompt && process.stdin.isTTY && process.stdout.isTTY && values.print === undefined) {
+    if (base.noSessionFile) {
+      console.error('cedia: the TUI keeps its turns in a thread, so it needs session files');
+      return 2;
+    }
+    // Loaded only here, so a headless run never pays for the terminal library.
+    const { runTui } = await import('./clients/tui/main.ts');
+    return runTui(base);
+  }
+  if (!prompt && !process.stdin.isTTY) prompt = (await new Response(Bun.stdin.stream()).text()).trim();
+  if (!prompt) {
+    console.error(USAGE);
+    return 2;
+  }
   try {
-    const result = await runHeadless({
-      prompt,
-      ...(values.model ? { model: values.model } : {}),
-      cwd: values.cwd ?? process.cwd(),
-      outputFormat: format,
-      ...(values['max-turns'] ? { maxTurns: Number(values['max-turns']) } : {}),
-      ...(values['max-budget-usd'] ? { maxBudgetUsd: Number(values['max-budget-usd']) } : {}),
-      ...(values.effort ? { effort: values.effort as Effort } : {}),
-      ...(values.escalate ? { escalate: values.escalate } : {}),
-      ...(values['no-session-file'] ? { noSessionFile: true } : {}),
-      ...(values.permission ? { permission: values.permission } : {}),
-      ...(values.allow ? { allow: values.allow } : {}),
-      ...(values.deny ? { deny: values.deny } : {}),
-      ...(values.unlock ? { unlock: values.unlock } : {}),
-      ...(values.privacy ? { privacy: values.privacy } : {}),
-      ...(values.fallback ? { fallback: values.fallback } : {}),
-      ...(values['on-quota'] ? { onQuota: values['on-quota'] } : {}),
-      ...(values.thread ? { thread: values.thread } : {}),
-      ...(values.spawn ? { spawn: values.spawn } : {}),
-      ...(values.lsp ? { lsp: values.lsp } : {}),
-      ...(values.ask ? { ask: values.ask } : {}),
-      ...(values.swarm ? { swarm: values.swarm } : {}),
-      ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
-      ...(values.handoff ? { handoff: values.handoff } : {}),
-      ...(values.review ? { review: values.review } : {}),
-      ...(values.plan ? { plan: values.plan } : {}),
-      ...(values.check ? { checks: values.check } : {}),
-      ...(values.sandbox ? { sandbox: values.sandbox } : {}),
-      ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),
-    });
+    const result = await runHeadless({ ...base, prompt, outputFormat: format });
     // A question for the owner is not a failure: the thread waits for the answer.
     const ok = result.subtype === 'success' || result.subtype === 'asked';
     if (!ok && format === 'text') console.error(`cedia: ${result.subtype}`);
-    return ok ? 0 : 1;
+    return ok && (!result.goal || result.goal.verdict === 'met') ? 0 : 1;
   } catch (e) {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
@@ -256,7 +288,8 @@ function threads(argv: string[]): number {
     if (cmd === 'show' && id) {
       const t = store.read(id);
       const lines = [`${t.id}  ${t.state}  ${t.title}`, '', t.task, ''];
-      for (const s of t.sessions) lines.push(`session ${s.sessionId}  ${s.model}  ${s.why}${s.path ? `  ${s.path}` : ''}`);
+      for (const s of t.sessions) lines.push(`session ${s.sessionId}  ${s.model}  ${s.why}${s.rewound ? '  (rewound)' : ''}${s.path ? `  ${s.path}` : ''}`);
+      if (t.runs.length) lines.push('', ...runLines(t));
       if (t.handoff) lines.push('', `handoff from ${t.handoff.sessionId}:`, t.handoff.note);
       if (t.result) lines.push('', 'result:', t.result);
       for (const m of t.messages) lines.push('', `message ${m.id} from ${m.from} at ${m.at}${m.unsent ? ' (unsent)' : t.pending.includes(m) ? ' (not seen yet)' : ''}:`, m.text);
@@ -288,6 +321,18 @@ function threads(argv: string[]): number {
       console.log(restoredText(r));
       return r.skipped.length ? 1 : 0;
     }
+    if (cmd === 'rewind' && id && rest.length <= 1) {
+      if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
+      if (!rest.length) {
+        const runs = runLines(store.read(id));
+        console.log(runs.length ? runs.join('\n') : `thread ${id} has no run to rewind to`);
+        return 0;
+      }
+      const r = rewindThread(store, id, Number(rest[0]), { open: (cwd) => workspaceSnapshots(cwd, cediaHome()), sessionFile: (cwd, sid) => sessionPath(cwd, sid) }, { force: values.force ?? false });
+      if ('error' in r) throw new Error(r.error);
+      console.log(rewoundText(r));
+      return 0;
+    }
     if (cmd === 'diff' && id) {
       if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
       const change = threadTurn(store, id);
@@ -305,7 +350,7 @@ function threads(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] | redo <id> [--force] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
+  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] | redo <id> [--force] | rewind <id> [<n>] [--force] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
   return 2;
 }
 

@@ -9,12 +9,17 @@ const READ_ONLY = new Set([
   'file', 'stat', 'du', 'which', 'date', 'uname', 'basename', 'dirname', 'realpath', 'tree', 'diff', 'sed', 'awk', 'jq', 'git', 'true',
 ]);
 const GIT_READ = new Set(['status', 'log', 'diff', 'show', 'branch', 'rev-parse', 'ls-files', 'blame', 'remote', 'describe', 'shortlog', 'grep']);
+// Flags that write a file or run another program (a preprocessor, a pager, a compressor, a diff driver).
 const FORBIDDEN_FLAGS: Record<string, RegExp> = {
-  find: /^-(exec|execdir|delete|ok|okdir|fprint|fprintf|fls)$/,
+  find: /^-(exec|execdir|delete|ok|okdir|fprint|fprint0|fprintf|fls)$/,
   sed: /^(-i|--in-place)/,
-  awk: /^-i/,
-  sort: /^(-o|--output)/,
-  git: /^(-c|--exec-path|--output)/,
+  awk: /^(-i|-f|-E|-l|--include|--file|--exec|--load)/,
+  sort: /^(-o|--output|--compress-program)/,
+  rg: /^--pre(=|$)/,
+  date: /^(-s|--set)/,
+  tree: /^(-o|-R)/,
+  file: /^(-C|--compile)/,
+  git: /^(-c|--exec-path|--output|-O|--open-files-in-pager|--ext-diff|--textconv)/,
 };
 
 export type Verdict = { ok: true } | { ok: false; reason: string };
@@ -73,7 +78,9 @@ export function checkReadOnly(command: string): Verdict {
       if (sub === 'branch' && args.some((a) => /^-(d|D|m|M|c|C|f)$|^--(delete|move|copy|force|set-upstream)/.test(a))) return { ok: false, reason: 'git branch with that flag writes' };
       if (sub === 'remote' && args.some((a) => /^(add|remove|rm|rename|set-url|prune|update)$/.test(a))) return { ok: false, reason: 'git remote with that subcommand writes' };
     }
-    if (cmd === 'awk' && args.some((a) => /system\s*\(|print\s*>|\|\s*"/.test(a))) return { ok: false, reason: 'awk program can write or run commands' };
+    if (cmd === 'awk' && args.some((a) => /system\s*\(|printf?\s*>|\|\s*"|\|\s*getline|\|&/.test(a))) return { ok: false, reason: 'awk program can write or run commands' };
+    // uniq writes its output to a second file name.
+    if (cmd === 'uniq' && args.filter((a) => !a.startsWith('-')).length > 1) return { ok: false, reason: 'uniq with an output file writes' };
     if (cmd === 'sed' && args.some((a) => /(^|;)\s*[0-9,$]*\s*[wWe]\b|\/[wW]\s/.test(a))) return { ok: false, reason: 'sed script can write or run commands' };
   }
   return { ok: true };

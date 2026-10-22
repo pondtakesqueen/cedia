@@ -69,6 +69,12 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
 
 const deny = (rule: string, reason: string): Decision => ({ decision: 'deny', rule, reason });
 
+// Whether a call matches a rule the way a deny rule does: any simple command of a bash call, or the call's path.
+export function ruleMatches(rule: string, spec: ToolSpec, input: JsonObject, cwd: string): boolean {
+  const commands = spec.name === 'bash' ? simpleCommands(String(input.command ?? '')) : undefined;
+  return matches(rule, spec.name, commands, spec.pathOf?.(input), cwd, 'any');
+}
+
 function matches(rule: string, tool: string, commands: string[][] | null | undefined, path: string | undefined, cwd: string, mode: 'any' | 'every', command?: string): boolean {
   const m = /^([\w-]+)(?:\((.*)\))?$/.exec(rule.trim());
   if (!m || m[1] !== tool) return false;
@@ -114,7 +120,7 @@ function real(path: string): string {
 
 // .git (hooks and config run code later, outside any sandbox), a hooks directory set by core.hooksPath (.husky)
 // and .cedia (cedia's rules and checks).
-function protectedPath(path: string, cwd: string): boolean {
+export function protectedPath(path: string, cwd: string): boolean {
   const full = real(resolve(cwd, expandHome(path)));
   if (/^(\.git|\.cedia)(\/|$)/.test(relative(real(cwd), full))) return true;
   const hooks = hooksDir(cwd);
