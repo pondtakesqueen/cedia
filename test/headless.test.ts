@@ -344,6 +344,8 @@ describe('cedia -p (offline, faux)', () => {
       expect(out.costUsd).toBeLessThan(0.5); // the subscription's notional cost is not cedia's spend
       const planArgs = readFileSync(join(dir, 'args1'), 'utf8');
       expect(planArgs).toContain('--permission-mode\ndontAsk');
+      // The repository under review runs no hook, MCP server or command through Claude Code.
+      for (const flag of ['--restricted', '--strict-mcp-config', '--disable-slash-commands']) expect(planArgs).toContain(`${flag}\n`);
       expect(planArgs).toContain('--tools\nRead,Grep,Glob,Bash\n');
       expect(planArgs).toContain('--model\nopus');
       expect(readFileSync(join(dir, 'args2'), 'utf8')).toContain('Bash(git diff:*)\nBash(git log:*)\nBash(git show:*)\nBash(git status:*)\nBash(test -s f.txt)');
