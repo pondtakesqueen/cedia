@@ -100,7 +100,7 @@ export function openDiagnoser(
         try {
           const argv = opts.wrap ? ['bash', '-c', await opts.wrap(line)] : s.command;
           if (closing) return undefined;
-          lsp = new LspClient(argv, cwd, opts.env, opts.wrap && process.platform === 'linux' ? null : process.pid);
+          lsp = new LspClient(argv, cwd, opts.env, opts.wrap ? null : process.pid);
           started.push(lsp);
           lsp.onExit = (why) => opts.warn?.(`cedia: the ${s.name} language server stopped (${why}); edits go on without its diagnostics`);
           await lsp.start(START_MS);

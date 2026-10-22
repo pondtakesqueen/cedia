@@ -47,8 +47,9 @@ export class LspClient {
     argv: string[],
     readonly root: string,
     env: Record<string, string>,
-    // The process the server watches, exiting when it is gone; null when it cannot see cedia's (in the Linux
-    // sandbox it has a process namespace of its own, and the sandbox stops it with cedia instead).
+    // The process the server watches, exiting when it is gone; null in the sandbox, where it cannot see cedia's
+    // (Linux gives it a process namespace of its own, macOS lets it signal only its own sandbox) and would take
+    // cedia for gone. There the sandbox (Linux) or cedia's close stops it.
     private parentPid: number | null = process.pid,
   ) {
     // Its own process group, so the servers it starts (tsserver) stop with it.
