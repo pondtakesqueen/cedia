@@ -74,6 +74,9 @@ export type RunOptions = {
   // Picks up from a session that stopped partway (the fallback after a spent quota). Its changed files count as
   // writes at the start of this run, so the done gate still wants a passing check after them.
   continues?: { sessionId: string; changed: string[] };
+  // Files changed before this session by someone else in the run (the parts of a split plan): the done gate
+  // wants a passing check after them, as after the session's own writes.
+  inherited?: string[];
   // The thread the session belongs to (core/project/threads.ts).
   thread?: string;
   // Once a turn leaves the context at this many tokens, the session writes a handoff note and ends with subtype
@@ -285,7 +288,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const checks = opts.checks ?? [];
   let runStart = log.events.length;
   // Inherited writes sit at 0, the user prompt's slot, so any check in this run comes after them.
-  const inherited = (opts.continues?.changed ?? []).map((path) => ({ kind: 'write' as const, at: 0, tool: 'parent', path }));
+  const inherited = [...(opts.continues?.changed ?? []), ...(opts.inherited ?? [])].map((path) => ({ kind: 'write' as const, at: 0, tool: 'parent', path }));
   const entries = () => [...inherited, ...ledgerEntries(log.events.slice(runStart), checks, opts.cwd)];
   let nudged = false;
   let emptyNudged = false;

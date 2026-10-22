@@ -311,6 +311,22 @@ describe('--spawn worktree (offline, faux)', () => {
     expect(git(r.work, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
   });
 
+  test("a plan's parts run at once in worktrees of their own before the writer starts", () => {
+    const r = repo();
+    const plan = 'Then check.\n<part files="one.txt">alpha-task: write good to one.txt</part>\n<part files="two.txt">beta-task: write good to two.txt</part>';
+    const out = cedia(
+      r.work,
+      [reply(plan), ...child('alpha-task', 'echo good > one.txt', 'alpha done'), ...child('beta-task', 'echo good > two.txt', 'beta done'), call('p1', 'true'), reply('both in')],
+      ['-p', 'make both files', '--spawn', 'worktree', '--plan', 'faux/fallback'],
+    );
+    const result = out.result();
+    expect(result).toMatchObject({ subtype: 'success', result: 'both in', subthreads: 2, spawned: { work: 2 } });
+    expect(readFileSync(join(r.work, 'one.txt'), 'utf8')).toBe('good\n');
+    expect(readFileSync(join(r.work, 'two.txt'), 'utf8')).toBe('good\n');
+    expect(result.evidence.changed).toEqual(expect.arrayContaining(['one.txt', 'two.txt']));
+    expect(git(r.work, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
+  });
+
   test('best of N: each approach runs in a worktree of its own, cedia runs the checks in each, and only the one that passes most is applied', () => {
     const r = repo();
     const race = { type: 'tool_use', id: 's1', name: 'spawn', input: { kind: 'work', task: 'make out.txt', approaches: ['approach-bad: write bad', 'approach-good: write good'] } };

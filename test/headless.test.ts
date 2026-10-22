@@ -319,20 +319,35 @@ describe('cedia -p (offline, faux)', () => {
       expect(userTexts(writer)[0]).toContain('<plan by="faux/fallback">\n1. Write good to f.txt.\n2. Run test -s f.txt.\n</plan>');
     });
 
-    test('a plan that splits the work into parts tells the writer to hand each to a work sub-thread', () => {
-      const plan = 'Two parts.\n<part files="a.txt">Write a to a.txt; check with test -s a.txt.</part>\n<part files="b.txt">Write b to b.txt; check with test -s b.txt.</part>';
-      const on = cedia([reply(plan), ...writes], [...base, '--plan', 'faux/fallback', '--spawn', 'worktree']);
-      const all = sessionsOf(on.home);
+    test("a plan's parts go to work sub-threads before the writer, on the model the planner picked", () => {
+      const args = ['-p', 'write a and b, then f', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -d .', '--plan', 'faux/fallback', '--workers', 'faux/fallback'];
+      const plan = 'f last.\n<part files="a.txt">Write a to a.txt.</part>\n<part files="b.txt" model="faux/fallback">Write b to b.txt.</part>';
+      const part = (file: string, id: string) => [call(`${id}1`, `echo ${file} > ${file}.txt`), call(`${id}2`, 'test -d .'), reply(`${file} done`)];
+      const r = cedia([reply(plan), ...part('a', 'a'), ...part('b', 'b'), call('w1', 'echo f > f.txt'), call('w2', 'test -d .'), reply('done')], [...args, '--spawn', 'on']);
+      const result = JSON.parse(r.out);
+      expect(result).toMatchObject({ subtype: 'success', subthreads: 2, spawned: { work: 2, explore: 0 } });
+      expect(result.evidence.changed).toEqual(expect.arrayContaining(['a.txt', 'b.txt', 'f.txt']));
+      expect(r.err).toContain('cedia: the plan splits off 2 parts; each goes to a work sub-thread first');
+      const all = sessionsOf(r.home);
       const planner = all.find((l) => (l[0] as { role: string }).role === 'plan')!;
-      expect(userTexts(planner)[0]).toContain('<part files="every file it changes, comma-separated">');
-      expect(userTexts(planner)[0]).toContain('several run at the same time');
-      const writer = all.find((l) => (l[0] as { role: string }).role === 'code')!;
-      expect(userTexts(writer)[0]).toContain('The plan splits the work into 2 parts that change different files. Hand each part to a work sub-thread with spawn (kind "work"), its brief as the task, all in one turn so they run at once');
-      // With spawn off there is no one to hand a part to: the planner is not asked for parts, nor the writer told.
-      const off = cedia([reply(plan), ...writes], [...base, '--plan', 'faux/fallback', '--spawn', 'off']);
+      expect(userTexts(planner)[0]).toContain('<part files="every file it changes, comma-separated" model="…">the brief</part>');
+      // Each part ran from its brief, the second on the model the plan named.
+      const subs = all.filter((l) => userTexts(l)[0]?.startsWith('You are a sub-thread'));
+      const modelOf = (brief: string) => (subs.find((l) => userTexts(l)[0]!.includes(`<task>\n${brief}\n</task>`))![0] as { model: string }).model;
+      expect(subs.length).toBe(2);
+      expect([modelOf('Write a to a.txt.'), modelOf('Write b to b.txt.')]).toEqual(['faux/scripted', 'faux/fallback']);
+      // The writer starts after them, with the plan and their reports, and never spawned.
+      const writer = all.find((l) => (l[0] as { role: string }).role === 'code' && !userTexts(l)[0]?.startsWith('You are a sub-thread'))!;
+      const first = userTexts(writer)[0]!;
+      expect(first).toContain('2 parts of the plan were already done before you started');
+      expect(first).toContain('a done');
+      expect(first).toContain('b done');
+      // With spawn off nothing is split: the planner is not asked, and no sub-thread runs.
+      const off = cedia([reply(plan), call('w1', 'echo f > f.txt'), call('w2', 'test -d .'), reply('done')], [...args, '--spawn', 'off']);
+      expect(JSON.parse(off.out)).toMatchObject({ subtype: 'success' });
+      expect(JSON.parse(off.out).subthreads).toBeUndefined();
       const offAll = sessionsOf(off.home);
       expect(userTexts(offAll.find((l) => (l[0] as { role: string }).role === 'plan')!)[0]).not.toContain('<part files=');
-      expect(userTexts(offAll.find((l) => (l[0] as { role: string }).role === 'code')!)[0]).not.toContain('Hand each part');
     });
 
     test('claude-code plans and reviews in your own Claude Code, read-only and without API keys', () => {
