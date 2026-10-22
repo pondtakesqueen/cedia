@@ -105,7 +105,7 @@ export class CediaTui {
   private streamed = false;
   private readonly store: ThreadStore;
   // A step waiting for the user's yes (a commit, a push): the next line answers it.
-  private pending: { what: string; yes: () => Promise<void> | void } | undefined;
+  private pending: { what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined;
   // Read again when files may have changed (a call's snapshot, the end of a turn, a command), not on every event.
   private git: string | undefined;
 
@@ -232,7 +232,7 @@ export class CediaTui {
     if (this.pending) {
       const p = this.pending;
       this.pending = undefined;
-      if (/^(y|yes)$/i.test(text)) return void this.busy(() => p.yes());
+      if (/^(y|yes)$/i.test(text)) return void this.busy((signal) => p.yes(signal));
       this.say(dim(`not done: ${p.what}`));
       // A plain no ends there; anything else is the next prompt or command as well.
       if (/^(n|no)$/i.test(text)) return;
@@ -357,7 +357,8 @@ export class CediaTui {
         case 'redo':
           return this.restore(name, rest[0] === 'force');
         case 'commit':
-          return void this.busy((signal) => this.commit(rest.join(' '), signal));
+          // The message as typed, new lines included.
+          return void this.busy((signal) => this.commit(line.trim().slice(name.length), signal));
         case 'pr':
           return this.pr();
         case 'new':
@@ -465,8 +466,8 @@ export class CediaTui {
     this.say(yellow(`push ${branch} to origin and open a pull request${base ? ` into ${base}` : ''}? y to go on; n, or anything else you type, cancels`));
     this.pending = {
       what: 'the push',
-      yes: async () => {
-        const r = await pushAndOpenPr(this.args.cwd);
+      yes: async (signal) => {
+        const r = await pushAndOpenPr(this.args.cwd, undefined, signal);
         this.say(r.ok ? green(r.out) : red(r.out));
       },
     };
