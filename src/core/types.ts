@@ -172,6 +172,8 @@ export type HeadlessResult = {
   usage: Usage;
   costUsd: number;
   cacheHitRatio: number;
+  // Requests after a session's first that missed the cache, with the cause (absent when none did).
+  cacheMisses?: CacheMiss[];
   result: string;
   evidence?: Evidence;
   timing?: Timing;
@@ -188,6 +190,13 @@ export type HeadlessResult = {
   subthreads?: number;
   spawned?: Spawned;
 };
+
+// Why a request read less from the prompt cache than the request before it had sent. Causes come from what the
+// log proves (hashes, model, time since the last reply), most specific first; 'provider' means the prefix did
+// not change.
+export type MissCause = 'cold' | 'system_changed' | 'tools_changed' | 'model_changed' | 'idle_over_ttl' | 'below_minimum' | 'provider';
+// One such request: its session, its number there, and the tokens the cache could have served and did not.
+export type CacheMiss = { session: string; request: number; cause: Exclude<MissCause, 'cold'>; tokens: number };
 
 // Sub-threads by kind, the handoffs their sessions made, and the largest context one of their replies saw.
 export type Spawned = { explore: number; work: number; handoffs: number; peakContext: number };

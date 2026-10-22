@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildMessages, sessionHeader } from '../context/build.ts';
+import { cacheMissesOf } from '../context/cache.ts';
 import { contextSize, HANDOFF_NO_TOOLS, HANDOFF_PROMPT } from '../project/handoff.ts';
 import { hash } from '../hash.ts';
 import { costUsd } from '../providers/catalog.ts';
@@ -303,6 +304,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     // A run's result pools its sub-threads' evidence, so each check says which thread ran it.
     if (opts.thread) ev.checks = ev.checks.map((c) => ({ ...c, thread: opts.thread }));
     const hasEvidence = ev.changed.length > 0 || ev.checks.length > 0;
+    const misses = cacheMissesOf(log.events, model, log.id, runStart);
     return {
       type: 'result',
       subtype,
@@ -311,6 +313,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       usage,
       costUsd: cost,
       cacheHitRatio: hitRatio(usage),
+      ...(misses.length ? { cacheMisses: misses } : {}),
       result: result ?? lastText,
       ...(hasEvidence ? { evidence: ev } : {}),
       timing: summarizeTiming(performance.now() - wallStart, timing, usage.output),
