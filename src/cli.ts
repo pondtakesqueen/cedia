@@ -6,6 +6,7 @@ import { GUARDS } from './core/safety/policy.ts';
 import { cediaHome } from './core/config.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
+import { loadSkills } from './core/skills/skills.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, SessionLog } from './core/session/log.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
@@ -63,6 +64,8 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
        cedia memory [list | add <text> | forget <id>]
                                             the project's memory: short facts every new session gets in its first
                                             turn; writer sessions add to it with the remember tool
+       cedia skills [--cwd <dir>]           the skills a session here can load: the user's (~/.cedia/skills) and the
+                                            repository's (.agents/skills, .claude/skills, .cursor/skills)
 
 models: ${Object.keys(ALIASES).join(', ')}`;
 
@@ -75,6 +78,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'lint-session') return lintFiles(argv.slice(1));
   if (argv[0] === 'threads') return threads(argv.slice(1));
   if (argv[0] === 'memory') return memory(argv.slice(1));
+  if (argv[0] === 'skills') return skills(argv.slice(1));
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -236,6 +240,25 @@ function threads(argv: string[]): number {
   }
   console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
   return 2;
+}
+
+function skills(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  if (parsed.positionals.length && parsed.positionals[0] !== 'list') {
+    console.error('usage: cedia skills [list] [--cwd <dir>]');
+    return 2;
+  }
+  const found = loadSkills(resolve(parsed.values.cwd ?? process.cwd()), cediaHome());
+  // A repository's description could carry terminal escapes; they are shown as text.
+  const shown = (t: string) => t.replace(/[\x00-\x1f\x7f\x9b]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+  console.log(found.length ? found.map((s) => `${s.name}  (${s.source})  ${shown(s.dir)}\n    ${shown(s.description)}`).join('\n') : 'no skills here');
+  return 0;
 }
 
 function memory(argv: string[]): number {
