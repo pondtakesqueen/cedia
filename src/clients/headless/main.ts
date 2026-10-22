@@ -7,7 +7,7 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
@@ -27,10 +27,11 @@ import { ScheduleStore, schedulesPath } from '../../core/project/schedules.ts';
 import { resolveProfile, withProfile } from '../../core/profiles.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
+import { lspServers, openDiagnoser } from '../../core/lsp/diagnose.ts';
+import { bashTool, scrubbedEnv } from '../../core/tools/bash.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
 import { applyWorktree, openWorktree, type Worktree } from '../../core/project/worktree.ts';
 import { approachBrief, bestTry, type Try } from '../../core/project/bestof.ts';
-import { bashTool } from '../../core/tools/bash.ts';
 import { decide } from '../../core/safety/policy.ts';
 import { editTool } from '../../core/tools/edit.ts';
 import { sandboxGuarded } from '../../core/safety/sandbox.ts';
@@ -74,6 +75,8 @@ export type HeadlessArgs = {
   // The model explore sub-threads run on, and whether writer sessions may spawn sub-threads at all.
   swarm?: string;
   spawn?: string;
+  // Language servers for diagnostics after edits: on (the default) or off.
+  lsp?: string;
   // "on" gives the writer ask_user, to end the run with a question for the owner (core/tools/ask.ts).
   ask?: string;
   // "on" gives the writer the todo tool, whose list a client draws as the thread's progress (core/tools/todo.ts).
@@ -187,6 +190,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}), ...(args.advisor ? { advisor: args.advisor } : {}), ...(args.classifier ? { classifier: args.classifier } : {}) });
   const spawnMode = loadSpawn(args.spawn);
   const spawnOn = spawnMode !== 'off';
+  const lspSetting = loadLsp(args.lsp);
   const askOn = loadAsk(args.ask);
   const todoOn = loadTodo(args.todo);
   const model = roles.code;
@@ -209,6 +213,18 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   if (!sandbox.on && policy.mode === 'read-only' && !args.permission && !process.env.CEDIA_PERMISSION)
     say('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
   const snapshots = workspaceSnapshots(args.cwd, cediaHome(), sandbox.placeholders);
+  // Language servers start at the first edit they cover, run as bash does (when the policy lets bash run them), and
+  // stop with the run.
+  const servers = lspServers(args.cwd, lspSetting);
+  const lspPolicy = policy;
+  const diagnoser = servers.length
+    ? openDiagnoser(args.cwd, servers, {
+        ...(sandbox.on ? { wrap: sandbox.wrap } : {}),
+        env: scrubbedEnv(),
+        warn: (l) => say(`${l}\n`),
+        may: (line) => decide(lspPolicy, bashTool, { command: line }, args.cwd).decision === 'allow',
+      })
+    : undefined;
   const fallback = loadFallback(model, args.fallback);
   const hooks = loadHooks();
   const hooked = Object.values(hooks).some((l) => l?.length);
@@ -405,6 +421,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         checks: reviewer ? [] : checks,
         ...(softChecks && !reviewer ? { softChecks } : {}),
         ...(sandbox.on ? { wrap: place?.wrap ?? sandbox.wrap } : {}),
+        // Not in a worktree: the language servers read the parent's working directory.
+        ...(diagnoser && !reviewer && !place ? { diagnose: diagnoser.diagnose } : {}),
         ...(place ? { snapshots: place.snapshots } : snapshots && !reviewer ? { snapshots } : {}),
         ...(continues ? { continues } : {}),
         ...(opts.role ? { role: opts.role } : {}),
@@ -845,6 +863,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     if (store && threadId) store.append(threadId, { run: runId, kind: 'state', state: 'failed', result: (e as Error).message });
     throw e;
   } finally {
+    await diagnoser?.close();
     await mcp?.close();
     await sandbox.close();
     process.off('SIGINT', onSignal);
