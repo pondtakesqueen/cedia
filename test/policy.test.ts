@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkSettings, loadContext, loadFallback, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSpawn } from '../src/core/config.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { preamble } from '../src/core/prompts.ts';
-import { decide, denyListed, insideWorkspace, type Policy } from '../src/core/safety/policy.ts';
+import { decide, denyListed, insideWorkspace, real, type Policy } from '../src/core/safety/policy.ts';
 import { REDACTED, secretPaths } from '../src/core/safety/secrets.ts';
 import { simpleCommands } from '../src/core/safety/shell.ts';
 import { bashTool } from '../src/core/tools/bash.ts';
@@ -102,6 +102,17 @@ describe('deny list', () => {
 
   test('allow rules and modes cannot lift it', () => {
     expect(bash({ mode: 'workspace', allow: ['bash(git push*)', 'bash'], deny: [] }, 'git push -f').rule).toBe('deny-list:force-push');
+  });
+
+  test('a path part the sandbox will not let it read counts as missing, instead of throwing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-eperm-'));
+    mkdirSync(join(dir, 'secret'));
+    const denied = (p: string) => {
+      if (p.includes('secret')) throw Object.assign(new Error(`EPERM: operation not permitted, lstat '${p}'`), { code: 'EPERM' });
+      return realpathSync(p);
+    };
+    expect(real(join(dir, 'secret', 'id_rsa'), denied)).toBe(join(realpathSync(dir), 'secret', 'id_rsa'));
+    expect(real(join(dir, 'secret'), denied)).toBe(join(realpathSync(dir), 'secret'));
   });
 
   test('a symlink out of the workspace is outside', () => {

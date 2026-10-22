@@ -119,17 +119,23 @@ export function insideWorkspace(path: string, cwd: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
-// Resolves symlinks on the part of the path that exists, so a link out of the workspace is caught.
-function real(path: string): string {
+// Resolves symlinks on the part of the path that exists, so a link out of the workspace is caught. A part that
+// cannot be read (EPERM under the OS sandbox, which denies ~/.ssh even a stat) counts as one that does not exist:
+// nothing can follow a link through it either, and throwing here failed every call that named such a path.
+export function real(path: string, realpath: (p: string) => string = realpathSync): string {
   let head = path;
   const tail: string[] = [];
-  while (!existsSync(head)) {
+  for (;;) {
+    if (existsSync(head)) {
+      try {
+        return resolve(realpath(head), ...tail);
+      } catch {}
+    }
     const up = dirname(head);
     if (up === head) return path;
     tail.unshift(head.slice(up.length).replace(/^\//, ''));
     head = up;
   }
-  return resolve(realpathSync(head), ...tail);
 }
 
 // .git (hooks and config run code later, outside any sandbox), a hooks directory set by core.hooksPath (.husky)
