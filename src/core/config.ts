@@ -24,6 +24,9 @@ export type Settings = {
   spawn?: boolean;
   // Tokens of context at which a session hands off to a new one, or "off". User settings only.
   handoffAt?: number | 'off';
+  // How a session hands off: "note" (the model writes one) or "compact" (the provider summarizes, on models that
+  // take compaction requests). User settings only.
+  handoff?: 'note' | 'compact';
   // On a spent quota: "fallback" (the default), or "wait:<minutes>" to wait up to that long in all for it to come
   // back before falling back. User settings only: a repo must not keep the user waiting.
   onQuota?: string;
@@ -44,6 +47,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   roles: ['plan', 'code', 'review', 'swarm'],
   spawn: 'any',
   handoffAt: 'any',
+  handoff: 'any',
   onQuota: 'any',
   desktop: 'any',
 };
@@ -158,6 +162,14 @@ export function loadHandoffAt(model: ModelSpec, flag?: string): number | undefin
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1000) throw new Error(`handoff-at must be a token count of at least 1000, or off: ${raw}`);
   return n;
+}
+
+// How a session hands off: flag > user settings > note. Compaction applies only where the model takes it; the
+// client falls back to the note elsewhere.
+export function loadHandoff(flag?: string): 'note' | 'compact' {
+  const raw = flag ?? readSettings(join(cediaHome(), 'settings.json')).handoff ?? 'note';
+  if (raw !== 'note' && raw !== 'compact') throw new Error(`handoff must be note or compact: ${raw}`);
+  return raw;
 }
 
 // Roles: flags > CEDIA_MODEL (code only) > user settings > defaults (code: deepseek; plan and review: off).

@@ -93,6 +93,9 @@
             "input"
           ],
           "additionalProperties": false
+        },
+        {
+          "$ref": "#/definitions/CompactionBlock"
         }
       ]
     },
@@ -238,6 +241,27 @@
           "additionalProperties": false
         }
       ]
+    },
+    "CompactionBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "compaction"
+        },
+        "text": {
+          "type": "string"
+        },
+        "opaque": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text",
+        "opaque"
+      ],
+      "additionalProperties": false
     },
     "CoreMessage": {
       "anyOf": [
@@ -433,6 +457,22 @@
         },
         "spawned": {
           "$ref": "#/definitions/Spawned"
+        },
+        "compaction": {
+          "type": "object",
+          "properties": {
+            "block": {
+              "$ref": "#/definitions/CompactionBlock"
+            },
+            "of": {
+              "$ref": "#/definitions/EventId"
+            }
+          },
+          "required": [
+            "block",
+            "of"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -1026,6 +1066,150 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "compact_request"
+            },
+            "of": {
+              "$ref": "#/definitions/EventId"
+            },
+            "bodyHash": {
+              "type": "string"
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "bodyHash",
+            "headers",
+            "id",
+            "kind",
+            "of",
+            "parentId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "compaction"
+            },
+            "requestId": {
+              "$ref": "#/definitions/EventId"
+            },
+            "stop": {
+              "$ref": "#/definitions/StopReason"
+            },
+            "usage": {
+              "$ref": "#/definitions/Usage"
+            },
+            "block": {
+              "$ref": "#/definitions/CompactionBlock"
+            },
+            "error": {
+              "$ref": "#/definitions/AttemptError"
+            },
+            "ms": {
+              "type": "number"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "id",
+            "kind",
+            "parentId",
+            "requestId",
+            "stop",
+            "usage"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "summary"
+            },
+            "session": {
+              "type": "string"
+            },
+            "block": {
+              "$ref": "#/definitions/CompactionBlock"
+            },
+            "kept": {
+              "type": "number"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "block",
+            "id",
+            "kept",
+            "kind",
+            "parentId",
+            "session"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "effort"
             },
             "effort": {
@@ -1207,7 +1391,8 @@
         "max_tokens",
         "refusal",
         "aborted",
-        "error"
+        "error",
+        "compaction"
       ]
     },
     "StreamEvent": {

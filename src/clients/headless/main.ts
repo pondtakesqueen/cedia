@@ -7,8 +7,9 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS } from '../../core/project/handoff.ts';
+import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
 import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
@@ -46,6 +47,8 @@ export type HeadlessArgs = {
   thread?: string;
   // Tokens of context at which a writer session hands off to a new one, or "off".
   handoffAt?: string;
+  // "note" or "compact": how it hands off.
+  handoff?: string;
   // The model explore sub-threads run on, and whether writer sessions may spawn sub-threads at all.
   swarm?: string;
   spawn?: string;
@@ -163,6 +166,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   }
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? (JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) as FauxStep[]) : undefined;
   const handoffAt = loadHandoffAt(model, args.handoffAt);
+  const handoffVia = loadHandoff(args.handoff);
   const escalate = args.escalate === 'off' ? undefined : ((args.escalate ?? 'high') as Effort);
   // Every run belongs to a thread of the project, unless nothing is written to disk.
   const store = args.noSessionFile ? undefined : new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
@@ -229,13 +233,25 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     note?: string;
     role?: 'plan' | 'review' | 'explore';
     child?: { thread?: string; handoff?: boolean; recall?: ToolSpec };
+    // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
+    seed?: { from: SessionLog; compaction: NonNullable<HeadlessResult['compaction']> };
   };
+  // What the session after a handoff starts from: the summary and kept turns, or the task and the note.
+  const successor = (from: SessionLog, r: HeadlessResult): RunOpts => ({
+    continues: { sessionId: from.id, changed: r.evidence?.changed ?? [] },
+    ...(r.compaction ? { seed: { from, compaction: r.compaction }, note: compactedNote(from.id) } : { note: handoffNote(from.id, r.result) }),
+  });
+  const handingOff = (r: HeadlessResult, sub: boolean) =>
+    process.stderr.write(
+      `cedia: ${sub ? "a sub-thread's " : ''}context reached ${handoffAt} tokens; ${r.compaction ? 'going on in a new session from a summary of its older turns' : `handing ${sub ? 'it ' : ''}off to a new session`}\n`,
+    );
   const run = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}) => {
     const { continues } = opts;
     const reviewer = opts.role !== undefined; // plan, review and explore read and never write
     const child = opts.child;
     const writing = !reviewer && !child; // the run's own writer: the one that hands off, gets mail and may spawn
     const usedTurns = turnsSpent();
+    if (opts.seed) seedCompacted(opts.seed.from, log, opts.seed.compaction);
     // A resumed session keeps the tools it was opened with (its cached prefix); new ones get recall once the
     // thread has an earlier session, and the thread tools once the project has another thread.
     const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
@@ -262,7 +278,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         ...(continues ? { continues } : {}),
         ...(opts.role ? { role: opts.role } : {}),
         ...(child ? (child.thread ? { thread: child.thread } : {}) : threadId ? { thread: threadId } : {}),
-        ...(handoffAt !== undefined && (writing ? handoffs < MAX_HANDOFFS : child?.handoff) ? { handoffAt } : {}),
+        ...(handoffAt !== undefined && (writing ? handoffs < MAX_HANDOFFS : child?.handoff) ? { handoffAt, ...(handoffVia === 'compact' && m.compaction ? { compact: compactPlan(handoffAt) } : {}) } : {}),
         ...(writing && spawnOn ? { spawnNudgeAt: spawnNudgeAt(handoffAt ?? defaultHandoffAt(m)) } : {}),
         ...(writing && store && threadId
           ? {
@@ -356,8 +372,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         spawned.handoffs++;
         const from = last.log;
         if (store && sub) store.append(sub, { kind: 'handoff', sessionId: from.id, note: r.result });
-        process.stderr.write(`cedia: a sub-thread's context reached ${handoffAt} tokens; handing it off to a new session\n`);
-        last = await once('handoff', { continues: { sessionId: from.id, changed: r.evidence?.changed ?? [] }, note: handoffNote(from.id, r.result) });
+        handingOff(r, true);
+        last = await once('handoff', successor(from, r));
         r = last.r;
       }
       r = { ...r, costUsd: cost };
@@ -381,11 +397,11 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       handoffs++;
       const from = writer.log;
       if (store && threadId) store.append(threadId, { kind: 'handoff', sessionId: from.id, note: r.result });
-      process.stderr.write(`cedia: context reached ${handoffAt} tokens; handing off to a new session\n`);
+      handingOff(r, false);
       writer = { model: m, log: openLog() };
       record(writer.log, m, 'handoff');
       const carry = prompt === task ? task : `${task}\n\n${prompt}`;
-      r = await run(m, writer.log, carry, { continues: { sessionId: from.id, changed: r.evidence?.changed ?? [] }, note: handoffNote(from.id, r.result) });
+      r = await run(m, writer.log, carry, successor(from, r));
     }
     return r;
   };

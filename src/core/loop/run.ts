@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildMessages, sessionHeader } from '../context/build.ts';
 import { contextSize, HANDOFF_NO_TOOLS, HANDOFF_PROMPT } from '../project/handoff.ts';
+import { COMPACT_INSTRUCTIONS, compactionCut, compactPlan, firstReply } from '../project/compact.ts';
 import { hash } from '../hash.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
@@ -21,6 +22,7 @@ import {
   ZERO_USAGE,
   type AssistantBlock,
   type AttemptError,
+  type CompactionBlock,
   type Effort,
   type EventId,
   type EventOf,
@@ -69,6 +71,12 @@ export type RunOptions = {
   // Once a turn leaves the context at this many tokens, the session writes a handoff note and ends with subtype
   // 'handoff'; the client goes on in a new session (core/project/handoff.ts). Absent means never.
   handoffAt?: number;
+  // Hand off by compaction instead of a note, on a model that takes compaction requests (core/project/compact.ts).
+  // Once a turn leaves the context at startAt tokens, the provider summarizes the session up to an earlier request
+  // in the background, keeping at least keepTokens of the newest context, while the session goes on. The session
+  // ends with subtype 'handoff' at the first turn boundary after the summary arrives, waiting for it if the context
+  // reaches handoffAt first. A compaction that brings no summary falls back to the note.
+  compact?: { startAt: number; keepTokens: number };
   // Once a turn leaves the context at this many tokens, a session that has the spawn tool and has not used it is
   // reminded of it, once (core/tools/spawn.ts). Absent means never.
   spawnNudgeAt?: number;
@@ -266,6 +274,10 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const snap: { tree?: string } = {};
   // 0: working; 1: asked for the note; 2: asked again after a tool call; 'off': gave up on handing off.
   let handoff: 0 | 1 | 2 | 'off' = 0;
+  // The compaction in flight, if any; `outcome` is set once it settles. 'off' once one failed: the note takes over.
+  type Compaction = { of: EventId; ac: AbortController; settled: Promise<void>; outcome?: { block?: CompactionBlock } };
+  const cmp: { now: Compaction | 'off' | undefined } = { now: opts.compact && model.compaction ? undefined : 'off' };
+  const inFlight = () => (cmp.now && cmp.now !== 'off' ? cmp.now : undefined);
   let spawnNudged = false;
   // Soft checks were found, not declared: they never refuse a claim, so they never escalate either.
   const escalateTo = opts.softChecks ? undefined : escalationTarget(model, opts.effort ?? model.defaultEffort, opts.escalate);
@@ -297,7 +309,14 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     return findSlop(changesFromCalls(run));
   };
 
-  const finish = (subtype: ResultSubtype, reason: TurnEndReason, result?: string): HeadlessResult => {
+  const finish = (subtype: ResultSubtype, reason: TurnEndReason, result?: string, compacted?: HeadlessResult['compaction']): HeadlessResult => {
+    // A compaction still in flight is no use to a session that ends: stop it, and log that here, before the end.
+    const pending = inFlight();
+    if (pending && !pending.outcome) {
+      pending.outcome = {};
+      pending.ac.abort();
+      log.append({ kind: 'compaction', requestId: pending.of, stop: 'aborted', usage: { ...ZERO_USAGE }, error: { code: 'network', message: 'aborted: the session ended first' } });
+    }
     log.append({ kind: 'turn_end', reason, ...(reason === 'aborted' ? { cause: 'user' as const } : {}) });
     const flags = slop().map(formatFinding);
     const ev = { ...evidence(entries()), ...(flags.length ? { flags } : {}) };
@@ -316,7 +335,38 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       ...(hasEvidence ? { evidence: ev } : {}),
       timing: summarizeTiming(performance.now() - wallStart, timing, usage.output),
       ...(peakContext ? { peakContext } : {}),
+      ...(compacted ? { compaction: compacted } : {}),
     };
+  };
+
+  // Asks the provider for a summary of the messages request `of` sent, without waiting for it. The compaction
+  // request is logged before it is sent and its outcome when it arrives; its cost counts like a turn's.
+  const startCompaction = (at: number) => {
+    const of = log.events[at] as EventOf<'request'>;
+    const creq: WireRequest = { ...rebuildRequest(log.events, at, model, log.id), compaction: { instructions: COMPACT_INSTRUCTIONS } };
+    const sent = log.append({ kind: 'compact_request', of: of.id, bodyHash: hash(provider.body(creq)), headers: redactHeaders(provider.headers(creq)) });
+    const ac = new AbortController();
+    signal.addEventListener('abort', () => ac.abort(), { once: true });
+    const start = performance.now();
+    const c: Compaction = { of: sent.id, ac, settled: Promise.resolve() };
+    c.settled = collect(provider, creq, ac.signal).then((got) => {
+      if (c.outcome) return; // the session ended first
+      const ms = Math.round(performance.now() - start);
+      if (got.ok === true) {
+        const block = got.blocks.find((b): b is CompactionBlock => b.type === 'compaction');
+        log.append({ kind: 'compaction', requestId: sent.id, stop: got.stop, usage: got.usage, ...(block ? { block } : {}), ms });
+        usage = addUsage(usage, got.usage);
+        const c2 = costUsd(model, got.usage, now());
+        cost += c2;
+        if (opts.meter) opts.meter.usd += c2;
+        c.outcome = block ? { block } : {};
+      } else {
+        const error: AttemptError = got.ok === false ? got.error : { code: 'network', message: 'aborted' };
+        log.append({ kind: 'compaction', requestId: sent.id, stop: 'error', usage: { ...ZERO_USAGE }, error, ms });
+        c.outcome = {};
+      }
+    });
+    cmp.now = c;
   };
 
   if (model.dataPolicy === 'trains' && !isPublicRepo(opts.cwd)) {
@@ -333,6 +383,15 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   while (true) {
     if (signal.aborted) return finish('interrupted', 'aborted');
     if (turns >= maxTurns) return finish('error_max_turns', 'max_turns');
+    // A summary arrived: end here, at a turn boundary, so the next session keeps every turn so far after it. A
+    // compaction that brought none hands the handoff back to the note.
+    const settled = inFlight();
+    if (settled?.outcome) {
+      const { block } = settled.outcome;
+      const of = (log.events.find((e) => e.id === settled.of) as EventOf<'compact_request'>).of;
+      cmp.now = 'off';
+      if (block) return finish('handoff', 'handoff', block.text, { block, of });
+    }
     turns++;
     const mail = handoff === 0 ? opts.inbox?.pending() : undefined;
     if (mail) {
@@ -452,9 +511,29 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       // anyway, at 125k to 145k (evals/results/README.md, long tasks).
       const added = log.events.slice(before).reduce((n, e) => n + (e.kind === 'tool_result' ? Math.ceil(e.output.text.length / 4) : 0), 0);
       const size = contextSize(got.usage) + added;
-      const first = log.events.find((e): e is EventOf<'assistant'> => e.kind === 'assistant')!;
+      const first = firstReply(log.events, runStart)!;
       const changedHere = () => ledgerEntries(log.events.slice(runStart), checks, opts.cwd).some((e) => e.kind === 'write' && e.path !== undefined);
-      if (handoff === 0 && opts.handoffAt !== undefined && size >= opts.handoffAt && size >= 2 * contextSize(first.usage) && (!opts.continues || changedHere())) {
+      // A session that starts from a summary starts large by design (the kept turns, and the turns that ran while the
+      // summary was written: 40k to 63k on Haiku at a 90k handoff point), so doubling would carry it past the handoff
+      // point; it must have grown by the share a compaction keeps instead.
+      const base = contextSize(first.usage);
+      const grown = log.events.some((e) => e.kind === 'summary') ? base + (opts.compact?.keepTokens ?? compactPlan(opts.handoffAt ?? 0).keepTokens) : 2 * base;
+      const due = (at: number) => size >= at && size >= grown && (!opts.continues || changedHere());
+      // By compaction: start it in the background, and at the handoff point wait for it to settle (the top of the
+      // loop then ends the session, or falls back to the note when no summary came).
+      if (cmp.now === undefined && opts.handoffAt !== undefined && handoff === 0 && due(opts.compact!.startAt)) {
+        const at = compactionCut(log.events, runStart, size, opts.compact!.keepTokens);
+        if (at !== undefined) startCompaction(at);
+        // Nothing to summarize that would keep enough (one turn holds most of the context): the note it is.
+        else if (size >= opts.handoffAt) cmp.now = 'off';
+      }
+      const pending = inFlight();
+      if (pending && !pending.outcome && opts.handoffAt !== undefined && size >= opts.handoffAt) await pending.settled;
+      // A compaction that brought no summary hands the handoff to the note, from this turn on.
+      if (pending?.outcome && !pending.outcome.block) cmp.now = 'off';
+      if (inFlight()) {
+        // the summary is on its way, or here: the top of the loop ends the session
+      } else if (cmp.now === 'off' && handoff === 0 && opts.handoffAt !== undefined && due(opts.handoffAt)) {
         handoff = 1;
         log.append({ kind: 'reminder', as: 'user', text: HANDOFF_PROMPT });
       } else if (!spawnNudged && handoff === 0 && opts.spawnNudgeAt !== undefined && size >= opts.spawnNudgeAt && byName.has('spawn')) {
