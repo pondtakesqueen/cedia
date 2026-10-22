@@ -26,6 +26,7 @@ const LABELS: Record<string, string> = {
   'claude-sonnet-5-5': 'Claude Sonnet 5.5',
   'claude-haiku-5-5': 'Claude Haiku 5.5',
   'deepseek-v4.1-flash': 'DeepSeek V4.1 Flash',
+  'deepseek/deepseek-v4.1-flash-1017': 'DeepSeek V4.1 Flash',
   'deepseek-v4-pro': 'DeepSeek V4 Pro',
   'beam-free': 'Beam (free)',
   'muse-spark-1.3-contributor': 'Muse Spark 1.3 (contributor)',
