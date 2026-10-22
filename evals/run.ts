@@ -97,7 +97,7 @@ export type Result = {
 
 type Invocation = { bin: string; args: string[]; env?: Record<string, string> };
 
-const HARNESSES: Record<string, (task: Task, cwd: string, model: string | null) => Invocation> = {
+export const HARNESSES: Record<string, (task: Task, cwd: string, model: string | null) => Invocation> = {
   cedia: (task, _cwd, model) => ({
     bin: process.env.CEDIA_EVAL_CEDIA_BIN ?? resolve(import.meta.dir, "../bin/cedia"),
     args: [
@@ -115,7 +115,18 @@ const HARNESSES: Record<string, (task: Task, cwd: string, model: string | null) 
   pi: (task, _cwd, model) => ({ bin: process.env.CEDIA_EVAL_PI_BIN ?? "pi", args: ["-p", task.prompt, ...(model ? ["--model", model] : [])] }),
   claude: (task, _cwd, model) => ({
     bin: process.env.CEDIA_EVAL_CLAUDE_BIN ?? "claude",
-    args: ["-p", task.prompt, "--output-format", "json", "--permission-mode", "acceptEdits", "--allowedTools", "Bash", ...(model ? ["--model", model] : [])],
+    // Claude Code as shipped, not the user's setup: no user settings (hooks, plugins, permissions) and no MCP
+    // server, with the same spend cap cedia gets. The project's own settings, if the task has any, still load.
+    args: [
+      "-p", task.prompt,
+      "--output-format", "json",
+      "--permission-mode", "acceptEdits",
+      "--allowedTools", "Bash",
+      "--setting-sources", "project,local",
+      "--strict-mcp-config",
+      "--max-budget-usd", process.env.CEDIA_EVAL_RUN_BUDGET ?? String(task.budgetUsd ?? 0.5),
+      ...(model ? ["--model", model] : []),
+    ],
   }),
   codex: (task) => ({ bin: process.env.CEDIA_EVAL_CODEX_BIN ?? "codex", args: ["exec", "--full-auto", task.prompt] }),
   opencode: (task, _cwd, model) => ({ bin: process.env.CEDIA_EVAL_OPENCODE_BIN ?? "opencode", args: ["run", task.prompt, ...(model ? ["--model", model] : [])] }),
