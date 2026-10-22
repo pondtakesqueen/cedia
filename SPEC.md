@@ -132,6 +132,7 @@ Rules that go with the shapes:
 - **Mid-conversation system prompt.** Appended as a system message when `midConversationSystem` is true, otherwise as a user text block.
 - **Parallel tools.** Calls whose `ToolSpec.effect` is `read` or `network` run in a bounded pool (8 at a time); `write_workspace` and `exec` run alone, as ordering barriers. `tool_intent` events are written in assistant block order; results go back as one batch (Anthropic requires all results of a turn in one user message).
 - **Permission order in the log.** `assistant → permission → tool_intent (only if allowed) → tool_result`. A denied call gets `tool_result{status:'denied'}` and no `tool_intent`.
+- **Result in the log.** A run that ends with a result writes it, receipt and evidence included, as `result{result: HeadlessResult}` right after the last `turn_end` of its last writer session, so a client that rebuilds a thread from the files shows its last receipt. It is not streamed as an event (the stream already ends with the result line), and the context builder skips it, so no model sees it. A resumed session goes on after it.
 - **Token estimate.** The last response's `usage` plus `chars/4` for the delta; Anthropic `count_tokens` on demand.
 - **Faux provider.** A script is an array of assistant messages or factories `(context, state) => AssistantEvent`, emitted as delta-level `StreamEvent`s. It computes `usage` by hashing the prefix it was sent, so `cacheRead` is nonzero exactly when the prefix repeats. Shape modeled on pi's faux provider (MIT); add a NOTICE entry if code is adapted.
 
@@ -171,6 +172,7 @@ cedian (`pongsathonkheereekaew/cedian`) is the native macOS desktop for cedia: i
 - Shapes come from `src/protocol/protocol.schema.json`; replays come from `test/fixtures/sessions/`. A change to either is a deliberate regeneration in the same PR as the type change.
 - `cedia --version --json` prints `VersionInfo`: the version, `protocol` (the first 16 hex digits of the sha256 of the `protocol.schema.json` the build carries, so the desktop can tell whether its pinned schema matches) and `capabilities`, the features a client may branch on. A capability is added when its feature lands and never renamed.
 - A prompt is one run: `cedia -p <text> --thread <id> --output-format stream-json`, in the thread's worktree. Text sent while it works goes in with `cedia threads send`, delivered at the next turn boundary, and `cedia threads unsend` takes it back until then; SIGTERM aborts. The user's 👍/👎 goes in with `cedia threads rate`.
+- The receipt of a thread's last run is the last `result` event in its sessions' logs; the live stream's final line is the same object.
 - Thread and session files are cedia's to write. The desktop reads and indexes them and changes them only through cedia commands.
 - `~/.cedia/settings.json` is the one settings file. The desktop's own keys live under `desktop`; everything else is cedia's schema.
 - Images and video in a thread go to a model that reads images: a new session on Haiku 5.5 when the code model is text-only (decided 2026-10-21; not built yet).

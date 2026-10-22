@@ -35,6 +35,13 @@ describe('session linter', () => {
     expect(lintSession(await goodLog())).toEqual([]);
   });
 
+  test('a run\'s result may follow the last turn_end, and nowhere else', async () => {
+    const good = await goodLog();
+    const result = { id: 'r1', parentId: null, at: '', kind: 'result', result: { type: 'result', subtype: 'success', sessionId: 's', numTurns: 2, usage: { uncached: 0, cacheRead: 0, cacheWrite: 0, output: 0 }, costUsd: 0, cacheHitRatio: 0, result: 'ok' } } as SessionEvent;
+    expect(rules(mutate(good, (es) => [...es, result]))).toEqual([]);
+    expect(rules(mutate(good, (es) => [...es.slice(0, 3), result, ...es.slice(3)]))).toEqual(['turn-end']);
+  });
+
   test('a missing tool_result', async () => {
     expect(rules(mutate(await goodLog(), (es) => es.filter((e) => !(e.kind === 'tool_result' && e.callId === 'c1'))))).toEqual(['tool-pairing']);
   });

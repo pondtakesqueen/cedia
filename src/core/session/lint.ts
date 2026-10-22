@@ -69,6 +69,9 @@ export function lintSession(events: SessionEvent[]): LintFinding[] {
       case 'turn_end':
         pendingRequest = undefined;
         break;
+      case 'result':
+        if (events[i - 1]?.kind !== 'turn_end' && events[i - 1]?.kind !== 'result') add(i, 'turn-end', 'a result that does not follow turn_end');
+        break;
     }
     // Results for a turn's calls must all arrive before the next request.
     if (e.kind === 'request' || e.kind === 'turn_end') {
@@ -77,6 +80,8 @@ export function lintSession(events: SessionEvent[]): LintFinding[] {
       for (const set of [open, results, allowed, denied, intents]) set.clear();
     }
   });
-  if (events.length > 1 && events.at(-1)!.kind !== 'turn_end') add(events.length - 1, 'turn-end', 'the log does not end with turn_end');
+  // A run's result may follow the last turn_end.
+  const last = events.findLastIndex((e) => e.kind !== 'result');
+  if (events.length > 1 && events[last]?.kind !== 'turn_end') add(last, 'turn-end', 'the log does not end with turn_end');
   return out;
 }

@@ -451,6 +451,9 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
     result = { ...combine(parts, result, children), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
     if (store && threadId) store.append(threadId, { kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
+    // The receipt goes in the writer's log too, so a thread rebuilt from the files shows it. Quiet: a stream-json
+    // client gets it as the result line below.
+    writer.log.append({ kind: 'result', result }, { quiet: true });
     if (args.outputFormat === 'text') {
       out(result.result + (result.result.endsWith('\n') ? '' : '\n'));
       if (result.evidence) process.stderr.write(receipt(result.evidence, result.thread) + '\n');

@@ -33,11 +33,12 @@ export class SessionLog {
     return this.events.at(-1);
   }
 
-  append<E extends NewEvent>(body: E): SessionEvent & E {
+  // quiet: on disk but not sent to listeners, for an event a client already gets another way (the run's result).
+  append<E extends NewEvent>(body: E, opts: { quiet?: boolean } = {}): SessionEvent & E {
     const event = { id: crypto.randomUUID() as EventId, parentId: this.leaf?.id ?? null, at: new Date().toISOString(), ...body };
     if (this.path) appendFileSync(this.path, JSON.stringify(event) + '\n');
     this.events.push(event as SessionEvent);
-    for (const l of this.listeners) l(event as SessionEvent);
+    if (!opts.quiet) for (const l of this.listeners) l(event as SessionEvent);
     return event as SessionEvent & E;
   }
 }
