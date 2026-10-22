@@ -137,8 +137,11 @@ describe('handoff in the loop', () => {
     expect(lintSession(never.log.events)).toEqual([]);
   });
 
-  test('a session that has only read does not hand off: its successor would read it all again', async () => {
-    const { r, log } = await run([tool('c1', 'big', {}), tool('c2', 'big', {}), write, tool('c3', 'big', {}), reply('the note')], { handoffAt: 2000 });
+  test('a first session that has only read hands off; one that picked up from another must change a file first', async () => {
+    const first = await run([tool('c1', 'big', {}), reply('the plan')], { handoffAt: 2000 });
+    expect(first.r).toMatchObject({ subtype: 'handoff', result: 'the plan' });
+    const continues = { sessionId: 'earlier', changed: [] };
+    const { r, log } = await run([tool('c1', 'big', {}), tool('c2', 'big', {}), write, tool('c3', 'big', {}), reply('the note')], { handoffAt: 2000, continues });
     expect(r).toMatchObject({ subtype: 'handoff', result: 'the note' });
     // Asked for the note only after the write, two turns past the point it first passed handoffAt.
     const asked = log.events.findIndex((e) => e.kind === 'reminder' && e.text === HANDOFF_PROMPT);
