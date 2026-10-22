@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { checkLedgerIdentity, claimsDone, defaultOut, estimateCost, formatSummary, loadTasks, parseReported, REPO_ROOT, repoTask, runTask, spawnedNote, splitCommand, summarize, type Result, type Task } from "../evals/run.ts";
+import { checkLedgerIdentity, claimsDone, defaultOut, HARNESSES, estimateCost, formatSummary, loadTasks, parseReported, REPO_ROOT, repoTask, runTask, spawnedNote, splitCommand, summarize, type Result, type Task } from "../evals/run.ts";
 
 describe("evals runner", () => {
   test("splitCommand keeps quoted arguments together", () => {
@@ -151,4 +151,13 @@ describe("evals runner", () => {
     expect(defaultOut("cedia", "opencode-go/deepseek-v4.1-flash", at)).toBe(join(REPO_ROOT, "evals", "results", "2026-10-22-cedia-opencode-go_deepseek-v4.1-flash-130509.jsonl"));
     expect(defaultOut("claude", null, at)).toEndWith("2026-10-22-claude-default-130509.jsonl");
   });
+});
+
+test("the claude arm runs Claude Code as shipped, with cedia's spend cap", () => {
+  const task = { id: "t", category: "c", source: "s", prompt: "do it", verify: "bun test", budgetUsd: 1.5 } as Task;
+  const args = HARNESSES.claude!(task, "/tmp", "sonnet").args.join(" ");
+  expect(args).toContain("--setting-sources project,local");
+  expect(args).toContain("--strict-mcp-config");
+  expect(args).toContain("--max-budget-usd 1.5");
+  expect(args).toContain("--model sonnet");
 });
