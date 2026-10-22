@@ -34,9 +34,6 @@ export type AttemptError = { code: AttemptErrorCode; status?: number; retryAfter
 
 export type ToolDef = { name: string; description: string; schema: JsonObject };
 
-// What raised the writer's effort: the done gate refused a claim, or a declared check failed after a change.
-export type EscalationCause = 'unverified' | 'check_failed';
-
 export type TurnEndReason = 'completed' | 'aborted' | 'error' | 'max_tokens' | 'budget' | 'max_turns' | 'handoff';
 
 type EventBody =
@@ -62,7 +59,7 @@ type EventBody =
   | { kind: 'reminder'; text: string; as: 'system' | 'user' }
   // A per-message effort change: from the latest user turn with new input on, the model works at this level
   // (core/loop/run.ts escalation). Wires without it (caps.midConversationEffort) never get one.
-  | { kind: 'effort'; effort: Effort; why: EscalationCause }
+  | { kind: 'effort'; effort: Effort }
   | { kind: 'turn_end'; reason: TurnEndReason; cause?: 'user' | 'parent' | 'hook' };
 
 export type SessionEvent = { id: EventId; parentId: EventId | null; at: string } & EventBody;

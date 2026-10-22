@@ -17,9 +17,8 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --max-turns <n>          stop after n model calls (default 200)
       --max-budget-usd <x>     stop once spend reaches x
       --effort <level>         low | medium | high | xhigh | max (default: the model's, see catalog)
-      --escalate <level|off>   the effort a writer session moves to, once, when the done gate refuses its claim or a
-                               declared check fails after a change (default high). Claude 5.5 models only: the
-                               change is a message, so the prompt cache stays
+      --escalate <level|off>   the effort a writer session moves to, once, when the done gate refuses its claim
+                               (default high). Claude 5.5 models only: the change is a message, so the cache stays
       --cwd <dir>              working directory (default: current)
       --permission <mode>      auto | read-only | workspace (default: $CEDIA_PERMISSION, ~/.cedia/settings.json, auto).
                                auto is workspace when the sandbox is on, read-only when it is off. cedia never stops to ask

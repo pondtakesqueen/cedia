@@ -263,13 +263,6 @@
         "max"
       ]
     },
-    "EscalationCause": {
-      "type": "string",
-      "enum": [
-        "unverified",
-        "check_failed"
-      ]
-    },
     "EventId": {
       "type": "string"
     },
@@ -957,9 +950,6 @@
             "effort": {
               "$ref": "#/definitions/Effort"
             },
-            "why": {
-              "$ref": "#/definitions/EscalationCause"
-            },
             "id": {
               "$ref": "#/definitions/EventId"
             },
@@ -982,8 +972,7 @@
             "effort",
             "id",
             "kind",
-            "parentId",
-            "why"
+            "parentId"
           ]
         },
         {

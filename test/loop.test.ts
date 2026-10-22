@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CHECK_FAILED_ESCALATION, CONTINUE_AFTER_LIMIT, EMPTY_REPLY, escalationTarget, runPrompt, type RunOptions } from '../src/core/loop/run.ts';
+import { CONTINUE_AFTER_LIMIT, EMPTY_REPLY, escalationTarget, runPrompt, type RunOptions } from '../src/core/loop/run.ts';
 import { FAUX_MODEL, resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, text, toolUse, type FauxStep } from '../src/core/providers/faux.ts';
 import { lintSession } from '../src/core/session/lint.ts';
@@ -371,14 +371,13 @@ describe('loop', () => {
         Object.assign(g.opts, { model: claudeLike, effort: 'low', escalate: 'high' }, extra);
         return g;
       };
-      const effortMessages = (body: any) => body.messages.filter((m: any) => m.role === 'effort');
 
       test('a refused claim raises effort once, right after the reminder, and every earlier message stays as sent', async () => {
         const { log, opts, provider } = esc([{ blocks: [fixA()] }, { blocks: [text('done')] }, { blocks: [run('true')] }, { blocks: [text('checked')] }]);
         expect((await runPrompt(opts, 'fix')).subtype).toBe('success');
         const at = kinds(log.events).indexOf('effort');
         expect(kinds(log.events).slice(at - 2, at + 2)).toEqual(['assistant', 'reminder', 'effort', 'request']);
-        expect(of(log.events, 'effort')).toEqual([expect.objectContaining({ effort: 'high', why: 'unverified' })]);
+        expect(of(log.events, 'effort')).toEqual([expect.objectContaining({ effort: 'high' })]);
         const bodies = provider.state.bodies as any[];
         expect(bodies[2].messages.slice(-2)).toEqual([{ role: 'user', parts: [{ type: 'text', text: expect.stringContaining('`true`') }] }, { role: 'effort', effort: 'high' }]);
         // Cache: each request's messages start with the previous request's, byte for byte.
@@ -388,19 +387,11 @@ describe('loop', () => {
         expectPaired(log.events);
       });
 
-      test('a check that fails after a change raises effort once, with a user turn that carries it', async () => {
-        const { log, opts, provider } = esc([{ blocks: [run('false')] }, { blocks: [fixA()] }, { blocks: [run('false')] }, { blocks: [run('false')] }, { blocks: [run('true')] }, { blocks: [text('fixed')] }]);
+      test('a failed check alone does not escalate: only the refused claim does', async () => {
+        const { log, opts } = esc([{ blocks: [fixA()] }, { blocks: [run('false')] }, { blocks: [run('true')] }, { blocks: [text('fixed')] }]);
         expect((await runPrompt(opts, 'fix')).subtype).toBe('success');
-        // The first failure came before any change: the bug itself, not a failed attempt.
-        expect(of(log.events, 'effort')).toEqual([expect.objectContaining({ effort: 'high', why: 'check_failed' })]);
-        expect(of(log.events, 'reminder').map((r) => r.text)).toEqual([CHECK_FAILED_ESCALATION]);
-        const third = (provider.state.bodies as any[])[3];
-        expect(third.messages.slice(-2)).toEqual([
-          { role: 'user', parts: [expect.objectContaining({ type: 'tool_result', isError: true }), { type: 'text', text: CHECK_FAILED_ESCALATION }] },
-          { role: 'effort', effort: 'high' },
-        ]);
-        expect(effortMessages((provider.state.bodies as any[]).at(-1))).toHaveLength(1);
-        expectPaired(log.events);
+        expect(of(log.events, 'effort')).toEqual([]);
+        expect(of(log.events, 'reminder')).toEqual([]);
       });
 
       test('no escalation without per-message effort, without a step up, with escalate off, or on soft checks', async () => {
@@ -409,7 +400,6 @@ describe('loop', () => {
           const { log, opts } = esc(steps(), extra);
           await runPrompt(opts, 'fix');
           expect(of(log.events, 'effort')).toEqual([]);
-          expect(of(log.events, 'reminder').map((r) => r.text)).not.toContain(CHECK_FAILED_ESCALATION);
         }
       });
 

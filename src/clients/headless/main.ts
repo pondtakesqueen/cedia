@@ -33,8 +33,7 @@ export type HeadlessArgs = {
   maxTurns?: number;
   maxBudgetUsd?: number;
   effort?: Effort;
-  // The level a writer session moves to when the done gate refuses its claim or a declared check fails after a
-  // change, or "off". Default high.
+  // The level a writer session moves to when the done gate refuses its claim, or "off". Default high.
   escalate?: string;
   noSessionFile?: boolean;
   permission?: string;
