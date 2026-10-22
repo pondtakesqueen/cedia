@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPrompt } from '../src/core/loop/run.ts';
 import { HANDOFF_NO_TOOLS, HANDOFF_PROMPT, defaultHandoffAt, resumeChoice } from '../src/core/project/handoff.ts';
-import { foldThread, threadsDir, ThreadStore, titleOf } from '../src/core/project/threads.ts';
+import { foldThread, threadsDir, ThreadStore, titleOf, type TodoState } from '../src/core/project/threads.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, type FauxStep } from '../src/core/providers/faux.ts';
 import { lintSession } from '../src/core/session/lint.ts';
@@ -448,6 +448,27 @@ describe('cedia threads (offline, faux)', () => {
     const bad = JSON.parse(cedia(tmp(), [tool('a1', 'ask_user', { question: 'pick', options: ['only one'] }), reply('went on')], ['-p', 'x', ...base, '--check', 'true', '--ask', 'on']).out);
     expect(bad).toMatchObject({ subtype: 'success', result: 'went on' });
     expect(cedia(tmp(), [], ['-p', 'x', '--ask', 'maybe']).err).toContain('--ask must be on or off');
+  });
+
+  test('--todo on: the writer keeps a todo list, which the thread holds as its progress, even read-only', () => {
+    const dir = tmp();
+    const steps = (states: TodoState[]) => ({ items: ['read the code', 'write the fix', 'run the tests'].map((text, i) => ({ text, state: states[i]! })) });
+    const r = JSON.parse(
+      cedia(dir, [tool('t1', 'todo', steps(['doing', 'pending', 'pending'])), tool('t2', 'todo', steps(['done', 'doing', 'pending'])), tool('t3', 'todo', { items: [{ text: '', state: 'done' }] }), reply('stopped here')], ['-p', 'fix it', '--output-format', 'json', '--sandbox', 'off', '--todo', 'on']).out,
+    );
+    expect(r).toMatchObject({ subtype: 'success' });
+    const log = sessionsOf(dir).find((l) => l.id === r.sessionId)!;
+    const results = log.events.filter((e): e is EventOf<'tool_result'> => e.kind === 'tool_result').map((e) => e.output.text);
+    expect(results).toEqual(['Saved: 0/3 done; now: read the code.', 'Saved: 1/3 done; now: write the fix.', 'every item needs text']);
+    const t = storeOf(dir).read(r.thread);
+    expect(t.todo).toEqual(steps(['done', 'doing', 'pending']).items);
+    expect(storeOf(dir).events(r.thread).filter((e) => e.kind === 'todo')).toHaveLength(2);
+    expect(threadsCli(dir, 'list').out).toContain('[1/3] fix it');
+    expect(threadsCli(dir, 'show', r.thread).out).toContain('todo 1/3:\n  [x] read the code\n  [>] write the fix\n  [ ] run the tests');
+    // Off by default.
+    const off = JSON.parse(cedia(tmp(), [reply('done')], ['-p', 'x', '--output-format', 'json', '--sandbox', 'off']).out);
+    expect(off.subtype).toBe('success');
+    expect(cedia(tmp(), [], ['-p', 'x', '--todo', 'maybe']).err).toContain('--todo must be on or off');
   });
 
   test('a read-only session cannot message another thread', () => {

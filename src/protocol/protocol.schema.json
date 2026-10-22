@@ -181,7 +181,8 @@
         "handoff",
         "plan",
         "review",
-        "ask"
+        "ask",
+        "todo"
       ]
     },
     "Check": {
@@ -2154,6 +2155,33 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "todo"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/TodoItem"
+              }
+            },
+            "at": {
+              "type": "string"
+            },
+            "run": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "items",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "question"
             },
             "sessionId": {
@@ -2378,6 +2406,30 @@
         "outputTokPerSec"
       ],
       "additionalProperties": false
+    },
+    "TodoItem": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/TodoState"
+        }
+      },
+      "required": [
+        "text",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "TodoState": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "doing",
+        "done"
+      ]
     },
     "ToolDef": {
       "type": "object",

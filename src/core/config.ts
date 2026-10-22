@@ -28,6 +28,7 @@ export type Settings = {
   // Whether writer sessions of a thread get ask_user, to end a run with a question for the owner (default false: a
   // headless run has nobody to answer). The desktop turns it on. User settings only.
   ask?: boolean;
+  todo?: boolean;
   // Tokens of context at which a session hands off to a new one, or "off". User settings only.
   handoffAt?: number | 'off';
   // How a session hands off: "note" (the model writes one) or "compact" (the provider summarizes, on models that
@@ -58,6 +59,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   roles: ['plan', 'code', 'review', 'swarm', 'advisor'],
   spawn: 'any',
   ask: 'any',
+  todo: 'any',
   handoffAt: 'any',
   handoff: 'any',
   onQuota: 'any',
@@ -177,6 +179,12 @@ export function loadSpawn(flag?: string): SpawnMode {
 export function loadAsk(flag?: string): boolean {
   if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--ask must be on or off: ${flag}`);
   return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).ask ?? false);
+}
+
+// todo: flag > user settings > off.
+export function loadTodo(flag?: string): boolean {
+  if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--todo must be on or off: ${flag}`);
+  return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).todo ?? false);
 }
 
 // The user's MCP servers, checked: each a command (with args, env, cwd) or a URL (with headers), optionally

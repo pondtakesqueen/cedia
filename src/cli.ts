@@ -56,6 +56,8 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --ask <on|off>           give the writer ask_user, to end the run with one question for you when only you can
                                decide; the thread waits as 'asking' and your answer is its next prompt
                                (default: settings ask, off)
+      --todo <on|off>          give the writer a todo list, kept in the thread as its progress (default: settings
+                               todo, off)
       --swarm <ref>            the model explore sub-threads run on (default: roles.swarm in settings, beam)
       --thread <id>            go on with a thread of this project instead of opening a new one
       --handoff-at <n|off>     hand off to a new session of the thread once the context reaches n tokens
@@ -131,6 +133,7 @@ export async function main(argv: string[]): Promise<number> {
       thread: { type: 'string' },
       spawn: { type: 'string' },
       ask: { type: 'string' },
+      todo: { type: 'string' },
       swarm: { type: 'string' },
       'handoff-at': { type: 'string' },
       handoff: { type: 'string' },
@@ -178,6 +181,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.thread ? { thread: values.thread } : {}),
     ...(values.spawn ? { spawn: values.spawn } : {}),
     ...(values.ask ? { ask: values.ask } : {}),
+    ...(values.todo ? { todo: values.todo } : {}),
     ...(values.swarm ? { swarm: values.swarm } : {}),
     ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
     ...(values.handoff ? { handoff: values.handoff } : {}),
@@ -289,6 +293,7 @@ function threads(argv: string[]): number {
       if (t.handoff) lines.push('', `handoff from ${t.handoff.sessionId}:`, t.handoff.note);
       if (t.result) lines.push('', 'result:', t.result);
       for (const m of t.messages) lines.push('', `message ${m.id} from ${m.from} at ${m.at}${m.unsent ? ' (unsent)' : t.pending.includes(m) ? ' (not seen yet)' : ''}:`, m.text);
+      if (t.todo?.length) lines.push('', `todo ${t.todo.filter((i) => i.state === 'done').length}/${t.todo.length}:`, ...t.todo.map((i) => `  ${i.state === 'done' ? '[x]' : i.state === 'doing' ? '[>]' : '[ ]'} ${i.text}`));
       if (t.question) lines.push('', `question from ${t.question.sessionId}:`, t.question.question, ...(t.question.options ?? []).map((o, i) => `  ${i + 1}. ${o}`), `answer with: cedia -p "<answer>" --thread ${t.id}`);
       for (const r of t.ratings) lines.push('', `rated ${r.rating} at ${r.at}${r.sessionId ? ` (session ${r.sessionId})` : ''}${r.note ? `: ${r.note}` : ''}`);
       console.log(lines.join('\n'));

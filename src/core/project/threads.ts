@@ -28,6 +28,8 @@ type ThreadBody =
   // The user's thumbs up or down on an answer: the session that gave it, if known. It picks eval cases and never
   // reaches a model.
   | { kind: 'rate'; rating: Rating; sessionId?: string; note?: string }
+  // The writer's list of steps, whole each time (core/tools/todo.ts): what a client draws as the thread's progress.
+  | { kind: 'todo'; items: TodoItem[] }
   // The question a session asked the owner, written just before the 'asking' state.
   | { kind: 'question'; sessionId: string; question: string; options?: string[] }
   | { kind: 'state'; state: ThreadState; result?: string }
@@ -46,6 +48,9 @@ type ThreadBody =
 export type RunFrom = { sessionId: string; path: string; events: number; model: string };
 // `run`: the run that wrote it, on what a run writes (core/project/rewind.ts).
 export type ThreadEvent = { at: string; run?: string } & ThreadBody;
+
+export type TodoState = 'pending' | 'doing' | 'done';
+export type TodoItem = { text: string; state: TodoState };
 
 export type Rating = 'up' | 'down';
 export const RATINGS: Rating[] = ['up', 'down'];
@@ -75,6 +80,8 @@ export type Thread = {
   rewound: string[];
   // The last run has not ended yet (no state since it began): it is going on, or it was killed.
   running: boolean;
+  // The latest todo list, if the writer kept one.
+  todo?: TodoItem[];
   // The open question while the thread is asking.
   question?: { sessionId: string; question: string; options?: string[]; at: string };
   updatedAt: string;
@@ -202,6 +209,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     else if (e.kind === 'message') t.messages.push({ id: e.id, from: e.from, text: e.text, at: e.at });
     else if (e.kind === 'delivered') for (const m of e.ids) delivered.add(m);
     else if (e.kind === 'unsend') for (const m of e.ids) unsent.add(m);
+    else if (e.kind === 'todo') t.todo = e.items;
     else if (e.kind === 'question') t.question = { sessionId: e.sessionId, question: e.question, ...(e.options ? { options: e.options } : {}), at: e.at };
     else if (e.kind === 'rate') t.ratings.push({ rating: e.rating, ...(e.sessionId ? { sessionId: e.sessionId } : {}), ...(e.note ? { note: e.note } : {}), at: e.at });
     else if (e.kind === 'archived') t.archived = e.archived;
@@ -256,5 +264,6 @@ export function inboxReminder(messages: ThreadMessage[]): string {
 // One line per thread for the threads tool and `cedia threads`.
 export function threadLine(t: Thread): string {
   const latest = (t.result ?? t.handoff?.note ?? '').trim().split('\n')[0] ?? '';
-  return `${t.id}  ${t.state.padEnd(7)}  ${t.parent ? `(sub-thread of ${t.parent}) ` : ''}${t.archived ? '(archived) ' : ''}${t.title}${latest ? `\n    ${latest.length > 120 ? `${latest.slice(0, 117)}...` : latest}` : ''}`;
+  const done = t.todo?.filter((i) => i.state === 'done').length;
+  return `${t.id}  ${t.state.padEnd(7)}  ${t.parent ? `(sub-thread of ${t.parent}) ` : ''}${t.archived ? '(archived) ' : ''}${t.todo?.length ? `[${done}/${t.todo.length}] ` : ''}${t.title}${latest ? `\n    ${latest.length > 120 ? `${latest.slice(0, 117)}...` : latest}` : ''}`;
 }

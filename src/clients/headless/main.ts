@@ -7,7 +7,7 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
@@ -20,6 +20,7 @@ import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, ty
 import { spawnNudgeAt, spawnPool, spawnTool, subtaskPrompt, type SpawnKind, type SpawnOutcome, type Spawner } from '../../core/tools/spawn.ts';
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { answerPrompt, askTool } from '../../core/tools/ask.ts';
+import { todoTool } from '../../core/tools/todo.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
@@ -68,6 +69,8 @@ export type HeadlessArgs = {
   spawn?: string;
   // "on" gives the writer ask_user, to end the run with a question for the owner (core/tools/ask.ts).
   ask?: string;
+  // "on" gives the writer the todo tool, whose list a client draws as the thread's progress (core/tools/todo.ts).
+  todo?: string;
   // "fallback" or "wait:<minutes>": what a spent quota does.
   onQuota?: string;
   // Reviews the change once the writer's claim passes the done gate.
@@ -167,6 +170,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const spawnMode = loadSpawn(args.spawn);
   const spawnOn = spawnMode !== 'off';
   const askOn = loadAsk(args.ask);
+  const todoOn = loadTodo(args.todo);
   const model = roles.code;
   const declared = loadChecks(args.cwd, args.checks);
   const checks = declared.length ? declared : detectChecks(args.cwd);
@@ -355,7 +359,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // server is gone keeps the tool, and a call to it says the server is not there.
     const mcpTools = [...(mcp?.tools ?? []), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map(mcpStub)];
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
-    const extra = [...(spawnOn ? [spawnHere] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
+    const extra = [...(spawnOn ? [spawnHere] : []), ...(askOn && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
     const tools = opts.role === 'advisor' ? [] : reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
     // A work sub-thread in a worktree works there: its own directory, environment line and snapshots.
     const place = child?.place;
