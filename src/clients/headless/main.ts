@@ -208,11 +208,13 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   // Scripted models share one script, so a later session reads on from where the last one stopped.
   let faux: Provider | undefined;
   const providerOf = (m: ModelSpec) => (m.wire === 'faux' ? (faux ??= providerFor(m, { fauxScript })) : providerFor(m));
-  // Every session of the run draws on one turn and budget allowance.
+  // Every session of the run draws on one turn and budget allowance. Spend is metered as it happens, so a
+  // sub-thread's counts against the budget of the session that spawned it, and the other way round.
   const parts: HeadlessResult[] = [];
+  const meter = { usd: 0 };
   // The parts that were sub-thread sessions.
   const children = new Set<HeadlessResult>();
-  const spent = () => ({ turns: parts.reduce((n, r) => n + r.numTurns, 0), costUsd: parts.reduce((c, r) => c + r.costUsd, 0) });
+  const turnsSpent = () => parts.reduce((n, r) => n + r.numTurns, 0);
   let handoffs = 0;
   // Quota waits add up across the run's sessions, against the one ceiling.
   let quotaWaited = 0;
@@ -229,7 +231,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     const reviewer = opts.role !== undefined; // plan, review and explore read and never write
     const child = opts.child;
     const writing = !reviewer && !child; // the run's own writer: the one that hands off, gets mail and may spawn
-    const used = spent();
+    const usedTurns = turnsSpent();
     // A resumed session keeps the tools it was opened with (its cached prefix); new ones get recall once the
     // thread has an earlier session, and the thread tools once the project has another thread.
     const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
@@ -274,8 +276,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
           ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), process.stderr.write(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
           : {}),
         ...(args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
-        ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - used.turns } : {}),
-        ...(args.maxBudgetUsd !== undefined ? { maxBudgetUsd: args.maxBudgetUsd - used.costUsd } : {}),
+        ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - usedTurns } : {}),
+        ...(args.maxBudgetUsd !== undefined ? { maxBudgetUsd: args.maxBudgetUsd, meter } : {}),
         ...(args.outputFormat === 'stream-json' ? { onStream: (event) => out(encode({ type: 'stream', event })) } : {}),
       },
       prompt,

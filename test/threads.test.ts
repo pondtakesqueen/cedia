@@ -460,6 +460,32 @@ describe('sub-threads (offline, faux)', () => {
     expect(sub).toMatchObject({ state: 'failed', archived: false });
   });
 
+  test("a sub-thread's spend counts against the run's budget, in the sub-thread and in the parent after it", () => {
+    const dir = tmp();
+    // Every faux turn here costs about the same, so the budget is a turn count: the parent's spawn, then the
+    // sub-thread's turns. Before spend was shared, the sub-thread had the whole budget to itself and the parent
+    // went on spending after it.
+    const one = JSON.parse(cedia(tmp(), [call('c0', 'true'), reply('ok')], ['-p', 'x', ...ws]).out).costUsd / 2;
+    const script = [
+      tool('s1', 'spawn', { kind: 'work', task: 'Run true three times.' }),
+      call('c1', 'true'),
+      call('c2', 'true'),
+      call('c3', 'true'),
+      reply('ran it'),
+      call('c4', 'true'),
+      reply('done'),
+    ];
+    const result = JSON.parse(cedia(dir, script, ['-p', 'run true', ...ws, '--max-budget-usd', String(one * 2.5)]).out);
+    expect(result.subtype).toBe('error_max_budget_usd');
+    expect(result.costUsd).toBeLessThan(one * 4);
+    // The sub-thread stopped at the run's budget, not at a budget of its own, and the parent ran nothing after it.
+    const parent = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
+    const results = parent.events.filter((e): e is EventOf<'tool_result'> => e.kind === 'tool_result');
+    expect(results[0]!.output.text).toContain('ended="error_max_budget_usd"');
+    const ran = sessionsOf(dir).flatMap((l) => l.events.filter((e): e is EventOf<'tool_result'> => e.kind === 'tool_result' && e.status === 'completed').map((e) => e.callId));
+    expect(ran).toEqual(['c1', 'c2']);
+  });
+
   test('--spawn off leaves the tool out', () => {
     const dir = tmp();
     const result = JSON.parse(cedia(dir, [reply('ok')], ['-p', 'hi', '--output-format', 'json', '--spawn', 'off']).out);

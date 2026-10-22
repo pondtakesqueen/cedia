@@ -76,6 +76,10 @@ export type RunOptions = {
   ttl?: '5m' | '1h';
   maxTurns?: number;
   maxBudgetUsd?: number;
+  // The run's spend so far, across all its sessions, when the client keeps one: each turn adds to it, and
+  // maxBudgetUsd is checked against it instead of this session's own cost. A session that spawns sub-threads
+  // shares it with them, so their spend counts against the run's budget while the session is still going.
+  meter?: { usd: number };
   signal?: AbortSignal;
   onStream?: (e: StreamEvent) => void;
   retry?: { max?: number; baseMs?: number; capMs?: number; sleep?: (ms: number) => Promise<void> };
@@ -332,7 +336,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: got.blocks, stop: got.stop, usage: got.usage });
     usage = addUsage(usage, got.usage);
     peakContext = Math.max(peakContext, contextSize(got.usage));
-    cost += costUsd(model, got.usage, now());
+    const turnCost = costUsd(model, got.usage, now());
+    cost += turnCost;
+    if (opts.meter) opts.meter.usd += turnCost;
     const text = got.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
     if (text) lastText = text;
 
@@ -341,7 +347,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     const calls = all.filter((c, i) => all.findIndex((d) => callIdOf(d) === callIdOf(c)) === i);
     const shared = new Set(all.filter((c) => !calls.includes(c)).map(callIdOf));
     if (calls.length || text.trim()) emptyNudged = false;
-    const overBudget = opts.maxBudgetUsd !== undefined && cost >= opts.maxBudgetUsd;
+    const overBudget = opts.maxBudgetUsd !== undefined && (opts.meter?.usd ?? cost) >= opts.maxBudgetUsd;
 
     if (handoff === 1 || handoff === 2) {
       if (!calls.length && text.trim()) return finish('handoff', 'handoff', text.trim());
