@@ -1,3 +1,3 @@
-{"at":"2026-10-22T02:56:29.910Z","kind":"open","title":"publish the package","task":"publish the package"}
-{"at":"2026-10-22T02:56:29.914Z","kind":"session","sessionId":"f582eeab-9a86-41a6-8a8b-ccf13a130366","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/f582eeab-9a86-41a6-8a8b-ccf13a130366.jsonl"}
-{"at":"2026-10-22T02:56:29.936Z","kind":"state","state":"done","result":"Publishing is on the deny list, so I left it for you."}
+{"at":"2026-10-22T03:03:43.763Z","kind":"open","title":"publish the package","task":"publish the package"}
+{"at":"2026-10-22T03:03:43.767Z","kind":"session","sessionId":"8a65af27-b008-4cd8-98d2-d03fd5ed29a8","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/8a65af27-b008-4cd8-98d2-d03fd5ed29a8.jsonl"}
+{"at":"2026-10-22T03:03:43.782Z","kind":"state","state":"done","result":"Publishing is on the deny list, so I left it for you."}

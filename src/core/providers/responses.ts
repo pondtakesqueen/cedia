@@ -8,6 +8,7 @@ const WIRE = 'openai-responses';
 export function responsesInput(req: WireRequest): JsonObject[] {
   const out: JsonObject[] = [];
   for (const m of req.messages) {
+    if (m.role === 'effort') continue;
     if (m.role === 'system') out.push({ role: 'developer', content: m.text });
     else if (m.role === 'user') {
       for (const p of m.parts) {

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CONTINUE_AFTER_LIMIT, EMPTY_REPLY, runPrompt, type RunOptions } from '../src/core/loop/run.ts';
+import { CONTINUE_AFTER_LIMIT, EMPTY_REPLY, escalationTarget, runPrompt, type RunOptions } from '../src/core/loop/run.ts';
 import { FAUX_MODEL, resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, text, toolUse, type FauxStep } from '../src/core/providers/faux.ts';
 import { lintSession } from '../src/core/session/lint.ts';
@@ -10,7 +10,7 @@ import { SessionLog } from '../src/core/session/log.ts';
 import { bashTool } from '../src/core/tools/bash.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
 import { readTool } from '../src/core/tools/read.ts';
-import type { EventOf, SessionEvent } from '../src/core/types.ts';
+import { EFFORTS, type EventOf, type SessionEvent } from '../src/core/types.ts';
 import { hash } from '../src/core/hash.ts';
 
 const cwd = mkdtempSync(join(tmpdir(), 'cedia-loop-'));
@@ -410,6 +410,58 @@ describe('loop', () => {
       const res = await runPrompt(opts, 'fix');
       expect(res.subtype).toBe('success');
       expect(res.evidence).toEqual({ changed: ['g.ts', 'bash: touch made.txt'], checks: [], unverified: ['g.ts', 'bash: touch made.txt'] });
+    });
+
+    describe('escalation', () => {
+      // FAUX_MODEL as a model with per-message effort, started cheap.
+      const claudeLike = { ...FAUX_MODEL, caps: { ...FAUX_MODEL.caps, midConversationEffort: true, effortLevels: EFFORTS } };
+      const esc = (steps: FauxStep[], extra: Partial<RunOptions> = {}) => {
+        const g = gate(steps, ['true', 'false']);
+        Object.assign(g.opts, { model: claudeLike, effort: 'low', escalate: 'high' }, extra);
+        return g;
+      };
+
+      test('a refused claim raises effort once, right after the reminder, and every earlier message stays as sent', async () => {
+        const { log, opts, provider } = esc([{ blocks: [fixA()] }, { blocks: [text('done')] }, { blocks: [run('true')] }, { blocks: [text('checked')] }]);
+        expect((await runPrompt(opts, 'fix')).subtype).toBe('success');
+        const at = kinds(log.events).indexOf('effort');
+        expect(kinds(log.events).slice(at - 2, at + 2)).toEqual(['assistant', 'reminder', 'effort', 'request']);
+        expect(of(log.events, 'effort')).toEqual([expect.objectContaining({ effort: 'high' })]);
+        const bodies = provider.state.bodies as any[];
+        expect(bodies[2].messages.slice(-2)).toEqual([{ role: 'user', parts: [{ type: 'text', text: expect.stringContaining('`true`') }] }, { role: 'effort', effort: 'high' }]);
+        // Cache: each request's messages start with the previous request's, byte for byte.
+        for (let i = 1; i < bodies.length; i++) expect(JSON.stringify(bodies[i].messages)).toStartWith(JSON.stringify(bodies[i - 1].messages).slice(0, -1));
+        // The top-level effort never changes.
+        expect(new Set(of(log.events, 'request').map((r) => r.effort))).toEqual(new Set(['low']));
+        expectPaired(log.events);
+      });
+
+      test('a failed check alone does not escalate: only the refused claim does', async () => {
+        const { log, opts } = esc([{ blocks: [fixA()] }, { blocks: [run('false')] }, { blocks: [run('true')] }, { blocks: [text('fixed')] }]);
+        expect((await runPrompt(opts, 'fix')).subtype).toBe('success');
+        expect(of(log.events, 'effort')).toEqual([]);
+        expect(of(log.events, 'reminder')).toEqual([]);
+      });
+
+      test('no escalation without per-message effort, without a step up, with escalate off, or on soft checks', async () => {
+        const steps = (): FauxStep[] => [{ blocks: [fixA()] }, { blocks: [run('false')] }, { blocks: [text('done')] }, { blocks: [text('done')] }];
+        for (const extra of [{ model: FAUX_MODEL }, { effort: 'high' as const }, { escalate: undefined }, { softChecks: true }] as Partial<RunOptions>[]) {
+          const { log, opts } = esc(steps(), extra);
+          await runPrompt(opts, 'fix');
+          expect(of(log.events, 'effort')).toEqual([]);
+        }
+      });
+
+      test('the target follows the model: its levels, its start, its capability', () => {
+        const opus = resolveModel('opus');
+        expect(escalationTarget(opus, 'low', 'high')).toBe('high');
+        expect(escalationTarget(opus, 'medium', 'medium')).toBeUndefined();
+        expect(escalationTarget(opus, 'xhigh', 'high')).toBeUndefined();
+        expect(escalationTarget(opus, undefined, 'high')).toBeUndefined();
+        expect(escalationTarget(resolveModel('deepseek'), 'low', 'high')).toBeUndefined();
+        expect(escalationTarget(resolveModel('grok'), 'low', 'high')).toBeUndefined();
+        expect(escalationTarget(resolveModel('haiku'), 'medium', 'high')).toBe('high');
+      });
     });
 
     test('a run that only reads needs no check and has no evidence', async () => {

@@ -5,6 +5,8 @@ export type JsonObject = { [key: string]: unknown };
 export type EventId = string & { readonly brand: 'EventId' };
 export type Wire = 'anthropic-messages' | 'chat-completions' | 'openai-responses' | 'faux';
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+// Lowest first.
+export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 // Disjoint counts: total input = uncached + cacheRead + cacheWrite.
 export type Usage = { uncached: number; cacheRead: number; cacheWrite: number; output: number; reasoning?: number };
@@ -58,6 +60,9 @@ type EventBody =
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
   | { kind: 'tool_result'; callId: string; status: EffectStatus; output: ToolOutput }
   | { kind: 'reminder'; text: string; as: 'system' | 'user' }
+  // A per-message effort change: from the latest user turn with new input on, the model works at this level
+  // (core/loop/run.ts escalation). Wires without it (caps.midConversationEffort) never get one.
+  | { kind: 'effort'; effort: Effort }
   | { kind: 'turn_end'; reason: TurnEndReason; cause?: 'user' | 'parent' | 'hook' }
   // The run's result (its receipt and evidence), written to the run's last writer session after its last turn_end,
   // so a client that rebuilds a thread from the files can show it. It never reaches a model.
@@ -74,7 +79,8 @@ export type UserPart =
 export type Message =
   | { role: 'user'; parts: UserPart[] }
   | { role: 'assistant'; wire: Wire; blocks: AssistantBlock[] }
-  | { role: 'system'; text: string };
+  | { role: 'system'; text: string }
+  | { role: 'effort'; effort: Effort };
 
 export type Price = { input: number; output: number; cacheRead: number; cacheWrite: number }; // USD per 1M tokens
 
@@ -87,6 +93,8 @@ export type ModelCapabilities = {
   cacheMinTokens: number;
   cacheBlockTokens: number; // providers cache whole blocks; a read up to one block short of the previous input is a full hit
   midConversationSystem: boolean;
+  // Effort can change by a message mid-conversation, keeping the cached prefix (Anthropic's per-message effort).
+  midConversationEffort: boolean;
   contextWindow: number;
 };
 
