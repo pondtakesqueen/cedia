@@ -991,7 +991,8 @@
         "start",
         "resume",
         "handoff",
-        "quota"
+        "quota",
+        "rejected"
       ]
     },
     "Step": {

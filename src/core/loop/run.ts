@@ -30,6 +30,7 @@ import {
   type SessionEvent,
   type StopReason,
   type StreamEvent,
+  type ToolOutput,
   type TurnEndReason,
   type Usage,
   type WireRequest,
@@ -78,13 +79,31 @@ export type RunOptions = {
   signal?: AbortSignal;
   onStream?: (e: StreamEvent) => void;
   retry?: { max?: number; baseMs?: number; capMs?: number; sleep?: (ms: number) => Promise<void> };
+  // The longest the run waits, in all, for a spent quota that says when it comes back (a 429 with retry-after);
+  // absent means a spent quota ends the session at once, so the client can fall back. `onQuotaWait` hears each wait.
+  quotaWaitMs?: number;
+  onQuotaWait?: (ms: number) => void;
   now?: () => Date;
 };
 
 export const CONTINUE_AFTER_LIMIT = 'Your previous reply was cut off by the output limit. Continue exactly where it stopped.';
 
+// A reply with no text and no tool call (thinking only, or nothing at all) ends no task: an earlier turn's text
+// would otherwise stand as the result.
+export const EMPTY_REPLY = 'Your last reply had no text and no tool call. Go on with the task, or reply with what you found or did.';
+
 export const unverifiedReminder = (checks: string[]) =>
   `cedia has no record of a declared check passing since your last change, so the task is not done yet. A check counts only when the whole bash command is ${checks.map((c) => `\`${c}\``).join(' or ')} (a leading \`cd\` to the working directory is fine; pipes, \`;\` or other commands are not). Run it that way now, fix what fails, then report.`;
+
+// The provider refused a request after taking this session's earlier ones: what changed is the history (a
+// thinking signature it no longer accepts, a tool call it cannot read back, a context past its window), and the
+// same request fails however often it is sent. The task goes on in a new session instead (clients/headless).
+export function historyRejected(events: SessionEvent[]): AttemptError | undefined {
+  const error = events.findLast((e): e is EventOf<'attempt'> => e.kind === 'attempt')?.error;
+  if (error?.code !== 'bad_request' && error?.code !== 'context_length') return undefined;
+  const request = events.findLastIndex((e) => e.kind === 'request');
+  return events.slice(0, request).some((e) => e.kind === 'assistant' && e.stop !== 'aborted') ? error : undefined;
+}
 
 // Hash header values so the log can show which headers were sent without holding secrets.
 export function redactHeaders(h: Record<string, string>): Record<string, string> {
@@ -187,6 +206,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const inherited = (opts.continues?.changed ?? []).map((path) => ({ kind: 'write' as const, at: 0, tool: 'parent', path }));
   const entries = () => [...inherited, ...ledgerEntries(log.events.slice(runStart), checks, opts.cwd)];
   let nudged = false;
+  let emptyNudged = false;
   const snap: { tree?: string } = {};
   // 0: working; 1: asked for the note; 2: asked again after a tool call; 'off': gave up on handing off.
   let handoff: 0 | 1 | 2 | 'off' = 0;
@@ -195,6 +215,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const timing = { modelMs: 0, ttftMs: 0, decodeMs: 0, toolMs: 0, retryMs: 0 };
   // The largest context any reply of this run saw: what handoff and sub-threads are meant to keep down.
   let peakContext = 0;
+  let quotaWaited = 0;
 
   // The slop guard reads this run's changes: the patch between its first and latest snapshot, or the edit and
   // write calls when snapshots are off.
@@ -292,10 +313,16 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       }
       log.append({ kind: 'attempt', requestId: request.id, n, error: got.error, ...t });
       timing.modelMs += t.ms ?? 0;
-      if (!isRetryable(got.error) || n >= retryMax) return finish('error_during_execution', 'error', got.error.message);
+      const after = got.error.retryAfterMs;
+      const quotaWait = got.error.code === 'quota' && opts.quotaWaitMs !== undefined && after !== undefined && quotaWaited + after <= opts.quotaWaitMs ? after : undefined;
+      if ((!isRetryable(got.error) && quotaWait === undefined) || n >= retryMax) return finish('error_during_execution', 'error', got.error.message);
       const base = opts.retry?.baseMs ?? 1000;
       const cap = opts.retry?.capMs ?? 30_000;
-      const wait = got.error.retryAfterMs ?? Math.min(cap, base * 2 ** (n - 1));
+      const wait = after ?? Math.min(cap, base * 2 ** (n - 1));
+      if (quotaWait !== undefined) {
+        quotaWaited += quotaWait;
+        opts.onQuotaWait?.(quotaWait);
+      }
       await sleep(wait);
       timing.retryMs += wait;
       if (signal.aborted) return finish('interrupted', 'aborted');
@@ -309,7 +336,11 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     const text = got.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
     if (text) lastText = text;
 
-    const calls = got.blocks.filter((b): b is Extract<AssistantBlock, { type: 'tool_use' }> => b.type === 'tool_use');
+    const all = got.blocks.filter((b): b is Extract<AssistantBlock, { type: 'tool_use' }> => b.type === 'tool_use');
+    // A call that repeats an earlier call's id is not run: the wire pairs results by id, so only one can answer.
+    const calls = all.filter((c, i) => all.findIndex((d) => callIdOf(d) === callIdOf(c)) === i);
+    const shared = new Set(all.filter((c) => !calls.includes(c)).map(callIdOf));
+    if (calls.length || text.trim()) emptyNudged = false;
     const overBudget = opts.maxBudgetUsd !== undefined && cost >= opts.maxBudgetUsd;
 
     if (handoff === 1 || handoff === 2) {
@@ -331,7 +362,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       }
       const toolStart = performance.now();
       const before = log.events.length;
-      await runTools(calls, byName, opts, signal, log, snap);
+      await runTools(calls, byName, opts, signal, log, snap, shared);
       timing.toolMs += performance.now() - toolStart;
       // Hand off at a turn boundary, while the whole prefix is still cached: the note costs one cheap turn.
       // The size is the last reply's usage plus chars/4 for the results just added. The context must also have
@@ -355,6 +386,14 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     if (overBudget) return finish('error_max_budget_usd', 'budget');
     if (got.stop === 'max_tokens') {
       log.append({ kind: 'reminder', as: 'user', text: CONTINUE_AFTER_LIMIT });
+      continue;
+    }
+    // A refusal ends the run as a failure, whatever the ledger holds.
+    if (got.stop === 'refusal') return finish('error_during_execution', 'error', text || `${model.ref} declined to go on with this task`);
+    if (!text.trim()) {
+      if (emptyNudged) return finish('error_during_execution', 'error', `${model.ref} ended its turn twice without a reply`);
+      emptyNudged = true;
+      log.append({ kind: 'reminder', as: 'user', text: EMPTY_REPLY });
       continue;
     }
     // Slop guard: one reminder naming what looks like a shortcut; the model fixes it or explains it.
@@ -395,6 +434,7 @@ async function runTools(
   signal: AbortSignal,
   log: SessionLog,
   snap: { tree?: string },
+  shared: Set<string>,
 ) {
   type Job = { callId: string; spec: ToolSpec; input: Record<string, unknown>; parallel: boolean };
   const results = new Map<string, EventOf<'tool_result'>['output'] & { status: EventOf<'tool_result'>['status'] }>();
@@ -403,7 +443,7 @@ async function runTools(
     const callId = callIdOf(c);
     const spec = byName.get(c.name);
     if (c.inputError) results.set(callId, { status: 'not_started', text: `not run: ${c.inputError}`, isError: true });
-    else if (!spec) results.set(callId, { status: 'not_started', text: `not run: unknown tool "${c.name}"`, isError: true });
+    else if (!spec) results.set(callId, { status: 'not_started', text: `not run: unknown tool "${c.name.length > 64 ? `${c.name.slice(0, 64)}…` : c.name}"`, isError: true });
     else {
       const d = decide(opts.permission ?? READ_ONLY_POLICY, spec, c.input, opts.cwd);
       log.append({ kind: 'permission', callId, tool: c.name, ...d });
@@ -418,10 +458,10 @@ async function runTools(
   }
   const run = async (j: Job) => {
     try {
-      const out = await j.spec.run(j.input, { cwd: opts.cwd, signal, ...(opts.wrap ? { wrap: opts.wrap } : {}) });
+      const out = asOutput(await j.spec.run(j.input, { cwd: opts.cwd, signal, ...(opts.wrap ? { wrap: opts.wrap } : {}) }));
       results.set(j.callId, { ...out, status: signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed' });
     } catch (e) {
-      results.set(j.callId, { status: 'failed', text: `tool crashed: ${(e as Error).message}`, isError: true });
+      results.set(j.callId, { status: 'failed', text: `tool crashed: ${e instanceof Error ? e.message : String(e)}`, isError: true });
     }
   };
   // A writing call runs between two snapshots, so the log names every file it changed.
@@ -458,9 +498,19 @@ async function runTools(
   for (const c of calls) {
     const callId = callIdOf(c);
     const { status, ...output } = results.get(callId)!;
+    if (shared.has(callId)) output.text += `\n[cedia: more than one call in your reply shared this id; only the first ran. Call the others again if you need them.]`;
     const r = redact ? redactSecrets(output.text) : { text: output.text, count: 0 };
     log.append({ kind: 'tool_result', callId, status, output: r.count ? { ...output, text: r.text, redacted: r.count } : output });
   }
+}
+
+// What a tool hands back, as the wire needs it: a tool that returns nothing or an object for text (an MCP tool,
+// say) still gets a string result, so the next request is not refused.
+function asOutput(out: unknown): ToolOutput {
+  if (!out || typeof out !== 'object') return { text: 'tool returned no output', isError: true };
+  const o = out as Partial<ToolOutput> & { text?: unknown };
+  const text = typeof o.text === 'string' ? o.text : o.text === undefined || o.text === null ? '(no output)' : (JSON.stringify(o.text) ?? String(o.text));
+  return { ...o, text, isError: o.isError === true };
 }
 
 // Read-only calls of one turn run together, at most this many at a time.
