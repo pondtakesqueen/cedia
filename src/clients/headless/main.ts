@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { historyRejected, runPrompt } from '../../core/loop/run.ts';
-import { preamble, BASE_SYSTEM } from '../../core/prompts.ts';
+import { modeNote, preamble, BASE_SYSTEM } from '../../core/prompts.ts';
 import { resolveModel } from '../../core/providers/catalog.ts';
 import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
@@ -12,7 +12,7 @@ import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../..
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
 import { memoryBlock, memoryPath, MemoryStore, rememberTool } from '../../core/project/memory.ts';
-import { loadSkills, skillsBlock, skillTool } from '../../core/skills/skills.ts';
+import { loadSkills, skillCommand, skillsBlock, skillTool } from '../../core/skills/skills.ts';
 import { mcpStub, startMcp, type McpServers } from '../../core/mcp/tools.ts';
 import { webFetchTool } from '../../core/tools/web.ts';
 import { runTurn } from '../../core/project/undo.ts';
@@ -32,7 +32,7 @@ import { bashTool, scrubbedEnv } from '../../core/tools/bash.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
 import { applyWorktree, openWorktree, type Worktree } from '../../core/project/worktree.ts';
 import { approachBrief, bestTry, type Try } from '../../core/project/bestof.ts';
-import { decide } from '../../core/safety/policy.ts';
+import { decide, type RunPermission } from '../../core/safety/policy.ts';
 import { editTool } from '../../core/tools/edit.ts';
 import { sandboxGuarded } from '../../core/safety/sandbox.ts';
 import type { Snapshots } from '../../core/safety/snapshot.ts';
@@ -212,6 +212,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   }
   if (!sandbox.on && policy.mode === 'read-only' && !args.permission && !process.env.CEDIA_PERMISSION)
     say('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
+  const permission: RunPermission = policy.plan ? 'plan' : policy.mode;
   const snapshots = workspaceSnapshots(args.cwd, cediaHome(), sandbox.placeholders);
   // Language servers start at the first edit they cover, run as bash does (when the policy lets bash run them), and
   // stop with the run.
@@ -335,7 +336,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const trees = turnTrees();
     if (store && threadId && trees) store.append(threadId, { run: runId, kind: 'turn', cwd: args.cwd, ...trees, sessions: [...new Set(writerRuns.map((w) => w.log.id))] });
   };
-  const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}), ...(profile?.instructions ? { profile: { name: profile.name, instructions: profile.instructions } } : {}) });
+  const basePreamble = preamble(args.cwd, { mode: policy.mode, ...(policy.plan ? { plan: { ask: !!(store && threadId) } } : {}), unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}), ...(profile?.instructions ? { profile: { name: profile.name, instructions: profile.instructions } } : {}) });
 
   const ac = new AbortController();
   const onSignal = () => ac.abort();
@@ -395,7 +396,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // server is gone keeps the tool, and a call to it says the server is not there.
     const mcpTools = [...(mcp?.tools ?? []), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map(mcpStub)];
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
-    const extra = [...(spawnOn ? [spawnHere] : []), ...(askOn && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened)] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
+    const extra = [...(spawnOn ? [spawnHere] : []), ...((askOn || policy.plan) && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened)] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
     // The advisor and the classifier answer in one reply, with no tools, in a session of their own.
     const helper = opts.role === 'advisor' || opts.role === 'classifier';
     const tools = helper ? [] : reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
@@ -483,7 +484,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     return { ok: r.subtype === 'success', text: r.result, step: { model: choice.model.ref, via: 'cedia', sessionId: log.id, costUsd: r.costUsd } };
   };
   // A thread that asked the owner a question goes on with their answer, framed as one.
-  let task = resumed?.question ? answerPrompt(resumed.question.question, args.prompt) : args.prompt;
+  let task = resumed?.question ? answerPrompt(resumed.question.question, args.prompt) : (skillCommand(args.prompt, skills) ?? args.prompt);
   // The advisor: one session for the run, which reads each of the writer's turns and answers OK or a note. A
   // failed advisor (its quota, an error) is left out for the rest of the run; the writer goes on without it.
   const adv = { log: undefined as SessionLog | undefined, turns: 0, notes: 0, costUsd: 0, off: false };
@@ -711,9 +712,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const spawnOther = spawnTool(spawner, undefined, { worktrees: spawnMode !== 'worktree', pool });
   // Runs the writer and follows its handoffs: each note opens a new session of the thread on the same model,
   // which starts from the task (and the fix it was on, if any) and the note.
-  const write = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}) => {
+  // `lead` goes before the prompt in this session only, not in what a handoff carries.
+  const write = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}, lead?: string) => {
     writer = { model: m, log };
-    let r = await run(m, log, prompt, opts);
+    let r = await run(m, log, lead ? `${lead}\n\n${prompt}` : prompt, opts);
     while (r.subtype === 'handoff') {
       handoffs++;
       const from = writer.log;
@@ -732,7 +734,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const last = resumed?.sessions.findLast((s) => s.role === 'code' && !resumed.rewound.includes(s.sessionId));
     const tree = snapshots?.take();
     const from = last?.path && sessionExists(last.path) ? { sessionId: last.sessionId, path: last.path, events: SessionLog.load(last.path).events.length, model: last.model } : undefined;
-    store.append(threadId, { kind: 'run', id: runId, prompt: args.prompt.slice(0, 500), cwd: args.cwd, ...(tree ? { tree } : {}), ...(from ? { from } : {}) });
+    store.append(threadId, { kind: 'run', id: runId, prompt: args.prompt.slice(0, 500), cwd: args.cwd, ...(tree ? { tree } : {}), ...(from ? { from } : {}), permission });
   }
   try {
     const servers = loadMcp();
@@ -767,7 +769,11 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       const log = lastLog;
       if (args.outputFormat === 'stream-json') log.listeners.push((event) => out(encode({ type: 'event', event })));
       record(log, model, 'resume');
-      result = await write(model, log, task);
+      // Its first message named the mode it was opened under; a run under another one says so.
+      const before = resumed?.runs.at(-1)?.permission;
+      const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
+      const lead = before && before !== permission ? `<permission>\n${modeNote(policy.mode, policy.unlock ?? [], policy.plan ? { ask: !!header?.tools.some((d) => d.name === 'ask_user') } : undefined)}\n</permission>` : undefined;
+      result = await write(model, log, task, {}, lead);
     } else {
       const log = openLog();
       record(log, model, resumed ? 'resume' : 'start');
