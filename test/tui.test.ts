@@ -232,6 +232,39 @@ describe('the TUI (offline, faux)', () => {
     expect(t.shown()).toContain('kept it, deprecated');
   });
 
+  test('/goal: each turn runs under the condition until /goal off; the judge\'s verdict is shown, and a not met sends the writer back', async () => {
+    const t = app();
+    t.type('/goal');
+    expect(t.shown()).toContain('no goal: /goal <condition> sets one');
+    t.type('/goal a.txt and b.txt both exist');
+    expect(t.a.goal).toBe('a.txt and b.txt both exist');
+    expect(t.a.statusLine()).toContain('goal');
+    // Writer, judge (not met), writer again, judge (met): one faux script, in order.
+    t.script([
+      call('g1', 'echo a > a.txt'),
+      reply('made a.txt'),
+      reply('b.txt does not exist\nGOAL: not met'),
+      call('g2', 'echo b > b.txt'),
+      reply('made b.txt too'),
+      reply('both files exist\nGOAL: met'),
+    ]);
+    t.type('make the files');
+    await t.a.idle();
+    expect(t.shown()).toContain('goal: not met yet (round 1)');
+    expect(t.shown()).toContain('goal met after 2 judgements');
+    expect(readFileSync(join(dir, 'b.txt'), 'utf8')).toBe('b\n');
+    t.type('/goal off');
+    expect(t.a.goal).toBeUndefined();
+    expect(t.a.statusLine()).not.toContain('goal');
+    // Without a goal, a claim of done ends the turn: no judge reads it.
+    t.script([reply('nothing to change')]);
+    t.type('anything else?');
+    await t.a.idle();
+    expect(t.shown().match(/goal met after/g)).toHaveLength(1);
+    // --goal sets it from the start.
+    expect(app({ goal: 'tests pass' }).a.goal).toBe('tests pass');
+  });
+
   test('escapes and control characters from commands never reach the screen', () => {
     expect(printable('a\x1b[2J\x1b[Hb\x1b]0;title\x07c\rd\te\nf\x1b(B')).toBe('abcd\te\nf');
     expect(callLine('bash', { command: 'echo \x1b[31mred' })).toBe('bash echo red');

@@ -56,6 +56,7 @@ export const COMMANDS: { name: string; description: string }[] = [
   { name: 'new', description: 'start a new thread' },
   { name: 'thread', description: 'go on with a thread of this project: /thread <id>, or list them' },
   { name: 'model', description: 'the model the next turn runs on: /model <ref>' },
+  { name: 'goal', description: "keep each turn going until a separate judge finds this holds: /goal <condition>; '/goal off' ends it" },
   { name: 'help', description: 'these commands and keys' },
   { name: 'quit', description: 'leave (Ctrl+D)' },
 ];
@@ -97,6 +98,8 @@ export class CediaTui {
   readonly editor: Editor;
   thread: string | undefined;
   model: string | undefined;
+  // The condition every turn runs under until it is cleared (--goal, /goal): a judge decides when a turn is done.
+  goal: string | undefined;
   private running: { stop: AbortController; done: Promise<void> } | undefined;
   private spent = 0;
   private context = 0;
@@ -117,6 +120,7 @@ export class CediaTui {
   ) {
     this.thread = args.thread;
     this.model = args.model;
+    this.goal = args.goal;
     this.store = new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
     this.tui = new TUI(terminal);
     this.editor = new Editor(this.tui, { borderColor: dim, selectList: SELECT });
@@ -183,6 +187,7 @@ export class CediaTui {
       this.args.permission ?? 'auto',
       this.git,
       this.thread ?? 'new thread',
+      this.goal ? 'goal' : '',
       this.context ? `ctx ${Math.round(this.context / 1000)}k` : '',
       this.spent ? `$${this.spent.toFixed(4)}` : '',
       this.running ? 'working' : '',
@@ -267,9 +272,10 @@ export class CediaTui {
         }
       }
     };
+    const { goal: _, ...args } = this.args;
     try {
       const result = await this.run(
-        { ...this.args, prompt, outputFormat: 'stream-json', ...(this.model ? { model: this.model } : {}), ...(this.thread ? { thread: this.thread } : {}), note: (t) => this.say(yellow(t.trimEnd())), signal },
+        { ...args, ...(this.goal ? { goal: this.goal } : {}), prompt, outputFormat: 'stream-json', ...(this.model ? { model: this.model } : {}), ...(this.thread ? { thread: this.thread } : {}), note: (t) => this.say(yellow(t.trimEnd())), signal },
         out,
       );
       this.done(result);
@@ -335,6 +341,12 @@ export class CediaTui {
     const parts = [r.subtype === 'success' ? 'done' : r.subtype, `${r.numTurns} turn${r.numTurns === 1 ? '' : 's'}`, `$${r.costUsd.toFixed(4)}`, `cache ${Math.round(r.cacheHitRatio * 100)}%`];
     this.say(dim(parts.join(' · ')));
     if (r.evidence) this.say(dim(receipt(r.evidence, r.thread)));
+    if (r.goal) {
+      const n = `${r.goal.rounds.length} judgement${r.goal.rounds.length === 1 ? '' : 's'}`;
+      const why = r.goal.rounds.at(-1)?.reason.split('\n')[0];
+      if (r.goal.verdict === 'met') this.say(green(`goal met after ${n}`));
+      else this.say(yellow(`goal ${r.goal.verdict.replace('_', ' ')} after ${n}${why ? `: ${printable(why)}` : ''}`));
+    }
     // The thread waits on the owner: what is typed next is the answer.
     if (r.question) this.say(yellow([printable(r.question.question), ...(r.question.options ?? []).map((o, i) => `  ${i + 1}. ${printable(o)}`), 'your next message is the answer'].join('\n')));
   }
@@ -366,8 +378,21 @@ export class CediaTui {
         case 'new':
           this.thread = undefined;
           this.context = 0;
-          this.say(dim('the next prompt starts a new thread'));
+          this.say(dim(`the next prompt starts a new thread${this.goal ? '; the goal still holds (/goal off ends it)' : ''}`));
           break;
+        case 'goal': {
+          // The condition as typed, new lines included.
+          const condition = line.trim().slice(name.length).trim();
+          if (!condition) this.say(this.goal ? `${dim('each turn goes on until a judge finds this holds:')}\n${printable(this.goal)}` : dim('no goal: /goal <condition> sets one'));
+          else if (condition === 'off') {
+            this.say(dim(this.goal ? 'goal ended: a turn is done when the done gate passes' : 'no goal to end'));
+            this.goal = undefined;
+          } else {
+            this.goal = condition;
+            this.say(dim('from the next turn on, a separate judge checks this after each claim of done, and sends the writer back (at most 3 times) while it does not hold'));
+          }
+          break;
+        }
         case 'thread':
           if (!rest[0]) this.say(this.store.list().filter((t) => !t.archived).map(threadLine).join('\n') || dim('no threads in this project'));
           else if (!this.store.has(rest[0])) this.say(red(`no thread ${rest[0]} in this project`));
