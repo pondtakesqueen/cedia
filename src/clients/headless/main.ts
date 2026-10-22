@@ -8,7 +8,7 @@ import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, type RoleChoice } from '../../core/config.ts';
-import { defaultHandoffAt, handoffNote, MAX_HANDOFFS } from '../../core/project/handoff.ts';
+import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
 import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
@@ -18,7 +18,7 @@ import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { openSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
-import type { ToolSpec } from '../../core/tools/registry.ts';
+import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
 import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
 import { runClaudeCode } from './claude-code.ts';
@@ -428,7 +428,15 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     const last = resumed?.sessions.findLast((s) => s.role === 'code');
     const lastLog = resumed && last?.model === model.ref && last.path && sessionExists(last.path) ? SessionLog.load(last.path) : undefined;
     let result: HeadlessResult;
-    if (lastLog && !historyRejected(lastLog.events)) {
+    // A session whose cache has expired costs its whole context to resume; past a size, a new session from where
+    // the thread stopped is cheaper, so the run says both prices and takes the cheaper.
+    const freshTokens = resumed ? Math.ceil((BASE_SYSTEM.length + JSON.stringify(toolDefs(CORE_TOOLS)).length + basePreamble.length + resumeNote(resumed).length + task.length) / 4) : 0;
+    const choice = lastLog ? resumeChoice(lastLog.events, model, freshTokens) : undefined;
+    if (choice?.fresh)
+      process.stderr.write(
+        `cedia: thread ${threadId}'s last session has been idle ${Math.round(choice.idleMs / 60_000)} min, past its cache; resuming it re-reads ${Math.round(choice.contextTokens / 1000)}k tokens (about $${choice.resumeUsd.toFixed(3)}), a new session from where it stopped starts at about ${Math.round(freshTokens / 1000)}k ($${choice.freshUsd.toFixed(3)}), so it goes on in a new session\n`,
+      );
+    if (lastLog && !historyRejected(lastLog.events) && !choice?.fresh) {
       const log = lastLog;
       if (args.outputFormat === 'stream-json') log.listeners.push((event) => out(encode({ type: 'event', event })));
       record(log, model, 'resume');
