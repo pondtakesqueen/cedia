@@ -67,6 +67,9 @@ type EventBody =
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
   | { kind: 'tool_result'; callId: string; status: EffectStatus; output: ToolOutput }
   | { kind: 'reminder'; text: string; as: 'system' | 'user' }
+  // A call's input came in a known wrong shape and was put into the schema's (ToolSpec.repair). The assistant
+  // event keeps what the model sent; the intent holds the repaired input.
+  | { kind: 'input_repaired'; callId: string; tool: string; repairs: string[] }
   // A compaction request, sent with the messages of the request `of` (core/project/compact.ts), and its outcome:
   // the summary block, or why there is none.
   | { kind: 'compact_request'; of: EventId; bodyHash: string; headers: Record<string, string> }
@@ -192,6 +195,9 @@ export type HeadlessResult = {
   usage: Usage;
   costUsd: number;
   cacheHitRatio: number;
+  // Calls whose input was repaired, keyed `<tool>: <kind of repair>` (absent when none was). A call the policy then
+  // denied counts too: the count is of what the model sent.
+  inputRepairs?: Record<string, number>;
   // Requests after a session's first that missed the cache, with the cause (absent when none did).
   cacheMisses?: CacheMiss[];
   result: string;
