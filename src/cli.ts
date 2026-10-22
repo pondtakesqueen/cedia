@@ -10,6 +10,7 @@ import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
 import { loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
+import { rewindThread, rewoundText, runLines } from './core/project/rewind.ts';
 import { workspaceSnapshots } from './core/safety/snapshot.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
@@ -43,7 +44,15 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                before falling back (default: settings onQuota, fallback)
       --review <ref>           the review role, after the done gate passes: a model, claude-code[:<model>]
                                (default sonnet there), or none. Changes it asks for go back to the writer once
-      --spawn <on|off>         let the writer hand self-contained work to sub-threads (default: settings, on)
+      --goal <condition>       keep going until a separate judge finds the condition holds: after each claim of done
+                               it reads the change and answers met, not met (the writer goes on with what is
+                               missing, at most 3 more times) or impossible. Exit 1 unless met
+      --goal-judge <ref>       the judge's model (default: the writer's, in a fresh read-only session)
+      --advisor <ref|none>     the advisor role: a model that reads each of the writer's turns and may leave it a
+                               note before the next (default: settings roles.advisor, none). One reply a turn
+      --spawn <on|off|worktree>
+                               let the writer hand self-contained work to sub-threads (default: settings, on);
+                               worktree runs each work sub-thread in a git worktree of its own, several at once
       --ask <on|off>           give the writer ask_user, to end the run with one question for you when only you can
                                decide; the thread waits as 'asking' and your answer is its next prompt
                                (default: settings ask, off)
@@ -75,6 +84,12 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                             put the files that turn changed back (or forward again), from cedia's
                                             snapshots; a file changed since is left unless --force. Commands the turn
                                             ran are not undone. The thread is told at its next turn
+       cedia threads rewind <id> [<n>] [--force]
+                                            go back to just before the thread's run n (threads show numbers them),
+                                            conversation and files together: the thread goes on from there, and
+                                            every file a later run changed is put back. It refuses while the thread
+                                            is working, or when such a file changed since (--force: anyway).
+                                            Without n, lists the runs
        cedia memory [list | add <text> | forget <id>]
                                             the project's memory: short facts every new session gets in its first
                                             turn; writer sessions add to it with the remember tool
@@ -120,6 +135,9 @@ export async function main(argv: string[]): Promise<number> {
       'handoff-at': { type: 'string' },
       handoff: { type: 'string' },
       review: { type: 'string' },
+      goal: { type: 'string' },
+      'goal-judge': { type: 'string' },
+      advisor: { type: 'string' },
       plan: { type: 'string' },
       check: { type: 'string', multiple: true },
       sandbox: { type: 'string' },
@@ -164,6 +182,9 @@ export async function main(argv: string[]): Promise<number> {
     ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
     ...(values.handoff ? { handoff: values.handoff } : {}),
     ...(values.review ? { review: values.review } : {}),
+    ...(values.goal ? { goal: values.goal } : {}),
+    ...(values['goal-judge'] ? { goalJudge: values['goal-judge'] } : {}),
+    ...(values.advisor ? { advisor: values.advisor } : {}),
     ...(values.plan ? { plan: values.plan } : {}),
     ...(values.check ? { checks: values.check } : {}),
     ...(values.sandbox ? { sandbox: values.sandbox } : {}),
@@ -190,7 +211,7 @@ export async function main(argv: string[]): Promise<number> {
     // A question for the owner is not a failure: the thread waits for the answer.
     const ok = result.subtype === 'success' || result.subtype === 'asked';
     if (!ok && format === 'text') console.error(`cedia: ${result.subtype}`);
-    return ok ? 0 : 1;
+    return ok && (!result.goal || result.goal.verdict === 'met') ? 0 : 1;
   } catch (e) {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
@@ -263,7 +284,8 @@ function threads(argv: string[]): number {
     if (cmd === 'show' && id) {
       const t = store.read(id);
       const lines = [`${t.id}  ${t.state}  ${t.title}`, '', t.task, ''];
-      for (const s of t.sessions) lines.push(`session ${s.sessionId}  ${s.model}  ${s.why}${s.path ? `  ${s.path}` : ''}`);
+      for (const s of t.sessions) lines.push(`session ${s.sessionId}  ${s.model}  ${s.why}${s.rewound ? '  (rewound)' : ''}${s.path ? `  ${s.path}` : ''}`);
+      if (t.runs.length) lines.push('', ...runLines(t));
       if (t.handoff) lines.push('', `handoff from ${t.handoff.sessionId}:`, t.handoff.note);
       if (t.result) lines.push('', 'result:', t.result);
       for (const m of t.messages) lines.push('', `message ${m.id} from ${m.from} at ${m.at}${m.unsent ? ' (unsent)' : t.pending.includes(m) ? ' (not seen yet)' : ''}:`, m.text);
@@ -295,6 +317,18 @@ function threads(argv: string[]): number {
       console.log(restoredText(r));
       return r.skipped.length ? 1 : 0;
     }
+    if (cmd === 'rewind' && id && rest.length <= 1) {
+      if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
+      if (!rest.length) {
+        const runs = runLines(store.read(id));
+        console.log(runs.length ? runs.join('\n') : `thread ${id} has no run to rewind to`);
+        return 0;
+      }
+      const r = rewindThread(store, id, Number(rest[0]), { open: (cwd) => workspaceSnapshots(cwd, cediaHome()), sessionFile: (cwd, sid) => sessionPath(cwd, sid) }, { force: values.force ?? false });
+      if ('error' in r) throw new Error(r.error);
+      console.log(rewoundText(r));
+      return 0;
+    }
     if (cmd === 'diff' && id) {
       if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
       const change = threadTurn(store, id);
@@ -312,7 +346,7 @@ function threads(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] | redo <id> [--force] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
+  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] | redo <id> [--force] | rewind <id> [<n>] [--force] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
   return 2;
 }
 
