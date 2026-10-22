@@ -502,7 +502,7 @@ describe('sub-threads (offline, faux)', () => {
     ]);
     const child = sessionsOf(dir).find((l) => l.id === sub.sessions[0]!.sessionId)!;
     expect(head(child.events)).toMatchObject({ thread: sub.id });
-    expect(head(child.events).tools.map((t) => t.name)).toEqual(['read', 'edit', 'write', 'bash']);
+    expect(head(child.events).tools.map((t) => t.name)).toEqual(['read', 'edit', 'write', 'bash', 'web_fetch']);
     for (const l of [parent, child]) expect(lintSession(l.events)).toEqual([]);
     expect(threadsCli(dir).out).not.toContain(sub.id);
     expect(threadsCli(dir, '--all').out).toContain(`(sub-thread of ${result.thread}) (archived)`);
@@ -544,8 +544,8 @@ describe('sub-threads (offline, faux)', () => {
     expect(head(second!.events)).toMatchObject({ thread: sub.id, parentSession: first!.id });
     expect(userText(second!.events)).toContain(`<handoff session="${first!.id}">\nWrote f.txt. Next: run grep -q good f.txt.\n</handoff>`);
     expect(userText(second!.events)).toContain('Write good to f.txt, then run grep -q good f.txt.');
-    expect(head(first!.events).tools.map((t) => t.name)).toEqual(['read', 'edit', 'write', 'bash']);
-    expect(head(second!.events).tools.map((t) => t.name)).toEqual(['read', 'edit', 'write', 'bash', 'recall']);
+    expect(head(first!.events).tools.map((t) => t.name)).toEqual(['read', 'edit', 'write', 'bash', 'web_fetch']);
+    expect(head(second!.events).tools.map((t) => t.name)).toEqual(['read', 'edit', 'write', 'bash', 'recall', 'web_fetch']);
     for (const l of [parent, first!, second!]) expect(lintSession(l.events)).toEqual([]);
 
     // The new session inherits the first one's write, so its claim still needs a check after it.
@@ -629,7 +629,7 @@ describe('sub-threads (offline, faux)', () => {
       call('c4', 'true'),
       reply('done'),
     ];
-    const result = JSON.parse(cedia(dir, script, ['-p', 'run true', ...ws, '--max-budget-usd', String(one * 2.5)]).out);
+    const result = JSON.parse(cedia(dir, script, ['-p', 'run true', ...ws, '--max-budget-usd', String(one * 2.65)]).out);
     expect(result.subtype).toBe('error_max_budget_usd');
     expect(result.costUsd).toBeLessThan(one * 4);
     // The sub-thread stopped at the run's budget, not at a budget of its own, and the parent ran nothing after it.

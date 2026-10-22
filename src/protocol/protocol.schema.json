@@ -488,6 +488,41 @@
             "via"
           ]
         },
+        "advice": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "turns": {
+              "type": "number"
+            },
+            "notes": {
+              "type": "number"
+            },
+            "model": {
+              "type": "string"
+            },
+            "via": {
+              "type": "string",
+              "enum": [
+                "cedia",
+                "claude-code"
+              ]
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "costUsd": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "model",
+            "notes",
+            "sessionId",
+            "turns",
+            "via"
+          ]
+        },
         "thread": {
           "type": "string"
         },
@@ -1125,6 +1160,72 @@
             "kind",
             "parentId",
             "text"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "hook"
+            },
+            "hook": {
+              "type": "string"
+            },
+            "event": {
+              "type": "string",
+              "enum": [
+                "preToolUse",
+                "postToolUse",
+                "stop"
+              ]
+            },
+            "callId": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "block"
+              ]
+            },
+            "failed": {
+              "type": "boolean"
+            },
+            "updated": {
+              "type": "boolean"
+            },
+            "ms": {
+              "type": "number"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "decision",
+            "event",
+            "hook",
+            "id",
+            "kind",
+            "ms",
+            "parentId"
           ]
         },
         {

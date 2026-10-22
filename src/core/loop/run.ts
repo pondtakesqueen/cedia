@@ -8,7 +8,8 @@ import { COMPACT_INSTRUCTIONS, compactionCut, compactPlan, firstReply } from '..
 import { hash } from '../hash.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
-import { decide, READ_ONLY_POLICY, type Policy } from '../safety/policy.ts';
+import { hookName, runHook, type Hooks } from '../hooks.ts';
+import { decide, READ_ONLY_POLICY, ruleMatches, type Policy } from '../safety/policy.ts';
 import { redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
@@ -29,6 +30,7 @@ import {
   type EventId,
   type EventOf,
   type HeadlessResult,
+  type JsonObject,
   type ModelSpec,
   type Question,
   type PrivacyLevel,
@@ -86,7 +88,14 @@ export type RunOptions = {
   // Messages from other threads, shown as a reminder at each turn boundary. `delivered` runs after the reminder
   // is logged, so a crash in between shows a message twice rather than never.
   inbox?: { pending(): { ids: string[]; text: string } | undefined; delivered(ids: string[]): void };
+  // The advisor role (core/trust/advisor.ts): after each turn that ran tools, it reads the turn's events and may
+  // return a note, which the session logs as a reminder before its next request. Absent means no advisor.
+  advise?: (turn: SessionEvent[]) => Promise<string | undefined>;
   effort?: Effort;
+  // The user's hooks (core/hooks.ts): before and after each call, and on a claim of done. They run in
+  // `hookHome` (cedia's home; the temp dir when absent), never the workspace.
+  hooks?: Hooks;
+  hookHome?: string;
   // The level the session moves to, once, when the done gate refuses a claim: cheap work up front, more thought
   // where it went wrong. Only upward from `effort`, and only on models with per-message effort, so the cached
   // prefix stays.
@@ -300,6 +309,8 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   // write calls when snapshots are off.
   const slopOn = !opts.permission?.unlock?.includes('slop-check');
   let slopNudged = false;
+  // Claims the user's stop hooks refused; past MAX_STOP_REFUSALS the run ends unverified.
+  let stopRefused = 0;
   const slop = (): SlopFinding[] => {
     if (!slopOn) return [];
     const run = log.events.slice(runStart);
@@ -464,6 +475,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     }
     if (!got.ok) throw new Error('unreachable');
 
+    const turnFrom = log.events.length;
     log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: got.blocks, stop: got.stop, usage: got.usage });
     usage = addUsage(usage, got.usage);
     peakContext = Math.max(peakContext, contextSize(got.usage));
@@ -511,6 +523,14 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       // A question for the owner ends the run once the turn's other calls are done; the answer is the next prompt.
       const asked = askedIn(log.events.slice(before), calls);
       if (asked) return { ...finish('asked', 'asked', asked.question), question: asked };
+      // The advisor reads the turn; its note is the first thing the next request carries after the results. Its
+      // time counts as model time: the run waits on a model.
+      if (opts.advise && handoff === 0 && !signal.aborted) {
+        const t0 = performance.now();
+        const note = await opts.advise(log.events.slice(turnFrom));
+        timing.modelMs += performance.now() - t0;
+        if (note && !signal.aborted) log.append({ kind: 'reminder', as: 'user', text: note });
+      }
       // Hand off at a turn boundary, while the whole prefix is still cached: the note costs one cheap turn.
       // The size is the last reply's usage plus chars/4 for the results just added. The context must also have
       // doubled since the session's first reply, so a session that starts large (a long note, a big task) does
@@ -585,6 +605,13 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       }
       if (!opts.softChecks) return finish('error_unverified_claim', 'completed');
     }
+    // The user's stop hooks judge the claim last, like a check the user wrote: a refusal goes back to the model.
+    const refusal = await stopHooks(opts, log, lastText, evidence(entries()).changed);
+    if (refusal) {
+      if (++stopRefused > MAX_STOP_REFUSALS) return finish('error_unverified_claim', 'completed');
+      log.append({ kind: 'reminder', as: 'user', text: stopHookReminder(refusal.hook, refusal.reason) });
+      continue;
+    }
     return finish('success', 'completed');
   }
 }
@@ -627,10 +654,21 @@ async function runTools(
     if (c.inputError) results.set(callId, { status: 'not_started', text: `not run: ${c.inputError}`, isError: true });
     else if (!spec) results.set(callId, { status: 'not_started', text: `not run: unknown tool "${c.name.length > 64 ? `${c.name.slice(0, 64)}…` : c.name}"`, isError: true });
     else {
+      const policy = opts.permission ?? READ_ONLY_POLICY;
       const fixed = spec.repair?.(c.input);
       if (fixed) log.append({ kind: 'input_repaired', callId, tool: c.name, repairs: fixed.repairs });
-      const input = fixed?.input ?? c.input;
-      const d = decide(opts.permission ?? READ_ONLY_POLICY, spec, input, opts.cwd);
+      // The policy decides first; the user's pre hooks see only calls it allows. An input a hook rewrote is
+      // decided again, so a hook can narrow a call but never get one past the policy.
+      let input = fixed?.input ?? c.input;
+      let d = decide(policy, spec, input, opts.cwd);
+      if (d.decision === 'allow') {
+        const pre = await preHooks(opts, log, spec, callId, input);
+        if (pre.decision === 'block') d = { decision: 'deny', rule: `hook:${pre.hook}`, reason: pre.reason };
+        else if (pre.input !== input) {
+          input = pre.input;
+          d = decide(policy, spec, input, opts.cwd);
+        }
+      }
       log.append({ kind: 'permission', callId, tool: c.name, ...d });
       if (d.decision === 'deny') {
         results.set(callId, { status: 'denied', text: deniedText(d.rule, d.reason ?? ''), isError: true });
@@ -664,7 +702,7 @@ async function runTools(
     try {
       const spill = (text: string) => spillOutput(log.id, j.callId, redact ? redactSecrets(text).text : text);
       const write = j.parallel && j.spec.isolated?.(j.input) ? { write: writeFor(j) } : {};
-      const out = asOutput(await j.spec.run(j.input, { cwd: opts.cwd, signal, spill, ...(opts.wrap ? { wrap: opts.wrap } : {}), ...write }));
+      const out = await postHooks(opts, log, j, asOutput(await j.spec.run(j.input, { cwd: opts.cwd, signal, spill, ...(opts.wrap ? { wrap: opts.wrap } : {}), ...write })));
       results.set(j.callId, { ...out, status: signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed' });
     } catch (e) {
       results.set(j.callId, { status: 'failed', text: `tool crashed: ${e instanceof Error ? e.message : String(e)}`, isError: true });
@@ -713,6 +751,54 @@ async function runTools(
     const r = redact ? redactSecrets(output.text) : { text: output.text, count: 0 };
     log.append({ kind: 'tool_result', callId, status, output: r.count ? { ...output, text: r.text, redacted: r.count } : output });
   }
+}
+
+export const MAX_STOP_REFUSALS = 2;
+
+export const stopHookReminder = (hook: string, reason: string) =>
+  `cedia: your claim that the task is done was refused by the user's stop hook ${hook}: ${reason}\nFix what it names, run the checks again, then reply.`;
+
+async function stopHooks(opts: RunOptions, log: SessionLog, result: string, changed: string[]): Promise<{ hook: string; reason: string } | undefined> {
+  for (const [i, h] of (opts.hooks?.stop ?? []).entries()) {
+    const t0 = performance.now();
+    const o = await runHook(h, { event: 'stop', sessionId: log.id, cwd: opts.cwd, result, changed }, opts.hookHome ?? tmpdir(), opts.signal);
+    const hook = hookName('stop', i, h);
+    log.append({ kind: 'hook', hook, event: 'stop', decision: o.decision, ...(o.decision === 'block' && o.failed ? { failed: true } : {}), ms: Math.round(performance.now() - t0) });
+    if (o.decision === 'block') return { hook, reason: o.reason };
+  }
+  return undefined;
+}
+
+// The user's pre hooks for one call, in order. The first block wins; each later hook sees the input as the
+// earlier ones left it.
+async function preHooks(opts: RunOptions, log: SessionLog, spec: ToolSpec, callId: string, input: JsonObject): Promise<{ decision: 'allow'; input: JsonObject } | { decision: 'block'; hook: string; reason: string }> {
+  for (const [i, h] of (opts.hooks?.preToolUse ?? []).entries()) {
+    if (h.match && !ruleMatches(h.match, spec, input, opts.cwd)) continue;
+    const t0 = performance.now();
+    const o = await runHook(h, { event: 'preToolUse', sessionId: log.id, cwd: opts.cwd, tool: spec.name, callId, input }, opts.hookHome ?? tmpdir(), opts.signal);
+    const hook = hookName('preToolUse', i, h);
+    const updated = o.decision === 'allow' && o.updatedInput !== undefined;
+    log.append({ kind: 'hook', hook, event: 'preToolUse', callId, decision: o.decision, ...(o.decision === 'block' && o.failed ? { failed: true } : {}), ...(updated ? { updated } : {}), ms: Math.round(performance.now() - t0) });
+    if (o.decision === 'block') return { decision: 'block', hook, reason: o.reason };
+    if (o.updatedInput) input = o.updatedInput;
+  }
+  return { decision: 'allow', input };
+}
+
+// The user's post hooks for one finished call: a note is added to the result, a block marks it failed. The call
+// has run either way.
+async function postHooks(opts: RunOptions, log: SessionLog, j: { callId: string; spec: ToolSpec; input: JsonObject }, out: ToolOutput): Promise<ToolOutput> {
+  for (const [i, h] of (opts.hooks?.postToolUse ?? []).entries()) {
+    if (h.match && !ruleMatches(h.match, j.spec, j.input, opts.cwd)) continue;
+    const t0 = performance.now();
+    const o = await runHook(h, { event: 'postToolUse', sessionId: log.id, cwd: opts.cwd, tool: j.spec.name, callId: j.callId, input: j.input, output: { text: out.text, isError: out.isError, ...(out.exitCode !== undefined ? { exitCode: out.exitCode } : {}) } }, opts.hookHome ?? tmpdir(), opts.signal);
+    const hook = hookName('postToolUse', i, h);
+    log.append({ kind: 'hook', hook, event: 'postToolUse', callId: j.callId, decision: o.decision, ...(o.decision === 'block' && o.failed ? { failed: true } : {}), ms: Math.round(performance.now() - t0) });
+    // A blocked result is a failed one for the done gate too: a check it blocks does not count as passing.
+    if (o.decision === 'block') out = { ...out, text: `${out.text}\n[hook ${hook}: ${o.reason}]`, isError: true, exitCode: out.exitCode ? out.exitCode : 1 };
+    else if (o.note) out = { ...out, text: `${out.text}\n[hook ${hook}: ${o.note}]` };
+  }
+  return out;
 }
 
 // A whole output too long for a result, in a file only its owner can read. Outside cedia's home, which the
