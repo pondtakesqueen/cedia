@@ -1,9 +1,13 @@
-import type { AssistantBlock, JsonObject, Message, Provider, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
+import type { AssistantBlock, CompactionBlock, JsonObject, Message, Provider, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
 import { Assembler } from './assemble.ts';
 import { authHeaders, classifyStreamError, post, type Fetcher } from './http.ts';
 import { readSse } from './sse.ts';
 
 const WIRE = 'anthropic-messages';
+
+// On-demand compaction: the header goes on the compaction request and on every request that carries its block.
+export const COMPACTION_BETA = 'compact-2026-09-04';
+const carriesCompaction = (req: WireRequest) => !!req.compaction || req.messages.some((m) => m.role === 'assistant' && m.blocks.some((b) => b.type === 'compaction'));
 
 function assistantContent(blocks: AssistantBlock[], sameWire: boolean): JsonObject[] {
   return blocks.flatMap((b): JsonObject[] => {
@@ -13,6 +17,7 @@ function assistantContent(blocks: AssistantBlock[], sameWire: boolean): JsonObje
       if (!sameWire || !b.opaque) return [];
       return b.redacted ? [{ type: 'redacted_thinking', data: b.opaque }] : [{ type: 'thinking', thinking: b.text, signature: b.opaque }];
     }
+    if (b.type === 'compaction') return sameWire ? [{ type: 'compaction', content: b.text, signature: b.opaque }] : [];
     return [{ type: 'tool_use', id: b.id, name: b.name, input: b.input }];
   });
 }
@@ -26,7 +31,8 @@ export function anthropicMessages(messages: Message[], midConversationSystem: bo
   const push = (role: 'user' | 'assistant', content: JsonObject[]) => {
     if (!content.length) return;
     const last = out.at(-1);
-    if (last?.role === role) last.content.push(...content);
+    // The summary block stays an assistant message of its own, the form in which the turns kept after it verify.
+    if (last?.role === role && last.content[0]?.type !== 'compaction') last.content.push(...content);
     else out.push({ role, content });
   };
   for (const m of messages) {
@@ -60,7 +66,19 @@ export function anthropicBody(req: WireRequest): JsonObject {
     cache_control: { type: 'ephemeral', ...ttl },
     ...(req.effort ? { output_config: { effort: req.effort } } : {}),
     ...(req.model.speed ? { speed: req.model.speed } : {}),
+    ...(req.compaction ? { compaction: { type: 'summarize', instructions: req.compaction.instructions } } : {}),
   };
+}
+
+// The model's own headers, with each beta the request needs added: compaction when it carries a compaction request
+// or block, per-message effort once the conversation holds an effort change. Adding the effort beta partway
+// through keeps the cache (tried on Haiku 5.5, 2026-10-22).
+function anthropicHeaders(req: WireRequest): Record<string, string> {
+  const h: Record<string, string> = { ...(req.model.headers ?? {}) };
+  const add = (beta: string) => (h['anthropic-beta'] = h['anthropic-beta'] ? `${h['anthropic-beta']},${beta}` : beta);
+  if (carriesCompaction(req)) add(COMPACTION_BETA);
+  if (req.messages.some((m) => m.role === 'effort')) add(EFFORT_BETA);
+  return h;
 }
 
 const STOP: Record<string, StopReason> = {
@@ -71,6 +89,7 @@ const STOP: Record<string, StopReason> = {
   max_tokens: 'max_tokens',
   model_context_window_exceeded: 'max_tokens',
   refusal: 'refusal',
+  compaction: 'compaction',
 };
 
 // Parses an Anthropic Messages SSE stream into StreamEvents.
@@ -80,12 +99,23 @@ export async function* parseAnthropic(body: ReadableStream<Uint8Array>): AsyncGe
   let stop: StopReason = 'end_turn';
   let started = false;
   let finished = false;
-  const applyUsage = (u: Record<string, number | undefined> | undefined) => {
+  // A compaction reply arrives as one whole block, with no deltas.
+  let compaction: CompactionBlock | undefined;
+  const applyUsage = (u: (Record<string, unknown> & { iterations?: Record<string, number | undefined>[] }) | undefined) => {
     if (!u) return;
-    if (u.input_tokens !== undefined) usage.uncached = u.input_tokens;
-    if (u.cache_read_input_tokens !== undefined) usage.cacheRead = u.cache_read_input_tokens;
-    if (u.cache_creation_input_tokens !== undefined) usage.cacheWrite = u.cache_creation_input_tokens;
-    if (u.output_tokens !== undefined) usage.output = u.output_tokens;
+    const n = (k: string) => (typeof u[k] === 'number' ? (u[k] as number) : undefined);
+    if (n('input_tokens') !== undefined) usage.uncached = n('input_tokens')!;
+    if (n('cache_read_input_tokens') !== undefined) usage.cacheRead = n('cache_read_input_tokens')!;
+    if (n('cache_creation_input_tokens') !== undefined) usage.cacheWrite = n('cache_creation_input_tokens')!;
+    if (n('output_tokens') !== undefined) usage.output = n('output_tokens')!;
+    // A compaction call reports zero at the top level and its real usage per iteration.
+    if (Array.isArray(u.iterations) && u.iterations.length) {
+      const sum = (k: string) => u.iterations!.reduce((t, it) => t + (it[k] ?? 0), 0);
+      usage.uncached = sum('input_tokens');
+      usage.cacheRead = sum('cache_read_input_tokens');
+      usage.cacheWrite = sum('cache_creation_input_tokens');
+      usage.output = sum('output_tokens');
+    }
   };
   for await (const msg of readSse(body)) {
     let d: any;
@@ -111,6 +141,7 @@ export async function* parseAnthropic(body: ReadableStream<Uint8Array>): AsyncGe
           a.thinking(key, '', { redacted: true });
           a.opaque(key, cb.data ?? '', false);
         } else if (cb.type === 'tool_use') a.toolStart(key, cb.id, cb.name);
+        else if (cb.type === 'compaction' && typeof cb.content === 'string') compaction = { type: 'compaction', text: cb.content, opaque: cb.signature ?? '' };
         break;
       }
       case 'content_block_delta': {
@@ -144,17 +175,8 @@ export async function* parseAnthropic(body: ReadableStream<Uint8Array>): AsyncGe
   }
   a.endAll();
   yield* a.drain();
-  yield { type: 'done', blocks: a.finish(stop === 'max_tokens'), stop, usage };
-}
-
-// The model's own headers, with the per-message effort beta added once the conversation holds an effort change.
-// Adding it partway through keeps the cache (tried on Haiku 5.5, 2026-10-22).
-function betaHeaders(req: WireRequest): Record<string, string> {
-  const headers = { ...(req.model.headers ?? {}) };
-  if (!req.messages.some((m) => m.role === 'effort')) return headers;
-  const beta = headers['anthropic-beta'];
-  headers['anthropic-beta'] = beta ? `${beta},${EFFORT_BETA}` : EFFORT_BETA;
-  return headers;
+  const blocks = a.finish(stop === 'max_tokens');
+  yield { type: 'done', blocks: compaction ? [compaction, ...blocks] : blocks, stop, usage };
 }
 
 export function anthropicProvider(fetcher?: Fetcher): Provider {
@@ -163,7 +185,7 @@ export function anthropicProvider(fetcher?: Fetcher): Provider {
     body: anthropicBody,
     headers: (req) => ({
       'anthropic-version': '2023-06-01',
-      ...betaHeaders(req),
+      ...anthropicHeaders(req),
       ...(req.model.sessionHeader ? { [req.model.sessionHeader]: req.sessionId } : {}),
       ...authHeaders(req.model),
     }),

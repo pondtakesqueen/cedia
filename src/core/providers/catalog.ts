@@ -61,6 +61,8 @@ const claude = (id: string, price: Price, extra: Partial<ModelSpec> = {}): Model
   defaultEffort: 'medium',
   price,
   dataPolicy: 'retained',
+  // OpenCode Go passes the compaction field on but not its beta header (probed 2026-10-22), so only here.
+  compaction: true,
   caps: claudeCaps,
   ...extra,
 });
@@ -123,6 +125,7 @@ export const FAUX_MODEL: ModelSpec = {
   maxOutput: 8_000,
   price: p(1, 2, 0.1, 1.25),
   dataPolicy: 'zdr',
+  compaction: true,
   caps: { ...chatCaps, contextWindow: 200_000 },
 };
 
