@@ -7,7 +7,7 @@ import { secretPaths } from './secrets.ts';
 // .git/hooks. Undefined outside a repository.
 export function hooksDir(cwd: string): string | undefined {
   try {
-    const r = Bun.spawnSync(['git', 'rev-parse', '--git-path', 'hooks'], { cwd, stdout: 'pipe', stderr: 'ignore' });
+    const r = Bun.spawnSync(['git', '-c', 'core.fsmonitor=false', 'rev-parse', '--git-path', 'hooks'], { cwd, stdout: 'pipe', stderr: 'ignore' });
     const out = r.success ? r.stdout.toString().trim() : '';
     return out ? resolve(cwd, out) : undefined;
   } catch {
@@ -27,6 +27,9 @@ export type Sandbox = {
   // Paths the sandbox mounts placeholders on while it is up; snapshots must not count them as changes.
   placeholders: string[];
   wrap(command: string): Promise<string>;
+  // The same sandbox with writes held to `dir` (and the sandbox's own $TMPDIR): for a work sub-thread in a
+  // worktree, which must not write the parent's files, the other worktrees or its own directory's place.
+  within(dir: string): (command: string) => Promise<string>;
   close(): Promise<void>;
 };
 
@@ -51,7 +54,7 @@ const MANDATORY_DENY = ['.gitconfig', '.gitmodules', '.bashrc', '.bash_profile',
 // directory another way, such as a worktree's changes, must not write it either.
 export const sandboxGuarded = (rel: string) => MANDATORY_DENY.some((p) => rel === p || rel.startsWith(`${p}/`));
 
-export const NO_SANDBOX: Sandbox = { on: false, allowedDomains: [], placeholders: [], wrap: async (c) => c, close: async () => {} };
+export const NO_SANDBOX: Sandbox = { on: false, allowedDomains: [], placeholders: [], wrap: async (c) => c, within: () => async (c) => c, close: async () => {} };
 
 export function sandboxConfig(cwd: string, allowedDomains: string[], cediaHome: string, hooks = hooksDir(cwd)) {
   return {
@@ -103,6 +106,11 @@ export async function openSandbox(
       allowedDomains: opts.allowedDomains,
       placeholders: missing,
       wrap: (command) => manager.wrapWithSandbox(command),
+      within: (dir) => {
+        // Its .git file names the git dir that git there uses, hooks and all.
+        const filesystem = { denyRead: secretPaths(opts.cediaHome), allowWrite: [dir], denyWrite: [join(dir, '.git')].filter((p) => existsSync(p)) };
+        return (command) => manager.wrapWithSandbox(command, undefined, { filesystem });
+      },
       close: () => manager.reset(),
     },
   };

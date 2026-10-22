@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { applyWorktree, openWorktree, type Worktree } from '../src/core/project/worktree.ts';
 import { openSnapshots } from '../src/core/safety/snapshot.ts';
 
@@ -17,7 +17,7 @@ function repo() {
   mkdirSync(join(work, 'src'), { recursive: true });
   writeFileSync(join(work, 'src', 'a.txt'), '1\n2\n3\n4\n5\n6\n7\n8\n');
   writeFileSync(join(work, 'gone.txt'), 'deleted by the parent before the child starts\n');
-  writeFileSync(join(work, '.gitignore'), 'deps/\n');
+  writeFileSync(join(work, '.gitignore'), 'deps/\n.env\n');
   git(work, 'init', '-q');
   git(work, 'add', '-A');
   git(work, 'commit', '-qm', 'init');
@@ -27,6 +27,7 @@ function repo() {
   Bun.spawnSync(['rm', join(work, 'gone.txt')]);
   mkdirSync(join(work, 'deps'));
   writeFileSync(join(work, 'deps', 'lib.js'), 'module\n');
+  writeFileSync(join(work, '.env'), 'A=1\n');
   const parent = openSnapshots(work, join(dir, 'store'))!;
   return { dir, work, parent, root: join(dir, 'worktrees') };
 }
@@ -48,6 +49,10 @@ describe('worktree per work sub-thread', () => {
     expect(existsSync(join(wt.cwd, 'gone.txt'))).toBe(false);
     expect(lstatSync(join(wt.cwd, 'deps')).isSymbolicLink()).toBe(true);
     expect(readFileSync(join(wt.cwd, 'deps', 'lib.js'), 'utf8')).toBe('module\n');
+    // An ignored file is a copy: what the child writes there stays there.
+    expect(lstatSync(join(wt.cwd, '.env')).isSymbolicLink()).toBe(false);
+    writeFileSync(join(wt.cwd, '.env'), 'A=2\n');
+    expect(readFileSync(join(r.work, '.env'), 'utf8')).toBe('A=1\n');
     // git works there, and sees the parent's changes as the parent does.
     expect(git(wt.cwd, 'status', '--porcelain')).toContain('src/a.txt');
     // Nothing changed: nothing to apply, and the link is not a change.
@@ -89,6 +94,49 @@ describe('worktree per work sub-thread', () => {
     expect(readFileSync(join(r.work, 'src', 'a.txt'), 'utf8')).toBe('child\n');
     expect(existsSync(join(r.work, '.vscode'))).toBe(false);
     wt.close();
+  });
+
+  test('a worktree whose directory was swapped for a link is not read; a nested repository is not written', () => {
+    const r = repo();
+    const elsewhere = mkdtempSync(join(tmpdir(), 'cedia-wt-elsewhere-'));
+    writeFileSync(join(elsewhere, 'id_rsa'), 'secret\n');
+    const wt = open(r, 't-swap');
+    renameSync(wt.dir, `${wt.dir}.bak`);
+    symlinkSync(elsewhere, wt.dir);
+    expect(() => applyWorktree(wt, r.parent, none)).toThrow('moved or replaced');
+    expect(existsSync(join(r.work, 'id_rsa'))).toBe(false);
+    expect(existsSync(join(r.work, 'src', 'a.txt'))).toBe(true);
+    rmSync(wt.dir);
+    renameSync(`${wt.dir}.bak`, wt.dir);
+    wt.close();
+
+    const nested = open(r, 't-nested');
+    mkdirSync(join(nested.cwd, 'sub'));
+    writeFileSync(join(nested.cwd, 'sub', 'f.txt'), 'x\n');
+    git(join(nested.cwd, 'sub'), 'init', '-q');
+    git(join(nested.cwd, 'sub'), 'add', '-A');
+    git(join(nested.cwd, 'sub'), 'commit', '-qm', 'x');
+    writeFileSync(join(nested.cwd, 'ok.txt'), 'ok\n');
+    expect(applyWorktree(nested, r.parent, none)).toEqual({ files: ['ok.txt'], refused: ['sub'], conflicts: [] });
+    expect(existsSync(join(r.work, 'sub'))).toBe(false);
+    nested.close();
+  });
+
+  test('a kept worktree keeps its directory but not its index; a crash leaves nothing the next one does not sweep', () => {
+    const r = repo();
+    const indexes = () => readdirSync(join(r.dir, 'store')).filter((f) => f.startsWith('cedia-index-'));
+    const kept = open(r, 't-kept');
+    kept.keep();
+    expect(existsSync(kept.cwd)).toBe(true);
+    expect(indexes()).toEqual([]);
+    const crashed = open(r, 't-crashed');
+    expect(indexes()).toHaveLength(1);
+    rmSync(crashed.dir, { recursive: true, force: true });
+    const next = open(r, 't-next');
+    expect(indexes()).toEqual([basename(next.dir)].map((id) => `cedia-index-${id}`));
+    expect(git(r.work, 'worktree', 'list')).not.toContain(crashed.dir);
+    next.close();
+    kept.close();
   });
 
   test('outside a repository, or one with no commit, there is no worktree', () => {
@@ -163,7 +211,7 @@ function cedia(dir: string, script: unknown[], args: string[]) {
   mkdirSync(home, { recursive: true });
   const scriptPath = join(home, `script-${crypto.randomUUID()}.json`);
   writeFileSync(scriptPath, JSON.stringify(script));
-  const p = Bun.spawnSync([BIN, '-m', 'faux', '--cwd', dir, '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'true', ...args], {
+  const p = Bun.spawnSync([BIN, '-m', 'faux', '--cwd', dir, '--output-format', 'json', '--permission', 'workspace', ...(args.includes('--sandbox') ? [] : ['--sandbox', 'off']), '--check', 'true', ...args], {
     env: { ...process.env, CEDIA_FAUX_SCRIPT: scriptPath, CEDIA_HOME: home },
     stdin: 'ignore',
   });
@@ -256,11 +304,34 @@ describe('--spawn worktree (offline, faux)', () => {
     expect(text).toContain('Not applied, since you may not write them: .vscode/settings.json');
     expect(existsSync(join(r.work, '.vscode'))).toBe(false);
 
+    // The parent's own deny rules hold for what comes back.
+    const denied = cedia(r.work, [{ blocks: [spawnCall('s1', 'alpha-task: two files')] }, ...child('alpha-task', 'echo x > locked.txt && echo ok > fine.txt', 'alpha done'), call('p1', 'true'), reply('done')], ['-p', 'files', '--spawn', 'worktree', '--deny', 'edit(locked.txt)']);
+    const deniedText = report(denied.result(), r.work, 's1');
+    expect(deniedText).toContain('Applied to your files: fine.txt');
+    expect(deniedText).toContain('Not applied, since you may not write them: locked.txt');
+    expect(existsSync(join(r.work, 'locked.txt'))).toBe(false);
+
     const plain = mkdtempSync(join(tmpdir(), 'cedia-wt-plain-'));
     mkdirSync(join(plain, 'w'));
     const inPlace = cedia(join(plain, 'w'), [{ blocks: [spawnCall('s1', 'alpha-task: one file')] }, ...child('alpha-task', 'echo good > one.txt', 'alpha done'), call('p1', 'true'), reply('done')], ['-p', 'x', '--spawn', 'worktree']);
     expect(inPlace.err).toContain('no worktree for the work sub-thread (not in a git repository); it runs in place');
     expect(inPlace.result()).toMatchObject({ subtype: 'success' });
     expect(readFileSync(join(plain, 'w', 'one.txt'), 'utf8')).toBe('good\n');
+  });
+});
+
+describe('--spawn worktree in the OS sandbox', () => {
+  test.skipIf(!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin')("a child's bash writes only in its worktree, never the parent's files", () => {
+    const r = repo();
+    const leak = join(r.work, 'leak.txt');
+    const out = cedia(
+      r.work,
+      [{ blocks: [spawnCall('s1', 'alpha-task: one file')] }, ...child('alpha-task', `echo x > ${leak}; echo good > one.txt; echo tmp > "$TMPDIR/cedia-wt-probe"`, 'alpha done'), call('p1', 'true'), reply('done')],
+      ['-p', 'x', '--spawn', 'worktree', '--sandbox', 'on'],
+    );
+    expect(out.result()).toMatchObject({ subtype: 'success' });
+    expect(existsSync(leak)).toBe(false);
+    expect(readFileSync(join(r.work, 'one.txt'), 'utf8')).toBe('good\n');
+    expect(report(out.result(), r.work, 's1')).toContain('Applied to your files: one.txt');
   });
 });

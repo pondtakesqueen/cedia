@@ -159,6 +159,7 @@ export function loadSpawn(flag?: string): SpawnMode {
   if (flag !== undefined && flag !== 'on' && flag !== 'off' && flag !== 'worktree') throw new Error(`--spawn must be on, off or worktree: ${flag}`);
   if (flag) return flag;
   const s = readSettings(join(cediaHome(), 'settings.json')).spawn ?? true;
+  if (s !== true && s !== false && s !== 'worktree') throw new Error(`spawn in settings.json must be true, false or "worktree": ${JSON.stringify(s)}`);
   return s === 'worktree' ? 'worktree' : s ? 'on' : 'off';
 }
 

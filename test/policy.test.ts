@@ -311,6 +311,8 @@ describe('settings keys', () => {
       expect(loadSpawn()).toBe('off');
       writeFileSync(join(home, 'settings.json'), JSON.stringify({ spawn: 'worktree' }));
       expect(loadSpawn()).toBe('worktree');
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ spawn: 'off' }));
+      expect(() => loadSpawn()).toThrow('spawn in settings.json must be true, false or "worktree"');
       expect(loadSpawn('on')).toBe('on');
       expect(() => loadSpawn('yes')).toThrow('--spawn must be on, off or worktree');
     } finally {

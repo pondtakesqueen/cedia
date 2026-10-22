@@ -12,14 +12,15 @@ import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../..
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { runTurn } from '../../core/project/undo.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
-import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type SpawnOutcome, type Spawner } from '../../core/tools/spawn.ts';
+import { spawnNudgeAt, spawnPool, spawnTool, subtaskPrompt, type SpawnKind, type SpawnOutcome, type Spawner } from '../../core/tools/spawn.ts';
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
 import { applyWorktree, openWorktree, type Worktree } from '../../core/project/worktree.ts';
-import { protectedPath } from '../../core/safety/policy.ts';
+import { decide } from '../../core/safety/policy.ts';
+import { editTool } from '../../core/tools/edit.ts';
 import { sandboxGuarded } from '../../core/safety/sandbox.ts';
 import type { Snapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
@@ -250,7 +251,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     continues?: { sessionId: string; changed: string[] };
     note?: string;
     role?: 'plan' | 'review' | 'explore';
-    child?: { thread?: string; handoff?: boolean; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots } };
+    child?: { thread?: string; handoff?: boolean; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots; wrap: (command: string) => Promise<string> } };
     // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
     seed?: { from: SessionLog; compaction: NonNullable<HeadlessResult['compaction']> };
   };
@@ -294,7 +295,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         privacy,
         checks: reviewer ? [] : checks,
         ...(softChecks && !reviewer ? { softChecks } : {}),
-        ...(sandbox.on ? { wrap: sandbox.wrap } : {}),
+        ...(sandbox.on ? { wrap: place?.wrap ?? sandbox.wrap } : {}),
         ...(place ? { snapshots: place.snapshots } : snapshots && !reviewer ? { snapshots } : {}),
         ...(continues ? { continues } : {}),
         ...(opts.role ? { role: opts.role } : {}),
@@ -376,8 +377,16 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     subthreads++;
     spawned[kind]++;
     let m = kind === 'explore' ? explorer : writer.model;
-    const sub = store?.open(brief, threadId ? { parent: threadId } : {});
-    const place = wt && { cwd: wt.cwd, snapshots: wt.snapshots, preamble: preamble(wt.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}) }) };
+    let sub: string | undefined;
+    let place: NonNullable<RunOpts['child']>['place'];
+    try {
+      sub = store?.open(brief, threadId ? { parent: threadId } : {});
+      // Its bash writes only in its worktree: the parent's files change only when its changes are applied.
+      place = wt && { cwd: wt.cwd, snapshots: wt.snapshots, preamble: preamble(wt.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}) }), wrap: sandbox.within(wt.dir) };
+    } catch (e) {
+      wt?.close();
+      throw e;
+    }
     const prompt = subtaskPrompt(brief, threadId, kind, wt?.cwd);
     // The sub-thread's sessions so far: what recall searches once one has handed off.
     const mine: EarlierSession[] = [];
@@ -425,14 +434,22 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     let worktree: SpawnOutcome['worktree'];
     if (wt && ctx.write) {
       const w = wt;
-      const refuse = (f: string) => protectedPath(join(args.cwd, f), args.cwd) || sandboxGuarded(f);
+      // What the parent's own edit could not write: its deny rules, secret stores and protected paths, and
+      // what the sandbox keeps bash from writing.
+      const refuse = (f: string) => decide(policy, editTool, { path: f }, args.cwd).decision === 'deny' || sandboxGuarded(f);
       try {
-        const applied = r.subtype !== 'interrupted' && !ac.signal.aborted ? await ctx.write(() => applyWorktree(w, snapshots!, refuse)) : undefined;
+        // A stop that came while it waited for the parent's files is still a stop.
+        const applied = r.subtype !== 'interrupted' && !ac.signal.aborted ? await ctx.write(() => (ac.signal.aborted ? undefined : applyWorktree(w, snapshots!, refuse))) : undefined;
         const keep = !ac.signal.aborted && (!applied || applied.conflicts.length > 0 || applied.refused.length > 0);
-        worktree = { applied: applied?.files ?? [], refused: applied?.refused ?? [], conflicts: applied?.conflicts ?? [], ...(applied ? {} : { why: `the sub-thread ended with ${r.subtype}` }), ...(keep ? { kept: w.cwd } : {}) };
-        if (!keep) w.close();
+        worktree = { applied: applied?.files ?? [], refused: applied?.refused ?? [], conflicts: applied?.conflicts ?? [], ...(applied ? {} : { why: `the sub-thread ended with ${ac.signal.aborted ? 'a stop' : r.subtype}` }), ...(keep ? { kept: w.cwd } : {}) };
+        if (keep) w.keep();
+        else w.close();
       } catch (e) {
-        worktree = { applied: [], refused: [], conflicts: [], why: (e as Error).message, kept: w.cwd };
+        // A worktree that is no longer the one made is not offered to be read: it may lead anywhere now.
+        const intact = w.intact();
+        if (intact) w.keep();
+        else w.close();
+        worktree = { applied: [], refused: [], conflicts: [], why: (e as Error).message, ...(intact ? { kept: w.cwd } : {}) };
       }
     }
     if (store && sub) {
@@ -441,9 +458,10 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     }
     return { ...(sub ? { thread: sub } : {}), model: m.ref, subtype: r.subtype, result: r.result, costUsd: r.costUsd, changed: r.evidence?.changed ?? [], unverified: r.evidence?.unverified ?? [], ...(worktree ? { worktree } : {}) };
   };
-  const spawn = spawnTool(spawner, undefined, { worktrees: spawnMode === 'worktree' });
+  const pool = spawnPool();
+  const spawn = spawnTool(spawner, undefined, { worktrees: spawnMode === 'worktree', pool });
   // A resumed session keeps the spawn tool it was opened with, worktrees or not, so its tool list stays the same.
-  const spawnOther = spawnTool(spawner, undefined, { worktrees: spawnMode !== 'worktree' });
+  const spawnOther = spawnTool(spawner, undefined, { worktrees: spawnMode !== 'worktree', pool });
   // Runs the writer and follows its handoffs: each note opens a new session of the thread on the same model,
   // which starts from the task (and the fix it was on, if any) and the note.
   const write = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}) => {

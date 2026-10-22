@@ -2,7 +2,7 @@ import { stableJson } from '../hash.ts';
 import type { AssistantBlock, AttemptError, JsonObject, Provider, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
 
 // Offline provider for tests. A script is a list of steps; each step is a reply or a function of the request.
-// A reply with `when` is kept for the first request whose messages contain that text, so sessions that run at once
+// A reply with `when` is kept for the first request whose first message contains that text, so sessions that run at once
 // (parallel sub-threads) each get their own steps whatever order their requests come in.
 // Usage is computed from the prefix actually sent, so cacheRead is nonzero exactly when the prefix repeats.
 // Shape modeled on pi's faux provider (MIT); no code copied.
@@ -22,7 +22,9 @@ export function fauxProvider(script: FauxStep[] | ((req: WireRequest, state: Fau
     body: (req: WireRequest): JsonObject => ({ model: req.model.id, system: req.system, tools: req.tools, messages: req.messages }),
     headers: (req) => ({ ...(req.model.sessionHeader ? { [req.model.sessionHeader]: req.sessionId } : {}) }),
     async *stream(req, signal): AsyncGenerator<StreamEvent> {
-      const sent = JSON.stringify(req.messages);
+      // Matched against the session's first message, which holds its task: later ones (a spawn call naming a
+      // child's task) would let one session take another's steps.
+      const sent = JSON.stringify(req.messages[0] ?? '');
       const at = steps ? steps.findIndex((s) => typeof s === 'function' || s.when === undefined || sent.includes(s.when)) : -1;
       const step: FauxStep | undefined = steps ? (at >= 0 ? steps.splice(at, 1)[0] : undefined) : (script as FauxStep);
       state.callCount++;
