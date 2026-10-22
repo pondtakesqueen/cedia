@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPrompt } from '../src/core/loop/run.ts';
-import { HANDOFF_NO_TOOLS, HANDOFF_PROMPT, defaultHandoffAt } from '../src/core/project/handoff.ts';
+import { HANDOFF_NO_TOOLS, HANDOFF_PROMPT, defaultHandoffAt, resumeChoice } from '../src/core/project/handoff.ts';
 import { foldThread, threadsDir, ThreadStore, titleOf } from '../src/core/project/threads.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, type FauxStep } from '../src/core/providers/faux.ts';
@@ -310,6 +310,29 @@ describe('cedia threads (offline, faux)', () => {
     expect(storeOf(dir).read(first.thread).sessions.map((s) => s.why)).toEqual(['start', 'resume', 'resume']);
 
     expect(cedia(dir, [], ['-p', 'x', ...base, '--thread', 't-00000000']).err).toContain('no thread t-00000000 in this project');
+  });
+
+  test('--thread on a session whose cache expired goes on in a new session when that is cheaper', () => {
+    const dir = tmp();
+    // A first session that read a lot: about 50k tokens of context.
+    const reads = { blocks: Array.from({ length: 6 }, (_, i) => ({ type: 'tool_use', id: `r${i}`, name: 'bash', input: { command: `seq ${i} 9000` } })) };
+    const first = JSON.parse(cedia(dir, [call('c1', 'echo good > f.txt'), reads, call('c2', 'grep -q good f.txt'), reply('first done')], ['-p', 'make f.txt say good', ...base]).out);
+    expect(first.peakContext).toBeGreaterThan(30_000);
+    const path = sessionsOf(dir).find((l) => l.id === first.sessionId)!;
+    const file = join(dir, 'home', 'sessions', readdirSync(join(dir, 'home', 'sessions'))[0]!, `${path.id}.jsonl`);
+    const age = (hours: number) =>
+      writeFileSync(file, readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.stringify({ ...JSON.parse(l), at: new Date(Date.now() - hours * 3_600_000).toISOString() })).join('\n') + '\n');
+    // Warm: the same session goes on.
+    const warm = cedia(dir, [call('c3', 'grep -q good f.txt'), reply('second done')], ['-p', 'check it', ...base, '--thread', first.thread]);
+    expect(JSON.parse(warm.out).sessionId).toBe(first.sessionId);
+    age(2);
+    const cold = cedia(dir, [call('c4', 'grep -q good f.txt'), reply('third done')], ['-p', 'check it again', ...base, '--thread', first.thread]);
+    const r = JSON.parse(cold.out);
+    expect(r.sessionId).not.toBe(first.sessionId);
+    expect(cold.err).toMatch(/idle 120 min, past its cache; resuming it re-reads \d+k tokens .* so it goes on in a new session/);
+    const fresh = sessionsOf(dir).find((l) => l.id === r.sessionId)!;
+    expect(userText(fresh.events)).toContain(`This is thread ${first.thread}`);
+    expect(head(fresh.events).tools.map((t) => t.name)).toContain('recall');
   });
 
   test('the run\'s result is logged after the writer\'s last turn_end, never streamed twice or shown to a model', () => {
@@ -661,5 +684,25 @@ describe('project identity across git worktrees', () => {
     expect(listed).toContain(result.thread);
     const log = SessionLog.load(join(dir, 'home', 'sessions', projectSlug(main), `${result.sessionId}.jsonl`));
     expect(head(log.events).cwd).toBe(wt);
+  });
+});
+
+describe('resumeChoice', () => {
+  const model = resolveModel('anthropic/claude-opus-5-5');
+  const at = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+  const log = (msAgo: number, context: number, ttl?: '1h'): SessionEvent[] =>
+    [
+      { id: 'a', at: at(msAgo + 1000), kind: 'request', model: model.ref, toolsHash: 't', systemHash: 's', bodyHash: 'b', headers: {}, ...(ttl ? { ttl } : {}) },
+      { id: 'b', at: at(msAgo), kind: 'assistant', wire: 'anthropic', model: model.ref, blocks: [], stop: 'end_turn', usage: { uncached: 0, cacheRead: context, cacheWrite: 0, output: 0 } },
+    ] as SessionEvent[];
+  test('a cold, large session goes to a new one; a warm, small or 1-hour-cached one is resumed', () => {
+    expect(resumeChoice(log(2 * 3_600_000, 150_000), model, 12_000)).toMatchObject({ cold: true, fresh: true });
+    expect(resumeChoice(log(60_000, 150_000), model, 12_000)).toMatchObject({ cold: false, fresh: false });
+    expect(resumeChoice(log(30 * 60_000, 150_000, '1h'), model, 12_000)).toMatchObject({ cold: false, fresh: false });
+    expect(resumeChoice(log(2 * 3_600_000, 20_000), model, 12_000)).toMatchObject({ cold: true, fresh: false });
+    // Cold and large, but the new session would start nearly as large: resume.
+    expect(resumeChoice(log(2 * 3_600_000, 40_000), model, 30_000)).toMatchObject({ cold: true, fresh: false });
+    const r = resumeChoice(log(2 * 3_600_000, 150_000), model, 12_000)!;
+    expect(r.resumeUsd).toBeGreaterThan(10 * r.freshUsd);
   });
 });

@@ -30,6 +30,10 @@ type ThreadBody =
   // The question a session asked the owner, written just before the 'asking' state.
   | { kind: 'question'; sessionId: string; question: string; options?: string[] }
   | { kind: 'state'; state: ThreadState; result?: string }
+  // A run of the thread that changed files: the shadow-git trees before its first write and after its last, across
+  // every session it took (handoff, fallback, a review's fix), and the working directory they are of. What /undo
+  // and /diff call a turn (core/project/undo.ts).
+  | { kind: 'turn'; cwd: string; before: string; after: string; sessions: string[] }
   // Hidden from lists, still readable. A sub-thread that finishes its task archives itself.
   | { kind: 'archived'; archived: boolean };
 export type ThreadEvent = { at: string } & ThreadBody;
@@ -52,6 +56,8 @@ export type Thread = {
   messages: ThreadMessage[];
   pending: ThreadMessage[];
   ratings: ThreadRating[];
+  // The latest run that changed files.
+  lastTurn?: { cwd: string; before: string; after: string; sessions: string[]; at: string };
   // The open question while the thread is asking.
   question?: { sessionId: string; question: string; options?: string[]; at: string };
   updatedAt: string;
@@ -175,6 +181,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     else if (e.kind === 'question') t.question = { sessionId: e.sessionId, question: e.question, ...(e.options ? { options: e.options } : {}), at: e.at };
     else if (e.kind === 'rate') t.ratings.push({ rating: e.rating, ...(e.sessionId ? { sessionId: e.sessionId } : {}), ...(e.note ? { note: e.note } : {}), at: e.at });
     else if (e.kind === 'archived') t.archived = e.archived;
+    else if (e.kind === 'turn') t.lastTurn = { cwd: e.cwd, before: e.before, after: e.after, sessions: e.sessions, at: e.at };
     else if (e.kind === 'state') {
       t.state = e.state;
       if (e.result !== undefined) t.result = e.result;
