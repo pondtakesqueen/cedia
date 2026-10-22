@@ -1,11 +1,13 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
 import { GUARDS } from './core/safety/policy.ts';
 import { cediaHome } from './core/config.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
+import { memoryPath, MemoryStore } from './core/project/memory.ts';
+import { loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
 import { workspaceSnapshots } from './core/safety/snapshot.ts';
 import { lintSession } from './core/session/lint.ts';
@@ -71,6 +73,11 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
                                             put the files that turn changed back (or forward again), from cedia's
                                             snapshots; a file changed since is left unless --force. Commands the turn
                                             ran are not undone. The thread is told at its next turn
+       cedia memory [list | add <text> | forget <id>]
+                                            the project's memory: short facts every new session gets in its first
+                                            turn; writer sessions add to it with the remember tool
+       cedia skills [--cwd <dir>]           the skills a session here can load: the user's (~/.cedia/skills) and the
+                                            repository's (.agents/skills, .claude/skills, .cursor/skills)
 
 models: ${Object.keys(ALIASES).join(', ')}`;
 
@@ -82,6 +89,8 @@ export async function main(argv: string[]): Promise<number> {
   }
   if (argv[0] === 'lint-session') return lintFiles(argv.slice(1));
   if (argv[0] === 'threads') return threads(argv.slice(1));
+  if (argv[0] === 'memory') return memory(argv.slice(1));
+  if (argv[0] === 'skills') return skills(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
   const { values, positionals } = parseArgs({
     args: argv,
@@ -293,6 +302,61 @@ function threads(argv: string[]): number {
     return 1;
   }
   console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] | redo <id> [--force] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
+  return 2;
+}
+
+function skills(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  if (parsed.positionals.length && parsed.positionals[0] !== 'list') {
+    console.error('usage: cedia skills [list] [--cwd <dir>]');
+    return 2;
+  }
+  const found = loadSkills(resolve(parsed.values.cwd ?? process.cwd()), cediaHome());
+  // A repository's description could carry terminal escapes; they are shown as text.
+  const shown = (t: string) => t.replace(/[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  console.log(found.length ? found.map((s) => `${s.name}  (${s.source})  ${shown(s.dir)}\n    ${shown(s.description)}`).join('\n') : 'no skills here');
+  return 0;
+}
+
+function memory(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message} (put -- before a note that starts with -)`);
+    return 2;
+  }
+  const { values, positionals } = parsed;
+  const store = new MemoryStore(memoryPath(cediaHome(), projectKey(resolve(values.cwd ?? process.cwd()))));
+  const [cmd = 'list', ...rest] = positionals;
+  try {
+    if (cmd === 'list') {
+      const notes = store.notes();
+      // A session's note could carry terminal escapes; they are shown as text.
+      const shown = (t: string) => t.replace(/[\x00-\x1f\x7f\x9b]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+      console.log(notes.length ? notes.map((n) => `${n.id}  ${n.at.slice(0, 10)}  ${n.from}: ${shown(n.text)}`).join('\n') : 'no notes for this project');
+      return 0;
+    }
+    if (cmd === 'add' && rest.length) {
+      console.log(`kept as note ${store.add(rest.join(' '), 'user').id}`);
+      return 0;
+    }
+    if (cmd === 'forget' && rest.length === 1) {
+      store.forget(rest[0]!);
+      console.log(`forgot ${rest[0]}`);
+      return 0;
+    }
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 1;
+  }
+  console.error('usage: cedia memory [list | add <text> | forget <id>] [--cwd <dir>]');
   return 2;
 }
 
