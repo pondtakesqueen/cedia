@@ -1,0 +1,3 @@
+{"at":"2026-10-22T02:06:32.177Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
+{"at":"2026-10-22T02:06:32.181Z","kind":"session","sessionId":"efe806c6-d866-4c58-952c-b6db89653f8f","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/efe806c6-d866-4c58-952c-b6db89653f8f.jsonl"}
+{"at":"2026-10-22T02:06:32.246Z","kind":"state","state":"done","result":"done, checked"}
