@@ -102,6 +102,9 @@ function hint(lines: string[], want: string[]): string {
   return at.length ? ` (its first line appears at line ${at.join(', ')})` : '';
 }
 
+// The file's errors after the write, when a language server reports any. The call itself succeeded either way.
+const withDiagnostics = (text: string, diagnostics: string | undefined) => (diagnostics ? `${text}\n\n${diagnostics}` : text);
+
 export const editTool: ToolSpec = {
   name: 'edit',
   description:
@@ -155,7 +158,7 @@ export const editTool: ToolSpec = {
       notes.push(`edit ${i + 1}: lines ${from}-${to}${count > 1 ? ` and ${count - 1} more` : ''}${tier === 'exact' ? '' : ` (matched ignoring ${tier === 'trailing-space' ? 'trailing spaces' : 'indentation'})`}`);
     }
     writeFileSync(full, crlf ? content.replace(/\n/g, '\r\n') : content);
-    return { text: `edited ${path}\n${notes.join('\n')}`, isError: false };
+    return { text: withDiagnostics(`edited ${path}\n${notes.join('\n')}`, await ctx.diagnose?.(full, ctx.signal)), isError: false };
   },
 };
 
@@ -188,6 +191,6 @@ export const writeTool: ToolSpec = {
       return { text: `cannot write ${path}: ${(e as Error).message}`, isError: true };
     }
     const lines = input.content ? trimLastNewline(input.content).split('\n').length : 0;
-    return { text: `${existed ? 'replaced' : 'created'} ${path} (${lines} lines)`, isError: false };
+    return { text: withDiagnostics(`${existed ? 'replaced' : 'created'} ${path} (${lines} lines)`, await ctx.diagnose?.(full, ctx.signal)), isError: false };
   },
 };

@@ -54,6 +54,8 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --spawn <on|off|worktree>
                                let the writer hand self-contained work to sub-threads (default: settings, on);
                                worktree runs each work sub-thread in a git worktree of its own, several at once
+      --lsp <on|off>           after each edit, add the file's errors from a language server when one is installed
+                               (typescript-language-server, pyright-langserver, gopls; more in settings "lsp"). Default on
       --ask <on|off>           give the writer ask_user, to end the run with one question for you when only you can
                                decide; the thread waits as 'asking' and your answer is its next prompt
                                (default: settings ask, off)
@@ -144,6 +146,7 @@ export async function main(argv: string[]): Promise<number> {
       'on-quota': { type: 'string' },
       thread: { type: 'string' },
       spawn: { type: 'string' },
+      lsp: { type: 'string' },
       ask: { type: 'string' },
       todo: { type: 'string' },
       profile: { type: 'string' },
@@ -193,6 +196,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values['on-quota'] ? { onQuota: values['on-quota'] } : {}),
     ...(values.thread ? { thread: values.thread } : {}),
     ...(values.spawn ? { spawn: values.spawn } : {}),
+    ...(values.lsp ? { lsp: values.lsp } : {}),
     ...(values.ask ? { ask: values.ask } : {}),
     ...(values.todo ? { todo: values.todo } : {}),
     ...(values.profile ? { profile: values.profile } : {}),

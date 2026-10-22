@@ -65,6 +65,8 @@ export type RunOptions = {
   softChecks?: boolean;
   // Puts bash inside the OS sandbox; absent means unsandboxed.
   wrap?: (command: string) => Promise<string>;
+  // A file's errors from a language server, added to edit and write results (core/lsp/diagnose.ts).
+  diagnose?: (file: string, signal?: AbortSignal) => Promise<string | undefined>;
   // Shadow-git snapshots around every writing call; absent means changed files come from edit/write only.
   snapshots?: Snapshots;
   role?: string;
@@ -702,7 +704,7 @@ async function runTools(
     try {
       const spill = (text: string) => spillOutput(log.id, j.callId, redact ? redactSecrets(text).text : text);
       const write = j.parallel && j.spec.isolated?.(j.input) ? { write: writeFor(j) } : {};
-      const out = await postHooks(opts, log, j, asOutput(await j.spec.run(j.input, { cwd: opts.cwd, signal, spill, ...(opts.wrap ? { wrap: opts.wrap } : {}), ...write })));
+      const out = await postHooks(opts, log, j, asOutput(await j.spec.run(j.input, { cwd: opts.cwd, signal, spill, ...(opts.wrap ? { wrap: opts.wrap } : {}), ...(opts.diagnose ? { diagnose: opts.diagnose } : {}), ...write })));
       results.set(j.callId, { ...out, status: signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed' });
     } catch (e) {
       results.set(j.callId, { status: 'failed', text: `tool crashed: ${e instanceof Error ? e.message : String(e)}`, isError: true });
