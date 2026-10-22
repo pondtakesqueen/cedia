@@ -237,6 +237,8 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     log.append({ kind: 'turn_end', reason, ...(reason === 'aborted' ? { cause: 'user' as const } : {}) });
     const flags = slop().map(formatFinding);
     const ev = { ...evidence(entries()), ...(flags.length ? { flags } : {}) };
+    // A run's result pools its sub-threads' evidence, so each check says which thread ran it.
+    if (opts.thread) ev.checks = ev.checks.map((c) => ({ ...c, thread: opts.thread }));
     const hasEvidence = ev.changed.length > 0 || ev.checks.length > 0;
     return {
       type: 'result',

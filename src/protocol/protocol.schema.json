@@ -129,6 +129,25 @@
         "quota"
       ]
     },
+    "Check": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": "number"
+        },
+        "thread": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "exitCode"
+      ],
+      "additionalProperties": false
+    },
     "Command": {
       "anyOf": [
         {
@@ -278,20 +297,7 @@
         "checks": {
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "command": {
-                "type": "string"
-              },
-              "exitCode": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "command",
-              "exitCode"
-            ],
-            "additionalProperties": false
+            "$ref": "#/definitions/Check"
           }
         },
         "unverified": {

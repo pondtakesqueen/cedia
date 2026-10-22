@@ -346,6 +346,11 @@ describe('sub-threads (offline, faux)', () => {
     const store = storeOf(dir);
     const sub = store.list().find((t) => t.parent === result.thread)!;
     expect(sub).toMatchObject({ state: 'done', archived: true, title: 'Write good to f.txt, then run grep -q good f.txt.' });
+    // The result pools both threads' checks, each named by the thread that ran it.
+    expect(result.evidence.checks).toEqual([
+      { command: 'grep -q good f.txt', exitCode: 0, thread: sub.id },
+      { command: 'grep -q good f.txt', exitCode: 0, thread: result.thread },
+    ]);
     const child = sessionsOf(dir).find((l) => l.id === sub.sessions[0]!.sessionId)!;
     expect(head(child.events)).toMatchObject({ thread: sub.id });
     expect(head(child.events).tools.map((t) => t.name)).toEqual(['read', 'edit', 'write', 'bash']);
