@@ -571,6 +571,30 @@
         "asked"
       ]
     },
+    "RunFrom": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "events": {
+          "type": "number"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "path",
+        "events",
+        "model"
+      ],
+      "additionalProperties": false
+    },
     "SessionEvent": {
       "anyOf": [
         {
@@ -1390,7 +1414,8 @@
         "resume",
         "handoff",
         "quota",
-        "rejected"
+        "rejected",
+        "rewind"
       ]
     },
     "Spawned": {
@@ -1979,6 +2004,62 @@
             "cwd",
             "kind",
             "sessions"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "run"
+            },
+            "id": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "tree": {
+              "type": "string"
+            },
+            "from": {
+              "$ref": "#/definitions/RunFrom"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "cwd",
+            "id",
+            "kind",
+            "prompt"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "rewind"
+            },
+            "run": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "kind",
+            "run"
           ]
         },
         {

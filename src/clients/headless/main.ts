@@ -193,8 +193,9 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     return log;
   };
   // The writer's sessions, the thread's earlier ones first: what recall searches.
+  // A session a rewind left behind is not searched: the user took that work back.
   const earlier: EarlierSession[] = (resumed?.sessions ?? []).flatMap((s) =>
-    s.role === 'code' && s.path ? [{ id: s.sessionId, events: () => (sessionExists(s.path!) ? SessionLog.load(s.path!).events : []) }] : [],
+    s.role === 'code' && s.path && !resumed!.rewound.includes(s.sessionId) ? [{ id: s.sessionId, events: () => (sessionExists(s.path!) ? SessionLog.load(s.path!).events : []) }] : [],
   );
   const recall = recallTool(() => earlier.filter((s) => s.id !== writer.log.id));
   const record = (log: SessionLog, m: ModelSpec, why: SessionWhy) => {
@@ -419,6 +420,14 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     }
     return r;
   };
+  // Where this run starts, for /rewind: the working tree, and the conversation as the thread's last writer session
+  // has it now (core/project/rewind.ts).
+  if (store && threadId) {
+    const last = resumed?.sessions.findLast((s) => s.role === 'code' && !resumed.rewound.includes(s.sessionId));
+    const tree = snapshots?.take();
+    const from = last?.path && sessionExists(last.path) ? { sessionId: last.sessionId, path: last.path, events: SessionLog.load(last.path).events.length, model: last.model } : undefined;
+    store.append(threadId, { kind: 'run', id: `r-${crypto.randomUUID().slice(0, 8)}`, prompt: args.prompt.slice(0, 500), cwd: args.cwd, ...(tree ? { tree } : {}), ...(from ? { from } : {}) });
+  }
   try {
     // Plan: a stronger model reads the repo and writes the plan the writer gets with the task.
     let plan: Step | undefined;
@@ -432,7 +441,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // A resumed thread goes on in its last session when the model is the same (its cache may still be warm) and
     // the provider still takes that session's history, otherwise in a new session that starts from where the
     // thread stopped.
-    const last = resumed?.sessions.findLast((s) => s.role === 'code');
+    const last = resumed?.sessions.findLast((s) => s.role === 'code' && !resumed.rewound.includes(s.sessionId));
     const lastLog = resumed && last?.model === model.ref && last.path && sessionExists(last.path) ? SessionLog.load(last.path) : undefined;
     let result: HeadlessResult;
     // A session whose cache has expired costs its whole context to resume; past a size, a new session from where

@@ -230,7 +230,7 @@ cedia is not a git client; it covers what an agent session needs and leaves the 
 | `/pr`: push the branch and open a PR through `gh` | 4 | Push needs approval; never to the default branch |
 | `/review`: review the diff or a PR with the `panel` role | 5 | Findings come with evidence |
 | Worktree per subagent | 5 | |
-| `/rewind` conversation and files together | 6 | |
+| `/rewind` conversation and files together | 6 | `cedia threads rewind <id> <n>` goes back to just before the thread's run n (`core/project/rewind.ts`). Each run records where it started (a `run` event: the working tree's snapshot tree and the writer session with its event count). The files every later run changed go back to that tree, a file changed since the run that last wrote it left unless forced, as `/undo` does; the thread goes on in a new session whose log is a byte-for-byte copy of that session's first events, so the cached prefix holds (a rewind to run 1 leaves no session, and the next run starts from the task). A `rewind` event makes the thread's fold drop what came after (sessions, turns, results, deliveries) but keep messages, so one delivered only to a dropped session waits again; recall no longer searches dropped sessions. The model is told at its next turn, through the inbox, that commands those runs ran are not undone. The TUI's `/rewind` comes with the TUI |
 
 ## pstack
 

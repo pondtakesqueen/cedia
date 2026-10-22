@@ -9,7 +9,8 @@ import { inert } from '../trust/frame.ts';
 // asking: the last run ended with a question for the owner (core/tools/ask.ts); the answer is the thread's next prompt.
 export type ThreadState = 'working' | 'done' | 'failed' | 'stopped' | 'asking';
 // rejected: the provider refused the last session's history, so the thread went on in a new one.
-export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota' | 'rejected';
+// rewind: a copy of a session as it was before a run, which the thread goes on from (core/project/rewind.ts).
+export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota' | 'rejected' | 'rewind';
 
 type ThreadBody =
   // parent: the thread that spawned this one as a sub-thread.
@@ -34,8 +35,15 @@ type ThreadBody =
   // every session it took (handoff, fallback, a review's fix), and the working directory they are of. What /undo
   // and /diff call a turn (core/project/undo.ts).
   | { kind: 'turn'; cwd: string; before: string; after: string; sessions: string[] }
+  // A run of the thread starting: its prompt, the shadow-git tree of the working directory then, and the session
+  // the conversation stood in, with how many of its events there were. What /rewind goes back to.
+  | { kind: 'run'; id: string; prompt: string; cwd: string; tree?: string; from?: RunFrom }
+  // The thread went back to just before run `run`: what happened from there to here is dropped from the fold
+  // (core/project/rewind.ts), except what is not the conversation's (messages, ratings, archiving).
+  | { kind: 'rewind'; run: string }
   // Hidden from lists, still readable. A sub-thread that finishes its task archives itself.
   | { kind: 'archived'; archived: boolean };
+export type RunFrom = { sessionId: string; path: string; events: number; model: string };
 export type ThreadEvent = { at: string } & ThreadBody;
 
 export type Rating = 'up' | 'down';
@@ -58,6 +66,12 @@ export type Thread = {
   ratings: ThreadRating[];
   // The latest run that changed files.
   lastTurn?: { cwd: string; before: string; after: string; sessions: string[]; at: string };
+  // Every run that changed files, oldest first, and every run, as /rewind lists them.
+  // `runs` is how many runs had started when the turn was recorded: the run it belongs to, counted from 1.
+  turns: (NonNullable<Thread['lastTurn']> & { runs: number })[];
+  runs: Extract<ThreadEvent, { kind: 'run' }>[];
+  // Sessions a rewind left behind: in `sessions`, and no longer part of the conversation.
+  rewound: string[];
   // The open question while the thread is asking.
   question?: { sessionId: string; question: string; options?: string[]; at: string };
   updatedAt: string;
@@ -168,11 +182,17 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     messages: [],
     pending: [],
     ratings: [],
+    turns: [],
+    runs: [],
+    rewound: [],
     updatedAt: events.at(-1)?.at ?? '',
   };
   const delivered = new Set<string>();
   const unsent = new Set<string>();
-  for (const e of events) {
+  const { live, dropped } = rewound(events);
+  // A session resumed by a dropped run counts as dropped whole: the thread goes on in a copy of its start.
+  t.rewound = [...new Set(dropped.flatMap((e) => (e.kind === 'session' ? [e.sessionId] : [])))];
+  for (const e of live) {
     if (e.kind === 'session') t.sessions.push(e);
     else if (e.kind === 'handoff') t.handoff = { sessionId: e.sessionId, note: e.note };
     else if (e.kind === 'message') t.messages.push({ id: e.id, from: e.from, text: e.text, at: e.at });
@@ -181,16 +201,40 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     else if (e.kind === 'question') t.question = { sessionId: e.sessionId, question: e.question, ...(e.options ? { options: e.options } : {}), at: e.at };
     else if (e.kind === 'rate') t.ratings.push({ rating: e.rating, ...(e.sessionId ? { sessionId: e.sessionId } : {}), ...(e.note ? { note: e.note } : {}), at: e.at });
     else if (e.kind === 'archived') t.archived = e.archived;
-    else if (e.kind === 'turn') t.lastTurn = { cwd: e.cwd, before: e.before, after: e.after, sessions: e.sessions, at: e.at };
+    else if (e.kind === 'turn') t.turns.push({ ...(t.lastTurn = { cwd: e.cwd, before: e.before, after: e.after, sessions: e.sessions, at: e.at }), runs: t.runs.length });
+    else if (e.kind === 'run') t.runs.push(e);
     else if (e.kind === 'state') {
       t.state = e.state;
       if (e.result !== undefined) t.result = e.result;
     }
   }
+  // A session a rewind dropped is still listed (its log stays), before the one the thread went on in.
+  t.sessions = [...dropped.filter((e): e is Extract<ThreadEvent, { kind: 'session' }> => e.kind === 'session'), ...t.sessions].sort((a, b) => a.at.localeCompare(b.at));
   if (t.state !== 'asking') delete t.question;
   for (const m of t.messages) if (unsent.has(m.id) && !delivered.has(m.id)) m.unsent = true;
   t.pending = t.messages.filter((m) => !delivered.has(m.id) && !m.unsent);
   return t;
+}
+
+// What not to fold after each rewind: the events from the run it went back to up to the rewind itself, except
+// messages, unsends, ratings and archiving, which are not the conversation's. A message delivered only to a
+// session that was dropped is then waiting again, so the session the thread goes on in gets it. A rewind to a run
+// that is not there (one an earlier rewind dropped) changes nothing.
+function rewound(events: ThreadEvent[]): { live: ThreadEvent[]; dropped: ThreadEvent[] } {
+  let live: ThreadEvent[] = [];
+  const dropped: ThreadEvent[] = [];
+  for (const e of events) {
+    if (e.kind !== 'rewind') {
+      live.push(e);
+      continue;
+    }
+    const at = live.findIndex((x) => x.kind === 'run' && x.id === e.run);
+    if (at < 0) continue;
+    const keep = (x: ThreadEvent) => x.kind === 'message' || x.kind === 'unsend' || x.kind === 'rate' || x.kind === 'archived';
+    dropped.push(...live.slice(at).filter((x) => !keep(x)));
+    live = [...live.slice(0, at), ...live.slice(at).filter(keep), e];
+  }
+  return { live, dropped };
 }
 
 // How another thread's messages reach the model: one logged reminder per batch.

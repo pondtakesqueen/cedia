@@ -1,4 +1,5 @@
-{"at":"2026-10-22T05:02:45.581Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
-{"at":"2026-10-22T05:02:45.584Z","kind":"session","sessionId":"f2930b5c-fdb8-4ec6-9efc-93ffcc688042","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/f2930b5c-fdb8-4ec6-9efc-93ffcc688042.jsonl"}
-{"at":"2026-10-22T05:02:45.666Z","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["f2930b5c-fdb8-4ec6-9efc-93ffcc688042"]}
-{"at":"2026-10-22T05:02:45.666Z","kind":"state","state":"done","result":"done, checked"}
+{"at":"2026-10-22T08:18:19.820Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
+{"at":"2026-10-22T08:18:19.826Z","kind":"run","id":"r-d2e34307","prompt":"make f.txt say good","cwd":"/fixture/repo","tree":"4b825dc642cb6eb9a060e54bf8d69288fbee4904"}
+{"at":"2026-10-22T08:18:19.828Z","kind":"session","sessionId":"cd55ce8d-84b8-4f73-8bbd-051e9d14e0e5","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/cd55ce8d-84b8-4f73-8bbd-051e9d14e0e5.jsonl"}
+{"at":"2026-10-22T08:18:19.920Z","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["cd55ce8d-84b8-4f73-8bbd-051e9d14e0e5"]}
+{"at":"2026-10-22T08:18:19.920Z","kind":"state","state":"done","result":"done, checked"}
