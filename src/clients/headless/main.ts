@@ -10,6 +10,9 @@ import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from 
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
+import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
+import { memoryBlock, memoryPath, MemoryStore, rememberTool } from '../../core/project/memory.ts';
+import { loadSkills, skillsBlock, skillTool } from '../../core/skills/skills.ts';
 import { runTurn } from '../../core/project/undo.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
 import { spawnNudgeAt, spawnPool, spawnTool, subtaskPrompt, type SpawnKind, type SpawnOutcome, type Spawner } from '../../core/tools/spawn.ts';
@@ -126,6 +129,8 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
     : undefined;
   const { evidence: _, timing: __, ...rest } = last;
   const peakContext = Math.max(0, ...parts.filter((r) => !children.has(r)).map((r) => r.peakContext ?? 0));
+  const inputRepairs: Record<string, number> = {};
+  for (const r of parts) for (const [k, v] of Object.entries(r.inputRepairs ?? {})) inputRepairs[k] = (inputRepairs[k] ?? 0) + v;
   const cacheMisses = parts.flatMap((r) => r.cacheMisses ?? []);
   return {
     ...rest,
@@ -135,6 +140,7 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
     usage,
     costUsd: parts.reduce((c, r) => c + r.costUsd, 0),
     cacheHitRatio: hitRatio(usage),
+    ...(Object.keys(inputRepairs).length ? { inputRepairs } : {}),
     ...(cacheMisses.length ? { cacheMisses } : {}),
     ...(evidence ? { evidence } : {}),
   };
@@ -207,7 +213,22 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     if (store && threadId) store.append(threadId, { kind: 'session', sessionId: log.id, model: m.ref, role: 'code', why, ...(log.path ? { path: log.path } : {}) });
     if (!earlier.some((s) => s.id === log.id)) earlier.push({ id: log.id, events: () => log.events });
   };
-  const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}) });
+  const instructions = instructionsBlock(loadInstructions(args.cwd));
+  // Project memory: read by every session, kept by the writer (not when nothing is written to disk).
+  const memory = new MemoryStore(memoryPath(cediaHome(), projectKey(args.cwd)));
+  const remembered = (() => {
+    try {
+      return memoryBlock(memory.notes());
+    } catch (e) {
+      process.stderr.write(`cedia: could not read the project's memory (${(e as Error).message}); going on without it\n`);
+      return '';
+    }
+  })();
+  const remember = store ? rememberTool(memory, threadId ?? 'cedia') : undefined;
+  const skills = loadSkills(args.cwd, cediaHome());
+  const skillList = skillsBlock(skills);
+  const skill = skillTool(skills);
+  const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}) });
   // Where each writer session of this run started in its log, for the change the run made.
   const writerRuns: { log: SessionLog; from: number }[] = [];
   // The change the run made: the first snapshot (taken before the first write) to the last, across its sessions.
@@ -226,7 +247,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     const trees = turnTrees();
     if (store && threadId && trees) store.append(threadId, { kind: 'turn', cwd: args.cwd, ...trees, sessions: [...new Set(writerRuns.map((w) => w.log.id))] });
   };
-  const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}) });
+  const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}) });
 
   const ac = new AbortController();
   const onSignal = () => ac.abort();
@@ -275,8 +296,11 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // thread has an earlier session, and the thread tools once the project has another thread.
     const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
     const spawnHere = header?.tools.some((d) => d.name === 'spawn' && d.description === spawnOther.description) ? spawnOther : spawn;
-    const extra = [...(spawnOn ? [spawnHere] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : [])];
-    const tools = reviewer ? REVIEW_TOOLS : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : [])] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
+    // With skills, or on a resumed session that had the tool: its tool list stays as it was even when the skills
+    // are gone since, and a call to one that is gone says so.
+    const withSkill = skills.length > 0 || !!header?.tools.some((d) => d.name === 'skill');
+    const extra = [...(spawnOn ? [spawnHere] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : [])];
+    const tools = reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : [])] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : [])] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
     // A work sub-thread in a worktree works there: its own directory, environment line and snapshots.
     const place = child?.place;
     if (writing) writerRuns.push({ log, from: log.events.length });
