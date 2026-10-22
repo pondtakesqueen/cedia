@@ -65,9 +65,9 @@ export type Thread = {
   messages: ThreadMessage[];
   pending: ThreadMessage[];
   ratings: ThreadRating[];
-  // The latest run that changed files.
   lastTurn?: { cwd: string; before: string; after: string; sessions: string[]; at: string };
-  // Every run that changed files, oldest first, and every run, as /rewind lists them.
+  // Every run that changed files, oldest first (the last is what /undo takes back), and every run, as /rewind
+  // lists them.
   // `runs` is how many runs had started when the turn was recorded: the run it belongs to, counted from 1.
   turns: (NonNullable<Thread['lastTurn']> & { runs: number })[];
   runs: Extract<ThreadEvent, { kind: 'run' }>[];

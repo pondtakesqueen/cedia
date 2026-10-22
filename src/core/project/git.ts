@@ -10,10 +10,26 @@ const git = (cwd: string, args: string[]) => {
   return r.status === 0 ? r.stdout : undefined;
 };
 
+const STATUS_ARGS = ['--no-optional-locks', 'status', '--porcelain=v2', '--branch', '-z'];
+
 // Undefined outside a git work tree.
 export function gitStatus(cwd: string): GitStatus | undefined {
-  const out = git(cwd, ['status', '--porcelain=v2', '--branch', '-z']);
-  if (out === undefined) return undefined;
+  const out = git(cwd, STATUS_ARGS.slice(1));
+  return out === undefined ? undefined : parseStatus(out);
+}
+
+// The same without blocking: the TUI reads it while a run goes on in the same process.
+export async function gitStatusAsync(cwd: string): Promise<GitStatus | undefined> {
+  try {
+    const p = Bun.spawn(['git', ...STATUS_ARGS], { cwd, stdout: 'pipe', stderr: 'ignore' });
+    const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+    return code === 0 ? parseStatus(out) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseStatus(out: string): GitStatus {
   const s: GitStatus = { branch: '', detached: false, dirty: 0, ahead: 0, behind: 0 };
   let oid = '';
   const records = out.split('\0');
