@@ -7,12 +7,13 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
 import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
+import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { openSnapshots } from '../../core/safety/snapshot.ts';
@@ -52,6 +53,8 @@ export type HeadlessArgs = {
   // The model explore sub-threads run on, and whether writer sessions may spawn sub-threads at all.
   swarm?: string;
   spawn?: string;
+  // "on" gives the writer ask_user, to end the run with a question for the owner (core/tools/ask.ts).
+  ask?: string;
   // "fallback" or "wait:<minutes>": what a spent quota does.
   onQuota?: string;
   // Reviews the change once the writer's claim passes the done gate.
@@ -132,6 +135,7 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
 export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
   const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}) });
   const spawnOn = loadSpawn(args.spawn);
+  const askOn = loadAsk(args.ask);
   const model = roles.code;
   const declared = loadChecks(args.cwd, args.checks);
   const checks = declared.length ? declared : detectChecks(args.cwd);
@@ -255,7 +259,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // A resumed session keeps the tools it was opened with (its cached prefix); new ones get recall once the
     // thread has an earlier session, and the thread tools once the project has another thread.
     const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
-    const extra = [...(spawnOn ? [spawn] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : [])];
+    const extra = [...(spawnOn ? [spawn] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : [])];
     const tools = reviewer ? REVIEW_TOOLS : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : [])] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
     if (writing) writerRuns.push({ log, from: log.events.length });
     const result = await runPrompt(
@@ -325,7 +329,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     if (r.subtype !== 'success') process.stderr.write(`cedia: the ${role} step on ${choice.model.ref} ended with ${r.subtype}\n`);
     return { ok: r.subtype === 'success', text: r.result, step: { model: choice.model.ref, via: 'cedia', sessionId: log.id, costUsd: r.costUsd } };
   };
-  let task = args.prompt;
+  // A thread that asked the owner a question goes on with their answer, framed as one.
+  let task = resumed?.question ? answerPrompt(resumed.question.question, args.prompt) : args.prompt;
   let writer = { model, log: undefined as unknown as SessionLog };
   // A sub-thread: its own thread (archived once it succeeds) and session, on the model its kind calls for.
   // Explore runs on the swarm model unless privacy keeps that model out; work runs on the writer's model.
@@ -409,9 +414,9 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // Plan: a stronger model reads the repo and writes the plan the writer gets with the task.
     let plan: Step | undefined;
     if (roles.plan) {
-      const p = await side('plan', roles.plan, planPrompt(args.prompt));
+      const p = await side('plan', roles.plan, planPrompt(task));
       if (p.ok && p.text.trim()) {
-        task = withPlan(args.prompt, p.text.trim(), p.step.model);
+        task = withPlan(task, p.text.trim(), p.step.model);
         plan = p.step;
       } else process.stderr.write('cedia: going on without a plan\n');
     }
@@ -470,6 +475,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     }
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
     result = { ...combine(parts, result, children), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
+    if (store && threadId && result.question) store.append(threadId, { kind: 'question', sessionId: result.sessionId, ...result.question });
     if (store && threadId) store.append(threadId, { kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
     // The receipt goes in the writer's log too, so a thread rebuilt from the files shows it. Quiet: a stream-json
     // client gets it as the result line below.
@@ -493,4 +499,4 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   }
 }
 
-const stateOf = (r: HeadlessResult) => (r.subtype === 'success' ? 'done' : r.subtype === 'interrupted' ? 'stopped' : 'failed');
+const stateOf = (r: HeadlessResult) => (r.subtype === 'success' ? 'done' : r.subtype === 'asked' ? 'asking' : r.subtype === 'interrupted' ? 'stopped' : 'failed');
