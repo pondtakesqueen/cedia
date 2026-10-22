@@ -7,6 +7,7 @@ import { DEFAULT_DOMAINS, SANDBOX_SETTINGS, type SandboxSetting } from './safety
 import { defaultHandoffAt } from './project/handoff.ts';
 import { FALLBACKS, resolveModel } from './providers/catalog.ts';
 import { secretPaths } from './safety/secrets.ts';
+import { checkHooks, type Hooks } from './hooks.ts';
 import type { ModelSpec, PrivacyLevel } from './types.ts';
 
 export type Settings = {
@@ -21,8 +22,9 @@ export type Settings = {
   // The model for each role: an alias or ref, `claude-code[:<model>]` for plan and review, or "none". User
   // settings only: a repo must not pick what the user pays for.
   roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string };
-  // Whether writer sessions get the spawn tool for sub-threads (default true). User settings only.
-  spawn?: boolean;
+  // Whether writer sessions get the spawn tool for sub-threads (default true), and "worktree" to run each work
+  // sub-thread in a git worktree of its own, several at once. User settings only.
+  spawn?: boolean | 'worktree';
   // Whether writer sessions of a thread get ask_user, to end a run with a question for the owner (default false: a
   // headless run has nobody to answer). The desktop turns it on. User settings only.
   ask?: boolean;
@@ -40,6 +42,8 @@ export type Settings = {
   // The desktop app's own settings (cedian: theme, keymap, layout and the like). cedia never reads them and checks
   // only that they are an object, so the desktop can keep them in this file without cedia knowing their shape.
   desktop?: Record<string, unknown>;
+  // The user's hooks (core/hooks.ts). User settings only: a repo must not run code outside the sandbox.
+  hooks?: Hooks;
 };
 
 // Every key cedia knows, with the keys allowed inside the objects it reads. A key that is not here is a typo or a
@@ -59,6 +63,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   onQuota: 'any',
   mcpServers: 'any',
   desktop: 'any',
+  hooks: 'any',
 };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -69,6 +74,7 @@ export function checkSettings(value: unknown): Settings {
     const allowed = SETTINGS_KEYS[key as keyof Settings];
     if (!allowed) throw new Error(`unknown setting "${key}" (known: ${Object.keys(SETTINGS_KEYS).join(', ')})`);
     if (key === 'desktop' && !isObject(inner)) throw new Error('"desktop" must be an object');
+    if (key === 'hooks') checkHooks(inner);
     if (allowed === 'any') continue;
     if (!isObject(inner)) throw new Error(`"${key}" must be an object`);
     const unknown = Object.keys(inner).find((k) => !allowed.includes(k));
@@ -158,9 +164,13 @@ export function loadQuotaWait(flag?: string): number | undefined {
 }
 
 // Sub-threads: flag > user settings > on.
-export function loadSpawn(flag?: string): boolean {
-  if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--spawn must be on or off: ${flag}`);
-  return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).spawn ?? true);
+export type SpawnMode = 'on' | 'off' | 'worktree';
+export function loadSpawn(flag?: string): SpawnMode {
+  if (flag !== undefined && flag !== 'on' && flag !== 'off' && flag !== 'worktree') throw new Error(`--spawn must be on, off or worktree: ${flag}`);
+  if (flag) return flag;
+  const s = readSettings(join(cediaHome(), 'settings.json')).spawn ?? true;
+  if (s !== true && s !== false && s !== 'worktree') throw new Error(`spawn in settings.json must be true, false or "worktree": ${JSON.stringify(s)}`);
+  return s === 'worktree' ? 'worktree' : s ? 'on' : 'off';
 }
 
 // ask_user: flag > user settings > off.
@@ -287,4 +297,9 @@ export function loadSandbox(flags: { mode?: string; allowDomains?: string[] } = 
   const mode = flags.mode || env.CEDIA_SANDBOX || user.mode || 'auto';
   if (!SANDBOX_SETTINGS.includes(mode as SandboxSetting)) throw new Error(`unknown sandbox setting "${mode}" (use ${SANDBOX_SETTINGS.join(', ')})`);
   return { mode: mode as SandboxSetting, allowedDomains: [...new Set([...DEFAULT_DOMAINS, ...(user.allowedDomains ?? []), ...(flags.allowDomains ?? [])])] };
+}
+
+// Hooks come from the user's settings only; a repo's .cedia/settings.json may name them but they are never read.
+export function loadHooks(): Hooks {
+  return readSettings(join(cediaHome(), 'settings.json')).hooks ?? {};
 }

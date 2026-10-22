@@ -488,6 +488,64 @@
             "via"
           ]
         },
+        "goal": {
+          "type": "object",
+          "properties": {
+            "condition": {
+              "type": "string"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "met",
+                "not_met",
+                "impossible"
+              ]
+            },
+            "rounds": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "verdict": {
+                    "type": "string",
+                    "enum": [
+                      "met",
+                      "not_met",
+                      "impossible"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "judge": {
+                    "type": "string"
+                  },
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "costUsd": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "verdict",
+                  "reason",
+                  "judge",
+                  "sessionId",
+                  "costUsd"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "condition",
+            "verdict",
+            "rounds"
+          ],
+          "additionalProperties": false
+        },
         "advice": {
           "type": "object",
           "additionalProperties": false,
@@ -646,6 +704,30 @@
         "handoff",
         "asked"
       ]
+    },
+    "RunFrom": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "events": {
+          "type": "number"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sessionId",
+        "path",
+        "events",
+        "model"
+      ],
+      "additionalProperties": false
     },
     "SessionEvent": {
       "anyOf": [
@@ -1203,6 +1285,72 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "hook"
+            },
+            "hook": {
+              "type": "string"
+            },
+            "event": {
+              "type": "string",
+              "enum": [
+                "preToolUse",
+                "postToolUse",
+                "stop"
+              ]
+            },
+            "callId": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "block"
+              ]
+            },
+            "failed": {
+              "type": "boolean"
+            },
+            "updated": {
+              "type": "boolean"
+            },
+            "ms": {
+              "type": "number"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "decision",
+            "event",
+            "hook",
+            "id",
+            "kind",
+            "ms",
+            "parentId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "input_repaired"
             },
             "callId": {
@@ -1513,7 +1661,8 @@
         "resume",
         "handoff",
         "quota",
-        "rejected"
+        "rejected",
+        "rewind"
       ]
     },
     "Spawned": {
@@ -1835,6 +1984,9 @@
             },
             "at": {
               "type": "string"
+            },
+            "run": {
+              "type": "string"
             }
           },
           "required": [
@@ -1869,6 +2021,9 @@
             },
             "at": {
               "type": "string"
+            },
+            "run": {
+              "type": "string"
             }
           },
           "required": [
@@ -1895,6 +2050,9 @@
               "type": "string"
             },
             "at": {
+              "type": "string"
+            },
+            "run": {
               "type": "string"
             }
           },
@@ -1923,6 +2081,9 @@
               "type": "string"
             },
             "at": {
+              "type": "string"
+            },
+            "run": {
               "type": "string"
             }
           },
@@ -1953,6 +2114,9 @@
             },
             "at": {
               "type": "string"
+            },
+            "run": {
+              "type": "string"
             }
           },
           "required": [
@@ -1977,6 +2141,9 @@
               }
             },
             "at": {
+              "type": "string"
+            },
+            "run": {
               "type": "string"
             }
           },
@@ -2004,6 +2171,9 @@
               "type": "string"
             },
             "at": {
+              "type": "string"
+            },
+            "run": {
               "type": "string"
             }
           },
@@ -2035,6 +2205,9 @@
             },
             "at": {
               "type": "string"
+            },
+            "run": {
+              "type": "string"
             }
           },
           "required": [
@@ -2059,6 +2232,9 @@
               "type": "string"
             },
             "at": {
+              "type": "string"
+            },
+            "run": {
               "type": "string"
             }
           },
@@ -2093,6 +2269,9 @@
             },
             "at": {
               "type": "string"
+            },
+            "run": {
+              "type": "string"
             }
           },
           "required": [
@@ -2110,12 +2289,74 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "run"
+            },
+            "id": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "tree": {
+              "type": "string"
+            },
+            "from": {
+              "$ref": "#/definitions/RunFrom"
+            },
+            "at": {
+              "type": "string"
+            },
+            "run": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "cwd",
+            "id",
+            "kind",
+            "prompt"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "rewind"
+            },
+            "run": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "kind",
+            "run"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "archived"
             },
             "archived": {
               "type": "boolean"
             },
             "at": {
+              "type": "string"
+            },
+            "run": {
               "type": "string"
             }
           },

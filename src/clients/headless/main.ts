@@ -7,7 +7,7 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
@@ -17,17 +17,23 @@ import { mcpStub, startMcp, type McpServers } from '../../core/mcp/tools.ts';
 import { webFetchTool } from '../../core/tools/web.ts';
 import { runTurn } from '../../core/project/undo.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
-import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
+import { spawnNudgeAt, spawnPool, spawnTool, subtaskPrompt, type SpawnKind, type SpawnOutcome, type Spawner } from '../../core/tools/spawn.ts';
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
+import { applyWorktree, openWorktree, type Worktree } from '../../core/project/worktree.ts';
+import { decide } from '../../core/safety/policy.ts';
+import { editTool } from '../../core/tools/edit.ts';
+import { sandboxGuarded } from '../../core/safety/sandbox.ts';
+import type { Snapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
 import { ADVISOR_SYSTEM, adviceOf, advicePrompt, adviceReminder, turnDigest } from '../../core/trust/advisor.ts';
 import { callText, CLASSIFIER_SYSTEM, classifyPrompt, MAX_INPUT, namedFiles, verdictOf, type Verdict } from '../../core/trust/classifier.ts';
 import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
+import { goalContinuePrompt, goalPrompt, MAX_GOAL_ROUNDS, parseGoal, type GoalRound } from '../../core/trust/goal.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type JsonObject, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
 import { runClaudeCode } from './claude-code.ts';
 import { encode } from '../../protocol/index.ts';
@@ -73,6 +79,13 @@ export type HeadlessArgs = {
   checks?: string[];
   sandbox?: string;
   allowDomains?: string[];
+  // For a client that owns the terminal (the TUI): where cedia's own notes go instead of stderr, and a stop.
+  note?: (text: string) => void;
+  signal?: AbortSignal;
+  // Keep going until a separate judge finds this condition holds (core/trust/goal.ts), judged by goalJudge (a
+  // model ref; default the writer's model, in a fresh read-only session).
+  goal?: string;
+  goalJudge?: string;
 };
 
 // Every run that changed files or ran checks ends with a receipt built from the ledger. A check another thread ran
@@ -151,8 +164,10 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
 }
 
 export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
+  const say = args.note ?? ((text: string) => void process.stderr.write(text));
   const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}), ...(args.advisor ? { advisor: args.advisor } : {}), ...(args.classifier ? { classifier: args.classifier } : {}) });
-  const spawnOn = loadSpawn(args.spawn);
+  const spawnMode = loadSpawn(args.spawn);
+  const spawnOn = spawnMode !== 'off';
   const askOn = loadAsk(args.ask);
   const model = roles.code;
   const declared = loadChecks(args.cwd, args.checks);
@@ -162,7 +177,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const context = loadContext();
   const sandboxSettings = loadSandbox({ ...(args.sandbox ? { mode: args.sandbox } : {}), allowDomains: args.allowDomains ?? [] });
   const { sandbox, note: sandboxNote } = await openSandbox(args.cwd, sandboxSettings.mode, { allowedDomains: sandboxSettings.allowedDomains, cediaHome: cediaHome() });
-  if (sandboxNote) process.stderr.write(sandboxNote + '\n');
+  if (sandboxNote) say(sandboxNote + '\n');
   const policyFlags = { ...(args.permission ? { mode: args.permission } : {}), allow: args.allow ?? [], deny: args.deny ?? [], unlock: args.unlock ?? [] };
   let policy;
   try {
@@ -172,9 +187,11 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     throw e;
   }
   if (!sandbox.on && policy.mode === 'read-only' && !args.permission && !process.env.CEDIA_PERMISSION)
-    process.stderr.write('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
+    say('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
   const snapshots = workspaceSnapshots(args.cwd, cediaHome(), sandbox.placeholders);
   const fallback = loadFallback(model, args.fallback);
+  const hooks = loadHooks();
+  const hooked = Object.values(hooks).some((l) => l?.length);
   let quotaWaitMs: number | undefined;
   try {
     quotaWaitMs = loadQuotaWait(args.onQuota);
@@ -184,10 +201,15 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   }
   for (const m of [model, ...[roles.plan, roles.review].flatMap((r) => (r?.via === 'cedia' ? [r.model] : [])), ...(roles.advisor ? [roles.advisor] : []), ...(roles.classifier ? [roles.classifier] : [])]) {
     const note = missingKeyNote(m);
-    if (note) process.stderr.write(note + '\n');
+    if (note) say(note + '\n');
   }
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? (JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) as FauxStep[]) : undefined;
   const handoffAt = loadHandoffAt(model, args.handoffAt);
+  const goalJudge = args.goal ? (args.goalJudge ? resolveModel(args.goalJudge) : model) : undefined;
+  if (goalJudge && goalJudge !== model) {
+    const note = missingKeyNote(goalJudge);
+    if (note) say(note + '\n');
+  }
   const handoffVia = loadHandoff(args.handoff);
   const escalate = args.escalate === 'off' ? undefined : ((args.escalate ?? 'high') as Effort);
   // Every run belongs to a thread of the project, unless nothing is written to disk.
@@ -198,6 +220,9 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   }
   const resumed = args.thread ? store!.read(args.thread) : undefined;
   const threadId = resumed?.id ?? store?.open(args.prompt);
+  // This run's id: every thread event it writes carries it, so a rewind past the run drops them even when they are
+  // written after it (core/project/rewind.ts).
+  const runId = `r-${crypto.randomUUID().slice(0, 8)}`;
   // Chosen once per run, so every new session of the run sees the same tools: thread tools when the project has
   // another thread to talk to.
   const others = store ? store.list().some((t) => t.id !== threadId) : false;
@@ -208,12 +233,13 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     return log;
   };
   // The writer's sessions, the thread's earlier ones first: what recall searches.
+  // A session a rewind left behind is not searched: the user took that work back.
   const earlier: EarlierSession[] = (resumed?.sessions ?? []).flatMap((s) =>
-    s.role === 'code' && s.path ? [{ id: s.sessionId, events: () => (sessionExists(s.path!) ? SessionLog.load(s.path!).events : []) }] : [],
+    s.role === 'code' && s.path && !resumed!.rewound.includes(s.sessionId) ? [{ id: s.sessionId, events: () => (sessionExists(s.path!) ? SessionLog.load(s.path!).events : []) }] : [],
   );
   const recall = recallTool(() => earlier.filter((s) => s.id !== writer.log.id));
   const record = (log: SessionLog, m: ModelSpec, why: SessionWhy) => {
-    if (store && threadId) store.append(threadId, { kind: 'session', sessionId: log.id, model: m.ref, role: 'code', why, ...(log.path ? { path: log.path } : {}) });
+    if (store && threadId) store.append(threadId, { run: runId, kind: 'session', sessionId: log.id, model: m.ref, role: 'code', why, ...(log.path ? { path: log.path } : {}) });
     if (!earlier.some((s) => s.id === log.id)) earlier.push({ id: log.id, events: () => log.events });
   };
   const instructions = instructionsBlock(loadInstructions(args.cwd));
@@ -223,7 +249,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     try {
       return memoryBlock(memory.notes());
     } catch (e) {
-      process.stderr.write(`cedia: could not read the project's memory (${(e as Error).message}); going on without it\n`);
+      say(`cedia: could not read the project's memory (${(e as Error).message}); going on without it\n`);
       return '';
     }
   })();
@@ -262,12 +288,14 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   // What /undo and /diff take as this run's turn (core/project/undo.ts), however the run ended.
   const recordTurn = () => {
     const trees = turnTrees();
-    if (store && threadId && trees) store.append(threadId, { kind: 'turn', cwd: args.cwd, ...trees, sessions: [...new Set(writerRuns.map((w) => w.log.id))] });
+    if (store && threadId && trees) store.append(threadId, { run: runId, kind: 'turn', cwd: args.cwd, ...trees, sessions: [...new Set(writerRuns.map((w) => w.log.id))] });
   };
   const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}) });
 
   const ac = new AbortController();
   const onSignal = () => ac.abort();
+  if (args.signal?.aborted) ac.abort();
+  else args.signal?.addEventListener('abort', onSignal, { once: true });
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
   // Scripted models share one script, so a later session reads on from where the last one stopped.
@@ -290,8 +318,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   type RunOpts = {
     continues?: { sessionId: string; changed: string[] };
     note?: string;
-    role?: 'plan' | 'review' | 'explore' | 'advisor' | 'classifier';
-    child?: { thread?: string; handoff?: boolean; recall?: ToolSpec };
+    role?: 'plan' | 'review' | 'explore' | 'goal' | 'advisor' | 'classifier';
+    child?: { thread?: string; handoff?: boolean; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots; wrap: (command: string) => Promise<string> } };
     // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
     seed?: { from: SessionLog; compaction: NonNullable<HeadlessResult['compaction']> };
   };
@@ -301,7 +329,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     ...(r.compaction ? { seed: { from, compaction: r.compaction }, note: compactedNote(from.id) } : { note: handoffNote(from.id, r.result) }),
   });
   const handingOff = (r: HeadlessResult, sub: boolean) =>
-    process.stderr.write(
+    say(
       `cedia: ${sub ? "a sub-thread's " : ''}context reached ${handoffAt} tokens; ${r.compaction ? 'going on in a new session from a summary of its older turns' : `handing ${sub ? 'it ' : ''}off to a new session`}\n`,
     );
   const run = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}) => {
@@ -314,6 +342,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // A resumed session keeps the tools it was opened with (its cached prefix); new ones get recall once the
     // thread has an earlier session, and the thread tools once the project has another thread.
     const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
+    const spawnHere = header?.tools.some((d) => d.name === 'spawn' && d.description === spawnOther.description) ? spawnOther : spawn;
     // With skills, or on a resumed session that had the tool: its tool list stays as it was even when the skills
     // are gone since, and a call to one that is gone says so.
     const withSkill = skills.length > 0 || !!header?.tools.some((d) => d.name === 'skill');
@@ -321,10 +350,12 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // server is gone keeps the tool, and a call to it says the server is not there.
     const mcpTools = [...(mcp?.tools ?? []), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map(mcpStub)];
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
-    const extra = [...(spawnOn ? [spawn] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
+    const extra = [...(spawnOn ? [spawnHere] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
     // The advisor and the classifier answer in one reply, with no tools, in a session of their own.
     const helper = opts.role === 'advisor' || opts.role === 'classifier';
     const tools = helper ? [] : reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
+    // A work sub-thread in a worktree works there: its own directory, environment line and snapshots.
+    const place = child?.place;
     if (writing) writerRuns.push({ log, from: log.events.length });
     const result = await runPrompt(
       {
@@ -334,15 +365,18 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         // Plan and review get no write tools, and their policy is read-only whatever the run's mode.
         tools,
         system: opts.role === 'advisor' ? ADVISOR_SYSTEM : opts.role === 'classifier' ? CLASSIFIER_SYSTEM : BASE_SYSTEM,
-        ...(helper ? {} : { preamble: reviewer ? reviewPreamble : opts.note ? `${basePreamble}\n\n${opts.note}` : basePreamble }),
-        cwd: args.cwd,
+        ...(helper ? {} : { preamble: reviewer ? reviewPreamble : opts.note ? `${place?.preamble ?? basePreamble}\n\n${opts.note}` : (place?.preamble ?? basePreamble) }),
+        cwd: place?.cwd ?? args.cwd,
         // They may also run the declared checks, to see what fails instead of only reading.
-        permission: reviewer ? { ...policy, mode: 'read-only', allow: [...policy.allow, ...checks.map((c) => `bash(${c})`)] } : policy,
+        // The run's own allow rules are the writer's: one such as bash(git *) would let a reviewer write.
+        permission: reviewer ? { ...policy, mode: 'read-only', allow: checks.map((c) => `bash(${c})`) } : policy,
         privacy,
+        // Stop hooks judge the writer's claim of done, not a plan, a review or a sub-thread's report.
+        ...(hooked ? { hooks: writing ? hooks : { ...hooks, stop: [] }, hookHome: cediaHome() } : {}),
         checks: reviewer ? [] : checks,
         ...(softChecks && !reviewer ? { softChecks } : {}),
-        ...(sandbox.on ? { wrap: sandbox.wrap } : {}),
-        ...(snapshots && !reviewer ? { snapshots } : {}),
+        ...(sandbox.on ? { wrap: place?.wrap ?? sandbox.wrap } : {}),
+        ...(place ? { snapshots: place.snapshots } : snapshots && !reviewer ? { snapshots } : {}),
         ...(continues ? { continues } : {}),
         ...(opts.role ? { role: opts.role } : {}),
         ...(child ? (child.thread ? { thread: child.thread } : {}) : threadId ? { thread: threadId } : {}),
@@ -355,14 +389,14 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
                   const t = store.read(threadId);
                   return t.pending.length ? { ids: t.pending.map((p) => p.id), text: inboxReminder(t.pending) } : undefined;
                 },
-                delivered: (ids: string[]) => store.append(threadId, { kind: 'delivered', ids, sessionId: log.id }),
+                delivered: (ids: string[]) => store.append(threadId, { run: runId, kind: 'delivered', ids, sessionId: log.id }),
               },
             }
           : {}),
         signal: ac.signal,
         // An advisor out of quota is dropped at once: the writer never waits on an optional helper.
         ...(quotaWaitMs !== undefined && !helper
-          ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), process.stderr.write(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
+          ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), say(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
           : {}),
         ...(helper ? (m.defaultEffort ? { effort: 'low' as Effort } : {}) : args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
         ...(escalate && !reviewer ? { escalate } : {}),
@@ -388,17 +422,17 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     if (choice.via === 'claude-code') {
       const step: Step = { model: `claude-code:${choice.model}`, via: 'claude-code', sessionId: '' };
       if (privacy === 'zdr') {
-        process.stderr.write(`cedia: privacy is zdr, so the ${role} step does not go to Claude Code\n`);
+        say(`cedia: privacy is zdr, so the ${role} step does not go to Claude Code\n`);
         return { ok: false, text: '', step };
       }
       const allowed = ['Read', 'Grep', 'Glob', ...(role === 'review' ? GIT_READS : []), ...checks.map((c) => `Bash(${c})`)];
       const r = await runClaudeCode({ prompt, model: choice.model, cwd: args.cwd, allowed, signal: ac.signal });
-      if (!r.ok) process.stderr.write(`cedia: the ${role} step in Claude Code failed: ${r.error}\n`);
+      if (!r.ok) say(`cedia: the ${role} step in Claude Code failed: ${r.error}\n`);
       return { ok: r.ok, text: r.text, step: { ...step, sessionId: r.sessionId, ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}) } };
     }
     const log = openLog();
     const r = await run(choice.model, log, prompt, { role });
-    if (r.subtype !== 'success') process.stderr.write(`cedia: the ${role} step on ${choice.model.ref} ended with ${r.subtype}\n`);
+    if (r.subtype !== 'success') say(`cedia: the ${role} step on ${choice.model.ref} ended with ${r.subtype}\n`);
     return { ok: r.subtype === 'success', text: r.result, step: { model: choice.model.ref, via: 'cedia', sessionId: log.id, costUsd: r.costUsd } };
   };
   // A thread that asked the owner a question goes on with their answer, framed as one.
@@ -418,7 +452,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         if ((r.peakContext ?? 0) >= defaultHandoffAt(roles.advisor!)) adv.log = undefined;
         if (r.subtype !== 'success') {
           adv.off = true;
-          if (r.subtype !== 'interrupted') process.stderr.write(`cedia: the advisor on ${roles.advisor!.ref} ended with ${r.subtype}; going on without it\n`);
+          if (r.subtype !== 'interrupted') say(`cedia: the advisor on ${roles.advisor!.ref} ended with ${r.subtype}; going on without it\n`);
           return undefined;
         }
         const note = adviceOf(r.result);
@@ -468,12 +502,34 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   // hands off to a new session of the sub-thread, as the writer does: on Haiku a sub-thread past 100k tokens would
   // pay the long-context price on every turn. Explore never hands off, since a session that only read cannot
   // (core/loop/run.ts).
-  const spawner: Spawner = async (brief: string, kind: SpawnKind) => {
+  // A work sub-thread with worktrees on runs in a git worktree of its own (core/project/worktree.ts), beside the
+  // others; only applying its changes runs alone, through ctx.write. Where no worktree can be made (no git, no
+  // commit yet) it runs in place as it would without them, through ctx.write as a whole.
+  const spawner: Spawner = async (brief: string, kind: SpawnKind, ctx) => {
+    let wt: Worktree | undefined;
+    if (kind === 'work' && ctx.write) {
+      const base = snapshots?.take();
+      const w = snapshots && base ? openWorktree(args.cwd, snapshots, base, `${threadId ?? 'run'}-${subthreads + 1}-${crypto.randomUUID().slice(0, 8)}`) : { error: 'cedia cannot record this working tree' };
+      if ('error' in w) {
+        say(`cedia: no worktree for the work sub-thread (${w.error}); it runs in place, alone\n`);
+        return ctx.write(() => spawner(brief, kind, { signal: ctx.signal }));
+      }
+      wt = w;
+    }
     subthreads++;
     spawned[kind]++;
     let m = kind === 'explore' ? explorer : writer.model;
-    const sub = store?.open(brief, threadId ? { parent: threadId } : {});
-    const prompt = subtaskPrompt(brief, threadId, kind);
+    let sub: string | undefined;
+    let place: NonNullable<RunOpts['child']>['place'];
+    try {
+      sub = store?.open(brief, threadId ? { parent: threadId } : {});
+      // Its bash writes only in its worktree: the parent's files change only when its changes are applied.
+      place = wt && { cwd: wt.cwd, snapshots: wt.snapshots, preamble: preamble(wt.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}) }), wrap: sandbox.within(wt.dir) };
+    } catch (e) {
+      wt?.close();
+      throw e;
+    }
+    const prompt = subtaskPrompt(brief, threadId, kind, wt?.cwd);
     // The sub-thread's sessions so far: what recall searches once one has handed off.
     const mine: EarlierSession[] = [];
     const recallMine = recallTool(() => mine.slice(0, -1));
@@ -483,7 +539,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       const log = openLog();
       if (store && sub) store.append(sub, { kind: 'session', sessionId: log.id, model: m.ref, role: kind === 'explore' ? 'explore' : 'code', why, ...(log.path ? { path: log.path } : {}) });
       mine.push({ id: log.id, events: () => log.events });
-      const child = { ...(sub ? { thread: sub } : {}), ...(kind === 'work' && handoffsHere < MAX_HANDOFFS ? { handoff: true } : {}), ...(mine.length > 1 ? { recall: recallMine } : {}) };
+      const child = { ...(sub ? { thread: sub } : {}), ...(kind === 'work' && handoffsHere < MAX_HANDOFFS ? { handoff: true } : {}), ...(mine.length > 1 ? { recall: recallMine } : {}), ...(place ? { place } : {}) };
       const r = await run(m, log, prompt, { ...opts, ...(kind === 'explore' ? { role: 'explore' as const } : {}), child });
       cost += r.costUsd;
       spawned.peakContext = Math.max(spawned.peakContext, r.peakContext ?? 0);
@@ -494,7 +550,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       let last = await once('start');
       r = last.r;
       if (kind === 'explore' && m !== writer.model && r.subtype === 'error_during_execution' && quotaSpent(last.log.events)) {
-        process.stderr.write(`cedia: ${m.ref} is out of quota; the explore sub-thread goes on on ${writer.model.ref}\n`);
+        say(`cedia: ${m.ref} is out of quota; the explore sub-thread goes on on ${writer.model.ref}\n`);
         m = writer.model;
         r = (await once('quota')).r;
       }
@@ -509,16 +565,45 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       }
       r = { ...r, costUsd: cost };
     } catch (e) {
+      wt?.close();
       if (store && sub) store.append(sub, { kind: 'state', state: 'failed', result: (e as Error).message });
       throw e;
     }
-    if (store && sub) {
-      store.append(sub, { kind: 'state', state: stateOf(r), result: r.result.slice(0, MAX_RESULT) });
-      if (r.subtype === 'success') store.append(sub, { kind: 'archived', archived: true });
+    // Its changes reach the parent's files whole or not at all (a conflict writes nothing), however it ended, as
+    // they would have in place: a child whose check cannot pass until another child's part lands is common, and
+    // the parent's done gate wants a check after them either way. Only a stop leaves them out. What did not come
+    // back stays in the worktree for the parent to read, unless the run was stopped.
+    let worktree: SpawnOutcome['worktree'];
+    if (wt && ctx.write) {
+      const w = wt;
+      // What the parent's own edit could not write: its deny rules, secret stores and protected paths, and
+      // what the sandbox keeps bash from writing.
+      const refuse = (f: string) => decide(policy, editTool, { path: f }, args.cwd).decision === 'deny' || sandboxGuarded(f);
+      try {
+        // A stop that came while it waited for the parent's files is still a stop.
+        const applied = r.subtype !== 'interrupted' && !ac.signal.aborted ? await ctx.write(() => (ac.signal.aborted ? undefined : applyWorktree(w, snapshots!, refuse))) : undefined;
+        const keep = !ac.signal.aborted && (!applied || applied.conflicts.length > 0 || applied.refused.length > 0);
+        worktree = { applied: applied?.files ?? [], refused: applied?.refused ?? [], conflicts: applied?.conflicts ?? [], ...(applied ? {} : { why: `the sub-thread ended with ${ac.signal.aborted ? 'a stop' : r.subtype}` }), ...(keep ? { kept: w.cwd } : {}) };
+        if (keep) w.keep();
+        else w.close();
+      } catch (e) {
+        // A worktree that is no longer the one made is not offered to be read: it may lead anywhere now.
+        const intact = w.intact();
+        if (intact) w.keep();
+        else w.close();
+        worktree = { applied: [], refused: [], conflicts: [], why: (e as Error).message, ...(intact ? { kept: w.cwd } : {}) };
+      }
     }
-    return { ...(sub ? { thread: sub } : {}), model: m.ref, subtype: r.subtype, result: r.result, costUsd: r.costUsd, changed: r.evidence?.changed ?? [], unverified: r.evidence?.unverified ?? [] };
+    if (store && sub) {
+      store.append(sub, { kind: 'state', state: worktree?.conflicts.length ? 'failed' : stateOf(r), result: r.result.slice(0, MAX_RESULT) });
+      if (r.subtype === 'success' && !worktree?.conflicts.length) store.append(sub, { kind: 'archived', archived: true });
+    }
+    return { ...(sub ? { thread: sub } : {}), model: m.ref, subtype: r.subtype, result: r.result, costUsd: r.costUsd, changed: r.evidence?.changed ?? [], unverified: r.evidence?.unverified ?? [], ...(worktree ? { worktree } : {}) };
   };
-  const spawn = spawnTool(spawner);
+  const pool = spawnPool();
+  const spawn = spawnTool(spawner, undefined, { worktrees: spawnMode === 'worktree', pool });
+  // A resumed session keeps the spawn tool it was opened with, worktrees or not, so its tool list stays the same.
+  const spawnOther = spawnTool(spawner, undefined, { worktrees: spawnMode !== 'worktree', pool });
   // Runs the writer and follows its handoffs: each note opens a new session of the thread on the same model,
   // which starts from the task (and the fix it was on, if any) and the note.
   const write = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}) => {
@@ -527,7 +612,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     while (r.subtype === 'handoff') {
       handoffs++;
       const from = writer.log;
-      if (store && threadId) store.append(threadId, { kind: 'handoff', sessionId: from.id, note: r.result });
+      if (store && threadId) store.append(threadId, { run: runId, kind: 'handoff', sessionId: from.id, note: r.result });
       handingOff(r, false);
       writer = { model: m, log: openLog() };
       record(writer.log, m, 'handoff');
@@ -536,11 +621,19 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     }
     return r;
   };
+  // Where this run starts, for /rewind: the working tree, and the conversation as the thread's last writer session
+  // has it now (core/project/rewind.ts).
+  if (store && threadId) {
+    const last = resumed?.sessions.findLast((s) => s.role === 'code' && !resumed.rewound.includes(s.sessionId));
+    const tree = snapshots?.take();
+    const from = last?.path && sessionExists(last.path) ? { sessionId: last.sessionId, path: last.path, events: SessionLog.load(last.path).events.length, model: last.model } : undefined;
+    store.append(threadId, { kind: 'run', id: runId, prompt: args.prompt.slice(0, 500), cwd: args.cwd, ...(tree ? { tree } : {}), ...(from ? { from } : {}) });
+  }
   try {
     const servers = loadMcp();
     if (Object.keys(servers).length) {
       mcp = await startMcp(servers);
-      for (const n of mcp.notes) process.stderr.write(n + '\n');
+      for (const n of mcp.notes) say(n + '\n');
     }
     // Plan: a stronger model reads the repo and writes the plan the writer gets with the task.
     let plan: Step | undefined;
@@ -549,12 +642,12 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       if (p.ok && p.text.trim()) {
         task = withPlan(task, p.text.trim(), p.step.model);
         plan = p.step;
-      } else process.stderr.write('cedia: going on without a plan\n');
+      } else say('cedia: going on without a plan\n');
     }
     // A resumed thread goes on in its last session when the model is the same (its cache may still be warm) and
     // the provider still takes that session's history, otherwise in a new session that starts from where the
     // thread stopped.
-    const last = resumed?.sessions.findLast((s) => s.role === 'code');
+    const last = resumed?.sessions.findLast((s) => s.role === 'code' && !resumed.rewound.includes(s.sessionId));
     const lastLog = resumed && last?.model === model.ref && last.path && sessionExists(last.path) ? SessionLog.load(last.path) : undefined;
     let result: HeadlessResult;
     // A session whose cache has expired costs its whole context to resume; past a size, a new session from where
@@ -562,7 +655,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     const freshTokens = resumed ? Math.ceil((BASE_SYSTEM.length + JSON.stringify(toolDefs(CORE_TOOLS)).length + basePreamble.length + resumeNote(resumed).length + task.length) / 4) : 0;
     const choice = lastLog ? resumeChoice(lastLog.events, model, freshTokens) : undefined;
     if (choice?.fresh)
-      process.stderr.write(
+      say(
         `cedia: thread ${threadId}'s last session has been idle ${Math.round(choice.idleMs / 60_000)} min, past its cache; resuming it re-reads ${Math.round(choice.contextTokens / 1000)}k tokens (about $${choice.resumeUsd.toFixed(3)}), a new session from where it stopped starts at about ${Math.round(freshTokens / 1000)}k ($${choice.freshUsd.toFixed(3)}), so it goes on in a new session\n`,
       );
     if (lastLog && !historyRejected(lastLog.events) && !choice?.fresh) {
@@ -578,28 +671,34 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // A spent quota does not end the task: a new session on the fallback model picks it up (a session never
     // switches model, so its cache stays valid). Nor does a history the provider refuses: a new session on the
     // same model starts from the task and the working tree. Each happens at most once a run.
+    // It applies to every writer pass: the first, a review's fix and a goal's next round.
     let fellBack = false;
     let restarted = false;
+    const recover = async (r: HeadlessResult): Promise<HeadlessResult> => {
+    let result = r;
     while (result.subtype === 'error_during_execution') {
       const from = writer;
       const changed = result.evidence?.changed ?? [];
       const rejected = historyRejected(from.log.events);
       if (fallback && !fellBack && quotaSpent(from.log.events)) {
         fellBack = true;
-        process.stderr.write(`cedia: ${from.model.ref} is out of quota; continuing on ${fallback.ref} in a new session\n`);
+        say(`cedia: ${from.model.ref} is out of quota; continuing on ${fallback.ref} in a new session\n`);
         const note = missingKeyNote(fallback);
-        if (note) process.stderr.write(note + '\n');
+        if (note) say(note + '\n');
         const log = openLog();
         record(log, fallback, 'quota');
         result = await write(fallback, log, task, { continues: { sessionId: from.log.id, changed }, note: continueNote(from.model, from.log.id) });
       } else if (!restarted && rejected) {
         restarted = true;
-        process.stderr.write(`cedia: ${from.model.ref} refused this session's history (${rejected.code}: ${rejected.message.slice(0, 200)}); continuing in a new session\n`);
+        say(`cedia: ${from.model.ref} refused this session's history (${rejected.code}: ${rejected.message.slice(0, 200)}); continuing in a new session\n`);
         const log = openLog();
         record(log, from.model, 'rejected');
         result = await write(from.model, log, task, { continues: { sessionId: from.log.id, changed }, note: rejectedNote(from.model, from.log.id) });
       } else break;
     }
+    return result;
+    };
+    result = await recover(result);
     // Review: after the writer's claim passed the done gate, a second model reads the change. Changes it asks
     // for go back to the writer's own session once.
     let review: ReviewOutcome | undefined;
@@ -608,40 +707,62 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       const { verdict, findings } = r.ok ? parseVerdict(r.text) : { verdict: 'unclear' as const, findings: '' };
       review = { ...r.step, verdict, fixed: false };
       if (verdict === 'changes') {
-        result = await write(writer.model, writer.log, fixPrompt(r.step.model, findings));
+        result = await recover(await write(writer.model, writer.log, fixPrompt(r.step.model, findings)));
         review.fixed = true;
-      } else if (verdict === 'unclear') process.stderr.write(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
+      } else if (verdict === 'unclear') say(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
+    }
+    // Goal: a separate judge decides whether the condition holds; while it does not, the writer goes on in its
+    // own session with what the judge found missing, up to MAX_GOAL_ROUNDS more passes.
+    let goal: HeadlessResult['goal'];
+    if (args.goal && goalJudge) {
+      const rounds: GoalRound[] = [];
+      while (result.subtype === 'success' && !ac.signal.aborted) {
+        const log = openLog();
+        if (store && threadId) store.append(threadId, { kind: 'session', sessionId: log.id, model: goalJudge.ref, role: 'goal', why: 'start', ...(log.path ? { path: log.path } : {}) });
+        // The receipt of the whole run so far: a later round's own pass changed only part of it.
+        const r = await run(goalJudge, log, goalPrompt(args.goal, args.prompt, result.result, combine(parts, result, children).evidence, changesPatch()), { role: 'goal' });
+        const judged = r.subtype === 'success' ? parseGoal(r.result) : undefined;
+        rounds.push({ verdict: judged?.verdict ?? 'not_met', reason: judged?.reason ?? `the judge's session ended with ${r.subtype}`, judge: goalJudge.ref, sessionId: log.id, costUsd: r.costUsd });
+        // A judge that could not finish says nothing about the work, so the writer is not sent back on it.
+        if (!judged || judged.verdict !== 'not_met' || rounds.length > MAX_GOAL_ROUNDS) break;
+        say(`cedia goal: not met yet (round ${rounds.length}); the writer goes on with what the judge found missing\n`);
+        result = await recover(await write(writer.model, writer.log, goalContinuePrompt(args.goal, goalJudge.ref, judged.reason)));
+      }
+      const last = rounds.at(-1);
+      goal = { condition: args.goal, verdict: last?.verdict ?? 'not_met', rounds };
     }
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
     const classified = cls.calls ? { model: roles.classifier!.ref, via: 'cedia' as const, sessionId: cls.last ?? '', costUsd: cls.costUsd, calls: cls.calls, blocked: cls.blocked } : undefined;
     const advice = adv.log ? { model: roles.advisor!.ref, via: 'cedia' as const, sessionId: adv.log.id, costUsd: adv.costUsd, turns: adv.turns, notes: adv.notes } : undefined;
-    result = { ...combine(parts, result, new Set([...children, ...advised]), advised), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(advice ? { advice } : {}), ...(classified ? { classified } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
+    result = { ...combine(parts, result, new Set([...children, ...advised]), advised), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(advice ? { advice } : {}), ...(goal ? { goal } : {}), ...(classified ? { classified } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
     recordTurn();
-    if (store && threadId && result.question) store.append(threadId, { kind: 'question', sessionId: result.sessionId, ...result.question });
-    if (store && threadId) store.append(threadId, { kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
+    if (store && threadId && result.question) store.append(threadId, { run: runId, kind: 'question', sessionId: result.sessionId, ...result.question });
+    if (store && threadId) store.append(threadId, { run: runId, kind: 'state', state: goal && goal.verdict !== 'met' && result.subtype === 'success' ? 'failed' : stateOf(result), result: result.result.slice(0, MAX_RESULT) });
     // The receipt goes in the writer's log too, so a thread rebuilt from the files shows it. Quiet: a stream-json
     // client gets it as the result line below.
     writer.log.append({ kind: 'result', result }, { quiet: true });
     if (args.outputFormat === 'text') {
       out(result.result + (result.result.endsWith('\n') ? '' : '\n'));
-      if (result.evidence) process.stderr.write(receipt(result.evidence, result.thread) + '\n');
-      if (result.plan) process.stderr.write(`cedia plan: by ${result.plan.model}\n`);
-      if (result.classified) process.stderr.write(`cedia classifier: ${result.classified.model} read ${result.classified.calls} command${result.classified.calls === 1 ? '' : 's'} and blocked ${result.classified.blocked}\n`);
-      if (result.advice) process.stderr.write(`cedia advisor: ${result.advice.model} read ${result.advice.turns} turn${result.advice.turns === 1 ? '' : 's'} and left ${result.advice.notes} note${result.advice.notes === 1 ? '' : 's'}\n`);
-      if (result.review) process.stderr.write(`cedia review: ${result.review.model} ${result.review.verdict === 'changes' ? 'asked for changes, sent back to the writer once' : result.review.verdict === 'approve' ? 'approved' : 'gave no verdict'}\n`);
-      if (threadId) process.stderr.write(`cedia thread: ${threadId}${handoffs ? ` (${handoffs} handoff${handoffs === 1 ? '' : 's'})` : ''}; go on with --thread ${threadId}\n`);
+      if (result.evidence) say(receipt(result.evidence, result.thread) + '\n');
+      if (result.plan) say(`cedia plan: by ${result.plan.model}\n`);
+      if (result.goal) say(`cedia goal: ${result.goal.verdict.replace('_', ' ')} after ${result.goal.rounds.length} judgement${result.goal.rounds.length === 1 ? '' : 's'} by ${goalJudge!.ref}${result.goal.verdict === 'met' ? '' : `: ${result.goal.rounds.at(-1)?.reason.split('\n')[0] ?? ''}`}\n`);
+      if (result.classified) say(`cedia classifier: ${result.classified.model} read ${result.classified.calls} command${result.classified.calls === 1 ? '' : 's'} and blocked ${result.classified.blocked}\n`);
+      if (result.advice) say(`cedia advisor: ${result.advice.model} read ${result.advice.turns} turn${result.advice.turns === 1 ? '' : 's'} and left ${result.advice.notes} note${result.advice.notes === 1 ? '' : 's'}\n`);
+      if (result.review) say(`cedia review: ${result.review.model} ${result.review.verdict === 'changes' ? 'asked for changes, sent back to the writer once' : result.review.verdict === 'approve' ? 'approved' : 'gave no verdict'}\n`);
+      if (threadId) say(`cedia thread: ${threadId}${handoffs ? ` (${handoffs} handoff${handoffs === 1 ? '' : 's'})` : ''}; go on with --thread ${threadId}\n`);
     }
     else out(encode(result));
     return result;
   } catch (e) {
     recordTurn();
-    if (store && threadId) store.append(threadId, { kind: 'state', state: 'failed', result: (e as Error).message });
+    if (store && threadId) store.append(threadId, { run: runId, kind: 'state', state: 'failed', result: (e as Error).message });
     throw e;
   } finally {
     await mcp?.close();
     await sandbox.close();
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
+    args.signal?.removeEventListener('abort', onSignal);
   }
 }
 

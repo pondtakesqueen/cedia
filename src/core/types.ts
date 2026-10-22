@@ -67,6 +67,9 @@ type EventBody =
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
   | { kind: 'tool_result'; callId: string; status: EffectStatus; output: ToolOutput }
   | { kind: 'reminder'; text: string; as: 'system' | 'user' }
+  // A user hook ran (core/hooks.ts): which, at what point, for which call, and what it decided. What it said that
+  // reaches the model is in the permission, tool_result or reminder that follows.
+  | { kind: 'hook'; hook: string; event: 'preToolUse' | 'postToolUse' | 'stop'; callId?: string; decision: 'allow' | 'block'; failed?: boolean; updated?: boolean; ms: number }
   // A call's input came in a known wrong shape and was put into the schema's (ToolSpec.repair). The assistant
   // event keeps what the model sent; the intent holds the repaired input.
   | { kind: 'input_repaired'; callId: string; tool: string; repairs: string[] }
@@ -209,6 +212,8 @@ export type HeadlessResult = {
   // The plan the writer was given, and the review of its change (see core/trust/review.ts).
   plan?: Step;
   review?: Step & { verdict: 'approve' | 'changes' | 'unclear'; fixed: boolean };
+  // Light goal mode (core/trust/goal.ts): the condition, the last judge's verdict, and each judgement.
+  goal?: { condition: string; verdict: 'met' | 'not_met' | 'impossible'; rounds: { verdict: 'met' | 'not_met' | 'impossible'; reason: string; judge: string; sessionId: string; costUsd: number }[] };
   // The advisor's session: the writer turns it read and the notes it left (see core/trust/advisor.ts).
   advice?: Step & { turns: number; notes: number };
   // The classifier's session: the commands it read and the ones it blocked (see core/trust/classifier.ts).

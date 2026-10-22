@@ -1,5 +1,6 @@
-{"at":"2026-10-22T08:36:36.247Z","kind":"open","title":"make f.txt say good or great","task":"make f.txt say good or great"}
-{"at":"2026-10-22T08:36:36.267Z","kind":"session","sessionId":"bea73288-252d-4167-90b9-bdf740f3638b","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/bea73288-252d-4167-90b9-bdf740f3638b.jsonl"}
-{"at":"2026-10-22T08:36:36.309Z","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["bea73288-252d-4167-90b9-bdf740f3638b"]}
-{"at":"2026-10-22T08:36:36.309Z","kind":"question","sessionId":"bea73288-252d-4167-90b9-bdf740f3638b","question":"Should f.txt say good or great? The task allows both; I wrote good.","options":["good","great"]}
-{"at":"2026-10-22T08:36:36.309Z","kind":"state","state":"asking","result":"Should f.txt say good or great? The task allows both; I wrote good."}
+{"at":"2026-10-22T09:42:57.802Z","kind":"open","title":"make f.txt say good or great","task":"make f.txt say good or great"}
+{"at":"2026-10-22T09:42:57.823Z","kind":"run","id":"r-b9cf5e06","prompt":"make f.txt say good or great","cwd":"/fixture/repo","tree":"4b825dc642cb6eb9a060e54bf8d69288fbee4904"}
+{"at":"2026-10-22T09:42:57.826Z","run":"r-b9cf5e06","kind":"session","sessionId":"a71e4a1b-ba1e-455f-90a5-3e1955dd67bc","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/a71e4a1b-ba1e-455f-90a5-3e1955dd67bc.jsonl"}
+{"at":"2026-10-22T09:42:57.871Z","run":"r-b9cf5e06","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["a71e4a1b-ba1e-455f-90a5-3e1955dd67bc"]}
+{"at":"2026-10-22T09:42:57.871Z","run":"r-b9cf5e06","kind":"question","sessionId":"a71e4a1b-ba1e-455f-90a5-3e1955dd67bc","question":"Should f.txt say good or great? The task allows both; I wrote good.","options":["good","great"]}
+{"at":"2026-10-22T09:42:57.871Z","run":"r-b9cf5e06","kind":"state","state":"asking","result":"Should f.txt say good or great? The task allows both; I wrote good."}
