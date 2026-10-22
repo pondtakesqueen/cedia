@@ -120,7 +120,7 @@ export const spawnNudge = (tokens: number) =>
   `Your context is about ${Math.round(tokens / 1000)}k tokens, and every later turn re-sends all of it. From here, hand reading you will not need word for word to the spawn tool: kind "explore" for a question that takes several files to answer (how a flow works, where something is defined, every caller of a function), several in one turn when they are independent. Its report comes back with paths and line numbers; read yourself only the parts of files you are about to edit.`;
 
 export const subtaskPrompt = (task: string, parent: string | undefined, kind: SpawnKind, worktree?: string) =>
-  `You are a sub-thread${parent ? ` of thread ${parent}` : ''}: another session handed you this task and will see only your final message. Do this task and nothing else.${kind === 'explore' ? ' You can read and run read-only commands, not edit.' : ''}${worktree ? ` You work in a git worktree of your own at ${worktree}, a copy of the other session's working tree: your changes are applied to its files when you finish. Do not commit.` : ''}
+  `You are a sub-thread${parent ? ` of thread ${parent}` : ''}: another session handed you this task and will see only your final message. Do this task and nothing else.${kind === 'explore' ? ' You can read and run read-only commands, not edit.' : ''}${worktree ? ` You work in a git worktree of your own at ${worktree}, a copy of the other session's working tree: your changes are applied to its files when you finish. Do not commit. Other sub-threads may be doing other parts of the work at the same time: a check that fails only on a part outside your task is not yours to fix, so say so in your report.` : ''}
 
 <task>
 ${task}

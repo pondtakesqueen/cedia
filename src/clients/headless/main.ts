@@ -418,14 +418,16 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       if (store && sub) store.append(sub, { kind: 'state', state: 'failed', result: (e as Error).message });
       throw e;
     }
-    // Its changes reach the parent's files only when it finished its task, and only whole: a conflict writes
-    // nothing. What did not come back stays in the worktree for the parent to read, unless the run was stopped.
+    // Its changes reach the parent's files whole or not at all (a conflict writes nothing), however it ended, as
+    // they would have in place: a child whose check cannot pass until another child's part lands is common, and
+    // the parent's done gate wants a check after them either way. Only a stop leaves them out. What did not come
+    // back stays in the worktree for the parent to read, unless the run was stopped.
     let worktree: SpawnOutcome['worktree'];
     if (wt && ctx.write) {
       const w = wt;
       const refuse = (f: string) => protectedPath(join(args.cwd, f), args.cwd) || sandboxGuarded(f);
       try {
-        const applied = r.subtype === 'success' ? await ctx.write(() => applyWorktree(w, snapshots!, refuse)) : undefined;
+        const applied = r.subtype !== 'interrupted' && !ac.signal.aborted ? await ctx.write(() => applyWorktree(w, snapshots!, refuse)) : undefined;
         const keep = !ac.signal.aborted && (!applied || applied.conflicts.length > 0 || applied.refused.length > 0);
         worktree = { applied: applied?.files ?? [], refused: applied?.refused ?? [], conflicts: applied?.conflicts ?? [], ...(applied ? {} : { why: `the sub-thread ended with ${r.subtype}` }), ...(keep ? { kept: w.cwd } : {}) };
         if (!keep) w.close();

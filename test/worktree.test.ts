@@ -229,6 +229,21 @@ describe('--spawn worktree (offline, faux)', () => {
     expect(readFileSync(join(r.work, 'src', 'a.txt'), 'utf8')).toMatch(/^1 parent\n2\n3\n4 (alpha|beta)\n/);
   });
 
+  test('a child whose check never passed still brings its changes back, marked unverified, and the parent must check', () => {
+    const r = repo();
+    const out = cedia(
+      r.work,
+      [{ blocks: [spawnCall('s1', 'alpha-task: one file')] }, call('alpha-1', 'echo good > one.txt', 'alpha-task'), reply('done', 'alpha-task'), reply('done', 'alpha-task'), call('p1', 'true'), reply('done')],
+      ['-p', 'x', '--spawn', 'worktree'],
+    );
+    const text = report(out.result(), r.work, 's1');
+    expect(text).toContain('ended="error_unverified_claim"');
+    expect(text).toContain('Changed: one.txt (no passing check after: one.txt)');
+    expect(text).toContain('Applied to your files: one.txt');
+    expect(readFileSync(join(r.work, 'one.txt'), 'utf8')).toBe('good\n');
+    expect(git(r.work, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
+  });
+
   test("a file the parent may not write is left out; outside git a work sub-thread runs in place, alone", () => {
     const r = repo();
     const out = cedia(
