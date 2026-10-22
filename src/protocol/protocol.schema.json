@@ -1168,6 +1168,72 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "hook"
+            },
+            "hook": {
+              "type": "string"
+            },
+            "event": {
+              "type": "string",
+              "enum": [
+                "preToolUse",
+                "postToolUse",
+                "stop"
+              ]
+            },
+            "callId": {
+              "type": "string"
+            },
+            "decision": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "block"
+              ]
+            },
+            "failed": {
+              "type": "boolean"
+            },
+            "updated": {
+              "type": "boolean"
+            },
+            "ms": {
+              "type": "number"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "decision",
+            "event",
+            "hook",
+            "id",
+            "kind",
+            "ms",
+            "parentId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "input_repaired"
             },
             "callId": {

@@ -7,6 +7,7 @@ import { DEFAULT_DOMAINS, SANDBOX_SETTINGS, type SandboxSetting } from './safety
 import { defaultHandoffAt } from './project/handoff.ts';
 import { FALLBACKS, resolveModel } from './providers/catalog.ts';
 import { secretPaths } from './safety/secrets.ts';
+import { checkHooks, type Hooks } from './hooks.ts';
 import type { ModelSpec, PrivacyLevel } from './types.ts';
 
 export type Settings = {
@@ -40,6 +41,8 @@ export type Settings = {
   // The desktop app's own settings (cedian: theme, keymap, layout and the like). cedia never reads them and checks
   // only that they are an object, so the desktop can keep them in this file without cedia knowing their shape.
   desktop?: Record<string, unknown>;
+  // The user's hooks (core/hooks.ts). User settings only: a repo must not run code outside the sandbox.
+  hooks?: Hooks;
 };
 
 // Every key cedia knows, with the keys allowed inside the objects it reads. A key that is not here is a typo or a
@@ -59,6 +62,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   onQuota: 'any',
   mcpServers: 'any',
   desktop: 'any',
+  hooks: 'any',
 };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -69,6 +73,7 @@ export function checkSettings(value: unknown): Settings {
     const allowed = SETTINGS_KEYS[key as keyof Settings];
     if (!allowed) throw new Error(`unknown setting "${key}" (known: ${Object.keys(SETTINGS_KEYS).join(', ')})`);
     if (key === 'desktop' && !isObject(inner)) throw new Error('"desktop" must be an object');
+    if (key === 'hooks') checkHooks(inner);
     if (allowed === 'any') continue;
     if (!isObject(inner)) throw new Error(`"${key}" must be an object`);
     const unknown = Object.keys(inner).find((k) => !allowed.includes(k));
@@ -283,4 +288,9 @@ export function loadSandbox(flags: { mode?: string; allowDomains?: string[] } = 
   const mode = flags.mode || env.CEDIA_SANDBOX || user.mode || 'auto';
   if (!SANDBOX_SETTINGS.includes(mode as SandboxSetting)) throw new Error(`unknown sandbox setting "${mode}" (use ${SANDBOX_SETTINGS.join(', ')})`);
   return { mode: mode as SandboxSetting, allowedDomains: [...new Set([...DEFAULT_DOMAINS, ...(user.allowedDomains ?? []), ...(flags.allowDomains ?? [])])] };
+}
+
+// Hooks come from the user's settings only; a repo's .cedia/settings.json may name them but they are never read.
+export function loadHooks(): Hooks {
+  return readSettings(join(cediaHome(), 'settings.json')).hooks ?? {};
 }
