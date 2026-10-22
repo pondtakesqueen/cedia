@@ -12,7 +12,7 @@ Exit 0: no model got worse. 1: a model regressed. 3: no comparison could be made
 
 ## What it runs
 
-`suite.json`: 24 tasks, 2 runs each, 4 at a time, on Haiku 5.5 (Claude API) and DeepSeek V4.1 Flash (OpenCode Go). The 12 pi-era floor tasks, the 7 hard tasks, the 4 wide and long tasks, and `real-slop-guard`, the cheapest real-repository task. `real-threads` and `real-subthreads` are left out: they cost $0.3 to $0.5 a run on Haiku and hit the 1200 s limit when handoff is on, so they belong in a measured experiment, not a gate. The tasks need `python3 -m pytest` and the full git history (`fetch-depth: 0`).
+`suite.json`: 25 tasks, 2 runs each, 4 at a time, on Haiku 5.5 (Claude API) and DeepSeek V4.1 Flash (OpenCode Go). The 12 pi-era floor tasks, the 7 hard tasks, the 4 wide and long tasks, `real-slop-guard`, the cheapest real-repository task, and `real-three-delegated`, which hands three real commits to one work sub-thread: on Haiku that sub-thread passes the 90k handoff point in every run, so the gate checks that sub-thread handoff triggers and the work still passes (about $0.06 a run on Haiku, 5 to 6 minutes). `real-threads` and `real-subthreads` are left out: they cost $0.3 to $0.5 a run on Haiku and hit the 1200 s limit when handoff is on, so they belong in a measured experiment, not a gate. The tasks need `python3 -m pytest` and the full git history (`fetch-depth: 0`).
 
 Each run writes its rows to `evals/results/<date>-gate-<model>-<commit>-<time>.jsonl`. A baseline is `baseline/<model>.json`: the commit, date, runs, jobs and cedia flags it was made with, a hash of each task, and the rows.
 
@@ -25,7 +25,7 @@ Over the tasks both runs have, with provider-error runs left out:
 | pass@1 | lower, and a one-sided Fisher exact test gives p < `passP` (0.1). Lower but not significant is shown as `~` |
 | tasks broken | a task passed every baseline run and fails every candidate run (at least 2) |
 | false-done | its rate is higher at all: it is the trust guarantee failing. Tasks with hidden tests are left out of this check: there the run's own checks passed and a spec it could not see failed, which is a failed run, counted above |
-| cost | the typical task's cost (geometric mean of per-task ratios) rises by more than `costRise` (15%), or the whole set's (sum of per-task means) by more than `totalRise` (40%); either way by more than $0.002 |
+| cost | the typical task's cost (geometric mean of per-task ratios) rises by more than `costRise` (15%), or the whole set's (sum of per-task means) by more than `totalRise` (40%); either way by more than $0.002. A model with an off-peak price (DeepSeek) is compared at its standard price, from each run's tokens: the Flash gate run of 2026-10-22 started at peak hours and read +63% against an off-peak baseline, +3% at one price |
 | time | the same for wall time, `timeRise` (20%) and `totalRise`, by more than 10 s; skipped when `--jobs` differs from the baseline's |
 | turns | never: shown to explain a cost or time change |
 
@@ -68,6 +68,7 @@ History:
 | e967722 | 47/48, $0.27, 33 s | 47/48, $0.38, 68 s | first baseline |
 | 18f1760 (same code) | 47/48, $0.32, 37 s | 46/48, $0.45, 56 s | second run; found the `wide-three-features` comment and the cost-noise rules |
 | 32774a7 (main) | 48/48, $0.26, 29 s | 48/48, $0.39, 50 s | after #21 (spawn reminder, handoff note carries the plan): PASS on both against the earlier baseline, typical task cost -6% and -3%, time -9% and -8% |
+| 26ffc46 (spawn on long tasks) | 47/48, $0.23, 30 s | 48/48, $0.63 at peak price ($0.80 against $0.77 at one price), 55 s | first-session handoff, sub-thread budget meter: PASS on both; `real-three-delegated` added to the suite and its rows stored at 82363a0 |
 
 ## When to update the baseline
 

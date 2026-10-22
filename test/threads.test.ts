@@ -137,8 +137,11 @@ describe('handoff in the loop', () => {
     expect(lintSession(never.log.events)).toEqual([]);
   });
 
-  test('a session that has only read does not hand off: its successor would read it all again', async () => {
-    const { r, log } = await run([tool('c1', 'big', {}), tool('c2', 'big', {}), write, tool('c3', 'big', {}), reply('the note')], { handoffAt: 2000 });
+  test('a first session that has only read hands off; one that picked up from another must change a file first', async () => {
+    const first = await run([tool('c1', 'big', {}), reply('the plan')], { handoffAt: 2000 });
+    expect(first.r).toMatchObject({ subtype: 'handoff', result: 'the plan' });
+    const continues = { sessionId: 'earlier', changed: [] };
+    const { r, log } = await run([tool('c1', 'big', {}), tool('c2', 'big', {}), write, tool('c3', 'big', {}), reply('the note')], { handoffAt: 2000, continues });
     expect(r).toMatchObject({ subtype: 'handoff', result: 'the note' });
     // Asked for the note only after the write, two turns past the point it first passed handoffAt.
     const asked = log.events.findIndex((e) => e.kind === 'reminder' && e.text === HANDOFF_PROMPT);
@@ -371,6 +374,10 @@ describe('sub-threads (offline, faux)', () => {
     expect(run.err).toContain("a sub-thread's context reached 2000 tokens; handing it off to a new session");
     // The parent itself did not hand off: one writer session.
     expect(result.sessions).toHaveLength(1);
+    // The result counts the sub-thread's handoff, and keeps its context apart from the parent's.
+    expect(result.spawned).toMatchObject({ explore: 0, work: 1, handoffs: 1 });
+    expect(result.spawned.peakContext).toBeGreaterThan(2000);
+    expect(result.peakContext).toBeLessThan(result.spawned.peakContext);
     const parent = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
     const report = parent.events.find((e): e is EventOf<'tool_result'> => e.kind === 'tool_result' && e.callId === 's1')!;
     expect(report).toMatchObject({ status: 'completed' });
@@ -454,6 +461,32 @@ describe('sub-threads (offline, faux)', () => {
     expect(parent.events.find((e) => e.kind === 'tool_result')).toMatchObject({ status: 'failed', output: { isError: true } });
     const sub = storeOf(dir).list().find((t) => t.parent === result.thread)!;
     expect(sub).toMatchObject({ state: 'failed', archived: false });
+  });
+
+  test("a sub-thread's spend counts against the run's budget, in the sub-thread and in the parent after it", () => {
+    const dir = tmp();
+    // Every faux turn here costs about the same, so the budget is a turn count: the parent's spawn, then the
+    // sub-thread's turns. Before spend was shared, the sub-thread had the whole budget to itself and the parent
+    // went on spending after it.
+    const one = JSON.parse(cedia(tmp(), [call('c0', 'true'), reply('ok')], ['-p', 'x', ...ws]).out).costUsd / 2;
+    const script = [
+      tool('s1', 'spawn', { kind: 'work', task: 'Run true three times.' }),
+      call('c1', 'true'),
+      call('c2', 'true'),
+      call('c3', 'true'),
+      reply('ran it'),
+      call('c4', 'true'),
+      reply('done'),
+    ];
+    const result = JSON.parse(cedia(dir, script, ['-p', 'run true', ...ws, '--max-budget-usd', String(one * 2.5)]).out);
+    expect(result.subtype).toBe('error_max_budget_usd');
+    expect(result.costUsd).toBeLessThan(one * 4);
+    // The sub-thread stopped at the run's budget, not at a budget of its own, and the parent ran nothing after it.
+    const parent = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
+    const results = parent.events.filter((e): e is EventOf<'tool_result'> => e.kind === 'tool_result');
+    expect(results[0]!.output.text).toContain('ended="error_max_budget_usd"');
+    const ran = sessionsOf(dir).flatMap((l) => l.events.filter((e): e is EventOf<'tool_result'> => e.kind === 'tool_result' && e.status === 'completed').map((e) => e.callId));
+    expect(ran).toEqual(['c1', 'c2']);
   });
 
   test('--spawn off leaves the tool out', () => {

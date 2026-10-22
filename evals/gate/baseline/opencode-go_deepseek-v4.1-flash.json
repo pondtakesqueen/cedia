@@ -1,8 +1,8 @@
 {
  "suite": "gate",
  "model": "opencode-go/deepseek-v4.1-flash",
- "commit": "43bd436",
- "date": "2026-10-21T19:00:09.958Z",
+ "commit": "82363a0-dirty",
+ "date": "2026-10-22T01:11:26.975Z",
  "runs": 2,
  "jobs": 4,
  "cediaArgs": [],
@@ -30,7 +30,8 @@
   "wide-bug-hunt": "6fd6e23119deb920",
   "wide-deprecate": "f904950c84ebeba7",
   "wide-three-features": "677a9774135741df",
-  "real-slop-guard": "a5c8323fd6491b3f"
+  "real-slop-guard": "a5c8323fd6491b3f",
+  "real-three-delegated": "b7abc9c966af4980"
  },
  "results": [
   {
@@ -1866,6 +1867,128 @@
    "attempts": 1,
    "verifyExitCode": 0,
    "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 189 pass\n 5 skip\n 0 fail\n 614 expect() calls\nRan 194 tests across 14 files. [2.07s]\n",
+   "passed": true,
+   "falseDone": false
+  },
+  {
+   "id": "real-three-delegated",
+   "category": "real-repo",
+   "harness": "cedia",
+   "model": "opencode-go/deepseek-v4.1-flash",
+   "run": 1,
+   "ts": "2026-10-22T01:24:21.946Z",
+   "ledger": [
+    {
+     "kind": "rollout",
+     "label": "real-three-delegated#1:harness",
+     "ms": 449675
+    },
+    {
+     "kind": "session",
+     "label": "real-three-delegated#1:verify",
+     "ms": 14199
+    }
+   ],
+   "wallMs": 449675,
+   "output": "l names), refused-history recovery in `src/clients/headless/main.ts` with `why: 'rejected'` in `src/core/project/threads.ts` and the regenerated `src/protocol/protocol.schema.json`, and `--on-quota wait:<minutes>` / `onQuota` via `loadQuotaWait` in `src/core/config.ts` plus the flag in `src/cli.ts`; `SPEC.md` and `AGENTS.md` updated in step. No test files were changed. Earlier I also ran `bun run typecheck` (clean) and `bun scripts/protocol-schema.ts --check` (exit 0) after the last source edit.",
+   "stderr": "cedia: sandbox unavailable (bubblewrap (bwrap) not installed; socat not installed); bash runs unsandboxed. Use --sandbox on to require it.\ncedia: OPENCODE_API_KEY is not set; sending opencode-go/deepseek-v4.1-flash requests without credentials, expecting a proxy to add them\n",
+   "exitCode": 0,
+   "reported": {
+    "subtype": "success",
+    "costUsd": 0.17758158000000002,
+    "tokens": {
+     "input": 3679673,
+     "cacheRead": 3262080,
+     "output": 27276
+    },
+    "cacheHitRatio": 0.8865135570470528,
+    "turns": 60,
+    "timing": {
+     "wallMs": 744838,
+     "modelMs": 278260,
+     "ttftMs": 157142,
+     "toolMs": 466366,
+     "retryMs": 0,
+     "harnessMs": 212,
+     "outputTokPerSec": 225.2
+    },
+    "handoffs": 0,
+    "subthreads": 1,
+    "spawned": {
+     "explore": 0,
+     "work": 1,
+     "handoffs": 0,
+     "peakContext": 88335
+    },
+    "peakContext": 64797
+   },
+   "claimedDone": false,
+   "refusedClaim": false,
+   "infraError": false,
+   "attempts": 1,
+   "verifyExitCode": 0,
+   "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 297 pass\n 11 skip\n 0 fail\n 1101 expect() calls\nRan 308 tests across 19 files. [14.17s]\n",
+   "passed": true,
+   "falseDone": false
+  },
+  {
+   "id": "real-three-delegated",
+   "category": "real-repo",
+   "harness": "cedia",
+   "model": "opencode-go/deepseek-v4.1-flash",
+   "run": 2,
+   "ts": "2026-10-22T01:22:38.042Z",
+   "ledger": [
+    {
+     "kind": "rollout",
+     "label": "real-three-delegated#2:harness",
+     "ms": 344483
+    },
+    {
+     "kind": "session",
+     "label": "real-three-delegated#2:verify",
+     "ms": 15459
+    }
+   ],
+   "wallMs": 344483,
+   "output": "**297 pass, 11 skip, 0 fail, 308 tests across 19 files**, exit 0.\n- `bun run typecheck` (`tsc --noEmit`): exit 0.\n- The three test files were untouched (original timestamps); `test/fixtures.test.ts` passes against the committed fixtures and schema, so no fixture re-recording was needed.\n\n## Left open\n- No git repository in the working directory, so nothing was committed.\n- `bun evals/gate.ts` was not run (it needs paid real-model arms); verification was scoped to the offline suite and typecheck.",
+   "stderr": "cedia: sandbox unavailable (bubblewrap (bwrap) not installed; socat not installed); bash runs unsandboxed. Use --sandbox on to require it.\ncedia: OPENCODE_API_KEY is not set; sending opencode-go/deepseek-v4.1-flash requests without credentials, expecting a proxy to add them\n",
+   "exitCode": 0,
+   "reported": {
+    "subtype": "success",
+    "costUsd": 0.14696334,
+    "tokens": {
+     "input": 3097049,
+     "cacheRead": 2807040,
+     "output": 35932
+    },
+    "cacheHitRatio": 0.9063595700294054,
+    "turns": 49,
+    "timing": {
+     "wallMs": 551068,
+     "modelMs": 255087,
+     "ttftMs": 82305,
+     "toolMs": 295797,
+     "retryMs": 0,
+     "harnessMs": 183,
+     "outputTokPerSec": 207.9
+    },
+    "handoffs": 0,
+    "subthreads": 1,
+    "spawned": {
+     "explore": 0,
+     "work": 1,
+     "handoffs": 0,
+     "peakContext": 92674
+    },
+    "peakContext": 85691
+   },
+   "claimedDone": false,
+   "refusedClaim": false,
+   "infraError": false,
+   "attempts": 1,
+   "verifyExitCode": 0,
+   "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 297 pass\n 11 skip\n 0 fail\n 1101 expect() calls\nRan 308 tests across 19 files. [15.44s]\n",
    "passed": true,
    "falseDone": false
   },

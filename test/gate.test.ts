@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { baselinePath, compare, DEFAULT_SUITE, expectedCost, fisherLower, loadSuite, taskHash, type Baseline, type Thresholds } from "../evals/gate.ts";
+import { baselinePath, compare, DEFAULT_SUITE, expectedCost, fisherLower, listCost, loadSuite, taskHash, type Baseline, type Thresholds } from "../evals/gate.ts";
 import type { Result, Task } from "../evals/run.ts";
 
 const th: Thresholds = { passP: 0.1, costRise: 0.15, timeRise: 0.2, totalRise: 0.4 };
@@ -54,6 +54,19 @@ describe("regression gate", () => {
     const hidden = compare(set(), fd, { thresholds: th, hiddenTasks: ["t5"] });
     expect(status(hidden, "false-done")).toBe("ok");
     expect(hidden.checks.find((x) => x.name === "false-done")!.note).toContain("0 -> 1 on tasks with hidden tests");
+  });
+
+  test("a model priced by the hour is compared at its standard price, from tokens", () => {
+    const flash = "opencode-go/deepseek-v4.1-flash";
+    const tokens = { input: 100_000, cacheRead: 90_000, output: 2_000 };
+    // The same tokens, billed off-peak in the baseline and at peak in the candidate.
+    const at = (cost: number) => set(() => ({ cost })).map((r) => ({ ...r, model: flash, reported: { ...r.reported, tokens } }));
+    const c = compare(at(0.003), at(0.006), { thresholds: th, model: flash });
+    expect(status(c, "cost")).toBe("ok");
+    expect(c.checks.find((x) => x.name === "cost")!.note).toContain("at the standard price");
+    expect(listCost(flash)!(at(0)[0]!)).toBeCloseTo((10_000 * 0.3 + 90_000 * 0.006 + 2_000 * 1.2) / 1e6, 9);
+    expect(listCost("anthropic/claude-haiku-5-5")).toBeUndefined();
+    expect(status(compare(set(), set(() => ({ cost: 0.012 })), { thresholds: th, model: "anthropic/claude-haiku-5-5" }), "cost")).toBe("regressed");
   });
 
   test("cost and time fail past their limit for the typical task or the whole set, paired by task", () => {

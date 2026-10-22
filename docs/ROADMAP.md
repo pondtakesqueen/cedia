@@ -36,6 +36,8 @@ No model has called `spawn` in any of 30+ real-repository runs. The "Spawn ‡πÅ‡∏
 
 Done when: a model spawns on its own on the `real-*` tasks, and spawn on beats spawn off on cost or time without a lower pass rate, measured with the gate (`--cedia-arg=--spawn=off` against the default).
 
+Status (2026-10-22): with the reminder (#21), Haiku spawns on its own on every `real-*` task. On `real-three-changes` (three real commits in one task) it sends explore sub-threads and then one work sub-thread per part, and spawn on costs half of spawn off ($0.06 against $0.08 to $0.13 a run) at 100%, but takes longer (work sub-threads run one at a time). Work sub-thread handoff is checked on a real model by `real-three-delegated`, now in the gate suite. DeepSeek Flash still never spawns. Left: spawn on Flash, and the time cost of work sub-threads (`evals/results/README.md`, 2026-10-22).
+
 ## 5. UX and new features
 
 `SPEC.md` stages 3 to 6, in order: the TUI on pi-tui with `/diff`, `/undo` and the status line; AGENTS.md, full compaction, memory, `/commit` and `/pr`; skills, MCP, subagents by role and the first four-arm comparison; rewind, LSP, goal mode, the classifier and the full eval against pi, `claude -p` and `codex exec`. The cost ideas in `research/NOTES.md` (cold-thread resume, staggered parallel agents, TTL per role) are measured with the gate as they come up.

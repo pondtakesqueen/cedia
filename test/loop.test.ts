@@ -11,6 +11,7 @@ import { bashTool } from '../src/core/tools/bash.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
 import { readTool } from '../src/core/tools/read.ts';
 import type { EventOf, SessionEvent } from '../src/core/types.ts';
+import { hash } from '../src/core/hash.ts';
 
 const cwd = mkdtempSync(join(tmpdir(), 'cedia-loop-'));
 writeFileSync(join(cwd, 'a.txt'), 'alpha\n');
@@ -50,6 +51,54 @@ describe('loop', () => {
     expect(res).toMatchObject({ subtype: 'success', numTurns: 2, result: 'it says alpha' });
     expect(kinds(log.events)).toEqual(['session', 'user', 'request', 'attempt', 'assistant', 'permission', 'tool_intent', 'tool_result', 'request', 'attempt', 'assistant', 'turn_end']);
     expect(of(log.events, 'tool_result')[0]!.output.text).toContain('alpha');
+    expectPaired(log.events);
+  });
+
+  const slow = (ms: number) => ({ ...readTool, name: 'slow', pathOf: undefined, run: async () => (await Bun.sleep(ms), { text: 'done waiting', isError: false }) });
+
+  test('while a tool runs long, the request is sent again with no output to keep its cache, and the spend counts', async () => {
+    const { log, provider, opts } = setup([{ blocks: [toolUse('c1', 'slow', {})] }, { blocks: [text('done')] }], { keepAliveMs: 100, tools: [slow(350)] });
+    const warmed: string[] = [];
+    const usage = { uncached: 0, cacheRead: 1_000_000, cacheWrite: 0, output: 0 };
+    provider.keepAlive = async (req) => (warmed.push(JSON.stringify(provider.body(req))), { ok: true, usage });
+    const res = await runPrompt(opts, 'go');
+    expect(res.subtype).toBe('success');
+    const kept = of(log.events, 'keepalive');
+    // Every 100 ms from the request's start while the 350 ms command runs: about three, all for the first request.
+    expect(kept.length).toBeGreaterThanOrEqual(2);
+    expect(kept.length).toBeLessThanOrEqual(4);
+    const first = of(log.events, 'request')[0]!;
+    for (const k of kept) expect(k).toMatchObject({ requestId: first.id, usage });
+    // The body is the first request's own, so the refresh hits the prefix the next request reads.
+    expect(new Set(warmed).size).toBe(1);
+    expect(hash(JSON.parse(warmed[0]!))).toBe(first.bodyHash);
+    // Each refresh comes before the tool's result, and none after it.
+    expect(log.events.findLastIndex((e) => e.kind === 'keepalive')).toBeLessThan(log.events.findIndex((e) => e.kind === 'tool_result'));
+    expect(res.usage.cacheRead).toBeGreaterThanOrEqual(kept.length * 1_000_000);
+    expect(res.costUsd).toBeGreaterThan(0);
+    expectPaired(log.events);
+  });
+
+  test('a short tool, a provider without keepAlive, or keepAliveMs 0 sends nothing', async () => {
+    const short = setup([{ blocks: [toolUse('c1', 'read', { path: 'a.txt' })] }, { blocks: [text('ok')] }], { keepAliveMs: 60_000 });
+    let calls = 0;
+    short.provider.keepAlive = async () => (calls++, { ok: true, usage: { uncached: 0, cacheRead: 1, cacheWrite: 0, output: 0 } });
+    await runPrompt(short.opts, 'go');
+    const off = setup([{ blocks: [toolUse('c1', 'slow', {})] }, { blocks: [text('ok')] }], { keepAliveMs: 0, tools: [slow(200)] });
+    off.provider.keepAlive = short.provider.keepAlive;
+    await runPrompt(off.opts, 'go');
+    const none = setup([{ blocks: [toolUse('c1', 'slow', {})] }, { blocks: [text('ok')] }], { keepAliveMs: 50, tools: [slow(200)] });
+    await runPrompt(none.opts, 'go');
+    expect(calls).toBe(0);
+    for (const l of [short.log, off.log, none.log]) expect(of(l.events, 'keepalive')).toEqual([]);
+  });
+
+  test('a failed refresh is logged and the session goes on', async () => {
+    const { log, provider, opts } = setup([{ blocks: [toolUse('c1', 'slow', {})] }, { blocks: [text('ok')] }], { keepAliveMs: 100, tools: [slow(250)] });
+    provider.keepAlive = async () => ({ ok: false, error: { code: 'server', message: 'overloaded' } });
+    const res = await runPrompt(opts, 'go');
+    expect(res.subtype).toBe('success');
+    expect(of(log.events, 'keepalive')[0]).toMatchObject({ error: { code: 'server' } });
     expectPaired(log.events);
   });
 
