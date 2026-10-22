@@ -159,6 +159,9 @@ describe('the TUI (offline, faux)', () => {
     const remote = mkdtempSync(join(tmpdir(), 'cedia-tui-remote-'));
     Bun.spawnSync(['git', 'init', '-q', '--bare', '-b', 'main'], { cwd: remote });
     git('init', '-q', '-b', 'main');
+    // /commit runs plain git commit: the repository names who commits, as a runner with no global identity needs.
+    git('config', 'user.email', 't@t');
+    git('config', 'user.name', 't');
     writeFileSync(join(repo, 'base.txt'), 'base\n');
     git('add', '.');
     git('commit', '-qm', 'Start');
