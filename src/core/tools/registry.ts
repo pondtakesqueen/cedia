@@ -2,7 +2,15 @@ import type { JsonObject, ToolDef, ToolEffect, ToolOutput } from '../types.ts';
 
 // `wrap` puts a shell command inside the OS sandbox when one is on. `spill` writes a whole output too long for
 // the result to a file (redacted like a result) and returns its path, or undefined when it could not.
-export type ToolCtx = { cwd: string; signal: AbortSignal; wrap?: (command: string) => Promise<string>; spill?: (text: string) => string | undefined };
+export type ToolCtx = {
+  cwd: string;
+  signal: AbortSignal;
+  wrap?: (command: string) => Promise<string>;
+  spill?: (text: string) => string | undefined;
+  // For a call that runs beside others (`isolated`): the part of it that writes the working directory, run one at
+  // a time and between two snapshots, so the log names the files it changed.
+  write?: <T>(fn: () => Promise<T> | T) => Promise<T>;
+};
 
 export type ToolSpec = ToolDef & {
   effect: ToolEffect;
@@ -12,6 +20,10 @@ export type ToolSpec = ToolDef & {
   // credential stores.
   pathOf?(input: JsonObject): string | undefined;
   replay: 'safe' | 'unsafe';
+  // A writing call that does its work away from the working directory (a work sub-thread in its own worktree)
+  // and writes it only through `ctx.write`: it runs in parallel with the calls beside it, as reads do. The policy
+  // still judges it by its effect.
+  isolated?(input: JsonObject): boolean;
   // Puts an input a model sent in a known wrong shape into the schema's shape, naming each repair; undefined when
   // it needed none. The loop logs the repairs (input_repaired) and every later step sees the repaired input.
   repair?(input: JsonObject): { input: JsonObject; repairs: string[] } | undefined;
