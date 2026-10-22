@@ -6,7 +6,7 @@ import { resolveModel } from '../../core/providers/catalog.ts';
 import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
-import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
+import { projectKey, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
@@ -15,7 +15,7 @@ import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } 
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
-import { openSnapshots } from '../../core/safety/snapshot.ts';
+import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
 import type { ToolSpec } from '../../core/tools/registry.ts';
 import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
@@ -151,7 +151,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   }
   if (!sandbox.on && policy.mode === 'read-only' && !args.permission && !process.env.CEDIA_PERMISSION)
     process.stderr.write('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
-  const snapshots = openSnapshots(args.cwd, join(cediaHome(), 'snapshots', projectSlug(args.cwd)), [cediaHome(), ...sandbox.placeholders]);
+  const snapshots = workspaceSnapshots(args.cwd, cediaHome(), sandbox.placeholders);
   const fallback = loadFallback(model, args.fallback);
   let quotaWaitMs: number | undefined;
   try {

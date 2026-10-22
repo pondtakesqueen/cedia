@@ -219,9 +219,9 @@ cedia is not a git client; it covers what an agent session needs and leaves the 
 |---|---|---|
 | Deny list for force-push and `git reset --hard` on shared branches | 2 | Trust section |
 | Shadow-git snapshot around each writing call | 2 | `~/.cedia/snapshots/<project-slug>`, own index, user/system git config ignored; never touches the user's repo or index. A `snapshot{tree, callId, changed}` event names the files each call changed, bash included, which Claude Code's checkpoints do not; the ledger and receipt use it |
-| Branch and dirty count in the status line | 3 | |
-| `/diff`: working tree changes, and changes since the turn started | 3 | Like Codex and OpenCode `/diff` |
-| `/undo` and `/redo` of the last turn's files | 3 | From the shadow snapshot; says plainly it does not undo external side effects |
+| Branch and dirty count in the status line | 3 | `core/project/git.ts`, read-only and without git's index lock (`--no-optional-locks`) |
+| `/diff`: working tree changes, and changes since the turn started | 3 | Like Codex and OpenCode `/diff`. The turn's part comes from its first snapshot against the tree now (`cedia threads diff <id>`) |
+| `/undo` and `/redo` of the last turn's files | 3 | From the shadow snapshot; says plainly it does not undo external side effects. Only the files the turn changed move; one changed since the turn is left unless forced; the model is told which files moved at its next turn, through the thread's inbox (`core/project/undo.ts`, `cedia threads undo|redo <id>`) |
 | `/commit`: message from the `smol` role, user confirms | 4 | Stages only files the session changed unless told otherwise |
 | `/pr`: push the branch and open a PR through `gh` | 4 | Push needs approval; never to the default branch |
 | `/review`: review the diff or a PR with the `panel` role | 5 | Findings come with evidence |
