@@ -63,7 +63,10 @@ type EventBody =
   // A per-message effort change: from the latest user turn with new input on, the model works at this level
   // (core/loop/run.ts escalation). Wires without it (caps.midConversationEffort) never get one.
   | { kind: 'effort'; effort: Effort }
-  | { kind: 'turn_end'; reason: TurnEndReason; cause?: 'user' | 'parent' | 'hook' };
+  | { kind: 'turn_end'; reason: TurnEndReason; cause?: 'user' | 'parent' | 'hook' }
+  // The run's result (its receipt and evidence), written to the run's last writer session after its last turn_end,
+  // so a client that rebuilds a thread from the files can show it. It never reaches a model.
+  | { kind: 'result'; result: HeadlessResult };
 
 export type SessionEvent = { id: EventId; parentId: EventId | null; at: string } & EventBody;
 export type EventOf<K extends SessionEvent['kind']> = Extract<SessionEvent, { kind: K }>;

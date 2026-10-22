@@ -312,6 +312,25 @@ describe('cedia threads (offline, faux)', () => {
     expect(cedia(dir, [], ['-p', 'x', ...base, '--thread', 't-00000000']).err).toContain('no thread t-00000000 in this project');
   });
 
+  test('the run\'s result is logged after the writer\'s last turn_end, never streamed twice or shown to a model', () => {
+    const dir = tmp();
+    const first = JSON.parse(cedia(dir, [call('c1', 'echo good > f.txt'), call('c2', 'grep -q good f.txt'), reply('first done')], ['-p', 'make f.txt say good', ...base]).out);
+    const logged = () => sessionsOf(dir).find((l) => l.id === first.sessionId)!.events;
+    expect(logged().at(-1)).toMatchObject({ kind: 'result', result: first });
+    expect(lintSession(logged())).toEqual([]);
+    // Resumed in the same session: the result sits between two runs, and the model's requests do not change.
+    const again = cedia(dir, [call('c3', 'grep -q good f.txt'), reply('second done')], ['-p', 'check it again', ...base, '--thread', first.thread, '--output-format', 'stream-json']);
+    const lines = again.out.trim().split('\n').map((l) => JSON.parse(l));
+    expect(lines.filter((l) => l.type === 'event' && l.event.kind === 'result')).toEqual([]);
+    expect(lines.at(-1)).toMatchObject({ type: 'result', result: 'second done' });
+    const events = logged();
+    expect(events.filter((e) => e.kind === 'result').map((e) => (e as EventOf<'result'>).result.result)).toEqual(['first done', 'second done']);
+    expect(lintSession(events)).toEqual([]);
+    const requests = events.filter((e): e is EventOf<'request'> => e.kind === 'request');
+    expect(new Set(requests.map((r) => r.systemHash)).size).toBe(1);
+    expect(userText(events)).not.toContain('first done');
+  });
+
   test('threads talk: one messages another, the user sends one, and both arrive when it resumes', () => {
     const dir = tmp();
     const a = JSON.parse(cedia(dir, [reply('A done')], ['-p', 'build the API', ...base, '--check', 'true']).out);
