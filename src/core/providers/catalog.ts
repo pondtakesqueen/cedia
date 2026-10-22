@@ -115,11 +115,11 @@ export const CATALOG: ModelSpec[] = [
     dataPolicy: 'trains',
     caps: chatCaps,
   },
-  // The same model through OpenRouter, paid per token (prices read from its models API, 2026-10-22: $0.15/$0.6,
-  // cache read $0.003, twice that at DeepSeek's peak hours, as through DeepSeek itself). OpenRouter serves it from
-  // about 30 endpoints, DeepSeek's own among them; only those that keep no prompts are allowed (`zdr`,
-  // `data_collection: deny`), so it counts as zdr like the Go route. Endpoints differ in quantization and
-  // caching, so a run on it is not the same arm as a run through Go.
+  // The same model through OpenRouter, paid per token. OpenRouter serves it from about 30 endpoints with caches
+  // of their own, so a session left to its routing moved between them and read 24.5% from cache (hard-pool,
+  // 2026-10-22). It is pinned to Cloudflare's: on OpenRouter's list of zero-retention endpoints, not quantized
+  // to fp4, and 91.8% cache hits on the same task ($0.10/$0.60 per 1M, cache read $0.003, from the endpoint list).
+  // No fallback to another endpoint: one that is down fails the request, and the quota fallback takes over.
   {
     ref: 'openrouter/deepseek-v4.1-flash',
     id: 'deepseek/deepseek-v4.1-flash-1017',
@@ -127,9 +127,9 @@ export const CATALOG: ModelSpec[] = [
     url: OPENROUTER,
     auth: OPENROUTER_AUTH,
     maxOutput: 32_000,
-    price: deepseekFlashPrice,
+    price: p(0.1, 0.6, 0.003),
     dataPolicy: 'zdr',
-    body: { provider: { zdr: true, data_collection: 'deny' } },
+    body: { provider: { order: ['cloudflare'], allow_fallbacks: false, zdr: true, data_collection: 'deny' } },
     caps: chatCaps,
   },
 ];
