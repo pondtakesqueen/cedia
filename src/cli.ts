@@ -157,7 +157,6 @@ export async function main(argv: string[]): Promise<number> {
       ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),
     });
     if (result.subtype !== 'success' && format === 'text') console.error(`cedia: ${result.subtype}`);
-    if (result.goal && result.goal.verdict !== 'met' && format === 'text' && result.subtype === 'success') console.error(`cedia: goal ${result.goal.verdict.replace('_', ' ')}`);
     return result.subtype === 'success' && (!result.goal || result.goal.verdict === 'met') ? 0 : 1;
   } catch (e) {
     console.error(`cedia: ${(e as Error).message}`);

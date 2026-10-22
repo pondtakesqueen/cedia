@@ -172,6 +172,10 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? (JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) as FauxStep[]) : undefined;
   const handoffAt = loadHandoffAt(model, args.handoffAt);
   const goalJudge = args.goal ? (args.goalJudge ? resolveModel(args.goalJudge) : model) : undefined;
+  if (goalJudge && goalJudge !== model) {
+    const note = missingKeyNote(goalJudge);
+    if (note) process.stderr.write(note + '\n');
+  }
   const handoffVia = loadHandoff(args.handoff);
   const escalate = args.escalate === 'off' ? undefined : ((args.escalate ?? 'high') as Effort);
   // Every run belongs to a thread of the project, unless nothing is written to disk.
@@ -275,7 +279,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         preamble: reviewer ? reviewPreamble : opts.note ? `${basePreamble}\n\n${opts.note}` : basePreamble,
         cwd: args.cwd,
         // They may also run the declared checks, to see what fails instead of only reading.
-        permission: reviewer ? { ...policy, mode: 'read-only', allow: [...policy.allow, ...checks.map((c) => `bash(${c})`)] } : policy,
+        // The run's own allow rules are the writer's: one such as bash(git *) would let a reviewer write.
+        permission: reviewer ? { ...policy, mode: 'read-only', allow: checks.map((c) => `bash(${c})`) } : policy,
         privacy,
         checks: reviewer ? [] : checks,
         ...(softChecks && !reviewer ? { softChecks } : {}),
@@ -440,8 +445,11 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // A spent quota does not end the task: a new session on the fallback model picks it up (a session never
     // switches model, so its cache stays valid). Nor does a history the provider refuses: a new session on the
     // same model starts from the task and the working tree. Each happens at most once a run.
+    // It applies to every writer pass: the first, a review's fix and a goal's next round.
     let fellBack = false;
     let restarted = false;
+    const recover = async (r: HeadlessResult): Promise<HeadlessResult> => {
+    let result = r;
     while (result.subtype === 'error_during_execution') {
       const from = writer;
       const changed = result.evidence?.changed ?? [];
@@ -462,6 +470,9 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         result = await write(from.model, log, task, { continues: { sessionId: from.log.id, changed }, note: rejectedNote(from.model, from.log.id) });
       } else break;
     }
+    return result;
+    };
+    result = await recover(result);
     // Review: after the writer's claim passed the done gate, a second model reads the change. Changes it asks
     // for go back to the writer's own session once.
     let review: ReviewOutcome | undefined;
@@ -470,7 +481,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       const { verdict, findings } = r.ok ? parseVerdict(r.text) : { verdict: 'unclear' as const, findings: '' };
       review = { ...r.step, verdict, fixed: false };
       if (verdict === 'changes') {
-        result = await write(writer.model, writer.log, fixPrompt(r.step.model, findings));
+        result = await recover(await write(writer.model, writer.log, fixPrompt(r.step.model, findings)));
         review.fixed = true;
       } else if (verdict === 'unclear') process.stderr.write(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
     }
@@ -481,20 +492,22 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       const rounds: GoalRound[] = [];
       while (result.subtype === 'success' && !ac.signal.aborted) {
         const log = openLog();
-        const r = await run(goalJudge, log, goalPrompt(args.goal, args.prompt, result.result, result.evidence, changesPatch()), { role: 'goal' });
+        if (store && threadId) store.append(threadId, { kind: 'session', sessionId: log.id, model: goalJudge.ref, role: 'goal', why: 'start', ...(log.path ? { path: log.path } : {}) });
+        // The receipt of the whole run so far: a later round's own pass changed only part of it.
+        const r = await run(goalJudge, log, goalPrompt(args.goal, args.prompt, result.result, combine(parts, result, children).evidence, changesPatch()), { role: 'goal' });
         const judged = r.subtype === 'success' ? parseGoal(r.result) : undefined;
         rounds.push({ verdict: judged?.verdict ?? 'not_met', reason: judged?.reason ?? `the judge's session ended with ${r.subtype}`, judge: goalJudge.ref, sessionId: log.id, costUsd: r.costUsd });
         // A judge that could not finish says nothing about the work, so the writer is not sent back on it.
         if (!judged || judged.verdict !== 'not_met' || rounds.length > MAX_GOAL_ROUNDS) break;
         process.stderr.write(`cedia goal: not met yet (round ${rounds.length}); the writer goes on with what the judge found missing\n`);
-        result = await write(writer.model, writer.log, goalContinuePrompt(args.goal, goalJudge.ref, judged.reason));
+        result = await recover(await write(writer.model, writer.log, goalContinuePrompt(args.goal, goalJudge.ref, judged.reason)));
       }
       const last = rounds.at(-1);
       goal = { condition: args.goal, verdict: last?.verdict ?? 'not_met', rounds };
     }
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
     result = { ...combine(parts, result, children), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(goal ? { goal } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
-    if (store && threadId) store.append(threadId, { kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
+    if (store && threadId) store.append(threadId, { kind: 'state', state: goal && goal.verdict !== 'met' && result.subtype === 'success' ? 'failed' : stateOf(result), result: result.result.slice(0, MAX_RESULT) });
     // The receipt goes in the writer's log too, so a thread rebuilt from the files shows it. Quiet: a stream-json
     // client gets it as the result line below.
     writer.log.append({ kind: 'result', result }, { quiet: true });
