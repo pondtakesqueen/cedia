@@ -42,6 +42,8 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --thread <id>            go on with a thread of this project instead of opening a new one
       --handoff-at <n|off>     hand off to a new session of the thread once the context reaches n tokens
                                (default: settings, then half the window, at most 150k)
+      --handoff <note|compact> how a session hands off: the model writes a note, or the provider summarizes the
+                               older turns and the newest are kept (Claude API models only; default: settings, note)
       --check <command>        declared check for the done gate, e.g. 'bun test'; repeatable
       --sandbox <s>            auto | on | off: OS sandbox for bash (default: $CEDIA_SANDBOX, settings, auto)
       --allow-domain <host>    let sandboxed commands reach this host; repeatable
@@ -94,6 +96,7 @@ export async function main(argv: string[]): Promise<number> {
       spawn: { type: 'string' },
       swarm: { type: 'string' },
       'handoff-at': { type: 'string' },
+      handoff: { type: 'string' },
       review: { type: 'string' },
       plan: { type: 'string' },
       check: { type: 'string', multiple: true },
@@ -145,6 +148,7 @@ export async function main(argv: string[]): Promise<number> {
       ...(values.spawn ? { spawn: values.spawn } : {}),
       ...(values.swarm ? { swarm: values.swarm } : {}),
       ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
+      ...(values.handoff ? { handoff: values.handoff } : {}),
       ...(values.review ? { review: values.review } : {}),
       ...(values.plan ? { plan: values.plan } : {}),
       ...(values.check ? { checks: values.check } : {}),

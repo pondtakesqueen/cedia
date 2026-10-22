@@ -72,6 +72,27 @@ describe('cedia usage', () => {
     expect([r.maxEffort, r.unpriced]).toEqual([3, 1]);
   });
 
+  test('a session from a summary bills its compaction once and its copied turns not again', () => {
+    const m = 'anthropic/claude-haiku-5-5';
+    let n = 0;
+    const e = (body: Record<string, unknown>): SessionEvent => ({ id: `e${n}`, at: at(n++), ...body }) as unknown as SessionEvent;
+    const req = () => e({ kind: 'request', model: m, toolsHash: 't', systemHash: 's', bodyHash: `b${n}`, headers: {} });
+    const reply = (text: string) => e({ kind: 'assistant', wire: 'anthropic', model: m, blocks: [{ type: 'text', text }], stop: 'end_turn', usage: usage(0, 1000) });
+    const block = { type: 'compaction', text: 'S'.repeat(40), opaque: 'O'.repeat(60) };
+    const first = [e({ kind: 'session', cwd: '/x', role: 'code', model: m, system: '', tools: [] }), e({ kind: 'user', text: 'task' }), req(), reply('a'), req(), reply('b')];
+    first.push(e({ kind: 'compaction', requestId: first[2]!.id, stop: 'compaction', usage: usage(0, 1000, 100), block }));
+    const one = usageReport([{ id: 'a', events: first }]);
+    const second = [e({ kind: 'session', cwd: '/x', role: 'code', model: m, system: '', tools: [] }), e({ kind: 'summary', session: 'a', block, kept: 2 }), req(), reply('b'), e({ kind: 'user', text: 'more' }), req(), reply('c')];
+    const both = usageReport([{ id: 'a', events: first }, { id: 'b', events: second }]);
+    // The copied request and reply were the first session's: one more request and one more reply's cost.
+    expect(both.requests).toBe(one.requests + 1);
+    expect(both.compactUsd).toBeGreaterThan(0);
+    const perReply = (one.costUsd - one.compactUsd) / 2;
+    expect(both.costUsd).toBeCloseTo(one.costUsd + perReply, 10);
+    expect(both.sources.find((s) => s.source === 'summary')?.chars).toBe(100);
+    expect(formatUsage(both)).toContain('summarizing for handoffs');
+  });
+
   test('reads log files from the command line', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cedia-usage-'));
     const file = join(dir, 's1.jsonl');

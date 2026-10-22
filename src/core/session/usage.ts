@@ -11,6 +11,8 @@ export type UsageReport = {
   costUsd: number;
   // Of that, what keeping a waiting session's cache warm cost (keepalive requests).
   keepaliveUsd: number;
+  // And what summarizing sessions for the next one cost (server compaction).
+  compactUsd: number;
   tokens: { input: number; cacheRead: number; output: number };
   // Characters sent, counting each time a request sent them again, by what they were: the system prompt and tool
   // definitions, user text, cedia's reminders, the model's own text, thinking and calls, and each tool's results.
@@ -47,6 +49,7 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
   let requests = 0;
   let cost = 0;
   let keepaliveUsd = 0;
+  let compactUsd = 0;
   let overPriceLine = 0;
   let maxEffort = 0;
   let handoffs = 0;
@@ -66,8 +69,17 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
     let turnThinking = 0;
     // The level requests run at: the request's own, until an escalation changes it for the rest of the session.
     let effort: string | undefined;
+    // A session that goes on from a summary (core/project/compact.ts) starts with copies of the turns it kept: sent
+    // again as context, but billed in the session they came from.
+    let copied = 0;
     for (const e of s.events) {
+      const copy = copied > 0;
+      if (copy) copied--;
       switch (e.kind) {
+        case 'summary':
+          hold('summary', e.block.text.length + e.block.opaque.length);
+          copied = e.kept;
+          break;
         case 'session':
           model = modelOf(e.model);
           hold('system prompt and tools', e.system.length + JSON.stringify(e.tools).length);
@@ -85,6 +97,7 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
           effort = e.effort;
           break;
         case 'request':
+          if (copy) break;
           sessionRequests++;
           for (const [k, v] of held) sent.set(k, (sent.get(k) ?? 0) + v);
           if (turnThinking) sent.set('thinking', (sent.get('thinking') ?? 0) + turnThinking);
@@ -93,27 +106,39 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
           break;
         case 'assistant': {
           const m = modelOf(e.model);
-          tokens.input += inputOf(e.usage);
-          tokens.cacheRead += e.usage.cacheRead;
-          tokens.output += e.usage.output;
-          // Priced at the time it ran: off-peak prices depend on it.
-          if (m) cost += costUsd(m, e.usage, new Date(e.at));
-          else unpriced++;
-          if (m?.price.above && inputOf(e.usage) > m.price.above.tokens) overPriceLine++;
+          if (!copy) {
+            tokens.input += inputOf(e.usage);
+            tokens.cacheRead += e.usage.cacheRead;
+            tokens.output += e.usage.output;
+            // Priced at the time it ran: off-peak prices depend on it.
+            if (m) cost += costUsd(m, e.usage, new Date(e.at));
+            else unpriced++;
+            if (m?.price.above && inputOf(e.usage) > m.price.above.tokens) overPriceLine++;
+          }
           for (const b of e.blocks) {
             if (b.type === 'text') hold('assistant text', b.text.length);
             else if (b.type === 'thinking') {
               const chars = b.text.length + (b.opaque?.length ?? 0);
               if (m?.caps.replayReasoning === 'same-turn') turnThinking += chars;
               else if (m?.caps.replayReasoning !== 'forbidden') hold('thinking', chars);
-            }
-            else {
+            } else if (b.type === 'tool_use') {
               toolOf.set(b.callId ?? b.id, b.name);
               hold('tool calls', b.name.length + JSON.stringify(b.input).length);
             }
           }
           break;
         }
+        // A summary written for the next session (core/project/compact.ts): billed here, sent back only there.
+        case 'compaction':
+          tokens.input += inputOf(e.usage);
+          tokens.cacheRead += e.usage.cacheRead;
+          tokens.output += e.usage.output;
+          if (model) {
+            const usd = costUsd(model, e.usage, new Date(e.at));
+            cost += usd;
+            compactUsd += usd;
+          }
+          break;
         case 'keepalive':
           if (e.usage && model) {
             const usd = costUsd(model, e.usage, new Date(e.at));
@@ -152,6 +177,7 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
     requests,
     costUsd: cost,
     keepaliveUsd,
+    compactUsd,
     tokens,
     sources: [...sent].map(([source, chars]) => ({ source, chars, share: total ? chars / total : 0 })).sort((a, b) => b.chars - a.chars),
     largest: largest.sort((a, b) => b.chars * b.resent - a.chars * a.resent).slice(0, top),
@@ -166,9 +192,14 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
 const k = (n: number) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : String(n));
 const pct = (x: number) => `${(x * 100).toFixed(0)}%`;
 
+const extra = (r: UsageReport) => {
+  const parts = [r.keepaliveUsd && `$${r.keepaliveUsd.toFixed(4)} keeping caches warm`, r.compactUsd && `$${r.compactUsd.toFixed(4)} summarizing for handoffs`].filter(Boolean);
+  return parts.length ? ` (of it ${parts.join(', ')})` : '';
+};
+
 export function formatUsage(r: UsageReport): string {
   const lines = [
-    `${r.sessions} session${r.sessions === 1 ? '' : 's'}, ${r.requests} requests, $${r.costUsd.toFixed(4)}${r.keepaliveUsd ? ` ($${r.keepaliveUsd.toFixed(4)} of it keeping caches warm)` : ''}`,
+    `${r.sessions} session${r.sessions === 1 ? '' : 's'}, ${r.requests} requests, $${r.costUsd.toFixed(4)}${extra(r)}`,
     `tokens: ${k(r.tokens.input)} input (${pct(r.tokens.input ? r.tokens.cacheRead / r.tokens.input : 0)} from cache), ${k(r.tokens.output)} output`,
     'input by source (characters, each time a request sent them):',
     ...r.sources.map((s) => `  ${s.source.padEnd(24)} ${pct(s.share).padStart(4)}  ${k(s.chars)}`),
@@ -189,8 +220,8 @@ export function formatUsage(r: UsageReport): string {
 }
 
 // Only the events a report reads (an effort change included); the rest is dropped once read.
-export const isUsageEvent = (e: SessionEvent): e is EventOf<'session' | 'user' | 'reminder' | 'effort' | 'request' | 'assistant' | 'keepalive' | 'tool_intent' | 'tool_result' | 'turn_end'> =>
-  ['session', 'user', 'reminder', 'effort', 'request', 'assistant', 'keepalive', 'tool_intent', 'tool_result', 'turn_end'].includes(e.kind);
+export const isUsageEvent = (e: SessionEvent): e is EventOf<'session' | 'summary' | 'user' | 'reminder' | 'effort' | 'request' | 'assistant' | 'compaction' | 'keepalive' | 'tool_intent' | 'tool_result' | 'turn_end'> =>
+  ['session', 'summary', 'user', 'reminder', 'effort', 'request', 'assistant', 'compaction', 'keepalive', 'tool_intent', 'tool_result', 'turn_end'].includes(e.kind);
 
 // Reads a log as far as its lines parse: a session still being written, or one a crash cut mid-line, still counts.
 export function readEventsLenient(text: string): SessionEvent[] {

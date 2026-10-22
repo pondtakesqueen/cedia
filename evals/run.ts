@@ -274,7 +274,10 @@ export async function runTask(task: Task, harness: string, model: string | null,
     let verifyOutput: string | undefined;
     if (task.verify) {
       const argv = splitCommand(task.verify);
-      const verify = spawnSync(argv[0]!, argv.slice(1), { cwd, encoding: "utf8", timeout: 120_000, stdio: ["ignore", "pipe", "pipe"] });
+      // Without the runner's own CEDIA_EVAL_* settings: a real-repository task's tests run that commit's eval runner,
+      // which would pass it flags (--cedia-arg) its older cedia does not know.
+      const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("CEDIA_EVAL_")));
+      const verify = spawnSync(argv[0]!, argv.slice(1), { cwd, env, encoding: "utf8", timeout: 120_000, stdio: ["ignore", "pipe", "pipe"] });
       verifyExitCode = verify.status ?? 1;
       verifyOutput = ((verify.stdout ?? "") + (verify.stderr ?? "")).slice(-500);
       passed = verifyExitCode === (task.expectedExitCode ?? 0);
