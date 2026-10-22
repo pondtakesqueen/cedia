@@ -89,8 +89,10 @@ export const CATALOG: ModelSpec[] = [
   // Fast mode (research preview, Claude API only): up to 2.5x output tokens per second at 2x the price.
   claude('claude-opus-5-5', p(8, 40, 0.4, 10), { ref: 'anthropic/claude-opus-5-5-fast', speed: 'fast', headers: { 'anthropic-beta': 'fast-mode-2026-02-01' } }),
   claude('claude-sonnet-5-5', p(2, 10, 0.2, 2.5), { defaultEffort: 'high' }),
-  claude('claude-haiku-5-5', haikuPrice),
-  go('claude-haiku-5-5', 'anthropic-messages', haikuPrice, { maxOutput: 128_000, dataPolicy: 'retained', defaultEffort: 'medium' }),
+  // Haiku starts at low and escalates to high when the done gate refuses a claim: on the gate suite that kept
+  // 48/48 and cost 21% less for the typical task than medium (2026-10-22, evals/gate/README.md).
+  claude('claude-haiku-5-5', haikuPrice, { defaultEffort: 'low' }),
+  go('claude-haiku-5-5', 'anthropic-messages', haikuPrice, { maxOutput: 128_000, dataPolicy: 'retained', defaultEffort: 'low' }),
   go('deepseek-v4.1-flash', 'chat-completions', deepseekFlashPrice),
   go('deepseek-v4-pro', 'chat-completions', { ...p(1.32, 3.96, 0.044), offPeak: { ...p(0.66, 1.98, 0.022), isOffPeak: deepseekOffPeak } }),
   go('beam-free', 'chat-completions', p(0, 0, 0), { dataPolicy: 'retained' }),

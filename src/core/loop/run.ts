@@ -227,7 +227,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const escalateTo = opts.softChecks ? undefined : escalationTarget(model, opts.effort ?? model.defaultEffort, opts.escalate);
   // Escalation: logged right after the gate's reminder, the user turn that carries it, so the change applies from
   // that turn on (core/providers/anthropic.ts). Not on a failed check: a turn of tool results alone is not new
-  // input, and the note that would carry it made Haiku at low effort give up sooner (PR notes).
+  // input, and the note that would carry it made Haiku at low effort give up sooner (SPEC.md, effort escalation).
   const escalate = () => {
     if (escalateTo && !log.events.some((e) => e.kind === 'effort')) log.append({ kind: 'effort', effort: escalateTo });
   };
