@@ -1,4 +1,4 @@
-{"at":"2026-10-22T05:31:10.678Z","kind":"open","title":"Write good to f.txt, then run grep -q good f.txt.","task":"Write good to f.txt, then run grep -q good f.txt.","parent":"t-00000001"}
-{"at":"2026-10-22T05:31:10.680Z","kind":"session","sessionId":"aec0f71b-ddeb-4c81-82e9-0f95f658ff6c","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/aec0f71b-ddeb-4c81-82e9-0f95f658ff6c.jsonl"}
-{"at":"2026-10-22T05:31:10.715Z","kind":"state","state":"done","result":"Wrote good to f.txt; grep -q good f.txt passes."}
-{"at":"2026-10-22T05:31:10.715Z","kind":"archived","archived":true}
+{"at":"2026-10-22T07:11:44.768Z","kind":"open","title":"Write good to f.txt, then run grep -q good f.txt.","task":"Write good to f.txt, then run grep -q good f.txt.","parent":"t-00000001"}
+{"at":"2026-10-22T07:11:44.770Z","kind":"session","sessionId":"7c0acf97-5677-4c3b-ad1b-b11cfb760df8","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/7c0acf97-5677-4c3b-ad1b-b11cfb760df8.jsonl"}
+{"at":"2026-10-22T07:11:44.805Z","kind":"state","state":"done","result":"Wrote good to f.txt; grep -q good f.txt passes."}
+{"at":"2026-10-22T07:11:44.805Z","kind":"archived","archived":true}

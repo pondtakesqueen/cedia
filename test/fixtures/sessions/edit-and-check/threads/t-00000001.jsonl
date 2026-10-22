@@ -1,3 +1,4 @@
-{"at":"2026-10-22T05:31:10.309Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
-{"at":"2026-10-22T05:31:10.320Z","kind":"session","sessionId":"dd009b83-9013-4e80-a98e-7c43125e615b","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/dd009b83-9013-4e80-a98e-7c43125e615b.jsonl"}
-{"at":"2026-10-22T05:31:10.380Z","kind":"state","state":"done","result":"f.txt now says good, and grep -q good f.txt passes."}
+{"at":"2026-10-22T07:11:44.399Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
+{"at":"2026-10-22T07:11:44.408Z","kind":"session","sessionId":"162e3648-9b17-41a4-966e-3917082d6870","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/162e3648-9b17-41a4-966e-3917082d6870.jsonl"}
+{"at":"2026-10-22T07:11:44.471Z","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["162e3648-9b17-41a4-966e-3917082d6870"]}
+{"at":"2026-10-22T07:11:44.471Z","kind":"state","state":"done","result":"f.txt now says good, and grep -q good f.txt passes."}
