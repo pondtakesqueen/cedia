@@ -6,7 +6,7 @@
 
 - `run-text` prints the final text on stdout and a receipt on stderr.
 - `run-json` prints one JSON result that includes `evidence.changed` and `thread`.
-- `run-check` fails the run when the model claims success without running the declared check after the write.
+- `run-check` exits 1 with `cedia: error_unverified_claim` when the model claims success a second time and still has not run the declared check. The first claim adds a reminder and the run continues.
 
 ## How to get to it (user POV)
 
@@ -90,6 +90,28 @@ rm -f "$CEDIA_VERIFY_WORK/note.txt"
 
   Exit code `0`. Stdout is one JSON object whose `subtype` is `success`, whose `evidence.changed` contains `note.txt`, and whose `evidence.unverified` is empty. Stderr is empty. `note.txt` is `verify-ok` again.
 
+- **Check refusal.** Point `CEDIA_FAUX_SCRIPT` at a write followed by two success claims. Leave the declared check out of the script.
+
+```
+cat > "$CEDIA_VERIFY_ROOT/script-gate.json" << 'EOF'
+[
+  {"blocks":[{"type":"tool_use","id":"c1","name":"bash","input":{"command":"printf 'verify-ok\\n' > gate.txt"}}]},
+  {"blocks":[{"type":"text","text":"Wrote gate.txt."}]},
+  {"blocks":[{"type":"text","text":"Wrote gate.txt."}]}
+]
+EOF
+export CEDIA_FAUX_SCRIPT="$CEDIA_VERIFY_ROOT/script-gate.json"
+.cursor/skills/verify-cedia/scripts/control-cedia run --name gate-fail -- -m faux -p "write gate.txt" --permission workspace --sandbox off --check "grep -q verify-ok gate.txt"
+```
+
+  Exit code `1`. Stderr contains `cedia: error_unverified_claim`.
+
+```
+.cursor/skills/verify-cedia/scripts/control-cedia capture --name gate-file -- cat gate.txt
+```
+
+  Exit code `0`. Stdout is `verify-ok` plus a newline.
+
 ## Gotchas
 
 - Default `cedia -p` with no `--permission` and no working sandbox prints `cedia: sandbox unavailable (bubblewrap (bwrap) not installed; socat not installed); bash runs unsandboxed. Use --sandbox on to require it.` and `cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.` The process can still exit 0 and print `Wrote note.txt.` when the bash call was denied. The file is absent. Observed 2026-10-21 with `-m faux` and no permission flag.
@@ -98,3 +120,4 @@ rm -f "$CEDIA_VERIFY_WORK/note.txt"
 - `costUsd` on a faux JSON result is a price-table number. The trace above had no network syscalls.
 - Live aliases, `--plan`, `--review`, and quota fallback are unverified. No provider key was set during the seeding run.
 - `cedia threads show` is a separate `control-cedia run`. It does not take `-p`.
+- A faux script that ends on the first success claim has no reply left for the reminder. The process exits 1 with `cedia: error_during_execution`, and stderr contains `faux script exhausted`. Give the script a second text claim to reach `error_unverified_claim`.
