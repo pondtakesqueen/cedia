@@ -56,12 +56,27 @@ describe('cedia usage', () => {
     const think = (text: string) => e({ kind: 'assistant', wire: 'openai-chat', model: m, blocks: [{ type: 'thinking', text }, { type: 'text', text: '' }], stop: 'end_turn', usage: usage(0, 10) });
     const r = usageReport([{ id: 's', events: [e({ kind: 'session', cwd: '/x', role: 'code', model: m, system: '', tools: [] }), req(), think('T'.repeat(100)), req(), e({ kind: 'user', text: 'next' }), req()] }]);
     expect(r.sources.find((s) => s.source === 'thinking')?.chars).toBe(100);
+    // A reminder sent as user text ends the turn on the wire too; one sent as system does not.
+    const head = () => [e({ kind: 'session', cwd: '/x', role: 'code', model: m, system: '', tools: [] }), req(), think('T'.repeat(100))];
+    const asUser = usageReport([{ id: 's', events: [...head(), e({ kind: 'reminder', as: 'user', text: 'r' }), req()] }]);
+    const asSystem = usageReport([{ id: 's', events: [...head(), e({ kind: 'reminder', as: 'system', text: 'r' }), req()] }]);
+    expect([asUser, asSystem].map((x) => x.sources.find((s) => s.source === 'thinking')?.chars)).toEqual([undefined, 100]);
+  });
+
+  test('an escalation to max counts the requests after it; an unknown model is named, not priced', () => {
+    let n = 0;
+    const e = (body: Record<string, unknown>): SessionEvent => ({ id: `e${n}`, at: at(n++), ...body }) as unknown as SessionEvent;
+    const req = (model = 'anthropic/claude-haiku-5-5') => e({ kind: 'request', model, effort: 'low', toolsHash: 't', systemHash: 's', bodyHash: `b${n}`, headers: {} });
+    const reply = (model = 'anthropic/claude-haiku-5-5') => e({ kind: 'assistant', wire: 'anthropic', model, blocks: [{ type: 'text', text: 'x' }], stop: 'end_turn', usage: usage(0, 10) });
+    const r = usageReport([{ id: 's', events: [e({ kind: 'session', cwd: '/x', role: 'code', model: 'anthropic/claude-haiku-5-5', system: '', tools: [] }), req(), reply(), e({ kind: 'effort', effort: 'max' }), req(), reply(), req(), reply(), req('someone/else'), reply('someone/else')] }]);
+    expect([r.maxEffort, r.unpriced]).toEqual([3, 1]);
   });
 
   test('reads log files from the command line', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cedia-usage-'));
     const file = join(dir, 's1.jsonl');
-    writeFileSync(file, events().map((e) => JSON.stringify(e)).join('\n') + '\n');
+    // The last line was cut mid-write: the report reads the rest.
+    writeFileSync(file, events().map((e) => JSON.stringify(e)).join('\n') + '\n{"id":"cut","kind":"assi');
     const p = Bun.spawnSync([BIN, 'usage', file, '--json']);
     expect(p.exitCode).toBe(0);
     expect(JSON.parse(p.stdout.toString())).toMatchObject({ sessions: 1, requests: 3, handoffs: 1 });

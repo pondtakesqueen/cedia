@@ -23,6 +23,8 @@ export type UsageReport = {
   maxEffort: number;
   // Sessions that ended by handing off to a new one.
   handoffs: number;
+  // Replies from a model cedia's catalog does not know: no price, so not in costUsd.
+  unpriced: number;
 };
 
 export type SessionInput = { id: string; events: SessionEvent[] };
@@ -48,6 +50,7 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
   let overPriceLine = 0;
   let maxEffort = 0;
   let handoffs = 0;
+  let unpriced = 0;
 
   for (const s of sessions) {
     // What the session's context holds so far, by source, and the tool results in it with the request count
@@ -61,6 +64,8 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
     // Thinking goes back on every request ('required'), only until the next user text ('same-turn', DeepSeek's
     // tool loops), or never.
     let turnThinking = 0;
+    // The level requests run at: the request's own, until an escalation changes it for the rest of the session.
+    let effort: string | undefined;
     for (const e of s.events) {
       switch (e.kind) {
         case 'session':
@@ -73,20 +78,27 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
           break;
         case 'reminder':
           hold('reminders', e.text.length);
+          // On the wire a reminder sent as user text starts a new turn too, so same-turn thinking stops there.
+          if (e.as === 'user') turnThinking = 0;
+          break;
+        case 'effort':
+          effort = e.effort;
           break;
         case 'request':
           sessionRequests++;
           for (const [k, v] of held) sent.set(k, (sent.get(k) ?? 0) + v);
           if (turnThinking) sent.set('thinking', (sent.get('thinking') ?? 0) + turnThinking);
-          if (e.effort === 'max') maxEffort++;
+          if ((effort ?? e.effort) === 'max') maxEffort++;
           model = modelOf(e.model) ?? model;
           break;
         case 'assistant': {
-          const m = modelOf(e.model) ?? model;
+          const m = modelOf(e.model);
           tokens.input += inputOf(e.usage);
           tokens.cacheRead += e.usage.cacheRead;
           tokens.output += e.usage.output;
-          if (m) cost += costUsd(m, e.usage);
+          // Priced at the time it ran: off-peak prices depend on it.
+          if (m) cost += costUsd(m, e.usage, new Date(e.at));
+          else unpriced++;
           if (m?.price.above && inputOf(e.usage) > m.price.above.tokens) overPriceLine++;
           for (const b of e.blocks) {
             if (b.type === 'text') hold('assistant text', b.text.length);
@@ -104,7 +116,7 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
         }
         case 'keepalive':
           if (e.usage && model) {
-            const usd = costUsd(model, e.usage);
+            const usd = costUsd(model, e.usage, new Date(e.at));
             cost += usd;
             keepaliveUsd += usd;
           }
@@ -147,6 +159,7 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
     overPriceLine,
     maxEffort,
     handoffs,
+    unpriced,
   };
 }
 
@@ -169,11 +182,26 @@ export function formatUsage(r: UsageReport): string {
     r.overPriceLine && `${r.overPriceLine} request${r.overPriceLine === 1 ? '' : 's'} past the model's long-context price line`,
     r.maxEffort && `${r.maxEffort} request${r.maxEffort === 1 ? '' : 's'} at effort max`,
     r.handoffs && `${r.handoffs} handoff${r.handoffs === 1 ? '' : 's'}`,
+    r.unpriced && `${r.unpriced} repl${r.unpriced === 1 ? 'y' : 'ies'} from a model with no known price, left out of the cost`,
   ].filter(Boolean);
   if (warn.length) lines.push(`also: ${warn.join('; ')}`);
   return lines.join('\n');
 }
 
-// Only the events a report reads; the rest of the log stays on disk.
-export const isUsageEvent = (e: SessionEvent): e is EventOf<'session' | 'user' | 'reminder' | 'request' | 'assistant' | 'keepalive' | 'tool_intent' | 'tool_result' | 'turn_end'> =>
-  ['session', 'user', 'reminder', 'request', 'assistant', 'keepalive', 'tool_intent', 'tool_result', 'turn_end'].includes(e.kind);
+// Only the events a report reads (an effort change included); the rest is dropped once read.
+export const isUsageEvent = (e: SessionEvent): e is EventOf<'session' | 'user' | 'reminder' | 'effort' | 'request' | 'assistant' | 'keepalive' | 'tool_intent' | 'tool_result' | 'turn_end'> =>
+  ['session', 'user', 'reminder', 'effort', 'request', 'assistant', 'keepalive', 'tool_intent', 'tool_result', 'turn_end'].includes(e.kind);
+
+// Reads a log as far as its lines parse: a session still being written, or one a crash cut mid-line, still counts.
+export function readEventsLenient(text: string): SessionEvent[] {
+  const events: SessionEvent[] = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      events.push(JSON.parse(line) as SessionEvent);
+    } catch {
+      // a cut line
+    }
+  }
+  return events;
+}

@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
@@ -8,7 +8,7 @@ import { cediaHome } from './core/config.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
-import { formatUsage, isUsageEvent, usageReport, type SessionInput } from './core/session/usage.ts';
+import { formatUsage, isUsageEvent, readEventsLenient, usageReport, type SessionInput } from './core/session/usage.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
 import { versionInfo } from './protocol/version.ts';
 
@@ -184,17 +184,17 @@ function usage(argv: string[]): number {
   try {
     if (!files.length && values.thread) {
       const store = new ThreadStore(threadsDir(cediaHome(), projectKey(cwd)));
-      const ids = [values.thread, ...store.list().filter((t) => t.parent === values.thread).map((t) => t.id)];
+      // The thread and every sub-thread under it, however deep.
+      const all = store.list();
+      const ids = [values.thread];
+      for (let i = 0; i < ids.length; i++) ids.push(...all.filter((t) => t.parent === ids[i]).map((t) => t.id));
       files = ids.flatMap((id) => store.read(id).sessions.map((s) => s.path ?? sessionPath(cwd, s.sessionId, cediaHome())));
     } else if (!files.length) {
       const dir = join(cediaHome(), 'sessions', projectKey(cwd));
       const all = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => join(dir, f)) : [];
       files = all.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs).slice(0, Number(values.last ?? 20));
     }
-    const sessions: SessionInput[] = files.filter(existsSync).map((f) => {
-      const log = SessionLog.load(f);
-      return { id: log.id, events: log.events.filter(isUsageEvent) };
-    });
+    const sessions: SessionInput[] = files.filter(existsSync).map((f) => ({ id: basename(f).replace(/\.jsonl$/, ''), events: readEventsLenient(readFileSync(f, 'utf8')).filter(isUsageEvent) }));
     if (!sessions.length) {
       console.error('cedia: no session logs to read');
       return 1;
