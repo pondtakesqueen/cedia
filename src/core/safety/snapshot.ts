@@ -1,13 +1,23 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { projectSlug as slugOf } from '../session/log.ts';
 
 // Shadow git: a separate git dir and index that record the working tree as trees, so cedia can name
 // every file a call changed (bash included) and later undo a turn. It never touches the user's repo:
 // GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE all point at cedia's copy, and user/system config is ignored.
-export type Snapshots = { take(): string | undefined; diff(from: string, to: string): string[]; patch(from: string, to: string): string; restore(tree: string): void };
+export type Snapshots = {
+  take(): string | undefined;
+  diff(from: string, to: string): string[];
+  patch(from: string, to: string, opts?: { context?: number }): string;
+  restore(tree: string): void;
+  restoreFiles(tree: string, files: string[]): void;
+};
 
 const SLOW_MS = 10_000;
+
+// A working directory's snapshots: `<home>/snapshots/<project-slug>`, never recording cedia's home itself.
+export const workspaceSnapshots = (cwd: string, home: string, exclude: string[] = []) => openSnapshots(cwd, join(home, 'snapshots', slugOf(cwd)), [home, ...exclude]);
 
 // `exclude` lists paths never to record, such as cedia's own home when it sits inside the working directory.
 export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = []): Snapshots | undefined {
@@ -23,11 +33,18 @@ export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_TERMINAL_PROMPT: '0',
   };
-  const git = (args: string[]) => {
-    const p = Bun.spawnSync(['git', '-c', 'core.autocrlf=false', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0', ...args], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
-    if (p.exitCode !== 0) throw new Error(`git ${args[0]}: ${p.stderr.toString().trim()}`);
-    return p.stdout.toString();
+  const gitRaw = (args: string[]) => {
+    // Another cedia process (a /diff beside a run) may hold the shadow index for a moment: wait for it rather
+    // than lose a snapshot.
+    for (let tries = 0; ; tries++) {
+      const p = Bun.spawnSync(['git', '-c', 'core.autocrlf=false', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0', ...args], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
+      if (p.exitCode === 0) return p.stdout;
+      const err = p.stderr.toString().trim();
+      if (!err.includes('.lock') || tries >= 40) throw new Error(`git ${args[0]}: ${err}`);
+      Bun.sleepSync(50);
+    }
   };
+  const git = (args: string[]) => gitRaw(args).toString();
   try {
     if (!existsSync(join(gitDir, 'HEAD'))) {
       mkdirSync(gitDir, { recursive: true });
@@ -57,10 +74,10 @@ export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [
       if (from === to) return [];
       return git(['diff-tree', '-r', '--name-only', '--no-renames', '-z', from, to]).split('\0').filter(Boolean);
     },
-    // Unified diff with no context lines, for the slop guard.
-    patch(from, to) {
+    // Unified diff, with no context lines unless asked (the slop guard reads it bare).
+    patch(from, to, opts = {}) {
       if (from === to) return '';
-      return git(['diff-tree', '-r', '-p', '-U0', '--no-color', '--no-renames', '--no-ext-diff', from, to]);
+      return git(['diff-tree', '-r', '-p', `-U${opts.context ?? 0}`, '--no-color', '--no-renames', '--no-ext-diff', from, to]);
     },
     // Puts the working tree back to `tree`: changed files restored, files added since removed.
     restore(tree) {
@@ -70,6 +87,51 @@ export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [
       git(['read-tree', tree]);
       git(['checkout-index', '-a', '-f']);
       for (const f of added) rmSync(join(root, f), { force: true });
+    },
+    // Puts only `files` back to how they are in `tree`, mode included: written from it, or removed where it has
+    // none. Every other file stays as it is.
+    restoreFiles(tree, files) {
+      if (!files.length) return;
+      const wanted = new Set(files);
+      const entries = new Map<string, { mode: string; blob: string }>();
+      // The whole tree, filtered here: a turn that changed thousands of files would not fit on a command line.
+      for (const line of git(['ls-tree', '-r', '-z', '--full-tree', tree]).split('\0').filter(Boolean)) {
+        const tab = line.indexOf('\t');
+        const path = line.slice(tab + 1);
+        const [mode, type, blob] = line.slice(0, tab).split(' ');
+        if (type === 'blob' && wanted.has(path)) entries.set(path, { mode: mode!, blob: blob! });
+      }
+      const at = (p: string) => {
+        try {
+          return lstatSync(p);
+        } catch {
+          return undefined;
+        }
+      };
+      // Checked for every file before any is written, so a refusal leaves the tree as it was.
+      const todo = files.filter((f) => {
+        const rel = relative(root, join(root, f));
+        return rel && !rel.startsWith('..') && !isAbsolute(rel);
+      });
+      for (const f of todo) {
+        const parts = f.split('/');
+        // A parent that is now a symlink would take the write outside the working tree.
+        if (parts.slice(0, -1).some((_, i) => at(join(root, ...parts.slice(0, i + 1)))?.isSymbolicLink())) throw new Error(`${f}: a parent directory is now a symlink`);
+        if (at(join(root, f))?.isDirectory()) throw new Error(`${f}: a directory is there now`);
+      }
+      for (const f of todo) {
+        const abs = join(root, f);
+        const entry = entries.get(f);
+        if (at(abs)) rmSync(abs, { force: true });
+        if (!entry) continue;
+        mkdirSync(dirname(abs), { recursive: true });
+        const bytes = gitRaw(['cat-file', 'blob', entry.blob]);
+        if (entry.mode === '120000') symlinkSync(bytes.toString(), abs);
+        else {
+          writeFileSync(abs, bytes);
+          chmodSync(abs, entry.mode === '100755' ? 0o755 : 0o644);
+        }
+      }
     },
   };
 }

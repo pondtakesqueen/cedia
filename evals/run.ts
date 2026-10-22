@@ -61,6 +61,8 @@ export type Reported = {
   spawned?: { explore: number; work: number; handoffs: number; peakContext: number };
   // cedia: tokens in the largest context one reply of the run's own sessions saw.
   peakContext?: number;
+  // cedia: requests that missed the prompt cache, by cause, and the tokens the cache could have served.
+  cacheMisses?: { count: Record<string, number>; tokens: number };
 };
 
 export type Result = {
@@ -184,6 +186,7 @@ export function parseReported(stdout: string): { reported: Reported; text: strin
         ...(typeof j.subthreads === "number" ? { subthreads: j.subthreads } : {}),
         ...(j.spawned && typeof j.spawned === "object" ? { spawned: j.spawned as Reported["spawned"] } : {}),
         ...(typeof j.peakContext === "number" ? { peakContext: j.peakContext } : {}),
+        ...(Array.isArray(j.cacheMisses) && j.cacheMisses.length ? { cacheMisses: missCounts(j.cacheMisses as { cause: string; tokens: number }[]) } : {}),
       },
     };
   }
@@ -456,6 +459,8 @@ export type Summary = {
   // cedia: the mean and largest peak context per run, runs whose peak passed 100k, handoffs and sub-threads, and of
   // those the work ones, the handoffs sub-threads made and the largest context one saw (when runs report them).
   context?: { meanPeak: number; maxPeak: number; over100k: number; handoffs: number; subthreads: number; work?: number; subHandoffs?: number; subPeak?: number };
+  // cedia: cache misses over all runs, by cause, and the tokens they cost a re-read of.
+  cacheMisses?: { count: Record<string, number>; tokens: number };
 };
 
 export function summarize(all: Result[]): Summary {
@@ -484,7 +489,16 @@ export function summarize(all: Result[]): Summary {
     ...(tok.length ? { tokens: { input, output: tok.reduce((a, t) => a + t!.output, 0) }, cacheHitRatio: input ? cacheRead / input : 0 } : {}),
     ...speedOf(results),
     ...contextOf(results),
+    ...missesOf(results),
   };
+}
+
+function missesOf(results: Result[]): { cacheMisses?: Summary["cacheMisses"] } {
+  const with_ = results.flatMap((r) => (r.reported.cacheMisses ? [r.reported.cacheMisses] : []));
+  if (!with_.length) return {};
+  const count: Record<string, number> = {};
+  for (const m of with_) for (const [k, v] of Object.entries(m.count)) count[k] = (count[k] ?? 0) + v;
+  return { cacheMisses: { count, tokens: with_.reduce((a, m) => a + m.tokens, 0) } };
 }
 
 function contextOf(results: Result[]): { context?: Summary["context"] } {
@@ -503,6 +517,12 @@ function contextOf(results: Result[]): { context?: Summary["context"] } {
         : {}),
     },
   };
+}
+
+export function missCounts(misses: { cause: string; tokens: number }[]): NonNullable<Reported["cacheMisses"]> {
+  const count: Record<string, number> = {};
+  for (const m of misses) count[m.cause] = (count[m.cause] ?? 0) + 1;
+  return { count, tokens: misses.reduce((a, m) => a + m.tokens, 0) };
 }
 
 // "3 sub-threads (1 work, 2 handoffs in them, peak 95k)", or the bare count from a run that reports no detail.
@@ -554,6 +574,9 @@ export function formatSummary(s: Summary): string {
     `  avg ${(s.avgMs / 1000).toFixed(1)}s per run` +
       (s.tokens ? `, ${Math.round(s.tokens.input / s.runs)} input / ${Math.round(s.tokens.output / s.runs)} output tokens per run, cache hit ${pct(s.cacheHitRatio ?? 0)}` : ""),
     ...(s.context ? [`  peak context ${Math.round(s.context.meanPeak / 1000)}k mean, ${Math.round(s.context.maxPeak / 1000)}k max, ${s.context.over100k} of ${s.runs} runs past 100k; ${s.context.handoffs} handoffs, ${s.context.subthreads} sub-threads${s.context.work !== undefined ? ` (${s.context.work} work, ${s.context.subHandoffs} handoffs in them, peak ${Math.round((s.context.subPeak ?? 0) / 1000)}k)` : ""}`] : []),
+    ...(s.cacheMisses
+      ? [`  cache misses ${Object.values(s.cacheMisses.count).reduce((a, b) => a + b, 0)} (${Object.entries(s.cacheMisses.count).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${v} ${k}`).join(", ")}), ${Math.round(s.cacheMisses.tokens / 1000)}k tokens the cache could have served`]
+      : []),
     ...(s.speed ? [`  speed ${s.speed.outputTokPerSec} output tok/s, ${(s.speed.ttftMs / 1000).toFixed(2)}s to first token per call; model ${pct(s.speed.modelShare)} of time, cedia ${pct(s.speed.harnessShare)}`] : []),
     s.costUsd !== undefined ? `  cost $${s.costUsd.toFixed(4)} total, ${s.costPerPass !== undefined ? `$${s.costPerPass.toFixed(4)} per passed run` : "no passes"}` : "  cost not reported",
   ].join("\n");
