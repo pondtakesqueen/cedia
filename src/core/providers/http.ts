@@ -34,6 +34,7 @@ export function missingKeyNote(model: ModelSpec, env: Env = process.env, keychai
 
 // A spent plan or balance, told apart from a per-minute rate limit by its message.
 const QUOTA = /quota|insufficient[ _](balance|credit|funds)|usage limit|limit reached|billing|out of credits/;
+export const isQuotaText = (text: string) => QUOTA.test(text.toLowerCase());
 // A 429 that says to come back later than this is a spent plan window, not a per-minute limit: Go's free tier
 // answered "Rate limit exceeded" with retry-after 27380 s (7.6 h), and a session slept on it.
 const QUOTA_WAIT_MS = 10 * 60_000;
