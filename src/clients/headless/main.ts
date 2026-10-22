@@ -219,7 +219,17 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const skillList = skillsBlock(skills);
   const skill = skillTool(skills);
   // The hosts the shell may reach, so a fetch is no way around the sandbox.
-  const webFetch = webFetchTool({ anyHost: !sandbox.on, allowedDomains: sandboxSettings.allowedDomains });
+  // web_fetch reaches what the session's shell may reach (core/tools/web.ts): the named domains, plus any public
+  // host when the sandbox is off and the session may run commands. Allow rules widen it: `web_fetch` for any host,
+  // `web_fetch(<domain>)` for one.
+  const fetchRules = policy.allow.flatMap((r) => {
+    const m = /^web_fetch(?:\((.*)\))?$/.exec(r.trim());
+    return m ? [m[1]?.trim() || '*'] : [];
+  });
+  // A bare rule opens public hosts only; a private address still needs its host named.
+  const webAccess = (mode: 'read-only' | 'workspace') => ({ anyHost: (!sandbox.on && mode === 'workspace') || fetchRules.includes('*'), allowedDomains: [...sandboxSettings.allowedDomains, ...fetchRules.filter((d) => d !== '*')] });
+  const webFetch = webFetchTool(webAccess(policy.mode));
+  const webFetchRead = webFetchTool(webAccess('read-only'));
   // Started inside the run's try below, so they are closed however it ends.
   let mcp: McpServers | undefined;
   const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}) });
@@ -291,7 +301,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     const mcpTools = [...(mcp?.tools ?? []), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map(mcpStub)];
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
     const extra = [...(spawnOn ? [spawn] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
-    const tools = reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
+    const tools = reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
     if (writing) writerRuns.push({ log, from: log.events.length });
     const result = await runPrompt(
       {
