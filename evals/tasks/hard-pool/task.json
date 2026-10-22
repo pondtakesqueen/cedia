@@ -1,0 +1,7 @@
+{
+  "id": "hard-pool",
+  "category": "bugfix",
+  "source": "synthetic: a promise pool with a concurrency limit, retries and abort, with bugs that only show under timing the visible tests do not reach; the tests that catch them are hidden",
+  "prompt": "pool.ts runs async tasks with a concurrency limit. Users report that it sometimes runs more tasks at once than the limit, returns results in the wrong slots, retries the wrong number of times, and keeps starting tasks after an abort. The doc comment in pool.ts is the contract. Fix pool.ts so it keeps every rule there, under any timing. Do not change the existing tests; add tests for what you fix. Run `bun test` before you finish.",
+  "verify": "bun test"
+}
