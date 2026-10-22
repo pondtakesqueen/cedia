@@ -399,7 +399,7 @@ export class CediaTui {
           else {
             this.thread = rest[0];
             this.context = 0;
-            this.say(dim(`going on with ${threadLine(this.store.read(rest[0]))}`));
+            this.say(dim(`going on with ${threadLine(this.store.read(rest[0]))}${this.goal ? '; the goal still holds (/goal off ends it)' : ''}`));
           }
           break;
         case 'model':

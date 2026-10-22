@@ -181,11 +181,18 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     if (note) say(note + '\n');
   }
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? (JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) as FauxStep[]) : undefined;
-  const handoffAt = loadHandoffAt(model, args.handoffAt);
-  const goalJudge = args.goal ? (args.goalJudge ? resolveModel(args.goalJudge) : model) : undefined;
+  let handoffAt: ReturnType<typeof loadHandoffAt>;
+  let goalJudge: typeof model | undefined;
+  try {
+    handoffAt = loadHandoffAt(model, args.handoffAt);
+    goalJudge = args.goal ? (args.goalJudge ? resolveModel(args.goalJudge) : model) : undefined;
+  } catch (e) {
+    await sandbox.close();
+    throw e;
+  }
   if (goalJudge && goalJudge !== model) {
     const note = missingKeyNote(goalJudge);
-    if (note) process.stderr.write(note + '\n');
+    if (note) say(note + '\n');
   }
   const handoffVia = loadHandoff(args.handoff);
   const escalate = args.escalate === 'off' ? undefined : ((args.escalate ?? 'high') as Effort);
@@ -457,7 +464,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     const freshTokens = resumed ? Math.ceil((BASE_SYSTEM.length + JSON.stringify(toolDefs(CORE_TOOLS)).length + basePreamble.length + resumeNote(resumed).length + task.length) / 4) : 0;
     const choice = lastLog ? resumeChoice(lastLog.events, model, freshTokens) : undefined;
     if (choice?.fresh)
-      process.stderr.write(
+      say(
         `cedia: thread ${threadId}'s last session has been idle ${Math.round(choice.idleMs / 60_000)} min, past its cache; resuming it re-reads ${Math.round(choice.contextTokens / 1000)}k tokens (about $${choice.resumeUsd.toFixed(3)}), a new session from where it stopped starts at about ${Math.round(freshTokens / 1000)}k ($${choice.freshUsd.toFixed(3)}), so it goes on in a new session\n`,
       );
     if (lastLog && !historyRejected(lastLog.events) && !choice?.fresh) {

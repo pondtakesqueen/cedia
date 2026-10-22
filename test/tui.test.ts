@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Terminal } from '@mariozechner/pi-tui';
+import { runHeadless } from '../src/clients/headless/main.ts';
 import { callLine, CediaTui, printable, type TuiArgs } from '../src/clients/tui/main.ts';
 import { SessionLog } from '../src/core/session/log.ts';
 import { lintSession } from '../src/core/session/lint.ts';
@@ -260,9 +261,31 @@ describe('the TUI (offline, faux)', () => {
     t.script([reply('nothing to change')]);
     t.type('anything else?');
     await t.a.idle();
-    expect(t.shown().match(/goal met after/g)).toHaveLength(1);
-    // --goal sets it from the start.
-    expect(app({ goal: 'tests pass' }).a.goal).toBe('tests pass');
+    expect(t.shown().match(/goal (not )?met after/g)).toHaveLength(1);
+  });
+
+  test('--goal reaches each turn until /goal off, and no goal reaches a turn after it', async () => {
+    const term = new FakeTerminal();
+    const seen: (string | undefined)[] = [];
+    const spy: typeof runHeadless = (args, out) => {
+      seen.push(args.goal);
+      return runHeadless(args, out);
+    };
+    const a = new CediaTui({ cwd: dir, model: 'faux', permission: 'workspace', sandbox: 'off', spawn: 'off', goal: 'g holds' }, term, spy, () => {});
+    a.start();
+    const type = (text: string) => {
+      term.input(text);
+      term.input('\r');
+    };
+    writeFileSync(join(dir, 'script-goal.json'), JSON.stringify([reply('done'), reply('it holds\nGOAL: met'), reply('done again')]));
+    process.env.CEDIA_FAUX_SCRIPT = join(dir, 'script-goal.json');
+    type('first');
+    await a.idle();
+    type('/goal off');
+    type('second');
+    await a.idle();
+    expect(seen).toEqual(['g holds', undefined]);
+    a.stop();
   });
 
   test('escapes and control characters from commands never reach the screen', () => {
