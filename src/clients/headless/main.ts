@@ -199,7 +199,14 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const instructions = instructionsBlock(loadInstructions(args.cwd));
   // Project memory: read by every session, kept by the writer (not when nothing is written to disk).
   const memory = new MemoryStore(memoryPath(cediaHome(), projectKey(args.cwd)));
-  const remembered = memoryBlock(memory.notes());
+  const remembered = (() => {
+    try {
+      return memoryBlock(memory.notes());
+    } catch (e) {
+      process.stderr.write(`cedia: could not read the project's memory (${(e as Error).message}); going on without it\n`);
+      return '';
+    }
+  })();
   const remember = store ? rememberTool(memory, threadId ?? 'cedia') : undefined;
   const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}) });
   // Where each writer session of this run started in its log, for the change the run made.

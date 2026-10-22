@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
@@ -230,13 +231,22 @@ function threads(argv: string[]): number {
 }
 
 function memory(argv: string[]): number {
-  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' } } });
-  const store = new MemoryStore(memoryPath(cediaHome(), projectKey(values.cwd ?? process.cwd())));
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message} (put -- before a note that starts with -)`);
+    return 2;
+  }
+  const { values, positionals } = parsed;
+  const store = new MemoryStore(memoryPath(cediaHome(), projectKey(resolve(values.cwd ?? process.cwd()))));
   const [cmd = 'list', ...rest] = positionals;
   try {
     if (cmd === 'list') {
       const notes = store.notes();
-      console.log(notes.length ? notes.map((n) => `${n.id}  ${n.at.slice(0, 10)}  ${n.from}: ${n.text}`).join('\n') : 'no notes for this project');
+      // A session's note could carry terminal escapes; they are shown as text.
+      const shown = (t: string) => t.replace(/[\x00-\x1f\x7f\x9b]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+      console.log(notes.length ? notes.map((n) => `${n.id}  ${n.at.slice(0, 10)}  ${n.from}: ${shown(n.text)}`).join('\n') : 'no notes for this project');
       return 0;
     }
     if (cmd === 'add' && rest.length) {
