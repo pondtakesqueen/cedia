@@ -14,6 +14,12 @@ Sources read on 2026-10-16. Mirrored docs live in `docs/` (refresh with `./mirro
 | `src/claude-code` (anthropics/claude-code) | plugins, examples | no license: read only, copy nothing |
 | `src/claude-code-harness` | Claude Code 2.1.292 binary RE docs (01–07 + closings-A–D, README map) | no license: read only, copy nothing |
 
+Later notes, read 2026-10-22, each paraphrased with nothing copied:
+
+- [`system-prompts-notes.md`](system-prompts-notes.md): Anthropic's published claude.ai system prompts, all models, used for per-model prompt tuning.
+- [`claude-code-prompts-notes.md`](claude-code-prompts-notes.md): Claude Code 2.1.307's prompts as extracted in Piebald-AI/claude-code-system-prompts.
+- [`claude-code-docs-notes.md`](claude-code-docs-notes.md): the Agent SDK docs, the What's new digests, legal and compliance, and the CLI reference.
+
 Excluded on purpose: `tanbiralam/claude-code` (leaked proprietary source) and leaked Cursor prompts.
 
 ## Provider APIs
@@ -141,7 +147,7 @@ Source: https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md (no lic
 - Framing tags are not escaped: a sub-thread report, thread message or handoff note that contains `</subthread>`, `</message>` or `</handoff>` closes cedia's frame (`tools/spawn.ts:24`, `project/threads.ts:142`, `clients/headless/main.ts:77`). Claude Code marks subagent output with a header (2.1.277), escapes `<system-reminder>` in hook output (2.1.292), neutralizes markup and invisible characters in memory (2.1.284) and strips invisible Unicode from prompts (2.1.277).
 - Bash kills only the shell on timeout or abort, then waits for stdout EOF (`tools/bash.ts:142-145`); a backgrounded child holding the pipe keeps the call open. Claude Code fixed orphaned process trees (2.1.212) and hooks hanging on `daemon &` (2.1.285).
 - The sandbox denies writes to `.git/hooks` only when it exists (`safety/sandbox.ts:48`), so bash can create it and plant a hook that runs outside the sandbox on the user's next commit; `core.hooksPath` targets such as `.husky` are not protected. Claude Code protects `.husky` (2.1.90) and asks before writing shell startup files and `~/.config/git` (2.1.160).
-- Read-only calls run with `Promise.all` over the whole batch (`loop/run.ts:432-441`), though the spec says a bounded pool; parallel explore sub-threads have no concurrency or per-run cap. Claude Code caps concurrent subagents at 20 (2.1.217) and spawns per session at 200 (2.1.212).
+- Read-only calls run with `Promise.all` over the whole batch (`loop/run.ts:432-441`), though the spec says a bounded pool; parallel explore sub-threads have no concurrency or per-run cap. Claude Code caps concurrent subagents at 20 (2.1.217) and capped spawns per session at 200 (2.1.212). The per-session cap was removed in W32 (What's new); only the concurrency and depth limits remain.
 - The deny list covers push, reset --hard and clean -f; ref-losing commands (`stash drop/clear`, `branch -D`, `reflog expire`, `update-ref -d`, `filter-branch`) are not covered and shadow snapshots cannot restore them. Claude Code blocks `stash drop` and `commit --amend` on commits it did not make (2.1.183).
 - Bash output is cut in the middle at 30k characters (`tools/registry.ts:26`); Claude Code saves large output to a file with a preview (2.1.2) and lets the user raise the inline cap (2.1.261).
 
