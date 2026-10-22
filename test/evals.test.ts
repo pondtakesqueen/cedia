@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { checkLedgerIdentity, claimsDone, estimateCost, loadTasks, parseReported, REPO_ROOT, repoTask, runTask, spawnedNote, splitCommand, summarize, type Result, type Task } from "../evals/run.ts";
+import { checkLedgerIdentity, claimsDone, estimateCost, formatSummary, loadTasks, parseReported, REPO_ROOT, repoTask, runTask, spawnedNote, splitCommand, summarize, type Result, type Task } from "../evals/run.ts";
 
 describe("evals runner", () => {
   test("splitCommand keeps quoted arguments together", () => {
@@ -100,6 +100,12 @@ describe("evals runner", () => {
     expect(summarize([peak(80_000, 0, 2), detailed]).context).toEqual({ meanPeak: 70_000, maxPeak: 80_000, over100k: 0, handoffs: 0, subthreads: 5, work: 1, subHandoffs: 2, subPeak: 95_000 });
     expect(spawnedNote(detailed.reported)).toBe("3 sub-threads (1 work, 2 handoffs in them, peak 95k)");
     expect(spawnedNote({ subthreads: 1 })).toBe("1 sub-thread");
+
+    const line = JSON.stringify({ type: "result", subtype: "success", costUsd: 0, usage: {}, inputRepairs: { "edit: top-level old_text/new_text": 2 } });
+    const repaired: Result = { ...r("f", 1, true, true, 0), reported: parseReported(line)!.reported };
+    const rs = summarize([repaired, repaired]);
+    expect(rs.inputRepairs).toEqual({ "edit: top-level old_text/new_text": 4 });
+    expect(formatSummary(rs)).toContain("repaired inputs: 4 edit: top-level old_text/new_text");
   });
 
   test("estimates cost from measured tokens at the target model's price", () => {

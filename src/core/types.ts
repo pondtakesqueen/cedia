@@ -60,6 +60,9 @@ type EventBody =
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
   | { kind: 'tool_result'; callId: string; status: EffectStatus; output: ToolOutput }
   | { kind: 'reminder'; text: string; as: 'system' | 'user' }
+  // A call's input came in a known wrong shape and was put into the schema's (ToolSpec.repair). The assistant
+  // event keeps what the model sent; the intent holds the repaired input.
+  | { kind: 'input_repaired'; callId: string; tool: string; repairs: string[] }
   // A per-message effort change: from the latest user turn with new input on, the model works at this level
   // (core/loop/run.ts escalation). Wires without it (caps.midConversationEffort) never get one.
   | { kind: 'effort'; effort: Effort }
@@ -172,6 +175,8 @@ export type HeadlessResult = {
   usage: Usage;
   costUsd: number;
   cacheHitRatio: number;
+  // Calls whose input was repaired, by kind of repair (absent when none was).
+  inputRepairs?: Record<string, number>;
   result: string;
   evidence?: Evidence;
   timing?: Timing;

@@ -61,6 +61,8 @@ export type Reported = {
   spawned?: { explore: number; work: number; handoffs: number; peakContext: number };
   // cedia: tokens in the largest context one reply of the run's own sessions saw.
   peakContext?: number;
+  // cedia: calls whose input came in a known wrong shape and was repaired, by tool and kind.
+  inputRepairs?: Record<string, number>;
 };
 
 export type Result = {
@@ -184,6 +186,7 @@ export function parseReported(stdout: string): { reported: Reported; text: strin
         ...(typeof j.subthreads === "number" ? { subthreads: j.subthreads } : {}),
         ...(j.spawned && typeof j.spawned === "object" ? { spawned: j.spawned as Reported["spawned"] } : {}),
         ...(typeof j.peakContext === "number" ? { peakContext: j.peakContext } : {}),
+        ...(j.inputRepairs && typeof j.inputRepairs === "object" ? { inputRepairs: j.inputRepairs as Record<string, number> } : {}),
       },
     };
   }
@@ -453,6 +456,8 @@ export type Summary = {
   // cedia: the mean and largest peak context per run, runs whose peak passed 100k, handoffs and sub-threads, and of
   // those the work ones, the handoffs sub-threads made and the largest context one saw (when runs report them).
   context?: { meanPeak: number; maxPeak: number; over100k: number; handoffs: number; subthreads: number; work?: number; subHandoffs?: number; subPeak?: number };
+  // cedia: repaired calls over all runs, by tool and kind: how often this model sends a tool's input wrong.
+  inputRepairs?: Record<string, number>;
 };
 
 export function summarize(all: Result[]): Summary {
@@ -481,7 +486,14 @@ export function summarize(all: Result[]): Summary {
     ...(tok.length ? { tokens: { input, output: tok.reduce((a, t) => a + t!.output, 0) }, cacheHitRatio: input ? cacheRead / input : 0 } : {}),
     ...speedOf(results),
     ...contextOf(results),
+    ...repairsOf(results),
   };
+}
+
+function repairsOf(results: Result[]): { inputRepairs?: Record<string, number> } {
+  const all: Record<string, number> = {};
+  for (const r of results) for (const [k, v] of Object.entries(r.reported.inputRepairs ?? {})) all[k] = (all[k] ?? 0) + v;
+  return Object.keys(all).length ? { inputRepairs: all } : {};
 }
 
 function contextOf(results: Result[]): { context?: Summary["context"] } {
@@ -551,6 +563,7 @@ export function formatSummary(s: Summary): string {
     `  avg ${(s.avgMs / 1000).toFixed(1)}s per run` +
       (s.tokens ? `, ${Math.round(s.tokens.input / s.runs)} input / ${Math.round(s.tokens.output / s.runs)} output tokens per run, cache hit ${pct(s.cacheHitRatio ?? 0)}` : ""),
     ...(s.context ? [`  peak context ${Math.round(s.context.meanPeak / 1000)}k mean, ${Math.round(s.context.maxPeak / 1000)}k max, ${s.context.over100k} of ${s.runs} runs past 100k; ${s.context.handoffs} handoffs, ${s.context.subthreads} sub-threads${s.context.work !== undefined ? ` (${s.context.work} work, ${s.context.subHandoffs} handoffs in them, peak ${Math.round((s.context.subPeak ?? 0) / 1000)}k)` : ""}`] : []),
+    ...(s.inputRepairs ? [`  repaired inputs: ${Object.entries(s.inputRepairs).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${v} ${k}`).join(", ")}`] : []),
     ...(s.speed ? [`  speed ${s.speed.outputTokPerSec} output tok/s, ${(s.speed.ttftMs / 1000).toFixed(2)}s to first token per call; model ${pct(s.speed.modelShare)} of time, cedia ${pct(s.speed.harnessShare)}`] : []),
     s.costUsd !== undefined ? `  cost $${s.costUsd.toFixed(4)} total, ${s.costPerPass !== undefined ? `$${s.costPerPass.toFixed(4)} per passed run` : "no passes"}` : "  cost not reported",
   ].join("\n");

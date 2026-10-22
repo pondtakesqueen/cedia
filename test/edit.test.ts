@@ -73,3 +73,34 @@ describe('edit and write tools', () => {
     expect(readFileSync(join(cwd, 'deep/new/a.ts'), 'utf8')).toBe('c\n');
   });
 });
+
+describe('input repair in the loop', () => {
+  test('an edit in a known wrong shape is logged as repaired, decided and run in the right one', async () => {
+    const { runPrompt } = await import('../src/core/loop/run.ts');
+    const { FAUX_MODEL } = await import('../src/core/providers/catalog.ts');
+    const { fauxProvider, text, toolUse } = await import('../src/core/providers/faux.ts');
+    const { SessionLog } = await import('../src/core/session/log.ts');
+    const { lintSession } = await import('../src/core/session/lint.ts');
+    const { CORE_TOOLS } = await import('../src/core/tools/index.ts');
+    const cwd = mkdtempSync(join(tmpdir(), 'cedia-repair-'));
+    writeFileSync(join(cwd, 'f.txt'), 'one\ntwo\n');
+    const log = SessionLog.create();
+    const steps = [
+      { blocks: [toolUse('c1', 'edit', { path: 'f.txt', old_text: 'one', new_text: 'ONE' })] },
+      { blocks: [toolUse('c2', 'edit', { path: 'f.txt', edits: '[{"old_text":"two","new_text":"TWO"}]' })] },
+      { blocks: [toolUse('c3', 'edit', { path: 'f.txt', edits: [{ old_text: 'TWO', new_text: '2' }] })] },
+      { blocks: [text('done')] },
+    ];
+    const res = await runPrompt({ log, provider: fauxProvider(steps), model: FAUX_MODEL, tools: CORE_TOOLS, system: 's', cwd, permission: { mode: 'workspace', allow: [], deny: [] } }, 'edit');
+    expect(readFileSync(join(cwd, 'f.txt'), 'utf8')).toBe('ONE\n2\n');
+    const repaired = log.events.filter((e) => e.kind === 'input_repaired');
+    expect(repaired).toEqual([expect.objectContaining({ callId: 'c1', repairs: ['top-level old_text/new_text'] }), expect.objectContaining({ callId: 'c2', repairs: ['edits as a JSON string'] })]);
+    const intent = log.events.find((e) => e.kind === 'tool_intent' && e.callId === 'c1');
+    expect(intent).toMatchObject({ input: { path: 'f.txt', edits: [{ old_text: 'one', new_text: 'ONE' }] } });
+    // The assistant event keeps what the model sent, so the request replays byte for byte.
+    const sent = log.events.find((e) => e.kind === 'assistant');
+    expect(sent).toMatchObject({ blocks: [{ input: { old_text: 'one' } }] });
+    expect(res.inputRepairs).toEqual({ 'edit: top-level old_text/new_text': 1, 'edit: edits as a JSON string': 1 });
+    expect(lintSession(log.events)).toEqual([]);
+  });
+});

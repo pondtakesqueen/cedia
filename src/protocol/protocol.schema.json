@@ -364,6 +364,12 @@
         "cacheHitRatio": {
           "type": "number"
         },
+        "inputRepairs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
         "result": {
           "type": "string"
         },
@@ -1018,6 +1024,53 @@
             "kind",
             "parentId",
             "text"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "input_repaired"
+            },
+            "callId": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "repairs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "callId",
+            "id",
+            "kind",
+            "parentId",
+            "repairs",
+            "tool"
           ]
         },
         {
