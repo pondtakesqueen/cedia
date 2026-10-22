@@ -2,9 +2,18 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { checkLedgerIdentity, claimsDone, defaultOut, HARNESSES, estimateCost, formatSummary, loadTasks, parseReported, REPO_ROOT, repoTask, runTask, spawnedNote, splitCommand, summarize, type Result, type Task } from "../evals/run.ts";
+import { checkLedgerIdentity, claimsDone, defaultOut, HARNESSES, estimateCost, formatSummary, loadTasks, parseReported, providerFailed, REPO_ROOT, repoTask, runTask, spawnedNote, splitCommand, summarize, type Result, type Task } from "../evals/run.ts";
 
 describe("evals runner", () => {
+  test("a run the provider ended is left out, one the agent ended is scored", () => {
+    const limit = '{"type":"error","error":{"type":"GoUsageLimitError","message":"Go usage limit exceeded"},"metadata":{"limitName":"weekly"}}';
+    expect(providerFailed("error_during_execution", 0, "fetch failed")).toBe(true);
+    expect(providerFailed("error_during_execution", 52_000, limit)).toBe(true);
+    expect(providerFailed("error_during_execution", 52_000, "bun test failed: 3 tests")).toBe(false);
+    expect(providerFailed("success", 52_000, "I hit no usage limit")).toBe(false);
+    expect(providerFailed("error_unverified_claim", 0, "")).toBe(false);
+  });
+
   test("splitCommand keeps quoted arguments together", () => {
     expect(splitCommand(`node -e "console.log('a b')" x`)).toEqual(["node", "-e", "console.log('a b')", "x"]);
   });

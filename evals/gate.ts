@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { ALIASES, CATALOG } from "../src/core/providers/catalog.ts";
-import { estimateCost, formatSummary, loadTasks, missingVerifyTools, REPO_ROOT, runAll, summarize, type Result, type Task } from "./run.ts";
+import { estimateCost, formatSummary, loadTasks, missingVerifyTools, providerFailed, REPO_ROOT, runAll, summarize, type Result, type Task } from "./run.ts";
 
 export type Thresholds = {
   // One-sided Fisher exact test on passed runs: a lower pass rate fails the gate when p is below this.
@@ -235,8 +235,12 @@ export function formatComparison(c: Comparison): string {
   ].join("\n");
 }
 
+// Rows written before a provider failure was recognized are judged again by today's rule.
 const readRows = (path: string): Result[] =>
-  readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as Result);
+  readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((l) => {
+    const r = JSON.parse(l) as Result;
+    return { ...r, infraError: r.infraError || providerFailed(r.reported?.subtype, r.reported?.tokens?.input ?? 0, r.output ?? "") };
+  });
 
 function readBaseline(path: string): Baseline | undefined {
   if (!existsSync(path)) return undefined;

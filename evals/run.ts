@@ -15,6 +15,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { costUsd, resolveModel } from "../src/core/providers/catalog.ts";
+import { isQuotaText } from "../src/core/providers/http.ts";
 
 export type Task = {
   id: string;
@@ -246,6 +247,12 @@ function exec(bin: string, args: string[], cwd: string, timeoutMs: number, env?:
   });
 }
 
+// A run the provider ended, not the agent: it failed before the model answered, or a spent plan or balance stopped
+// it part way (Go's weekly limit ended runs 35 s in, which then read as task failures). Left out and run again.
+export function providerFailed(subtype: string | undefined, inputTokens: number, text: string): boolean {
+  return subtype === "error_during_execution" && (inputTokens === 0 || isQuotaText(text));
+}
+
 export async function runTask(task: Task, harness: string, model: string | null, run = 1): Promise<Result> {
   const make = HARNESSES[harness];
   if (!make) throw new Error(`unknown harness: ${harness}`);
@@ -273,7 +280,7 @@ export async function runTask(task: Task, harness: string, model: string | null,
     const refusedClaim = reported.subtype === "error_unverified_claim";
     // cedia's success only means the run ended normally; a run that reports it could not finish is not a claim.
     const claimedDone = harness === "cedia" && parsed ? reported.subtype === "success" && claimsDone(text) : claimsDone(text);
-    const infraError = reported.subtype === "error_during_execution" && (reported.tokens?.input ?? 0) === 0;
+    const infraError = providerFailed(reported.subtype, reported.tokens?.input ?? 0, text);
 
     // Tests that came with the task are put back before verify, so editing them cannot pass the task.
     const tampered: string[] = [];
@@ -471,7 +478,7 @@ export type Summary = {
   passAll: number; // share of tasks that passed every run (pass^k)
   falseDone: number; // share of runs that claimed done and failed verify
   refused: number; // share of runs the done gate refused
-  infraErrors: number; // runs left out because the provider failed before the model answered
+  infraErrors: number; // runs left out because the provider failed (see providerFailed)
   avgMs: number;
   costUsd?: number;
   costPerPass?: number;
