@@ -204,8 +204,15 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     if (note) say(note + '\n');
   }
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? (JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) as FauxStep[]) : undefined;
-  const handoffAt = loadHandoffAt(model, args.handoffAt);
-  const goalJudge = args.goal ? (args.goalJudge ? resolveModel(args.goalJudge) : model) : undefined;
+  let handoffAt: ReturnType<typeof loadHandoffAt>;
+  let goalJudge: typeof model | undefined;
+  try {
+    handoffAt = loadHandoffAt(model, args.handoffAt);
+    goalJudge = args.goal ? (args.goalJudge ? resolveModel(args.goalJudge) : model) : undefined;
+  } catch (e) {
+    await sandbox.close();
+    throw e;
+  }
   if (goalJudge && goalJudge !== model) {
     const note = missingKeyNote(goalJudge);
     if (note) say(note + '\n');
