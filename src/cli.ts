@@ -51,6 +51,8 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --goal-judge <ref>       the judge's model (default: the writer's, in a fresh read-only session)
       --advisor <ref|none>     the advisor role: a model that reads each of the writer's turns and may leave it a
                                note before the next (default: settings roles.advisor, none). One reply a turn
+      --classifier <ref|none>  the classifier role: a model that reads each command no allow rule names before it
+                               runs, and may block it (default: settings roles.classifier, none). One reply a command
       --spawn <on|off|worktree>
                                let the writer hand self-contained work to sub-threads (default: settings, on);
                                worktree runs each work sub-thread in a git worktree of its own, several at once
@@ -157,6 +159,7 @@ export async function main(argv: string[]): Promise<number> {
       goal: { type: 'string' },
       'goal-judge': { type: 'string' },
       advisor: { type: 'string' },
+      classifier: { type: 'string' },
       plan: { type: 'string' },
       check: { type: 'string', multiple: true },
       sandbox: { type: 'string' },
@@ -207,6 +210,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.goal ? { goal: values.goal } : {}),
     ...(values['goal-judge'] ? { goalJudge: values['goal-judge'] } : {}),
     ...(values.advisor ? { advisor: values.advisor } : {}),
+    ...(values.classifier ? { classifier: values.classifier } : {}),
     ...(values.plan ? { plan: values.plan } : {}),
     ...(values.check ? { checks: values.check } : {}),
     ...(values.sandbox ? { sandbox: values.sandbox } : {}),

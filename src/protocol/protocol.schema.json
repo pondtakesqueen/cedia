@@ -593,6 +593,41 @@
             "via"
           ]
         },
+        "classified": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "calls": {
+              "type": "number"
+            },
+            "blocked": {
+              "type": "number"
+            },
+            "model": {
+              "type": "string"
+            },
+            "via": {
+              "type": "string",
+              "enum": [
+                "cedia",
+                "claude-code"
+              ]
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "costUsd": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "blocked",
+            "calls",
+            "model",
+            "sessionId",
+            "via"
+          ]
+        },
         "thread": {
           "type": "string"
         },

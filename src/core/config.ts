@@ -21,7 +21,7 @@ export type Settings = {
   fallback?: Record<string, string>;
   // The model for each role: an alias or ref, `claude-code[:<model>]` for plan and review, or "none". User
   // settings only: a repo must not pick what the user pays for.
-  roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string };
+  roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string };
   // Whether writer sessions get the spawn tool for sub-threads (default true), and "worktree" to run each work
   // sub-thread in a git worktree of its own, several at once. User settings only.
   spawn?: boolean | 'worktree';
@@ -65,7 +65,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   privacy: 'any',
   context: 'any',
   fallback: 'any',
-  roles: ['plan', 'code', 'review', 'swarm', 'advisor'],
+  roles: ['plan', 'code', 'review', 'swarm', 'advisor', 'classifier'],
   spawn: 'any',
   lsp: 'any',
   ask: 'any',
@@ -273,9 +273,9 @@ export function loadHandoff(flag?: string): 'note' | 'compact' {
 // `claude-code` alone means opus for plan and sonnet for review. The writer always runs in cedia, where its
 // writes go through the policy, the sandbox and the done gate.
 export function loadRoles(
-  flags: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string } = {},
+  flags: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string } = {},
   env = process.env,
-): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice; swarm: ModelSpec; advisor?: ModelSpec } {
+): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice; swarm: ModelSpec; advisor?: ModelSpec; classifier?: ModelSpec } {
   const user = readSettings(join(cediaHome(), 'settings.json')).roles ?? {};
   const codeRef = flags.code ?? env.CEDIA_MODEL ?? user.code ?? 'deepseek';
   if (/^claude-code\b/.test(codeRef)) throw new Error('the code role runs in cedia, where its writes are checked; use claude-code for plan or review');
@@ -292,7 +292,11 @@ export function loadRoles(
   const advisorRef = flags.advisor ?? user.advisor;
   if (advisorRef && /^claude-code\b/.test(advisorRef)) throw new Error('the advisor runs in cedia, one reply a turn; claude-code is for plan or review');
   const advisor = advisorRef && advisorRef !== 'none' && advisorRef !== 'off' ? resolveModel(advisorRef) : undefined;
-  return { code: resolveModel(codeRef), ...(plan ? { plan } : {}), ...(review ? { review } : {}), swarm, ...(advisor ? { advisor } : {}) };
+  // The classifier reads every command the mode alone would allow, so it too is off unless named.
+  const classifierRef = flags.classifier ?? user.classifier;
+  if (classifierRef && /^claude-code\b/.test(classifierRef)) throw new Error('the classifier runs in cedia, one reply a command; claude-code is for plan or review');
+  const classifier = classifierRef && classifierRef !== 'none' && classifierRef !== 'off' ? resolveModel(classifierRef) : undefined;
+  return { code: resolveModel(codeRef), ...(plan ? { plan } : {}), ...(review ? { review } : {}), swarm, ...(advisor ? { advisor } : {}), ...(classifier ? { classifier } : {}) };
 }
 
 // Declared checks for the done gate. Declaring a check grants nothing, so a repo may declare its own.

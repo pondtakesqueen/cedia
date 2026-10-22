@@ -14,6 +14,7 @@ import { redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
 import { evidence, ledgerEntries, verified } from '../trust/ledger.ts';
+import type { Verdict } from '../trust/classifier.ts';
 import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
 import { spawnNudge } from '../tools/spawn.ts';
@@ -93,6 +94,9 @@ export type RunOptions = {
   // The advisor role (core/trust/advisor.ts): after each turn that ran tools, it reads the turn's events and may
   // return a note, which the session logs as a reminder before its next request. Absent means no advisor.
   advise?: (turn: SessionEvent[]) => Promise<string | undefined>;
+  // The classifier role (core/trust/classifier.ts): reads each command the mode alone would allow and may block
+  // it. Absent means none.
+  classify?: (call: { tool: string; input: JsonObject; cwd: string }) => Promise<Verdict>;
   effort?: Effort;
   // The user's hooks (core/hooks.ts): before and after each call, and on a claim of done. They run in
   // `hookHome` (cedia's home; the temp dir when absent), never the workspace.
@@ -670,6 +674,23 @@ async function runTools(
           input = pre.input;
           d = decide(policy, spec, input, opts.cwd);
         }
+      }
+      // The classifier reads what the mode alone let through: a command that may write or reach out, which no
+      // allow rule of the user's named.
+      if (opts.classify && d.decision === 'allow' && d.rule === 'mode:workspace' && effectOf(spec, input) === 'exec' && !signal.aborted) {
+        let v: Verdict;
+        try {
+          v = await opts.classify({ tool: c.name, input, cwd: opts.cwd });
+        } catch (e) {
+          // A guard that fails blocks; the call still gets its result.
+          v = { decision: 'deny', reason: `the classifier failed (${(e as Error).message}), so nothing it has not read runs` };
+        }
+        // A stop while it read: the call was never decided, so it is not started rather than blocked.
+        if (signal.aborted) {
+          results.set(callId, { status: 'not_started', text: 'not run: the run was stopped', isError: true });
+          continue;
+        }
+        d = v.decision === 'allow' ? { decision: 'allow', rule: 'classifier' } : { decision: 'deny', rule: 'classifier', reason: v.reason };
       }
       log.append({ kind: 'permission', callId, tool: c.name, ...d });
       if (d.decision === 'deny') {
