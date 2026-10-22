@@ -204,6 +204,9 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   }
   const resumed = args.thread ? store!.read(args.thread) : undefined;
   const threadId = resumed?.id ?? store?.open(args.prompt);
+  // This run's id: every thread event it writes carries it, so a rewind past the run drops them even when they are
+  // written after it (core/project/rewind.ts).
+  const runId = `r-${crypto.randomUUID().slice(0, 8)}`;
   // Chosen once per run, so every new session of the run sees the same tools: thread tools when the project has
   // another thread to talk to.
   const others = store ? store.list().some((t) => t.id !== threadId) : false;
@@ -214,12 +217,13 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     return log;
   };
   // The writer's sessions, the thread's earlier ones first: what recall searches.
+  // A session a rewind left behind is not searched: the user took that work back.
   const earlier: EarlierSession[] = (resumed?.sessions ?? []).flatMap((s) =>
-    s.role === 'code' && s.path ? [{ id: s.sessionId, events: () => (sessionExists(s.path!) ? SessionLog.load(s.path!).events : []) }] : [],
+    s.role === 'code' && s.path && !resumed!.rewound.includes(s.sessionId) ? [{ id: s.sessionId, events: () => (sessionExists(s.path!) ? SessionLog.load(s.path!).events : []) }] : [],
   );
   const recall = recallTool(() => earlier.filter((s) => s.id !== writer.log.id));
   const record = (log: SessionLog, m: ModelSpec, why: SessionWhy) => {
-    if (store && threadId) store.append(threadId, { kind: 'session', sessionId: log.id, model: m.ref, role: 'code', why, ...(log.path ? { path: log.path } : {}) });
+    if (store && threadId) store.append(threadId, { run: runId, kind: 'session', sessionId: log.id, model: m.ref, role: 'code', why, ...(log.path ? { path: log.path } : {}) });
     if (!earlier.some((s) => s.id === log.id)) earlier.push({ id: log.id, events: () => log.events });
   };
   const instructions = instructionsBlock(loadInstructions(args.cwd));
@@ -268,7 +272,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   // What /undo and /diff take as this run's turn (core/project/undo.ts), however the run ended.
   const recordTurn = () => {
     const trees = turnTrees();
-    if (store && threadId && trees) store.append(threadId, { kind: 'turn', cwd: args.cwd, ...trees, sessions: [...new Set(writerRuns.map((w) => w.log.id))] });
+    if (store && threadId && trees) store.append(threadId, { run: runId, kind: 'turn', cwd: args.cwd, ...trees, sessions: [...new Set(writerRuns.map((w) => w.log.id))] });
   };
   const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}) });
 
@@ -364,7 +368,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
                   const t = store.read(threadId);
                   return t.pending.length ? { ids: t.pending.map((p) => p.id), text: inboxReminder(t.pending) } : undefined;
                 },
-                delivered: (ids: string[]) => store.append(threadId, { kind: 'delivered', ids, sessionId: log.id }),
+                delivered: (ids: string[]) => store.append(threadId, { run: runId, kind: 'delivered', ids, sessionId: log.id }),
               },
             }
           : {}),
@@ -555,7 +559,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     while (r.subtype === 'handoff') {
       handoffs++;
       const from = writer.log;
-      if (store && threadId) store.append(threadId, { kind: 'handoff', sessionId: from.id, note: r.result });
+      if (store && threadId) store.append(threadId, { run: runId, kind: 'handoff', sessionId: from.id, note: r.result });
       handingOff(r, false);
       writer = { model: m, log: openLog() };
       record(writer.log, m, 'handoff');
@@ -564,6 +568,14 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     }
     return r;
   };
+  // Where this run starts, for /rewind: the working tree, and the conversation as the thread's last writer session
+  // has it now (core/project/rewind.ts).
+  if (store && threadId) {
+    const last = resumed?.sessions.findLast((s) => s.role === 'code' && !resumed.rewound.includes(s.sessionId));
+    const tree = snapshots?.take();
+    const from = last?.path && sessionExists(last.path) ? { sessionId: last.sessionId, path: last.path, events: SessionLog.load(last.path).events.length, model: last.model } : undefined;
+    store.append(threadId, { kind: 'run', id: runId, prompt: args.prompt.slice(0, 500), cwd: args.cwd, ...(tree ? { tree } : {}), ...(from ? { from } : {}) });
+  }
   try {
     const servers = loadMcp();
     if (Object.keys(servers).length) {
@@ -582,7 +594,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // A resumed thread goes on in its last session when the model is the same (its cache may still be warm) and
     // the provider still takes that session's history, otherwise in a new session that starts from where the
     // thread stopped.
-    const last = resumed?.sessions.findLast((s) => s.role === 'code');
+    const last = resumed?.sessions.findLast((s) => s.role === 'code' && !resumed.rewound.includes(s.sessionId));
     const lastLog = resumed && last?.model === model.ref && last.path && sessionExists(last.path) ? SessionLog.load(last.path) : undefined;
     let result: HeadlessResult;
     // A session whose cache has expired costs its whole context to resume; past a size, a new session from where
@@ -644,8 +656,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     const advice = adv.log ? { model: roles.advisor!.ref, via: 'cedia' as const, sessionId: adv.log.id, costUsd: adv.costUsd, turns: adv.turns, notes: adv.notes } : undefined;
     result = { ...combine(parts, result, new Set([...children, ...advised]), advised), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(advice ? { advice } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
     recordTurn();
-    if (store && threadId && result.question) store.append(threadId, { kind: 'question', sessionId: result.sessionId, ...result.question });
-    if (store && threadId) store.append(threadId, { kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
+    if (store && threadId && result.question) store.append(threadId, { run: runId, kind: 'question', sessionId: result.sessionId, ...result.question });
+    if (store && threadId) store.append(threadId, { run: runId, kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
     // The receipt goes in the writer's log too, so a thread rebuilt from the files shows it. Quiet: a stream-json
     // client gets it as the result line below.
     writer.log.append({ kind: 'result', result }, { quiet: true });
@@ -661,7 +673,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     return result;
   } catch (e) {
     recordTurn();
-    if (store && threadId) store.append(threadId, { kind: 'state', state: 'failed', result: (e as Error).message });
+    if (store && threadId) store.append(threadId, { run: runId, kind: 'state', state: 'failed', result: (e as Error).message });
     throw e;
   } finally {
     await mcp?.close();

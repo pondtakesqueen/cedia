@@ -1,3 +1,4 @@
-{"at":"2026-10-22T08:36:35.769Z","kind":"open","title":"publish the package","task":"publish the package"}
-{"at":"2026-10-22T08:36:35.784Z","kind":"session","sessionId":"63313e51-4d55-428a-b70b-aef3fa0a4a54","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/63313e51-4d55-428a-b70b-aef3fa0a4a54.jsonl"}
-{"at":"2026-10-22T08:36:35.801Z","kind":"state","state":"done","result":"Publishing is on the deny list, so I left it for you."}
+{"at":"2026-10-22T09:42:57.334Z","kind":"open","title":"publish the package","task":"publish the package"}
+{"at":"2026-10-22T09:42:57.351Z","kind":"run","id":"r-3d18923d","prompt":"publish the package","cwd":"/fixture/repo","tree":"4b825dc642cb6eb9a060e54bf8d69288fbee4904"}
+{"at":"2026-10-22T09:42:57.355Z","run":"r-3d18923d","kind":"session","sessionId":"8af20ca7-3039-4e55-81b3-0b8fb89b9d10","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/8af20ca7-3039-4e55-81b3-0b8fb89b9d10.jsonl"}
+{"at":"2026-10-22T09:42:57.369Z","run":"r-3d18923d","kind":"state","state":"done","result":"Publishing is on the deny list, so I left it for you."}
