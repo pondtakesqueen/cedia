@@ -1,7 +1,7 @@
 import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, Text, TUI, matchesKey, truncateToWidth, type Component, type MarkdownTheme, type Terminal } from '@mariozechner/pi-tui';
 import { readFileSync } from 'node:fs';
 import { cediaHome, loadPrivacy, loadRoles } from '../../core/config.ts';
-import { COMMIT_SYSTEM, commitFiles, commitMessage, commitPatch, commitPrompt, currentBranch, defaultBranch, prBlocked, pushAndOpenPr, recentSubjects, threadChanges } from '../../core/project/commit.ts';
+import { COMMIT_SYSTEM, commitFiles, commitMessage, commitPatch, commitPrompt, currentBranch, defaultBranch, prBlocked, pullRequest, pushAndOpenPr, recentSubjects, threadChanges } from '../../core/project/commit.ts';
 import { runPrompt } from '../../core/loop/run.ts';
 import { resolveModel } from '../../core/providers/catalog.ts';
 import { providerFor } from '../../core/providers/index.ts';
@@ -9,6 +9,9 @@ import { gitStatusAsync, statusText, workingDiff } from '../../core/project/git.
 import { threadLine, threadsDir, ThreadStore } from '../../core/project/threads.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from '../../core/project/undo.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
+import { BASE_SYSTEM } from '../../core/prompts.ts';
+import { CORE_TOOLS } from '../../core/tools/index.ts';
+import { askedReviewPrompt, fixPrompt, parseVerdict, type ReviewSubject } from '../../core/trust/review.ts';
 import { projectKey, SessionLog, sessionPath } from '../../core/session/log.ts';
 import type { HeadlessResult, JsonObject, SessionEvent } from '../../core/types.ts';
 import { decode, type CoreMessage } from '../../protocol/index.ts';
@@ -53,6 +56,7 @@ export const COMMANDS: { name: string; description: string }[] = [
   { name: 'redo', description: 'put them forward again' },
   { name: 'commit', description: "commit the files this thread changed, with a message a model writes and you confirm ('/commit <message>' writes your own)" },
   { name: 'pr', description: 'push this branch and open a pull request through gh (never from the default branch); asks first' },
+  { name: 'review', description: "a model reviews the uncommitted changes ('/review <n>' a pull request, through gh); findings come with evidence" },
   { name: 'new', description: 'start a new thread' },
   { name: 'thread', description: 'go on with a thread of this project: /thread <id>, or list them' },
   { name: 'model', description: 'the model the next turn runs on: /model <ref>' },
@@ -363,6 +367,8 @@ export class CediaTui {
           return void this.busy((signal) => this.commit(line.trim().slice(name.length), signal));
         case 'pr':
           return this.pr();
+        case 'review':
+          return void this.busy((signal) => this.review(rest[0], signal));
         case 'new':
           this.thread = undefined;
           this.context = 0;
@@ -458,6 +464,61 @@ export class CediaTui {
         this.say(r.ok ? green(r.out.split('\n')[0] ?? 'committed') : red(`git commit failed: ${r.out}`));
       },
     };
+  }
+
+  // /review: the review role's model (the next turn's model when none is set) reads the change in a session of its
+  // own, read-only, logged like any other. Findings on the working tree can go back to the thread's writer.
+  private async review(pr: string | undefined, signal: AbortSignal) {
+    let subject: ReviewSubject;
+    let patch: string;
+    if (pr) {
+      const got = await pullRequest(this.args.cwd, pr.replace(/^#/, ''), undefined, signal);
+      if ('error' in got) return this.say(red(got.error));
+      subject = { kind: 'pr', number: pr.replace(/^#/, ''), title: got.title, body: got.body };
+      patch = got.patch;
+    } else {
+      const w = workingDiff(this.args.cwd);
+      if (!w) return this.say(dim('not a git repository'));
+      if (!w.patch && !w.untracked.length) return this.say(dim('no changes to review'));
+      subject = { kind: 'changes', untracked: w.untracked };
+      patch = w.patch;
+    }
+    const roles = loadRoles(this.model ? { code: this.model } : {});
+    const model = roles.review?.via === 'cedia' ? roles.review.model : resolveModel(this.model ?? roles.code.ref);
+    this.say(dim(`reviewing ${subject.kind === 'pr' ? `pull request #${subject.number}` : 'the uncommitted changes'} with ${model.ref}…`));
+    const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
+    const id = crypto.randomUUID();
+    const log = SessionLog.create({ id, path: sessionPath(this.args.cwd, id) });
+    // Its calls and replies are drawn as a turn's are; its context is not the thread's, so the status line keeps that.
+    log.listeners.push((e) => {
+      if (e.kind === 'assistant') for (const b of e.blocks) if (b.type === 'text' && b.text.trim()) this.chat.addChild(new Markdown(printable(b.text), 0, 0, MARKDOWN));
+      if (e.kind === 'tool_intent' || e.kind === 'tool_result' || e.kind === 'permission') this.onEvent(e);
+      this.tui.requestRender();
+    });
+    const r = await runPrompt(
+      {
+        log,
+        provider: providerFor(model, { fauxScript }),
+        model,
+        tools: CORE_TOOLS.filter((t) => t.effect !== 'write_workspace'),
+        system: BASE_SYSTEM,
+        cwd: this.args.cwd,
+        role: 'review',
+        permission: { mode: 'read-only', allow: [], deny: [] },
+        privacy: loadPrivacy(this.args.cwd, this.args.privacy),
+        maxTurns: 40,
+        signal,
+      },
+      askedReviewPrompt(subject, patch),
+    );
+    this.spent += r.costUsd;
+    this.say(dim(`review ${r.subtype === 'success' ? 'done' : r.subtype} · ${r.numTurns} turn${r.numTurns === 1 ? '' : 's'} · $${r.costUsd.toFixed(4)}`));
+    if (r.subtype !== 'success') return;
+    const { verdict, findings } = parseVerdict(r.result);
+    // Findings on a pull request stay with the user: its branch may not be this working tree's.
+    if (verdict !== 'changes' || subject.kind !== 'changes' || !findings) return;
+    this.say(yellow(`send these findings to ${this.thread ? "this thread's writer" : 'a new thread'} to fix? y to send; n, or anything else you type, cancels`));
+    this.pending = { what: 'sending the findings', yes: (s) => this.turn(fixPrompt(model.ref, findings), s) };
   }
 
   private pr() {

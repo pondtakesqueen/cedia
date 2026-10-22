@@ -128,3 +128,27 @@ export async function pushAndOpenPr(cwd: string, gh = process.env.CEDIA_GH_BIN ?
   const pr = await run([gh, 'pr', 'create', '--fill', ...(base ? ['--base', base] : []), '--head', branch], cwd, signal);
   return pr.ok ? { ok: true, out: pr.out } : { ok: false, out: `pushed ${branch}, but gh pr create failed: ${pr.out}` };
 }
+
+// A pull request to review: its title, description and diff, through gh. Read only; nothing is checked out.
+export async function pullRequest(cwd: string, n: string, gh = process.env.CEDIA_GH_BIN ?? 'gh', signal?: AbortSignal): Promise<{ title: string; body: string; patch: string } | { error: string }> {
+  if (!/^\d+$/.test(n)) return { error: `not a pull request number: ${n}` };
+  const out = async (args: string[]) => {
+    try {
+      const p = Bun.spawn([gh, ...args], { cwd, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', ...(signal ? { signal } : {}) });
+      const [o, e, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+      return code === 0 ? { ok: true as const, out: o } : { ok: false as const, out: (e || o).trim() };
+    } catch (e) {
+      return { ok: false as const, out: (e as Error).message };
+    }
+  };
+  const view = await out(['pr', 'view', n, '--json', 'title,body']);
+  if (!view.ok) return { error: `gh pr view ${n} failed: ${view.out}` };
+  const diff = await out(['pr', 'diff', n]);
+  if (!diff.ok) return { error: `gh pr diff ${n} failed: ${diff.out}` };
+  try {
+    const v = JSON.parse(view.out) as { title?: string; body?: string };
+    return { title: v.title ?? '', body: v.body ?? '', patch: diff.out };
+  } catch {
+    return { error: `gh pr view ${n} gave no JSON` };
+  }
+}
