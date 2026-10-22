@@ -12,6 +12,9 @@
     },
     "ThreadEvent": {
       "$ref": "#/definitions/ThreadEvent"
+    },
+    "VersionInfo": {
+      "$ref": "#/definitions/VersionInfo"
     }
   },
   "definitions": {
@@ -127,6 +130,22 @@
         "server",
         "context_length",
         "quota"
+      ]
+    },
+    "Capability": {
+      "type": "string",
+      "enum": [
+        "stream-json",
+        "threads",
+        "threads.send",
+        "threads.unsend",
+        "threads.rate",
+        "evidence.check-thread",
+        "keychain",
+        "spawn",
+        "handoff",
+        "plan",
+        "review"
       ]
     },
     "Check": {
@@ -1659,6 +1678,34 @@
         "cacheRead",
         "cacheWrite",
         "output"
+      ],
+      "additionalProperties": false
+    },
+    "VersionInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "cedia"
+        },
+        "version": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Capability"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "protocol",
+        "capabilities"
       ],
       "additionalProperties": false
     },

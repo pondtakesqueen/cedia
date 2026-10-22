@@ -1,7 +1,8 @@
 import type { AttemptError, AttemptErrorCode, ModelSpec } from '../types.ts';
 import { processKeychain, type Keychain } from './keychain.ts';
+import { VERSION } from '../version.ts';
 
-export const USER_AGENT = `cedia/${process.env.CEDIA_VERSION ?? '0.1.0'}`;
+export const USER_AGENT = `cedia/${process.env.CEDIA_VERSION ?? VERSION}`;
 
 type Env = Record<string, string | undefined>;
 

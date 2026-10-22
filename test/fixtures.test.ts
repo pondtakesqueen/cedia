@@ -5,6 +5,7 @@ import { protocolSchema } from '../scripts/protocol-schema.ts';
 import { FIXTURES, record, SCENARIOS, type Recording } from '../scripts/session-fixtures.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 import type { SessionEvent } from '../src/core/types.ts';
+import { VERSION } from '../src/core/version.ts';
 
 // The contract clients build on (the desktop generates its Rust types from the schema and replays the fixtures),
 // so a change to either must be a deliberate regeneration, never drift.
@@ -26,6 +27,16 @@ const committed = (name: string): Recording => {
 describe('client contract', () => {
   test('protocol.schema.json matches the protocol types (bun scripts/protocol-schema.ts)', () => {
     expect(readFileSync(join(import.meta.dir, '..', 'src', 'protocol', 'protocol.schema.json'), 'utf8')).toBe(protocolSchema());
+  });
+
+  test('cedia --version --json names the version, the hash of the schema it speaks, and its capabilities', () => {
+    const run = (...args: string[]) => Bun.spawnSync([join(import.meta.dir, '..', 'bin', 'cedia'), ...args], { env: { ...process.env, CEDIA_KEYCHAIN: 'off' } }).stdout.toString();
+    const info = JSON.parse(run('--version', '--json'));
+    const schema = readFileSync(join(import.meta.dir, '..', 'src', 'protocol', 'protocol.schema.json'));
+    expect(info).toEqual({ name: 'cedia', version: VERSION, protocol: new Bun.CryptoHasher('sha256').update(schema).digest('hex').slice(0, 16), capabilities: expect.arrayContaining(['threads.unsend', 'threads.rate', 'evidence.check-thread']) });
+    expect(info.capabilities).not.toContain('keychain');
+    expect(JSON.parse(readFileSync(join(import.meta.dir, '..', 'package.json'), 'utf8')).version).toBe(VERSION);
+    expect(run('--version')).toBe(`cedia ${VERSION}\n`);
   });
 
   test('the fixture index names every scenario', () => {

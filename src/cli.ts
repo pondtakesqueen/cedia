@@ -7,8 +7,10 @@ import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, SessionLog } from './core/session/log.ts';
 import type { Effort } from './core/types.ts';
+import { versionInfo } from './protocol/version.ts';
 
 const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on stdin)
+       cedia --version [--json]             the version; --json adds the protocol hash and capabilities
 
   -m, --model <ref>            the code role: model alias or ref (default: $CEDIA_MODEL, roles.code in settings, deepseek)
       --plan <ref>             the plan role: a model, claude-code[:<model>] to plan in your own Claude Code
@@ -53,6 +55,11 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
 models: ${Object.keys(ALIASES).join(', ')}`;
 
 export async function main(argv: string[]): Promise<number> {
+  if (argv[0] === '--version' || argv[0] === '-v') {
+    const info = versionInfo();
+    console.log(argv.slice(1).includes('--json') ? JSON.stringify(info) : `cedia ${info.version}`);
+    return 0;
+  }
   if (argv[0] === 'lint-session') return lintFiles(argv.slice(1));
   if (argv[0] === 'threads') return threads(argv.slice(1));
   const { values, positionals } = parseArgs({

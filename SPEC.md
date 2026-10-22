@@ -168,6 +168,7 @@ Claude 5.5-family models also bind thinking signatures to the prefix, so any his
 cedian (`pongsathonkheereekaew/cedian`) is the native macOS desktop for cedia: it runs cedia, draws its threads as panes and never runs an agent loop of its own. What it builds on, and what it may not do:
 
 - Shapes come from `src/protocol/protocol.schema.json`; replays come from `test/fixtures/sessions/`. A change to either is a deliberate regeneration in the same PR as the type change.
+- `cedia --version --json` prints `VersionInfo`: the version, `protocol` (the first 16 hex digits of the sha256 of the `protocol.schema.json` the build carries, so the desktop can tell whether its pinned schema matches) and `capabilities`, the features a client may branch on. A capability is added when its feature lands and never renamed.
 - A prompt is one run: `cedia -p <text> --thread <id> --output-format stream-json`, in the thread's worktree. Text sent while it works goes in with `cedia threads send`, delivered at the next turn boundary, and `cedia threads unsend` takes it back until then; SIGTERM aborts. The user's 👍/👎 goes in with `cedia threads rate`.
 - Thread and session files are cedia's to write. The desktop reads and indexes them and changes them only through cedia commands.
 - `~/.cedia/settings.json` is the one settings file. The desktop's own keys live under `desktop`; everything else is cedia's schema.
