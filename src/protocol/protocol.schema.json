@@ -488,6 +488,41 @@
             "via"
           ]
         },
+        "advice": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "turns": {
+              "type": "number"
+            },
+            "notes": {
+              "type": "number"
+            },
+            "model": {
+              "type": "string"
+            },
+            "via": {
+              "type": "string",
+              "enum": [
+                "cedia",
+                "claude-code"
+              ]
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "costUsd": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "model",
+            "notes",
+            "sessionId",
+            "turns",
+            "via"
+          ]
+        },
         "thread": {
           "type": "string"
         },
