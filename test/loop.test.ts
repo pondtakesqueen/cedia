@@ -2,14 +2,17 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CONTINUE_AFTER_LIMIT, EMPTY_REPLY, escalationTarget, runPrompt, type RunOptions } from '../src/core/loop/run.ts';
+import { CONTINUE_AFTER_LIMIT, EMPTY_REPLY, escalationTarget, runPrompt, spillOutput, type RunOptions } from '../src/core/loop/run.ts';
 import { FAUX_MODEL, resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, text, toolUse, type FauxStep } from '../src/core/providers/faux.ts';
+import { decide } from '../src/core/safety/policy.ts';
+import { secretPaths } from '../src/core/safety/secrets.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 import { SessionLog } from '../src/core/session/log.ts';
 import { bashTool } from '../src/core/tools/bash.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
 import { readTool } from '../src/core/tools/read.ts';
+import { MAX_OUTPUT_CHARS } from '../src/core/tools/registry.ts';
 import { EFFORTS, type EventOf, type SessionEvent } from '../src/core/types.ts';
 import { hash } from '../src/core/hash.ts';
 
@@ -43,6 +46,42 @@ function expectPaired(events: SessionEvent[]) {
   expect(results.sort()).toEqual(uses.sort());
   expect(lintSession(events)).toEqual([]);
 }
+
+describe('long bash output', () => {
+  test('goes to a redacted file whole, and the result shows its start, its end and the path', async () => {
+    const key = `sk-ant-${'k1'.repeat(20)}`;
+    const lines = Array.from({ length: 20_000 }, (_, i) => (i === 10_000 ? `FAILED middle_test ${key}` : `line ${i}`));
+    writeFileSync(join(cwd, 'big.txt'), lines.join('\n') + '\n');
+    const { log, opts } = setup([{ blocks: [toolUse('c1', 'bash', { command: 'cat big.txt' })] }, { blocks: [text('read it')] }]);
+    await runPrompt(opts, 'show big.txt');
+    const result = of(log.events, 'tool_result')[0]!;
+    const path = result.output.spillPath!;
+    expect(path).toContain(log.id);
+    expect(result.output.text.length).toBeLessThanOrEqual(MAX_OUTPUT_CHARS);
+    expect(result.output.text).toContain(`is in ${path}`);
+    const shown = result.output.text;
+    expect([shown.startsWith('line 0\n'), shown.endsWith('line 19999\n\n[exit 0]'), shown.includes('middle_test')]).toEqual([true, true, false]);
+    const whole = readFileSync(path, 'utf8');
+    expect(whole).toContain('FAILED middle_test [cedia:redacted]');
+    expect(whole).not.toContain(key);
+    expect(whole.split('\n')).toHaveLength(20_002);
+    expectPaired(log.events);
+  });
+
+  test('the file is one a later read call may open', async () => {
+    const path = spillOutput('s1', 'c/1', 'whole output\n', mkdtempSync(join(tmpdir(), 'cedia-spill-')))!;
+    expect(path).toEndWith('/s1/c_1.txt');
+    const d = decide({ mode: 'read-only', allow: [], deny: [], secrets: secretPaths(join(tmpdir(), 'no-cedia-home')) }, readTool, { path }, cwd);
+    expect(d.decision).toBe('allow');
+    expect((await readTool.run({ path }, { cwd, signal: new AbortController().signal })).text).toContain('whole output');
+  });
+
+  test('output under the limit stays in the result and writes no file', async () => {
+    const { log, opts } = setup([{ blocks: [toolUse('c1', 'bash', { command: 'cat a.txt' })] }, { blocks: [text('ok')] }]);
+    await runPrompt(opts, 'show a.txt');
+    expect(of(log.events, 'tool_result')[0]!.output).toEqual({ text: 'alpha\n\n[exit 0]', isError: false, exitCode: 0 });
+  });
+});
 
 describe('loop', () => {
   test('runs a tool and answers; log order is request, attempt, assistant, permission, intent, result', async () => {
@@ -212,6 +251,19 @@ describe('loop', () => {
     expect(res.subtype).toBe('interrupted');
     expect(of(log.events, 'turn_end')[0]).toMatchObject({ reason: 'aborted', cause: 'user' });
     expect(of(log.events, 'assistant')[0]!.stop).toBe('aborted');
+  });
+
+  test('abort while tools run still gives every call of the reply a result', async () => {
+    const ac = new AbortController();
+    const calls = [toolUse('c1', 'bash', { command: 'sleep 30' }), toolUse('c2', 'read', { path: 'a.txt' }), toolUse('c3', 'bash', { command: 'sleep 30' })];
+    const { log, opts } = setup([{ blocks: calls }, { blocks: [text('never')] }], { signal: ac.signal, permission: { mode: 'workspace', allow: [], deny: [] } });
+    const p = runPrompt(opts, 'wait');
+    setTimeout(() => ac.abort(), 300);
+    const t = performance.now();
+    const res = await p;
+    expect(performance.now() - t).toBeLessThan(5000);
+    expect(res.subtype).toBe('interrupted');
+    expectPaired(log.events);
   });
 
   test('bad tool input, unknown tools and denied commands still get results', async () => {
