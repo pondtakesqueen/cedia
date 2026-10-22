@@ -223,8 +223,8 @@ cedia is not a git client; it covers what an agent session needs and leaves the 
 | Branch and dirty count in the status line | 3 | `core/project/git.ts`, read-only and without git's index lock (`--no-optional-locks`) |
 | `/diff`: working tree changes, and changes since the turn started | 3 | Like Codex and OpenCode `/diff`. The turn's part comes from its first snapshot against the tree now (`cedia threads diff <id>`) |
 | `/undo` and `/redo` of the last turn's files | 3 | From the shadow snapshot; says plainly it does not undo external side effects. Only the files the turn changed move; one changed since the turn is left unless forced; the model is told which files moved at its next turn, through the thread's inbox (`core/project/undo.ts`, `cedia threads undo|redo <id>`) |
-| `/commit`: message from the `smol` role, user confirms | 4 | Stages only files the session changed unless told otherwise |
-| `/pr`: push the branch and open a PR through `gh` | 4 | Push needs approval; never to the default branch |
+| `/commit`: message from the `smol` role, user confirms | 4 | Stages only files the session changed unless told otherwise. In the TUI: the files the thread's turns changed that still differ from HEAD (`core/project/commit.ts`); the message is drafted by the next turn's model in a logged session with no tools, or given as `/commit <message>`; `git commit --only` leaves the user's other staged work alone |
+| `/pr`: push the branch and open a PR through `gh` | 4 | Push needs approval; never to the default branch. The TUI asks before the push, refuses a detached HEAD and the remote's default branch, and opens the PR with `gh pr create --fill` (`CEDIA_GH_BIN` for tests) |
 | `/review`: review the diff or a PR with the `panel` role | 5 | Findings come with evidence |
 | Worktree per subagent | 5 | |
 | `/rewind` conversation and files together | 6 | |

@@ -53,7 +53,8 @@ export type Thread = {
   messages: ThreadMessage[];
   pending: ThreadMessage[];
   ratings: ThreadRating[];
-  // The latest run that changed files.
+  // The runs that changed files, oldest first; the last is what /undo takes back.
+  turns: { cwd: string; before: string; after: string; sessions: string[]; at: string }[];
   lastTurn?: { cwd: string; before: string; after: string; sessions: string[]; at: string };
   updatedAt: string;
 };
@@ -163,6 +164,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     messages: [],
     pending: [],
     ratings: [],
+    turns: [],
     updatedAt: events.at(-1)?.at ?? '',
   };
   const delivered = new Set<string>();
@@ -175,7 +177,10 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     else if (e.kind === 'unsend') for (const m of e.ids) unsent.add(m);
     else if (e.kind === 'rate') t.ratings.push({ rating: e.rating, ...(e.sessionId ? { sessionId: e.sessionId } : {}), ...(e.note ? { note: e.note } : {}), at: e.at });
     else if (e.kind === 'archived') t.archived = e.archived;
-    else if (e.kind === 'turn') t.lastTurn = { cwd: e.cwd, before: e.before, after: e.after, sessions: e.sessions, at: e.at };
+    else if (e.kind === 'turn') {
+      t.lastTurn = { cwd: e.cwd, before: e.before, after: e.after, sessions: e.sessions, at: e.at };
+      t.turns.push(t.lastTurn);
+    }
     else if (e.kind === 'state') {
       t.state = e.state;
       if (e.result !== undefined) t.result = e.result;

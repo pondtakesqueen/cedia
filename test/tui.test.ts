@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Terminal } from '@mariozechner/pi-tui';
@@ -151,6 +151,68 @@ describe('the TUI (offline, faux)', () => {
     await Bun.sleep(20);
     expect(t.left()).toBe(true);
     expect(t.shown()).toContain('interrupted');
+  });
+
+  test('/commit takes only the thread\'s files with a drafted message once confirmed; /pr refuses the default branch, then pushes and opens one', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cedia-tui-git-'));
+    const git = (...args: string[]) => Bun.spawnSync(['git', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: repo });
+    const remote = mkdtempSync(join(tmpdir(), 'cedia-tui-remote-'));
+    Bun.spawnSync(['git', 'init', '-q', '--bare', '-b', 'main'], { cwd: remote });
+    git('init', '-q', '-b', 'main');
+    writeFileSync(join(repo, 'base.txt'), 'base\n');
+    git('add', '.');
+    git('commit', '-qm', 'Start');
+    git('remote', 'add', 'origin', remote);
+    git('push', '-q', '-u', 'origin', 'main');
+    const term = new FakeTerminal();
+    const a = new CediaTui({ cwd: repo, model: 'faux', permission: 'workspace', sandbox: 'off', spawn: 'off' }, term, undefined, () => {});
+    a.start();
+    const type = (text: string) => (term.input(text), term.input('\r'));
+    const script = (steps: unknown[]) => {
+      const p = join(repo, '..', `script-${Math.random()}.json`);
+      writeFileSync(p, JSON.stringify(steps));
+      process.env.CEDIA_FAUX_SCRIPT = p;
+    };
+    const shown = () => plain(a.chat.render(100).join('\n'));
+    script([call('c1', 'echo made > made.txt && echo more >> base.txt'), reply('done')]);
+    type('make made.txt');
+    await a.idle();
+    // The user's own file is not the thread's.
+    writeFileSync(join(repo, 'mine.txt'), 'mine\n');
+    script([reply('```\nAdd made.txt and extend base.txt\n\nOne line each.\n```')]);
+    type('/commit');
+    await a.idle();
+    expect(shown()).toContain('commit 2 files: base.txt, made.txt');
+    expect(shown()).toContain('Add made.txt and extend base.txt');
+    type('y');
+    await a.idle();
+    const log = git('log', '-1', '--format=%B%n--%n', '--name-only').stdout.toString();
+    expect(log).toContain('Add made.txt and extend base.txt\n\nOne line each.');
+    expect(log).toContain('base.txt');
+    expect(log).toContain('made.txt');
+    expect(log).not.toContain('mine.txt');
+    type('/commit');
+    await a.idle();
+    expect(shown()).toContain('nothing this thread changed differs from HEAD');
+
+    type('/pr');
+    expect(shown()).toContain('main is the default branch: cedia never pushes to it');
+    git('switch', '-q', '-c', 'feature');
+    const gh = join(remote, 'gh');
+    writeFileSync(gh, '#!/bin/sh\necho "https://example.test/pr/1 $*"\n');
+    chmodSync(gh, 0o755);
+    process.env.CEDIA_GH_BIN = gh;
+    type('/pr');
+    expect(shown()).toContain('push feature to origin and open a pull request into main?');
+    type('no');
+    expect(shown()).toContain('not done: the push');
+    type('/pr');
+    type('y');
+    await a.idle();
+    delete process.env.CEDIA_GH_BIN;
+    expect(shown()).toContain('https://example.test/pr/1 pr create --fill --base main --head feature');
+    expect(Bun.spawnSync(['git', 'rev-parse', '--verify', '-q', 'refs/heads/feature'], { cwd: remote }).exitCode).toBe(0);
+    a.stop();
   });
 
   test('escapes and control characters from commands never reach the screen', () => {

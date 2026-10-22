@@ -1,10 +1,15 @@
 import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, Text, TUI, matchesKey, truncateToWidth, type Component, type MarkdownTheme, type Terminal } from '@mariozechner/pi-tui';
-import { cediaHome, loadRoles } from '../../core/config.ts';
+import { readFileSync } from 'node:fs';
+import { cediaHome, loadPrivacy, loadRoles } from '../../core/config.ts';
+import { COMMIT_SYSTEM, commitFiles, commitMessage, commitPatch, commitPrompt, currentBranch, defaultBranch, prBlocked, pushAndOpenPr, recentSubjects, threadChanges } from '../../core/project/commit.ts';
+import { runPrompt } from '../../core/loop/run.ts';
+import { resolveModel } from '../../core/providers/catalog.ts';
+import { providerFor } from '../../core/providers/index.ts';
 import { gitStatusAsync, statusText, workingDiff } from '../../core/project/git.ts';
 import { threadLine, threadsDir, ThreadStore } from '../../core/project/threads.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from '../../core/project/undo.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
-import { projectKey } from '../../core/session/log.ts';
+import { projectKey, SessionLog, sessionPath } from '../../core/session/log.ts';
 import type { HeadlessResult, JsonObject, SessionEvent } from '../../core/types.ts';
 import { decode, type CoreMessage } from '../../protocol/index.ts';
 import { receipt, runHeadless, type HeadlessArgs } from '../headless/main.ts';
@@ -46,6 +51,8 @@ export const COMMANDS: { name: string; description: string }[] = [
   { name: 'diff', description: 'working tree changes, and what changed since the last turn started' },
   { name: 'undo', description: "put back the files the last turn changed ('/undo force' takes files changed since too)" },
   { name: 'redo', description: 'put them forward again' },
+  { name: 'commit', description: "commit the files this thread changed, with a message a model writes and you confirm ('/commit <message>' writes your own)" },
+  { name: 'pr', description: 'push this branch and open a pull request through gh (never from the default branch); asks first' },
   { name: 'new', description: 'start a new thread' },
   { name: 'thread', description: 'go on with a thread of this project: /thread <id>, or list them' },
   { name: 'model', description: 'the model the next turn runs on: /model <ref>' },
@@ -97,6 +104,8 @@ export class CediaTui {
   private live: { md: Markdown; text: string } | undefined;
   private streamed = false;
   private readonly store: ThreadStore;
+  // A step waiting for the user's yes (a commit, a push): the next line answers it.
+  private pending: { what: string; yes: () => Promise<void> | void } | undefined;
   // Read again when files may have changed (a call's snapshot, the end of a turn, a command), not on every event.
   private git: string | undefined;
 
@@ -220,6 +229,14 @@ export class CediaTui {
     if (!text) return;
     this.editor.addToHistory(text);
     this.editor.setText('');
+    if (this.pending) {
+      const p = this.pending;
+      this.pending = undefined;
+      if (/^(y|yes)$/i.test(text)) return void this.busy(() => p.yes());
+      this.say(dim(`not done: ${p.what}`));
+      // A plain no ends there; anything else is the next prompt or command as well.
+      if (/^(n|no)$/i.test(text)) return;
+    }
     if (text.startsWith('/')) return this.command(text.slice(1));
     if (this.running) {
       this.say(yellow('a turn is running: wait for it, or stop it with Esc'));
@@ -339,6 +356,10 @@ export class CediaTui {
         case 'undo':
         case 'redo':
           return this.restore(name, rest[0] === 'force');
+        case 'commit':
+          return void this.busy((signal) => this.commit(rest.join(' '), signal));
+        case 'pr':
+          return this.pr();
         case 'new':
           this.thread = undefined;
           this.context = 0;
@@ -387,6 +408,68 @@ export class CediaTui {
     }
     const cut = lines.length - MAX_DIFF_LINES;
     this.say((cut > 0 ? [...lines.slice(0, MAX_DIFF_LINES), dim(`[${cut} more lines: run git diff]`)] : lines).join('\n'));
+  }
+
+  // Work that is not a turn but must not overlap one (a commit message, a push): shown as running meanwhile.
+  private async busy(work: (signal: AbortSignal) => Promise<void> | void) {
+    const stop = new AbortController();
+    let release = () => {};
+    this.running = { stop, done: new Promise<void>((r) => (release = r)) };
+    this.refreshStatus();
+    try {
+      await work(stop.signal);
+    } catch (e) {
+      this.say(red((e as Error).message));
+    } finally {
+      this.running = undefined;
+      this.refreshStatus(true);
+      release();
+    }
+  }
+
+  // The message comes from the next turn's model, in a session of its own with no tools, logged like any other.
+  private async draftMessage(prompt: string, signal: AbortSignal): Promise<string> {
+    const model = resolveModel(this.model ?? loadRoles({}).code.ref);
+    const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
+    const id = crypto.randomUUID();
+    const log = SessionLog.create({ id, path: sessionPath(this.args.cwd, id) });
+    const r = await runPrompt({ log, provider: providerFor(model, { fauxScript }), model, tools: [], system: COMMIT_SYSTEM, cwd: this.args.cwd, role: 'commit', privacy: loadPrivacy(this.args.cwd, this.args.privacy), maxTurns: 2, signal }, prompt);
+    this.spent += r.costUsd;
+    if (r.subtype !== 'success') throw new Error(`the commit message could not be written (${r.subtype}): write one with /commit <message>`);
+    return commitMessage(r.result);
+  }
+
+  private async commit(own: string, signal: AbortSignal) {
+    if (!this.thread) return this.say(dim('no thread yet: nothing to commit'));
+    const snaps = workspaceSnapshots(this.args.cwd, cediaHome());
+    if (!snaps) return this.say(red('no snapshots for this directory, so cedia cannot tell which files the thread changed'));
+    const files = threadChanges(this.store, this.thread, this.args.cwd, snaps);
+    if (!files.length) return this.say(dim('nothing this thread changed differs from HEAD'));
+    const message = own.trim() || (await this.draftMessage(commitPrompt(commitPatch(this.args.cwd, files), files, recentSubjects(this.args.cwd)), signal));
+    if (!message) return this.say(red('the message came back empty: write one with /commit <message>'));
+    this.say([bold(`commit ${files.length} file${files.length === 1 ? '' : 's'}: ${files.join(', ')}`), '', message, '', yellow('commit this? y to commit; n, or anything else you type, cancels')].join('\n'));
+    this.pending = {
+      what: 'the commit',
+      yes: () => {
+        const r = commitFiles(this.args.cwd, files, message);
+        this.say(r.ok ? green(r.out.split('\n')[0] ?? 'committed') : red(`git commit failed: ${r.out}`));
+      },
+    };
+  }
+
+  private pr() {
+    const blocked = prBlocked(this.args.cwd);
+    if (blocked) return this.say(red(blocked));
+    const branch = currentBranch(this.args.cwd)!;
+    const base = defaultBranch(this.args.cwd);
+    this.say(yellow(`push ${branch} to origin and open a pull request${base ? ` into ${base}` : ''}? y to go on; n, or anything else you type, cancels`));
+    this.pending = {
+      what: 'the push',
+      yes: async () => {
+        const r = await pushAndOpenPr(this.args.cwd);
+        this.say(r.ok ? green(r.out) : red(r.out));
+      },
+    };
   }
 
   private restore(action: 'undo' | 'redo', force: boolean) {
