@@ -19,6 +19,9 @@
     "Schedule": {
       "$ref": "#/definitions/Schedule"
     },
+    "CommandList": {
+      "$ref": "#/definitions/CommandList"
+    },
     "VersionInfo": {
       "$ref": "#/definitions/VersionInfo"
     }
@@ -193,7 +196,8 @@
         "todo",
         "profiles",
         "open_thread",
-        "schedules"
+        "schedules",
+        "commands"
       ]
     },
     "Check": {
@@ -286,6 +290,53 @@
           "additionalProperties": false
         }
       ]
+    },
+    "CommandEntry": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "skill"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "user",
+            "repository"
+          ]
+        },
+        "argumentHint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "kind",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "CommandList": {
+      "type": "object",
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CommandEntry"
+          }
+        }
+      },
+      "required": [
+        "commands"
+      ],
+      "additionalProperties": false
     },
     "CompactionBlock": {
       "type": "object",

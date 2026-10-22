@@ -15,6 +15,7 @@ cedia is a personal coding harness written from scratch in TypeScript on Bun. `S
 - `bin/cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | rate <id> <up|down> | archive <id> | diff <id> | undo <id> | redo <id> | rewind <id> [<n>]]`: the project's threads. `undo` and `redo` move the files of the thread's last turn that changed files, from the shadow snapshots; `rewind` takes the thread back to just before run n, conversation and files together.
 - `bin/cedia schedules [list | due | add <when> <prompt> --thread <id> [--every <dur>] | cancel|pause|resume|fire <id>] [--json]`: the project's scheduled prompts. cedia only says what is due; the desktop's daemon (or cron) fires and runs each one.
 - `bin/cedia memory [list | add <text> | forget <id>]`: the project's memory, which every new session gets in its first turn.
+- `bin/cedia commands [--json]`: what a client offers for `/`: each skill here (`CommandList`). A prompt that starts with `/<skill>` asks the writer to load that skill first.
 - `bin/cedia skills`: the skills a session here can load (`~/.cedia/skills`, and the repository's `.agents/skills`, `.claude/skills`, `.cursor/skills`); the model loads one with the `skill` tool.
 - MCP servers come from `mcpServers` in `~/.cedia/settings.json` only (`src/core/mcp/`); `test/mcp/server.ts` is a fake stdio server for tests.
 - `bin/cedia --version --json`: version, protocol schema hash and capabilities, for clients.

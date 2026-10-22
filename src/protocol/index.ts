@@ -8,6 +8,7 @@ import type { HeadlessResult, SessionEvent, StreamEvent } from '../core/types.ts
 export type { SessionEvent } from '../core/types.ts';
 export type { ThreadEvent } from '../core/project/threads.ts';
 export type { Schedule, ScheduleEvent } from '../core/project/schedules.ts';
+export type { CommandEntry, CommandList } from '../core/skills/skills.ts';
 export type { Capability, VersionInfo } from './version.ts';
 
 export type CoreMessage = { type: 'event'; event: SessionEvent } | { type: 'stream'; event: StreamEvent } | HeadlessResult;

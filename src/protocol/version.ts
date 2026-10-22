@@ -25,7 +25,8 @@ export type Capability =
   | 'todo' // --todo: the todo tool and the 'todo' thread event, a thread's progress
   | 'profiles' // --profile, profiles in settings, the profile in a thread's open event
   | 'open_thread' // the coordinator profile's open_thread: threads opened 'queued' with `by`, for a client to run
-  | 'schedules'; // cedia schedules, the schedule tool for profiles with schedule, Schedule and ScheduleEvent
+  | 'schedules' // cedia schedules, the schedule tool for profiles with schedule, Schedule and ScheduleEvent
+  | 'commands'; // cedia commands --json (CommandList), and a prompt starting /<skill> loads that skill
 
 export type VersionInfo = { name: 'cedia'; version: string; protocol: string; capabilities: Capability[] };
 
@@ -33,7 +34,7 @@ export type VersionInfo = { name: 'cedia'; version: string; protocol: string; ca
 export const PROTOCOL = hash(schemaText as unknown as string);
 
 export function versionInfo(): VersionInfo {
-  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask', 'todo', 'profiles', 'open_thread', 'schedules', 'worktree.newest-wins', 'spawn.best-of-n'];
+  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask', 'todo', 'profiles', 'open_thread', 'schedules', 'worktree.newest-wins', 'spawn.best-of-n', 'commands'];
   if (processKeychain()) capabilities.push('keychain');
   return { name: 'cedia', version: VERSION, protocol: PROTOCOL, capabilities };
 }

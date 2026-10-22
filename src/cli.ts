@@ -9,7 +9,7 @@ import { cediaHome } from './core/config.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
 import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Schedule } from './core/project/schedules.ts';
-import { loadSkills } from './core/skills/skills.ts';
+import { commandList, loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
 import { rewindThread, rewoundText, runLines } from './core/project/rewind.ts';
 import { workspaceSnapshots } from './core/safety/snapshot.ts';
@@ -110,6 +110,9 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia memory [list | add <text> | forget <id>]
                                             the project's memory: short facts every new session gets in its first
                                             turn; writer sessions add to it with the remember tool
+       cedia commands [--json] [--cwd <dir>]
+                                            what a client offers for /: each skill here; a prompt that starts with
+                                            /<skill> asks the writer to load it first
        cedia skills [--cwd <dir>]           the skills a session here can load: the user's (~/.cedia/skills) and the
                                             repository's (.agents/skills, .claude/skills, .cursor/skills)
 
@@ -126,6 +129,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'memory') return memory(argv.slice(1));
   if (argv[0] === 'schedules') return schedules(argv.slice(1));
   if (argv[0] === 'skills') return skills(argv.slice(1));
+  if (argv[0] === 'commands') return commands(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
   const { values, positionals } = parseArgs({
     args: argv,
@@ -393,6 +397,20 @@ function skills(argv: string[]): number {
   // A repository's description could carry terminal escapes; they are shown as text.
   const shown = (t: string) => t.replace(/[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
   console.log(found.length ? found.map((s) => `${s.name}  (${s.source})  ${shown(s.dir)}\n    ${shown(s.description)}`).join('\n') : 'no skills here');
+  return 0;
+}
+
+function commands(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { cwd: { type: 'string' }, json: { type: 'boolean' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const list = commandList(loadSkills(resolve(parsed.values.cwd ?? process.cwd()), cediaHome()));
+  const shown = (t: string) => t.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
+  console.log(parsed.values.json ? JSON.stringify(list) : list.commands.map((c) => `/${c.name}${c.argumentHint ? ` ${shown(c.argumentHint)}` : ''}  ${shown(c.description)}`).join('\n') || 'no commands here');
   return 0;
 }
 

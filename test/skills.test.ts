@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { lintSession } from '../src/core/session/lint.ts';
 import { SessionLog } from '../src/core/session/log.ts';
-import { frontMatter, loadSkills, skillsBlock, skillTool } from '../src/core/skills/skills.ts';
+import { commandList, frontMatter, loadSkills, skillCommand, skillsBlock, skillTool } from '../src/core/skills/skills.ts';
 
 function repo() {
   const dir = mkdtempSync(join(tmpdir(), 'cedia-skills-'));
@@ -103,5 +103,35 @@ describe('skills', () => {
     const result = events.find((e) => e.kind === 'tool_result');
     expect(result && result.kind === 'tool_result' && JSON.stringify(result)).toContain('Three lines: five, seven, five syllables.');
     expect(lintSession(events)).toEqual([]);
+  });
+
+  test('each skill is a / command, and a prompt that starts with one asks for it to be loaded first', () => {
+    const dir = repo();
+    skill(join(dir, '.agents', 'skills'), 'haiku', 'name: haiku\ndescription: answer in haiku\nargument-hint: <topic>');
+    skill(join(dir, '.agents', 'skills'), 'plain', 'name: plain\ndescription: plain words');
+    const found = loadSkills(dir, mkdtempSync(join(tmpdir(), 'h-')));
+    expect(commandList(found).commands).toEqual([
+      { name: 'haiku', description: 'answer in haiku', kind: 'skill', source: 'repository', argumentHint: '<topic>' },
+      { name: 'plain', description: 'plain words', kind: 'skill', source: 'repository' },
+    ]);
+    expect(skillCommand('/haiku the sea', found)).toBe('/haiku the sea\n\n(/haiku is the haiku skill: load it with the skill tool first, then do what it says, for the text after the command.)');
+    expect(skillCommand('/plain', found)).toBe('/plain\n\n(/plain is the plain skill: load it with the skill tool first, then do what it says.)');
+    expect(skillCommand('/haikus x', found)).toBeUndefined();
+    expect(skillCommand('fix /haiku', found)).toBeUndefined();
+
+    const home = join(dir, '.home');
+    const p = Bun.spawnSync([join(import.meta.dir, '..', 'bin', 'cedia'), 'commands', '--json', '--cwd', dir], { env: { ...process.env, CEDIA_HOME: home } });
+    expect(JSON.parse(p.stdout.toString()).commands.map((c: { name: string }) => c.name)).toEqual(['haiku', 'plain']);
+
+    // Through a run: the writer's message carries the request to load it.
+    const script = join(dir, '.script.json');
+    writeFileSync(script, JSON.stringify([{ blocks: [{ type: 'text', text: 'ok' }] }]));
+    const r = Bun.spawnSync([join(import.meta.dir, '..', 'bin', 'cedia'), '-m', 'faux', '-p', '/haiku the sea', '--cwd', dir, '--sandbox', 'off'], { env: { ...process.env, CEDIA_FAUX_SCRIPT: script, CEDIA_HOME: home } });
+    expect(r.exitCode).toBe(0);
+    const sessions = join(home, 'sessions');
+    const [project] = readdirSync(sessions);
+    const [file] = readdirSync(join(sessions, project!));
+    const events = SessionLog.load(join(sessions, project!, file!)).events;
+    expect(JSON.stringify(events.filter((e) => e.kind === 'user'))).toContain('load it with the skill tool first');
   });
 });

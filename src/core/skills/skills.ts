@@ -16,7 +16,12 @@ import type { ToolSpec } from '../tools/registry.ts';
 // inside its folder and never when they look like secrets, and all of it is redacted and made inert. Neither kind
 // can widen what the permission mode and the sandbox allow.
 
-export type Skill = { name: string; description: string; dir: string; source: 'user' | 'repository' };
+export type Skill = { name: string; description: string; dir: string; source: 'user' | 'repository'; argumentHint?: string };
+
+// `cedia commands --json`: what a client offers when the person types `/`. Each skill is a command; `/<name> <text>`
+// sent as a prompt asks the writer to load that skill first (skillCommand).
+export type CommandEntry = { name: string; description: string; kind: 'skill'; source: Skill['source']; argumentHint?: string };
+export type CommandList = { commands: CommandEntry[] };
 
 export const SKILL_DIRS = ['.agents/skills', '.claude/skills', '.cursor/skills'];
 const NAME = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
@@ -69,7 +74,8 @@ function readSkill(dir: string, source: Skill['source']): Skill | undefined {
     // Redacted before it is cut, so a cut cannot split a secret past the redaction.
     const description = redactSecrets((fm.fields.description ?? '').replace(/\s+/g, ' ').trim()).text;
     if (!NAME.test(name) || !description) return undefined;
-    return { name, description: description.slice(0, MAX_DESCRIPTION), dir, source };
+    const hint = redactSecrets((fm.fields['argument-hint'] ?? '').replace(/\s+/g, ' ').trim()).text.slice(0, 200);
+    return { name, description: description.slice(0, MAX_DESCRIPTION), dir, source, ...(hint ? { argumentHint: hint } : {}) };
   } catch {
     return undefined;
   }
@@ -199,4 +205,18 @@ export function skillTool(skills: Skill[]): ToolSpec {
       };
     },
   };
+}
+
+export const commandList = (skills: Skill[]): CommandList => ({
+  commands: skills.map((s) => ({ name: s.name, description: s.description, kind: 'skill', source: s.source, ...(s.argumentHint ? { argumentHint: s.argumentHint } : {}) })),
+});
+
+// A prompt that starts with `/<skill>`: the person picked that skill from the command list. The prompt goes as
+// typed, with a line asking the writer to load the skill first; any other prompt, `/` or not, is left alone.
+export function skillCommand(prompt: string, skills: Skill[]): string | undefined {
+  const m = /^\/([a-z0-9-]+)(?:\s|$)/.exec(prompt);
+  const skill = m && skills.find((s) => s.name === m[1]);
+  if (!skill) return undefined;
+  const rest = prompt.slice(m[0].length).trim();
+  return `${prompt.trimEnd()}\n\n(/${skill.name} is the ${skill.name} skill: load it with the skill tool first, then do what it says${rest ? ', for the text after the command' : ''}.)`;
 }
