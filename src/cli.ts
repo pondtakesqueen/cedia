@@ -34,6 +34,10 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
                                before falling back (default: settings onQuota, fallback)
       --review <ref>           the review role, after the done gate passes: a model, claude-code[:<model>]
                                (default sonnet there), or none. Changes it asks for go back to the writer once
+      --goal <condition>       keep going until a separate judge finds the condition holds: after each claim of done
+                               it reads the change and answers met, not met (the writer goes on with what is
+                               missing, at most 3 more times) or impossible. Exit 1 unless met
+      --goal-judge <ref>       the judge's model (default: the writer's, in a fresh read-only session)
       --spawn <on|off>         let the writer hand self-contained work to sub-threads (default: settings, on)
       --swarm <ref>            the model explore sub-threads run on (default: roles.swarm in settings, beam)
       --thread <id>            go on with a thread of this project instead of opening a new one
@@ -91,6 +95,8 @@ export async function main(argv: string[]): Promise<number> {
       'handoff-at': { type: 'string' },
       handoff: { type: 'string' },
       review: { type: 'string' },
+      goal: { type: 'string' },
+      'goal-judge': { type: 'string' },
       plan: { type: 'string' },
       check: { type: 'string', multiple: true },
       sandbox: { type: 'string' },
@@ -143,13 +149,16 @@ export async function main(argv: string[]): Promise<number> {
       ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
       ...(values.handoff ? { handoff: values.handoff } : {}),
       ...(values.review ? { review: values.review } : {}),
+      ...(values.goal ? { goal: values.goal } : {}),
+      ...(values['goal-judge'] ? { goalJudge: values['goal-judge'] } : {}),
       ...(values.plan ? { plan: values.plan } : {}),
       ...(values.check ? { checks: values.check } : {}),
       ...(values.sandbox ? { sandbox: values.sandbox } : {}),
       ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),
     });
     if (result.subtype !== 'success' && format === 'text') console.error(`cedia: ${result.subtype}`);
-    return result.subtype === 'success' ? 0 : 1;
+    if (result.goal && result.goal.verdict !== 'met' && format === 'text' && result.subtype === 'success') console.error(`cedia: goal ${result.goal.verdict.replace('_', ' ')}`);
+    return result.subtype === 'success' && (!result.goal || result.goal.verdict === 'met') ? 0 : 1;
   } catch (e) {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;

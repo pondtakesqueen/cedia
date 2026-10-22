@@ -198,6 +198,8 @@ export type HeadlessResult = {
   // The plan the writer was given, and the review of its change (see core/trust/review.ts).
   plan?: Step;
   review?: Step & { verdict: 'approve' | 'changes' | 'unclear'; fixed: boolean };
+  // Light goal mode (core/trust/goal.ts): the condition, the last judge's verdict, and each judgement.
+  goal?: { condition: string; verdict: 'met' | 'not_met' | 'impossible'; rounds: { verdict: 'met' | 'not_met' | 'impossible'; reason: string; judge: string; sessionId: string; costUsd: number }[] };
   // The thread the run belongs to, and every session it took when it handed off or fell back.
   thread?: string;
   sessions?: string[];
