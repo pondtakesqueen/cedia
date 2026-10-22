@@ -29,6 +29,8 @@ import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
 import { applyWorktree, openWorktree, type Worktree } from '../../core/project/worktree.ts';
+import { approachBrief, bestTry, type Try } from '../../core/project/bestof.ts';
+import { bashTool } from '../../core/tools/bash.ts';
 import { decide } from '../../core/safety/policy.ts';
 import { editTool } from '../../core/tools/edit.ts';
 import { sandboxGuarded } from '../../core/safety/sandbox.ts';
@@ -496,17 +498,13 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   // A work sub-thread with worktrees on runs in a git worktree of its own (core/project/worktree.ts), beside the
   // others; only applying its changes runs alone, through ctx.write. Where no worktree can be made (no git, no
   // commit yet) it runs in place as it would without them, through ctx.write as a whole.
-  const spawner: Spawner = async (brief: string, kind: SpawnKind, ctx) => {
-    let wt: Worktree | undefined;
-    if (kind === 'work' && ctx.write) {
-      const base = snapshots?.take();
-      const w = snapshots && base ? openWorktree(args.cwd, snapshots, base, `${threadId ?? 'run'}-${subthreads + 1}-${crypto.randomUUID().slice(0, 8)}`) : { error: 'cedia cannot record this working tree' };
-      if ('error' in w) {
-        say(`cedia: no worktree for the work sub-thread (${w.error}); it runs in place, alone\n`);
-        return ctx.write(() => spawner(brief, kind, { signal: ctx.signal }));
-      }
-      wt = w;
-    }
+  const openWt = () => {
+    const base = snapshots?.take();
+    return snapshots && base ? openWorktree(args.cwd, snapshots, base, `${threadId ?? 'run'}-${subthreads + 1}-${crypto.randomUUID().slice(0, 8)}`) : { error: 'cedia cannot record this working tree' };
+  };
+  // One sub-thread run to its end, in `wt` when it has one; its changes are not applied yet.
+  type Ran = { wt?: Worktree; sub?: string; m: ModelSpec; r: HeadlessResult };
+  const runSub = async (brief: string, kind: SpawnKind, wt: Worktree | undefined): Promise<Ran> => {
     subthreads++;
     spawned[kind]++;
     let m = kind === 'explore' ? explorer : writer.model;
@@ -560,12 +558,19 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       if (store && sub) store.append(sub, { kind: 'state', state: 'failed', result: (e as Error).message });
       throw e;
     }
-    // Its changes reach the parent's files whole or not at all (a conflict writes nothing), however it ended, as
-    // they would have in place: a child whose check cannot pass until another child's part lands is common, and
-    // the parent's done gate wants a check after them either way. Only a stop leaves them out. What did not come
-    // back stays in the worktree for the parent to read, unless the run was stopped.
+    return { ...(wt ? { wt } : {}), ...(sub ? { sub } : {}), m, r };
+  };
+  // Its changes reach the parent's files whole or not at all (a conflict writes nothing), however it ended, as
+  // they would have in place: a child whose check cannot pass until another child's part lands is common, and
+  // the parent's done gate wants a check after them either way. Only a stop leaves them out, and `drop` (a best
+  // of N try that was not kept), which also removes its worktree. What did not come back stays in the worktree
+  // for the parent to read, unless the run was stopped.
+  const land = async ({ wt, sub, m, r }: Ran, ctx: Parameters<Spawner>[2], drop?: string): Promise<SpawnOutcome> => {
     let worktree: SpawnOutcome['worktree'];
-    if (wt && ctx.write) {
+    if (wt && drop) {
+      wt.close();
+      worktree = { applied: [], refused: [], conflicts: [], why: drop };
+    } else if (wt && ctx.write) {
       const w = wt;
       // What the parent's own edit could not write: its deny rules, secret stores and protected paths, and
       // what the sandbox keeps bash from writing.
@@ -574,7 +579,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         // A stop that came while it waited for the parent's files is still a stop.
         const applied = r.subtype !== 'interrupted' && !ac.signal.aborted ? await ctx.write(() => (ac.signal.aborted ? undefined : applyWorktree(w, snapshots!, refuse))) : undefined;
         const keep = !ac.signal.aborted && (!applied || applied.conflicts.length > 0 || applied.refused.length > 0);
-        worktree = { applied: applied?.files ?? [], refused: applied?.refused ?? [], conflicts: applied?.conflicts ?? [], ...(applied ? {} : { why: `the sub-thread ended with ${ac.signal.aborted ? 'a stop' : r.subtype}` }), ...(keep ? { kept: w.cwd } : {}) };
+        worktree = { applied: applied?.files ?? [], refused: applied?.refused ?? [], conflicts: applied?.conflicts ?? [], ...(applied?.newest ? { newest: applied.newest } : {}), ...(applied ? {} : { why: `the sub-thread ended with ${ac.signal.aborted ? 'a stop' : r.subtype}` }), ...(keep ? { kept: w.cwd } : {}) };
         if (keep) w.keep();
         else w.close();
       } catch (e) {
@@ -590,6 +595,61 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       if (r.subtype === 'success' && !worktree?.conflicts.length) store.append(sub, { kind: 'archived', archived: true });
     }
     return { ...(sub ? { thread: sub } : {}), model: m.ref, subtype: r.subtype, result: r.result, costUsd: r.costUsd, changed: r.evidence?.changed ?? [], unverified: r.evidence?.unverified ?? [], ...(worktree ? { worktree } : {}) };
+  };
+  // The run's checks in a worktree, run by cedia in the child's sandbox: how many exit 0.
+  const passing = async (wt: Worktree) => {
+    let passed = 0;
+    for (const command of checks) {
+      if (ac.signal.aborted) break;
+      const out = await bashTool.run({ command, timeout_ms: 600_000 }, { cwd: wt.cwd, signal: ac.signal, wrap: sandbox.within(wt.dir) });
+      if (out.exitCode === 0) passed++;
+    }
+    return passed;
+  };
+  // Best of N (core/project/bestof.ts): one work sub-thread per approach, each in a worktree of its own, all at
+  // once; then the run's checks in each, and only the one that passes most is applied.
+  const race = async (brief: string, approaches: string[], ctx: Parameters<Spawner>[2]): Promise<SpawnOutcome> => {
+    const wts: Worktree[] = [];
+    for (const _ of approaches) {
+      const w = openWt();
+      if ('error' in w) {
+        for (const o of wts) o.close();
+        say(`cedia: no worktree for best of ${approaches.length} (${w.error}); the first approach runs in place, alone\n`);
+        return ctx.write!(() => spawner(`${brief}\n\nTake this approach: ${approaches[0]}`, 'work', { signal: ctx.signal }));
+      }
+      wts.push(w);
+    }
+    const settled = await Promise.allSettled(approaches.map((a, i) => runSub(approachBrief(brief, a, approaches.length), 'work', wts[i])));
+    const ran = settled.flatMap((s) => (s.status === 'fulfilled' ? [s.value] : []));
+    if (!ran.length) throw (settled[0] as PromiseRejectedResult).reason;
+    const tries: Try[] = [];
+    for (const [i, s] of settled.entries()) {
+      if (s.status === 'rejected') {
+        tries.push({ approach: approaches[i]!, subtype: 'error_during_execution', passed: 0, checks: checks.length, unverified: 0, costUsd: 0 });
+        continue;
+      }
+      const { wt, sub, r } = s.value;
+      const passed = wt && r.subtype !== 'interrupted' && !ac.signal.aborted && wt.intact() ? await passing(wt) : 0;
+      tries.push({ approach: approaches[i]!, ...(sub ? { thread: sub } : {}), subtype: ac.signal.aborted ? 'interrupted' : r.subtype, passed, checks: checks.length, unverified: r.evidence?.unverified.length ?? 0, costUsd: r.costUsd });
+    }
+    const kept = bestTry(tries);
+    const outcomes: (SpawnOutcome | undefined)[] = [];
+    for (const [i, s] of settled.entries()) outcomes.push(s.status === 'fulfilled' ? await land(s.value, ctx, i === kept ? undefined : kept === undefined ? undefined : `approach ${kept + 1} was kept instead`) : undefined);
+    const first = outcomes[kept ?? outcomes.findIndex(Boolean)]!;
+    return { ...first, costUsd: tries.reduce((sum, t) => sum + t.costUsd, 0), bestOf: { tries, ...(kept !== undefined ? { kept } : {}) } };
+  };
+  const spawner: Spawner = async (brief: string, kind: SpawnKind, ctx) => {
+    if (kind === 'work' && ctx.write && ctx.approaches) return race(brief, ctx.approaches, ctx);
+    let wt: Worktree | undefined;
+    if (kind === 'work' && ctx.write) {
+      const w = openWt();
+      if ('error' in w) {
+        say(`cedia: no worktree for the work sub-thread (${w.error}); it runs in place, alone\n`);
+        return ctx.write(() => spawner(brief, kind, { signal: ctx.signal }));
+      }
+      wt = w;
+    }
+    return land(await runSub(brief, kind, wt), ctx);
   };
   const pool = spawnPool();
   const spawn = spawnTool(spawner, undefined, { worktrees: spawnMode === 'worktree', pool });

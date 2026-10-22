@@ -188,6 +188,8 @@
         "plan",
         "review",
         "ask",
+        "worktree.newest-wins",
+        "spawn.best-of-n",
         "todo",
         "profiles",
         "open_thread",
