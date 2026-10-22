@@ -371,6 +371,10 @@ describe('sub-threads (offline, faux)', () => {
     expect(run.err).toContain("a sub-thread's context reached 2000 tokens; handing it off to a new session");
     // The parent itself did not hand off: one writer session.
     expect(result.sessions).toHaveLength(1);
+    // The result counts the sub-thread's handoff, and keeps its context apart from the parent's.
+    expect(result.spawned).toMatchObject({ explore: 0, work: 1, handoffs: 1 });
+    expect(result.spawned.peakContext).toBeGreaterThan(2000);
+    expect(result.peakContext).toBeLessThan(result.spawned.peakContext);
     const parent = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
     const report = parent.events.find((e): e is EventOf<'tool_result'> => e.kind === 'tool_result' && e.callId === 's1')!;
     expect(report).toMatchObject({ status: 'completed' });

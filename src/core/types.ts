@@ -156,7 +156,8 @@ export type HeadlessResult = {
   result: string;
   evidence?: Evidence;
   timing?: Timing;
-  // Tokens in the largest context one reply saw (the request plus the reply); across sessions, the largest.
+  // Tokens in the largest context one reply saw (the request plus the reply); across the run's own sessions, the
+  // largest. A sub-thread's sessions count in spawned.peakContext instead.
   peakContext?: number;
   // The plan the writer was given, and the review of its change (see core/trust/review.ts).
   plan?: Step;
@@ -166,7 +167,11 @@ export type HeadlessResult = {
   sessions?: string[];
   // Sub-threads the run spawned (core/tools/spawn.ts); their spend is in costUsd.
   subthreads?: number;
+  spawned?: Spawned;
 };
+
+// Sub-threads by kind, the handoffs their sessions made, and the largest context one of their replies saw.
+export type Spawned = { explore: number; work: number; handoffs: number; peakContext: number };
 
 // A role run around the writer. `via: 'claude-code'` is the user's own Claude Code CLI (their subscription): its
 // session lives in Claude Code, and its reported cost is not added to costUsd.

@@ -405,6 +405,9 @@
         },
         "subthreads": {
           "type": "number"
+        },
+        "spawned": {
+          "$ref": "#/definitions/Spawned"
         }
       },
       "required": [
@@ -994,6 +997,30 @@
         "quota",
         "rejected"
       ]
+    },
+    "Spawned": {
+      "type": "object",
+      "properties": {
+        "explore": {
+          "type": "number"
+        },
+        "work": {
+          "type": "number"
+        },
+        "handoffs": {
+          "type": "number"
+        },
+        "peakContext": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "explore",
+        "work",
+        "handoffs",
+        "peakContext"
+      ],
+      "additionalProperties": false
     },
     "Step": {
       "type": "object",
