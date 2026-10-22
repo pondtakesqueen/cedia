@@ -221,7 +221,8 @@ function cedia(dir: string, script: unknown[], args: string[]) {
 const child = (key: string, command: string, said: string) => [call(`${key}-1`, command, key), call(`${key}-2`, 'true', key), reply(said, key)];
 const report = (out: { sessionId: string }, dir: string, callId: string) => {
   const { SessionLog, projectSlug } = require('../src/core/session/log.ts');
-  const root = join(dir, '..', 'home', 'sessions', projectSlug(dir));
+  // Sessions are kept under the real path (macOS's temp dir is behind a symlink).
+  const root = join(dir, '..', 'home', 'sessions', projectSlug(require('node:fs').realpathSync(dir)));
   const log = require('node:fs')
     .readdirSync(root)
     .map((f: string) => SessionLog.load(join(root, f)))

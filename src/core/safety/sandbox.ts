@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { secretPaths } from './secrets.ts';
@@ -107,8 +107,10 @@ export async function openSandbox(
       placeholders: missing,
       wrap: (command) => manager.wrapWithSandbox(command),
       within: (dir) => {
-        // Its .git file names the git dir that git there uses, hooks and all.
-        const filesystem = { denyRead: secretPaths(opts.cediaHome), allowWrite: [dir], denyWrite: [join(dir, '.git')].filter((p) => existsSync(p)) };
+        // By its real path: the sandbox matches paths as the kernel resolves them (macOS's temp dir is behind a
+        // symlink). Its .git file names the git dir that git there uses, hooks and all.
+        const real = realpathSync(dir);
+        const filesystem = { denyRead: secretPaths(opts.cediaHome), allowWrite: [real], denyWrite: [join(real, '.git')].filter((p) => existsSync(p)) };
         return (command) => manager.wrapWithSandbox(command, undefined, { filesystem });
       },
       close: () => manager.reset(),
