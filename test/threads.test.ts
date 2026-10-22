@@ -10,7 +10,7 @@ import { fauxProvider, type FauxStep } from '../src/core/providers/faux.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 import { projectKey, projectRoot, projectSlug, SessionLog } from '../src/core/session/log.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
-import { spawnNudge, spawnTool } from '../src/core/tools/spawn.ts';
+import { spawnNudge, spawnNudgeAt, spawnTool } from '../src/core/tools/spawn.ts';
 import { recallTool, threadTools } from '../src/core/tools/threads.ts';
 import type { EventOf, SessionEvent } from '../src/core/types.ts';
 
@@ -211,6 +211,12 @@ describe('handoff in the loop', () => {
 
   const spawner = spawnTool(async () => ({ model: 'faux/scripted', subtype: 'success', result: 'found it', costUsd: 0, changed: [], unverified: [] }));
   const nudges = (log: SessionLog) => log.events.filter((e) => e.kind === 'reminder' && e.text.endsWith(spawnNudge(0).split('tokens')[1]!));
+
+  test('the reminder comes at a third of the handoff point, and by 30k at the latest, while there is reading left to hand off', () => {
+    expect(spawnNudgeAt(60_000)).toBe(20_000);
+    expect(spawnNudgeAt(90_000)).toBe(30_000);
+    expect(spawnNudgeAt(150_000)).toBe(30_000);
+  });
 
   test('past spawnNudgeAt, a session with the spawn tool is reminded of it once', async () => {
     const { r, log } = await run([tool('c1', 'big', {}), tool('c2', 'big', {}), reply('done')], { spawnNudgeAt: 2000, tools: [...CORE_TOOLS, spawner, bigTool] });
