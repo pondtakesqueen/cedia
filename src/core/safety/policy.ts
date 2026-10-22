@@ -118,8 +118,8 @@ function matches(rule: string, tool: string, commands: string[][] | null | undef
 function writesDenied(rule: string, command: string, commands: string[][], cwd: string): boolean {
   const m = /^(edit|write)\((.+)\)$/.exec(rule.trim());
   if (!m || checkReadOnly(command).ok) return false;
-  const re = glob(m[2]);
-  const targets = [...command.matchAll(/>>?\|?\s*([^\s;|&<>()]+)/g)].map((t) => t[1].replace(/^['"]|['"]$/g, ''));
+  const re = glob(m[2]!);
+  const targets = [...command.matchAll(/>>?\|?\s*([^\s;|&<>()]+)/g)].map((t) => t[1]!.replace(/^['"]|['"]$/g, ''));
   const words = commands.flatMap((argv) => argv.slice(1)).filter((w) => !w.startsWith('-'));
   return [...words, ...targets].some((w) => {
     const full = resolve(cwd, expandHome(w));
