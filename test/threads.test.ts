@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPrompt } from '../src/core/loop/run.ts';
 import { HANDOFF_NO_TOOLS, HANDOFF_PROMPT, defaultHandoffAt, resumeChoice } from '../src/core/project/handoff.ts';
-import { foldThread, threadsDir, ThreadStore, titleOf } from '../src/core/project/threads.ts';
+import { foldThread, threadsDir, ThreadStore, titleOf, type TodoState } from '../src/core/project/threads.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, type FauxStep } from '../src/core/providers/faux.ts';
 import { lintSession } from '../src/core/session/lint.ts';
@@ -448,6 +448,106 @@ describe('cedia threads (offline, faux)', () => {
     const bad = JSON.parse(cedia(tmp(), [tool('a1', 'ask_user', { question: 'pick', options: ['only one'] }), reply('went on')], ['-p', 'x', ...base, '--check', 'true', '--ask', 'on']).out);
     expect(bad).toMatchObject({ subtype: 'success', result: 'went on' });
     expect(cedia(tmp(), [], ['-p', 'x', '--ask', 'maybe']).err).toContain('--ask must be on or off');
+  });
+
+  test('--todo on: the writer keeps a todo list, which the thread holds as its progress, even read-only', () => {
+    const dir = tmp();
+    const steps = (states: TodoState[]) => ({ items: ['read the code', 'write the fix', 'run the tests'].map((text, i) => ({ text, state: states[i]! })) });
+    const r = JSON.parse(
+      cedia(dir, [tool('t1', 'todo', steps(['doing', 'pending', 'pending'])), tool('t2', 'todo', steps(['done', 'doing', 'pending'])), tool('t3', 'todo', { items: [{ text: '', state: 'done' }] }), reply('stopped here')], ['-p', 'fix it', '--output-format', 'json', '--sandbox', 'off', '--todo', 'on']).out,
+    );
+    expect(r).toMatchObject({ subtype: 'success' });
+    const log = sessionsOf(dir).find((l) => l.id === r.sessionId)!;
+    const results = log.events.filter((e): e is EventOf<'tool_result'> => e.kind === 'tool_result').map((e) => e.output.text);
+    expect(results).toEqual(['Saved: 0/3 done; now: read the code.', 'Saved: 1/3 done; now: write the fix.', 'every item needs text']);
+    const t = storeOf(dir).read(r.thread);
+    expect(t.todo).toEqual(steps(['done', 'doing', 'pending']).items);
+    expect(storeOf(dir).events(r.thread).filter((e) => e.kind === 'todo')).toHaveLength(2);
+    expect(threadsCli(dir, 'list').out).toContain('[1/3] fix it');
+    expect(threadsCli(dir, 'show', r.thread).out).toContain('todo 1/3:\n  [x] read the code\n  [>] write the fix\n  [ ] run the tests');
+    // Off by default.
+    const off = JSON.parse(cedia(tmp(), [reply('done')], ['-p', 'x', '--output-format', 'json', '--sandbox', 'off']).out);
+    expect(off.subtype).toBe('success');
+    expect(cedia(tmp(), [], ['-p', 'x', '--todo', 'maybe']).err).toContain('--todo must be on or off');
+  });
+
+  test('--profile coordinator: read-only, opens queued threads with open_thread, and the thread keeps its profile', () => {
+    const dir = tmp();
+    const r = JSON.parse(
+      cedia(
+        dir,
+        [tool('o1', 'open_thread', { task: 'Fix the login bug in src/login.ts; report the failing case.', title: 'Login bug' }), tool('o2', 'open_thread', { task: 'Write the release notes' }), call('c1', 'echo x > f.txt'), reply('opened two threads')],
+        ['-p', 'fix login and write notes', '--output-format', 'json', '--sandbox', 'off', '--profile', 'coordinator'],
+      ).out,
+    );
+    expect(r).toMatchObject({ subtype: 'success', result: 'opened two threads' });
+    const log = sessionsOf(dir).find((l) => l.id === r.sessionId)!;
+    expect(head(log.events).tools.map((t) => t.name)).toEqual(expect.arrayContaining(['open_thread', 'todo', 'ask_user', 'read_thread', 'message_thread', 'spawn']));
+    expect(JSON.stringify(log.events)).toContain('<profile name=\\"coordinator\\">');
+    // Read-only: the coordinator does not do the work.
+    expect(log.events.filter((e) => e.kind === 'tool_result').at(-1)).toMatchObject({ status: 'denied' });
+    expect(existsSync(join(dir, 'f.txt'))).toBe(false);
+    const store = storeOf(dir);
+    expect(store.read(r.thread).profile).toBe('coordinator');
+    const opened = store.list().filter((t) => t.by === r.thread);
+    expect(opened.map((t) => [t.title, t.state]).sort()).toEqual([
+      ['Login bug', 'queued'],
+      ['Write the release notes', 'queued'],
+    ]);
+    expect(threadsCli(dir, 'list').out).toContain(`queued   (opened by ${r.thread}) Login bug`);
+    // Its first run makes it working, then done; it runs without the coordinator's profile.
+    const login = opened.find((t) => t.title === 'Login bug')!;
+    const ran = JSON.parse(cedia(dir, [reply('found it')], ['-p', login.task, '--output-format', 'json', '--sandbox', 'off', '--thread', login.id]).out);
+    expect(head(sessionsOf(dir).find((l) => l.id === ran.sessionId)!.events).tools.map((t) => t.name)).not.toContain('open_thread');
+    expect(storeOf(dir).read(login.id).state).toBe('done');
+    // The coordinator's thread goes on with its profile, named or not.
+    const again = JSON.parse(cedia(dir, [reply('nothing new')], ['-p', 'status?', '--output-format', 'json', '--sandbox', 'off', '--thread', r.thread]).out);
+    expect(again.sessionId).toBe(r.sessionId);
+    expect(head(sessionsOf(dir).find((l) => l.id === again.sessionId)!.events).tools.map((t) => t.name)).toContain('open_thread');
+  });
+
+  test('profiles from settings lay over the built-in one; an unknown profile or field is an error', () => {
+    const dir = tmp();
+    mkdirSync(join(dir, 'home'), { recursive: true });
+    writeFileSync(join(dir, 'home', 'settings.json'), JSON.stringify({ profiles: { coordinator: { ask: false }, writer: { permission: 'workspace', todo: true, instructions: 'You write the docs.' } } }));
+    const c = JSON.parse(cedia(dir, [reply('ok')], ['-p', 'x', '--output-format', 'json', '--sandbox', 'off', '--profile', 'coordinator']).out);
+    const names = (id: string) => head(sessionsOf(dir).find((l) => l.id === id)!.events).tools.map((t) => t.name);
+    expect(names(c.sessionId)).toContain('open_thread');
+    expect(names(c.sessionId)).not.toContain('ask_user');
+    const w = JSON.parse(cedia(dir, [call('c1', 'echo x > f.txt'), call('c2', 'true'), reply('wrote')], ['-p', 'y', '--output-format', 'json', '--sandbox', 'off', '--check', 'true', '--profile', 'writer']).out);
+    expect(w.subtype).toBe('success');
+    expect(existsSync(join(dir, 'f.txt'))).toBe(true);
+    expect(names(w.sessionId)).toContain('todo');
+    expect(names(w.sessionId)).not.toContain('open_thread');
+    // A flag wins over the profile.
+    const ro = JSON.parse(cedia(dir, [call('c1', 'echo y > g.txt'), reply('tried')], ['-p', 'z', '--output-format', 'json', '--sandbox', 'off', '--profile', 'writer', '--permission', 'read-only']).out);
+    expect(ro.subtype).toBe('success');
+    expect(existsSync(join(dir, 'g.txt'))).toBe(false);
+    expect(cedia(dir, [], ['-p', 'x', '--profile', 'nobody']).err).toContain('no profile "nobody" (known: coordinator, writer)');
+    writeFileSync(join(dir, 'home', 'settings.json'), JSON.stringify({ profiles: { coordinator: { color: 'red' } } }));
+    expect(cedia(dir, [], ['-p', 'x', '--profile', 'coordinator']).err).toContain('unknown setting "profiles.coordinator.color"');
+  });
+
+  test('the coordinator schedules a prompt for its own thread; the daemon finds it due, fires it and runs it', () => {
+    const dir = tmp();
+    const c = JSON.parse(cedia(dir, [tool('s1', 'schedule', { prompt: 'Check the nightly build.', at: '2020-01-01T00:00:00Z', every: '1d' }), reply('scheduled')], ['-p', 'every morning check the build', '--output-format', 'json', '--sandbox', 'off', '--profile', 'coordinator']).out);
+    expect(c.subtype).toBe('success');
+    const cli = (...a: string[]) => Bun.spawnSync([BIN, 'schedules', ...a, '--cwd', dir], { env: { ...process.env, CEDIA_HOME: join(dir, 'home') } });
+    const due = JSON.parse(cli('due', '--json').stdout.toString());
+    expect(due).toEqual([expect.objectContaining({ prompt: 'Check the nightly build.', thread: c.thread, by: c.thread, every: 1440, enabled: true, next: '2020-01-01T00:00:00.000Z' })]);
+    const fired = JSON.parse(cli('fire', due[0].id, '--json').stdout.toString());
+    expect(fired[0].next > new Date().toISOString()).toBe(true);
+    expect(JSON.parse(cli('due', '--json').stdout.toString())).toEqual([]);
+    const woke = JSON.parse(cedia(dir, [reply('build is green')], ['-p', due[0].prompt, '--output-format', 'json', '--sandbox', 'off', '--thread', c.thread]).out);
+    expect(woke).toMatchObject({ subtype: 'success', thread: c.thread });
+    // By hand: add, pause, list.
+    const added = cli('add', '30m', 'look again', '--thread', c.thread);
+    expect(added.exitCode).toBe(0);
+    const id = /^(s-[0-9a-f]{8})/.exec(added.stdout.toString())![1]!;
+    expect(cli('pause', id).stdout.toString()).toBe(`paused ${id}\n`);
+    expect(cli('list').stdout.toString()).toContain(`${id}  paused`);
+    expect(cli('add', 'later', 'x', '--thread', c.thread).stderr.toString()).toContain('not a time: later');
+    expect(cli('add', '1h', 'x', '--thread', 't-00000000').stderr.toString()).toContain('no thread t-00000000');
   });
 
   test('a read-only session cannot message another thread', () => {

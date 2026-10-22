@@ -4,18 +4,23 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import type { Snapshots } from '../safety/snapshot.ts';
 import { projectSlug } from '../session/log.ts';
+import { cloneTree } from './clone.ts';
+import { newestWins, writtenAt } from './newest.ts';
 
 // A work sub-thread's own copy of the working tree: a git worktree of the user's repository, detached at HEAD and
 // filled with the parent's working tree as it is (uncommitted changes included), so the child sees what the
 // parent sees and has git, while what it writes stays out of the parent's files until it is applied. Several
 // can run at once. The changes come back as a three-way merge in cedia's snapshot store (base: the tree the
 // child started from, ours: the parent's tree now, theirs: the child's), so two children that changed different
-// parts of one file both land, and a change that does not combine is reported instead of written.
+// parts of one file both land, and a change that does not combine is reported instead of written. A lockfile or
+// generated file both changed is not merged by lines: the side that wrote it last wins it whole (newest.ts).
 //
 // The worktree lives in the temp dir, in a directory only this user can enter; the child's sandbox lets bash
 // write only inside its own worktree. What git ignores in the parent is brought in so the checks run there and
-// never recorded or applied: directories (node_modules, build output) as links, which the child's sandbox keeps
-// it from writing through, and small files (.env) as copies. Its snapshots run git with the worktree as the work
+// never recorded or applied: directories (node_modules, build output) as copy-on-write clones (clone.ts), which
+// the child may write, installing or building there without touching the parent's, or, where the filesystem
+// cannot clone, as links, which the child's sandbox keeps it from writing through; and small files (.env) as
+// copies. Its snapshots run git with the worktree as the work
 // tree but cedia's own git dir, and only once its directory is checked to be the one made, so neither a swapped
 // directory nor what the child wrote in its .git file is followed.
 
@@ -23,6 +28,8 @@ export type Worktree = {
   // The worktree's root, and the directory the child works in: the parent's cwd at the same place in the repo.
   dir: string;
   cwd: string;
+  // The parent's working directory, which the worktree copies.
+  from: string;
   snapshots: Snapshots & { drop(): void };
   // The tree the child started from.
   base: string;
@@ -33,9 +40,11 @@ export type Worktree = {
   // Keeps the directory, for the parent to read, and drops what recorded it.
   keep(): void;
 };
-export type Applied = { files: string[]; refused: string[]; conflicts: string[] };
+// `newest`: the files both sides changed that are written whole by a tool, and whose version was kept.
+export type Applied = { files: string[]; refused: string[]; conflicts: string[]; newest?: { file: string; kept: 'yours' | 'its' }[] };
 
-// What git ignores and the child gets, at most; an ignored file larger than MAX_COPY is linked, not copied.
+// What git ignores and the child gets, at most; an ignored file larger than MAX_COPY is cloned or linked, not
+// copied.
 const MAX_LINKS = 500;
 const MAX_COPY = 1024 * 1024;
 
@@ -99,7 +108,7 @@ export function openWorktree(cwd: string, parent: Snapshots, base: string, name:
       const st = lstatSync(from);
       if (st.isSymbolicLink()) symlinkSync(readlinkSync(from), to);
       else if (st.isFile() && st.size <= MAX_COPY) copyFileSync(from, to);
-      else symlinkSync(from, to);
+      else if (!cloneTree(from, to)) symlinkSync(from, to);
     }
     // The directories from the worktree's root down to the child's, as they were made.
     const chain = [dir, ...rel.split('/').filter(Boolean).map((_, i, parts) => join(dir, ...parts.slice(0, i + 1)))].map((p) => ({ p, st: lstatSync(p) }));
@@ -117,6 +126,7 @@ export function openWorktree(cwd: string, parent: Snapshots, base: string, name:
     return {
       dir,
       cwd: at,
+      from: cwd,
       snapshots,
       base: start,
       intact,
@@ -142,11 +152,18 @@ export function applyWorktree(wt: Worktree, parent: Snapshots, refuse: (file: st
   const ours = parent.take();
   if (!ours) throw new Error("cannot record the working tree's state");
   const merged = parent.merge(wt.base, ours, theirs);
-  if (merged.conflicts.length) return { files: [], refused: [], conflicts: merged.conflicts };
-  const changed = parent.diff(ours, merged.tree);
+  // What both changed and a tool writes whole: the side that wrote it last wins it, merged lines or conflict.
+  const mine = new Set(parent.diff(wt.base, theirs));
+  const both = newestWins(wt.from, parent.diff(wt.base, ours).filter((f) => mine.has(f)));
+  const newest = both.map((file) => ({ file, kept: writtenAt(wt.cwd, file) > writtenAt(wt.from, file) ? ('its' as const) : ('yours' as const) }));
+  const conflicts = merged.conflicts.filter((f) => !both.includes(f));
+  if (conflicts.length) return { files: [], refused: [], conflicts };
+  const side = (kept: 'yours' | 'its') => newest.filter((n) => n.kept === kept).map((n) => n.file);
+  const tree = parent.pick(parent.pick(merged.tree, side('its'), theirs), side('yours'), ours);
+  const changed = parent.diff(ours, tree);
   const refused = changed.filter(refuse);
   const wanted = changed.filter((f) => !refused.includes(f));
   // A nested repository the child made is not a file to write.
-  const skipped = parent.restoreFiles(merged.tree, wanted);
-  return { files: wanted.filter((f) => !skipped.includes(f)), refused: [...refused, ...skipped], conflicts: [] };
+  const skipped = parent.restoreFiles(tree, wanted);
+  return { files: wanted.filter((f) => !skipped.includes(f)), refused: [...refused, ...skipped], conflicts: [], ...(newest.length ? { newest } : {}) };
 }
