@@ -22,8 +22,12 @@ function assistantContent(blocks: AssistantBlock[], sameWire: boolean): JsonObje
   });
 }
 
+// Per-message effort: a role "system" message with no content changes the level from the latest user turn with
+// new input on, and leaves everything before it (and so the cached prefix) as it was.
+export const EFFORT_BETA = 'mid-conversation-output-config-2026-07-01';
+
 export function anthropicMessages(messages: Message[], midConversationSystem: boolean): JsonObject[] {
-  const out: { role: 'user' | 'assistant'; content: JsonObject[] }[] = [];
+  const out: ({ role: 'user' | 'assistant'; content: JsonObject[] } | { role: 'system'; content: []; output_config: JsonObject })[] = [];
   const push = (role: 'user' | 'assistant', content: JsonObject[]) => {
     if (!content.length) return;
     const last = out.at(-1);
@@ -32,7 +36,8 @@ export function anthropicMessages(messages: Message[], midConversationSystem: bo
     else out.push({ role, content });
   };
   for (const m of messages) {
-    if (m.role === 'assistant') push('assistant', assistantContent(m.blocks, m.wire === WIRE));
+    if (m.role === 'effort') out.push({ role: 'system', content: [], output_config: { effort: m.effort } });
+    else if (m.role === 'assistant') push('assistant', assistantContent(m.blocks, m.wire === WIRE));
     else if (m.role === 'system') push('user', [{ type: 'text', text: midConversationSystem ? m.text : `<system-reminder>\n${m.text}\n</system-reminder>` }]);
     else
       push(
@@ -65,9 +70,14 @@ export function anthropicBody(req: WireRequest): JsonObject {
   };
 }
 
+// The model's own headers, with each beta the request needs added: compaction when it carries a compaction request
+// or block, per-message effort once the conversation holds an effort change. Adding the effort beta partway
+// through keeps the cache (tried on Haiku 5.5, 2026-10-22).
 function anthropicHeaders(req: WireRequest): Record<string, string> {
   const h: Record<string, string> = { ...(req.model.headers ?? {}) };
-  if (carriesCompaction(req)) h['anthropic-beta'] = h['anthropic-beta'] ? `${h['anthropic-beta']},${COMPACTION_BETA}` : COMPACTION_BETA;
+  const add = (beta: string) => (h['anthropic-beta'] = h['anthropic-beta'] ? `${h['anthropic-beta']},${beta}` : beta);
+  if (carriesCompaction(req)) add(COMPACTION_BETA);
+  if (req.messages.some((m) => m.role === 'effort')) add(EFFORT_BETA);
   return h;
 }
 

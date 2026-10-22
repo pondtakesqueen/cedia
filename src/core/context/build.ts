@@ -31,6 +31,9 @@ export function buildMessages(events: SessionEvent[]): Message[] {
         if (e.as === 'system') out.push({ role: 'system', text: e.text });
         else pushUser({ type: 'text', text: e.text });
         break;
+      case 'effort':
+        out.push({ role: 'effort', effort: e.effort });
+        break;
     }
   }
   return out;

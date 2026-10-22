@@ -12,7 +12,7 @@ Exit 0: no model got worse. 1: a model regressed. 3: no comparison could be made
 
 ## What it runs
 
-`suite.json`: 25 tasks, 2 runs each, 4 at a time, on Haiku 5.5 and DeepSeek V4.1 Flash, both through OpenCode Go, so a gate run spends the Go plan's quota instead of API credit (since 2026-10-22; the same Haiku model, at the same list price). A change that only the Claude API carries, such as `--handoff compact`, is gated with `-m anthropic/claude-haiku-5-5`, against `baseline/anthropic_claude-haiku-5-5.json`, the Claude API baseline kept from before. The 12 pi-era floor tasks, the 7 hard tasks, the 4 wide and long tasks, `real-slop-guard`, the cheapest real-repository task, and `real-three-delegated`, which hands three real commits to one work sub-thread: on Haiku that sub-thread passes the 90k handoff point in every run, so the gate checks that sub-thread handoff triggers and the work still passes (about $0.06 a run on Haiku, 5 to 6 minutes). `real-threads` and `real-subthreads` are left out: they cost $0.3 to $0.5 a run on Haiku and hit the 1200 s limit when handoff is on, so they belong in a measured experiment, not a gate. The tasks need `python3 -m pytest` and the full git history (`fetch-depth: 0`).
+`suite.json`: 25 tasks, 2 runs each, 4 at a time, on Haiku 5.5 and DeepSeek V4.1 Flash, both through OpenCode Go, so a gate run spends the Go plan's quota instead of API credit (since 2026-10-22; the same Haiku model, at the same list price). A change that only the Claude API carries, such as `--handoff compact`, is gated with `-m anthropic/claude-haiku-5-5`, against `baseline/anthropic_claude-haiku-5-5.json`, the Claude API baseline kept from before (still at `medium`, from before Haiku started at `low`; re-record it with API credit before it judges anything). The 12 pi-era floor tasks, the 7 hard tasks, the 4 wide and long tasks, `real-slop-guard`, the cheapest real-repository task, and `real-three-delegated`, which hands three real commits to one work sub-thread: on Haiku that sub-thread passes the 90k handoff point in every run, so the gate checks that sub-thread handoff triggers and the work still passes (about $0.06 a run on Haiku, 5 to 6 minutes). `real-threads` and `real-subthreads` are left out: they cost $0.3 to $0.5 a run on Haiku and hit the 1200 s limit when handoff is on, so they belong in a measured experiment, not a gate. The tasks need `python3 -m pytest` and the full git history (`fetch-depth: 0`).
 
 Each run writes its rows to `evals/results/<date>-gate-<model>-<commit>-<time>.jsonl`. A baseline is `baseline/<model>.json`: the commit, date, runs, jobs and cedia flags it was made with, a hash of each task, and the rows.
 
@@ -69,6 +69,17 @@ History:
 | 18f1760 (same code) | 47/48, $0.32, 37 s | 46/48, $0.45, 56 s | second run; found the `wide-three-features` comment and the cost-noise rules |
 | 32774a7 (main) | 48/48, $0.26, 29 s | 48/48, $0.39, 50 s | after #21 (spawn reminder, handoff note carries the plan): PASS on both against the earlier baseline, typical task cost -6% and -3%, time -9% and -8% |
 | 26ffc46 (spawn on long tasks) | 47/48, $0.23, 30 s | 48/48, $0.63 at peak price ($0.80 against $0.77 at one price), 55 s | first-session handoff, sub-thread budget meter: PASS on both; `real-three-delegated` added to the suite and its rows stored at 82363a0 |
+| 6ef1dfd | 48/48, $0.16, 21 s | (not rerun) | Haiku starts at `low` and escalates to `high` when the done gate refuses a claim: PASS, typical task cost -14%, whole set -36%, time -14%. About half the runs escalated, and every reply after an escalation read the whole previous input from cache. On the 24-task suite; main then added `real-three-delegated`, and the re-record on 25 tasks stopped when the API credit ran out, so `baseline/anthropic_claude-haiku-5-5.json` is still main's at `medium`: run `bun evals/gate.ts -m anthropic/claude-haiku-5-5 --update-baseline` once credit is back |
+
+Effort arms on Haiku 5.5 (2026-10-22, one gate run each, against the 32774a7 baseline at `medium`):
+
+| Arm | pass@1 | Typical task cost | Whole set | Note |
+|---|---|---|---|---|
+| `medium`, escalate to `high` on a refused claim | 48/48 | +2% | -3% | time +9% |
+| `low`, no escalation | 48/48 | -18% | -33% | |
+| `low`, escalate on a refused claim or a check failing after a change | 46/48 | -21% | -36% | `hard-redact-bugs` refused twice: after the failed-check note ("cedia raised your effort level") Haiku stopped sooner. That trigger was dropped |
+| `low`, escalate on a refused claim (the default) | 48/48 | -21% | -35% | rerun with `--update-baseline`: 48/48, -14%, -36% |
+| same, with keep-working, real-check and scope lines from the 5.5 prompting guides in `BASE_SYSTEM` | 47/48 | -16% | -32% | no gain on Haiku; DeepSeek ran at peak-hour prices, so its cost could not be read. Not adopted |
 
 ## When to update the baseline
 
