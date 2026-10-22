@@ -44,7 +44,8 @@ type ThreadBody =
   // Hidden from lists, still readable. A sub-thread that finishes its task archives itself.
   | { kind: 'archived'; archived: boolean };
 export type RunFrom = { sessionId: string; path: string; events: number; model: string };
-export type ThreadEvent = { at: string } & ThreadBody;
+// `run`: the run that wrote it, on what a run writes (core/project/rewind.ts).
+export type ThreadEvent = { at: string; run?: string } & ThreadBody;
 
 export type Rating = 'up' | 'down';
 export const RATINGS: Rating[] = ['up', 'down'];
@@ -58,7 +59,7 @@ export type Thread = {
   state: ThreadState;
   parent?: string;
   archived: boolean;
-  sessions: Extract<ThreadEvent, { kind: 'session' }>[];
+  sessions: (Extract<ThreadEvent, { kind: 'session' }> & { rewound?: boolean })[];
   handoff?: { sessionId: string; note: string };
   result?: string;
   messages: ThreadMessage[];
@@ -72,6 +73,8 @@ export type Thread = {
   runs: Extract<ThreadEvent, { kind: 'run' }>[];
   // Sessions a rewind left behind: in `sessions`, and no longer part of the conversation.
   rewound: string[];
+  // The last run has not ended yet (no state since it began): it is going on, or it was killed.
+  running: boolean;
   // The open question while the thread is asking.
   question?: { sessionId: string; question: string; options?: string[]; at: string };
   updatedAt: string;
@@ -107,7 +110,7 @@ export class ThreadStore {
     }
   }
 
-  append(id: string, body: ThreadBody, now = new Date()): void {
+  append(id: string, body: ThreadBody & { run?: string }, now = new Date()): void {
     mkdirSync(this.dir, { recursive: true });
     appendFileSync(this.path(id), JSON.stringify({ at: now.toISOString(), ...body }) + '\n');
   }
@@ -185,6 +188,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     turns: [],
     runs: [],
     rewound: [],
+    running: false,
     updatedAt: events.at(-1)?.at ?? '',
   };
   const delivered = new Set<string>();
@@ -208,8 +212,10 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
       if (e.result !== undefined) t.result = e.result;
     }
   }
-  // A session a rewind dropped is still listed (its log stays), before the one the thread went on in.
-  t.sessions = [...dropped.filter((e): e is Extract<ThreadEvent, { kind: 'session' }> => e.kind === 'session'), ...t.sessions].sort((a, b) => a.at.localeCompare(b.at));
+  // A session a rewind dropped is still listed (its log stays), marked, before the one the thread went on in.
+  t.sessions = [...dropped.flatMap((e) => (e.kind === 'session' ? [{ ...e, rewound: true }] : [])), ...t.sessions].sort((a, b) => a.at.localeCompare(b.at));
+  const lastRun = live.findLastIndex((e) => e.kind === 'run');
+  t.running = lastRun >= 0 && !live.slice(lastRun).some((e) => e.kind === 'state');
   if (t.state !== 'asking') delete t.question;
   for (const m of t.messages) if (unsent.has(m.id) && !delivered.has(m.id)) m.unsent = true;
   t.pending = t.messages.filter((m) => !delivered.has(m.id) && !m.unsent);
@@ -220,17 +226,21 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
 // messages, unsends, ratings and archiving, which are not the conversation's. A message delivered only to a
 // session that was dropped is then waiting again, so the session the thread goes on in gets it. A rewind to a run
 // that is not there (one an earlier rewind dropped) changes nothing.
+// What a dropped run writes later (a run still going when the rewind came) is dropped too, by its `run` tag.
 function rewound(events: ThreadEvent[]): { live: ThreadEvent[]; dropped: ThreadEvent[] } {
   let live: ThreadEvent[] = [];
   const dropped: ThreadEvent[] = [];
+  const droppedRuns = new Set<string>();
+  const keep = (x: ThreadEvent) => x.kind === 'message' || x.kind === 'unsend' || x.kind === 'rate' || x.kind === 'archived';
   for (const e of events) {
     if (e.kind !== 'rewind') {
-      live.push(e);
+      if (e.run && droppedRuns.has(e.run) && !keep(e)) dropped.push(e);
+      else live.push(e);
       continue;
     }
     const at = live.findIndex((x) => x.kind === 'run' && x.id === e.run);
     if (at < 0) continue;
-    const keep = (x: ThreadEvent) => x.kind === 'message' || x.kind === 'unsend' || x.kind === 'rate' || x.kind === 'archived';
+    for (const x of live.slice(at)) if (x.kind === 'run') droppedRuns.add(x.id);
     dropped.push(...live.slice(at).filter((x) => !keep(x)));
     live = [...live.slice(0, at), ...live.slice(at).filter(keep), e];
   }

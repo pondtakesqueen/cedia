@@ -75,7 +75,9 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
        cedia threads rewind <id> [<n>] [--force]
                                             go back to just before the thread's run n (threads show numbers them),
                                             conversation and files together: the thread goes on from there, and
-                                            every file a later run changed is put back. Without n, lists the runs
+                                            every file a later run changed is put back. It refuses while the thread
+                                            is working, or when such a file changed since (--force: anyway).
+                                            Without n, lists the runs
 
 models: ${Object.keys(ALIASES).join(', ')}`;
 
@@ -248,7 +250,7 @@ function threads(argv: string[]): number {
     if (cmd === 'show' && id) {
       const t = store.read(id);
       const lines = [`${t.id}  ${t.state}  ${t.title}`, '', t.task, ''];
-      for (const s of t.sessions) lines.push(`session ${s.sessionId}  ${s.model}  ${s.why}${t.rewound.includes(s.sessionId) ? '  (rewound)' : ''}${s.path ? `  ${s.path}` : ''}`);
+      for (const s of t.sessions) lines.push(`session ${s.sessionId}  ${s.model}  ${s.why}${s.rewound ? '  (rewound)' : ''}${s.path ? `  ${s.path}` : ''}`);
       if (t.runs.length) lines.push('', ...runLines(t));
       if (t.handoff) lines.push('', `handoff from ${t.handoff.sessionId}:`, t.handoff.note);
       if (t.result) lines.push('', 'result:', t.result);
@@ -291,7 +293,7 @@ function threads(argv: string[]): number {
       const r = rewindThread(store, id, Number(rest[0]), { open: (cwd) => workspaceSnapshots(cwd, cediaHome()), sessionFile: (cwd, sid) => sessionPath(cwd, sid) }, { force: values.force ?? false });
       if ('error' in r) throw new Error(r.error);
       console.log(rewoundText(r));
-      return r.skipped.length ? 1 : 0;
+      return 0;
     }
     if (cmd === 'diff' && id) {
       if (!store.has(id)) throw new Error(`no thread ${id} in this project`);

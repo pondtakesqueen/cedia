@@ -77,22 +77,28 @@ describe('/rewind: conversation and files together (offline, faux)', () => {
     expect(w.store.read(thread).runs.map((r) => r.prompt)).toEqual(['first: write one', 'fourth: write four']);
   });
 
-  test('a file changed after the run that wrote it is left unless forced; rewinding to run 1 leaves no session', () => {
+  test('a file changed after the run that wrote it stops the rewind unless forced; rewinding to run 1 leaves no session', () => {
     const w = setup();
     const first = w.prompt('first', [call('c1', 'echo first > a.txt'), reply('done')]);
     const thread = JSON.parse(first.out).thread as string;
     w.prompt('second', [call('c2', 'echo second > a.txt; echo b > b.txt'), reply('done')], thread);
     writeFileSync(join(w.dir, 'b.txt'), 'edited by the user\n');
 
-    const r = w.run([], ['threads', 'rewind', thread, '1']);
-    expect(r.code).toBe(1);
-    expect(r.out).toContain('put back a.txt');
-    expect(r.out).toContain('left b.txt: changed since the run that wrote it');
+    const refused = w.run([], ['threads', 'rewind', thread, '1']);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain('b.txt changed since the run that last wrote it; nothing was rewound');
+    expect([w.read('a.txt'), w.read('b.txt')]).toEqual(['second\n', 'edited by the user\n']);
+    expect(w.store.read(thread).runs).toHaveLength(2);
+
+    const r = w.run([], ['threads', 'rewind', thread, '1', '--force']);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('put back a.txt, b.txt');
     expect(r.out).toContain('the next run starts a new session from the task');
-    expect([w.read('a.txt'), w.read('b.txt')]).toEqual(['start\n', 'edited by the user\n']);
+    expect([w.read('a.txt'), w.read('b.txt')]).toEqual(['start\n', undefined]);
     const t = w.store.read(thread);
     expect(t.runs).toEqual([]);
-    expect(t.sessions.every((s) => t.rewound.includes(s.sessionId))).toBe(true);
+    expect(t.state).toBe('stopped');
+    expect(t.sessions.every((s) => s.rewound)).toBe(true);
 
     // The next run opens a new session.
     const next = w.prompt('again', [reply('fresh')], thread);
@@ -102,6 +108,17 @@ describe('/rewind: conversation and files together (offline, faux)', () => {
     expect(t2.rewound).not.toContain(t2.sessions.at(-1)!.sessionId);
 
     expect(w.run([], ['threads', 'rewind', thread, '5']).err).toContain('has runs 1 to 1, not 5');
+  });
+
+  test('a thread whose last run has not ended is not rewound unless forced', () => {
+    const w = setup();
+    const first = w.prompt('first', [call('c1', 'echo first > a.txt'), reply('done')]);
+    const thread = JSON.parse(first.out).thread as string;
+    // A second run that has begun and not ended.
+    w.store.append(thread, { kind: 'run', id: 'r-00000000', prompt: 'going on', cwd: w.dir });
+    expect(w.store.read(thread).state).toBe('done');
+    expect(w.run([], ['threads', 'rewind', thread, '2']).err).toContain('is working: its last run has not ended');
+    expect(w.run([], ['threads', 'rewind', thread, '2', '--force']).code).toBe(0);
   });
 });
 
@@ -123,6 +140,10 @@ describe('the thread fold after a rewind', () => {
       { at: at(11), kind: 'session', sessionId: 's2', model: 'm', role: 'code', why: 'rewind' },
       // A rewind to a run an earlier one dropped changes nothing.
       { at: at(12), kind: 'rewind', run: 'r-2' },
+      // Run 2 was still going: what it writes after the rewind is dropped too.
+      { at: at(13), run: 'r-2', kind: 'session', sessionId: 's3', model: 'm', role: 'code', why: 'handoff' },
+      { at: at(14), run: 'r-2', kind: 'turn', cwd: '/w', before: 'b', after: 'c', sessions: ['s3'] },
+      { at: at(15), run: 'r-2', kind: 'state', state: 'done', result: 'two done late' },
     ];
     const t = foldThread('t-00000000', events);
     expect(t.runs.map((r) => r.id)).toEqual(['r-1']);
@@ -132,7 +153,7 @@ describe('the thread fold after a rewind', () => {
     expect(t.lastTurn).toBeUndefined();
     expect(t.pending.map((m) => m.id)).toEqual(['m1']);
     expect(t.ratings).toHaveLength(1);
-    expect(t.sessions.map((s) => s.sessionId)).toEqual(['s1', 's2']);
-    expect(t.rewound).toEqual([]);
+    expect(t.sessions.map((s) => [s.sessionId, !!s.rewound])).toEqual([['s1', false], ['s2', false], ['s3', true]]);
+    expect(t.rewound).toEqual(['s3']);
   });
 });
