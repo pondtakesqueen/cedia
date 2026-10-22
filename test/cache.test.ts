@@ -73,3 +73,18 @@ describe('cache prefix (offline, faux)', () => {
     expect(provider.state.bodies.map((b) => hash(b))).toEqual(reqIdx.map((i) => (log.events[i] as EventOf<'request'>).bodyHash));
   });
 });
+
+describe('cache misses in the result', () => {
+  test('a run names each request that missed and why; a run whose prefix held names none', async () => {
+    const cwd = workspace();
+    const log = SessionLog.create();
+    const base = { log, model: FAUX_MODEL, tools: [readTool, bashTool], cwd };
+    const first = await runPrompt({ ...base, provider: fauxProvider(script()), system: SYSTEM }, 'read the files');
+    expect(first.cacheMisses).toBeUndefined();
+    // The same session resumed on a provider that holds none of its cache (a fresh faux): the prefix is the
+    // session's own, unchanged, so the miss is the provider's, and only the second run reports it.
+    const second = await runPrompt({ ...base, provider: fauxProvider([{ blocks: [text('again')] }]), system: SYSTEM }, 'once more');
+    expect(second.cacheMisses).toEqual([{ session: log.id, request: 21, cause: 'provider', tokens: expect.any(Number) }]);
+    expect(second.cacheMisses![0]!.tokens).toBeGreaterThan(1000);
+  });
+});
