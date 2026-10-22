@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { inert } from '../trust/frame.ts';
+import type { RunPermission } from '../safety/policy.ts';
 
 // A project is a working directory; a thread is one line of work in it, made of one or more sessions. A session
 // hands off to the next when its context grows long, and threads leave each other messages. Each thread is an
@@ -41,7 +42,8 @@ type ThreadBody =
   | { kind: 'turn'; cwd: string; before: string; after: string; sessions: string[] }
   // A run of the thread starting: its prompt, the shadow-git tree of the working directory then, and the session
   // the conversation stood in, with how many of its events there were. What /rewind goes back to.
-  | { kind: 'run'; id: string; prompt: string; cwd: string; tree?: string; from?: RunFrom }
+  // `permission`: what the run ran under (absent before cedia recorded it).
+  | { kind: 'run'; id: string; prompt: string; cwd: string; tree?: string; from?: RunFrom; permission?: RunPermission }
   // The thread went back to just before run `run`: what happened from there to here is dropped from the fold
   // (core/project/rewind.ts), except what is not the conversation's (messages, ratings, archiving).
   | { kind: 'rewind'; run: string }

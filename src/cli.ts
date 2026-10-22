@@ -4,8 +4,8 @@ import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
 import type { TuiArgs } from './clients/tui/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
-import { GUARDS } from './core/safety/policy.ts';
-import { cediaHome } from './core/config.ts';
+import { GUARDS, PERMISSION_ENTRIES, type PermissionList } from './core/safety/policy.ts';
+import { cediaHome, loadPermissionSetting } from './core/config.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
 import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Schedule } from './core/project/schedules.ts';
@@ -33,8 +33,9 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --escalate <level|off>   the effort a writer session moves to, once, when the done gate refuses its claim
                                (default high). Claude 5.5 models only: the change is a message, so the cache stays
       --cwd <dir>              working directory (default: current)
-      --permission <mode>      auto | read-only | workspace (default: $CEDIA_PERMISSION, ~/.cedia/settings.json, auto).
-                               auto is workspace when the sandbox is on, read-only when it is off. cedia never stops to ask for permission
+      --permission <mode>      auto | read-only | plan | workspace (default: $CEDIA_PERMISSION, ~/.cedia/settings.json, auto).
+                               auto is workspace when the sandbox is on, read-only when it is off; plan is read-only and
+                               ends with a plan and the question whether to go ahead. cedia never stops to ask for permission
       --allow <rule>           allow a call, e.g. 'bash(bun test*)' or 'edit(src/*)'; repeatable
       --deny <rule>            deny a call; repeatable. The built-in guards always apply unless unlocked
       --unlock <guard>         lift a built-in guard: ${GUARDS.join(', ')}; repeatable
@@ -110,6 +111,7 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia memory [list | add <text> | forget <id>]
                                             the project's memory: short facts every new session gets in its first
                                             turn; writer sessions add to it with the remember tool
+       cedia permissions [--json]           the permission modes a run may take (--permission) and the default
        cedia skills [--cwd <dir>]           the skills a session here can load: the user's (~/.cedia/skills) and the
                                             repository's (.agents/skills, .claude/skills, .cursor/skills)
 
@@ -126,6 +128,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'memory') return memory(argv.slice(1));
   if (argv[0] === 'schedules') return schedules(argv.slice(1));
   if (argv[0] === 'skills') return skills(argv.slice(1));
+  if (argv[0] === 'permissions') return permissions(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
   const { values, positionals } = parseArgs({
     args: argv,
@@ -393,6 +396,25 @@ function skills(argv: string[]): number {
   // A repository's description could carry terminal escapes; they are shown as text.
   const shown = (t: string) => t.replace(/[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
   console.log(found.length ? found.map((s) => `${s.name}  (${s.source})  ${shown(s.dir)}\n    ${shown(s.description)}`).join('\n') : 'no skills here');
+  return 0;
+}
+
+function permissions(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  let list: PermissionList;
+  try {
+    list = { default: loadPermissionSetting(), modes: PERMISSION_ENTRIES };
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 1;
+  }
+  console.log(parsed.values.json ? JSON.stringify(list) : list.modes.map((m) => `${m.mode === list.default ? '*' : ' '} ${m.mode.padEnd(10)} ${m.description}`).join('\n'));
   return 0;
 }
 
