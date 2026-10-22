@@ -155,7 +155,7 @@ describe("evals runner", () => {
 
 test("the claude arm runs Claude Code as shipped, with cedia's spend cap", () => {
   const task = { id: "t", category: "c", source: "s", prompt: "do it", verify: "bun test", budgetUsd: 1.5 } as Task;
-  const args = HARNESSES.claude(task, "/tmp", "sonnet").args.join(" ");
+  const args = HARNESSES.claude!(task, "/tmp", "sonnet").args.join(" ");
   expect(args).toContain("--setting-sources project,local");
   expect(args).toContain("--strict-mcp-config");
   expect(args).toContain("--max-budget-usd 1.5");
