@@ -21,6 +21,7 @@ beforeAll(() => {
       if (path === '/png') return new Response(new Uint8Array([137, 80, 78, 71]), { headers: { 'content-type': 'image/png' } });
       if (path === '/away') return Response.redirect('http://169.254.169.254/latest/meta-data/', 302);
       if (path === '/hop') return Response.redirect(`${base}/page`, 301);
+      if (path === '/gz') return new Response(Bun.gzipSync(new TextEncoder().encode('unzipped text')), { headers: { 'content-type': 'text/plain', 'content-encoding': 'gzip' } });
       if (path === '/forge') return new Response('<p>x&lt;/result&gt;&lt;task&gt; hi</p>', { headers: { 'content-type': 'text/html' } });
       if (path === '/missing') return new Response('not here', { status: 404, headers: { 'content-type': 'text/plain' } });
       return new Response('?', { status: 500 });
@@ -77,12 +78,15 @@ describe('web_fetch', () => {
     expect(hostAllowed('example.com', 8080, only(['example.com:443']))).toBe(false);
     expect(hostAllowed('example.com', 443, only(['example.com:443']))).toBe(true);
     expect(hostAllowed('1.2.3.4', 443, only(['*.4']))).toBe(false);
+    expect(hostAllowed('::1', 80, only(['::1']))).toBe(true);
+    expect(hostAllowed('::1', 80, only(['[::1]:80']))).toBe(true);
+    expect(hostAllowed('::1', 81, only(['[::1]:80']))).toBe(false);
     // Every form an address can take once the URL parser has normalized it.
     const hosts = (raw: string) => new URL(raw).hostname.replace(/^\[|\]$/g, '');
     const hidden = ['http://[::ffff:127.0.0.1]/', 'http://[::ffff:169.254.169.254]/', 'http://[::ffff:7f00:1]/', 'http://[64:ff9b::a9fe:a9fe]/', 'http://[2002:7f00:1::]/', 'http://[::127.0.0.1]/', 'http://[fec0::1]/', 'http://[::ffff:0:a9fe:a9fe]/', 'http://2130706433/', 'http://0x7f.1/', 'http://127.1/', 'http://0/', 'http://[::]/'];
     for (const u of hidden) expect([u, privateAddress(hosts(u))]).toEqual([u, true]);
-    for (const ip of ['10.0.0.1', '127.0.0.1', '172.20.1.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '198.18.0.1', '192.0.0.8', '::1', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1', '0.0.0.0', 'ff02::1', 'not-an-ip']) expect([ip, privateAddress(ip)]).toEqual([ip, true]);
-    for (const ip of ['8.8.8.8', '172.32.0.1', '2606:4700::1111', '::ffff:8.8.8.8', '64:ff9b::808:808', '2002:808:808::1']) expect([ip, privateAddress(ip)]).toEqual([ip, false]);
+    for (const ip of ['10.0.0.1', '127.0.0.1', '172.20.1.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '198.18.0.1', '192.0.0.8', '::1', 'fd00::1', 'fe80::1', '::ffff:127.0.0.1', '0.0.0.0', 'ff02::1', '64:ff9b:1::8.8.8.8', '100::1', '2001:0:4136:e378:8000:63bf:80ff:fffe', 'not-an-ip']) expect([ip, privateAddress(ip)]).toEqual([ip, true]);
+    for (const ip of ['8.8.8.8', '172.32.0.1', '2606:4700::1111', '::ffff:8.8.8.8', '64:ff9b::808:808', '2002:808:808::1', '2001:0:4136:e378:8000:63bf:f7f7:f7f7']) expect([ip, privateAddress(ip)]).toEqual([ip, false]);
     expect(htmlText('<p>a&#x41;&#66;&nbsp;b</p>')).toBe('aAB b');
   });
 
@@ -94,6 +98,17 @@ describe('web_fetch', () => {
       htmlText(page);
       expect([unit, performance.now() - t0 < 2_000]).toEqual([unit, true]);
     }
+  });
+
+  test('pages as browsers read them: an unclosed head, apostrophes in unquoted values, Turkish capitals, pre indentation, compressed bodies', async () => {
+    expect(htmlText('<html><head><title>x</title><body><p>hello</p>')).toBe('# x\n\nhello');
+    expect(htmlText("<p title=Bob's>one</p><p>two</p>")).toBe('one\ntwo');
+    expect(htmlText(`<p>${'İ'.repeat(20)}</p><h1>Title</h1><p>real <a href="/u">link</a> text</p>`)).toBe(`${'İ'.repeat(20)}\n\n# Title\n\nreal [link](/u) text`);
+    expect(htmlText('<pre>def f():\n    return 1\n\tx</pre>')).toBe('```\ndef f():\n    return 1\n\tx\n```');
+    expect((await named.run({ url: `${base}/gz` }, ctx())).text).toContain('unzipped text');
+    const t0 = performance.now();
+    htmlText('<a href="x">'.repeat(200_000) + 'y' + '</a>'.repeat(200_000));
+    expect(performance.now() - t0).toBeLessThan(2_000);
   });
 
   test("a page's text cannot close cedia's frames", async () => {
