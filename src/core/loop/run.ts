@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildMessages, sessionHeader } from '../context/build.ts';
 import { contextSize, HANDOFF_NO_TOOLS, HANDOFF_PROMPT } from '../project/handoff.ts';
-import { COMPACT_INSTRUCTIONS, compactionCut, firstReply } from '../project/compact.ts';
+import { COMPACT_INSTRUCTIONS, compactionCut, compactPlan, firstReply } from '../project/compact.ts';
 import { hash } from '../hash.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
@@ -492,7 +492,12 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       const size = contextSize(got.usage) + added;
       const first = firstReply(log.events, runStart)!;
       const changedHere = () => ledgerEntries(log.events.slice(runStart), checks, opts.cwd).some((e) => e.kind === 'write' && e.path !== undefined);
-      const due = (at: number) => size >= at && size >= 2 * contextSize(first.usage) && (!opts.continues || changedHere());
+      // A session that starts from a summary starts large by design (the kept turns, and the turns that ran while the
+      // summary was written: 40k to 63k on Haiku at a 90k handoff point), so doubling would carry it past the handoff
+      // point; it must have grown by the share a compaction keeps instead.
+      const base = contextSize(first.usage);
+      const grown = log.events.some((e) => e.kind === 'summary') ? base + (opts.compact?.keepTokens ?? compactPlan(opts.handoffAt ?? 0).keepTokens) : 2 * base;
+      const due = (at: number) => size >= at && size >= grown && (!opts.continues || changedHere());
       // By compaction: start it in the background, and at the handoff point wait for it to settle (the top of the
       // loop then ends the session, or falls back to the note when no summary came).
       if (cmp.now === undefined && opts.handoffAt !== undefined && handoff === 0 && due(opts.compact!.startAt)) {

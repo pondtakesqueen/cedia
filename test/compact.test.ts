@@ -6,7 +6,7 @@ import { attributeMisses } from '../src/core/context/cache.ts';
 import { buildMessages } from '../src/core/context/build.ts';
 import { rebuildRequest, runPrompt } from '../src/core/loop/run.ts';
 import { compactedNote, compactionCut, compactPlan, firstReply, seedCompacted } from '../src/core/project/compact.ts';
-import { HANDOFF_PROMPT } from '../src/core/project/handoff.ts';
+import { contextSize, HANDOFF_PROMPT } from '../src/core/project/handoff.ts';
 import { anthropicBody, anthropicProvider, COMPACTION_BETA, parseAnthropic } from '../src/core/providers/anthropic.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, type FauxStep } from '../src/core/providers/faux.ts';
@@ -120,16 +120,19 @@ describe('handoff by compaction in the loop', () => {
     expect(attributeMisses(b.events, { blockTokens: 16 }).map((r) => r.cause)).toEqual(['cold', undefined]);
   });
 
-  test('a session that started from a summary measures doubling from its own first reply', async () => {
+  test('a session that started from a summary compacts again once it grew by the kept share, not only when doubled', async () => {
     const a = await run([write, tool('c1', 'big', {}), summary, call('c2', 'ls'), reply('x')], { handoffAt: 1_000_000, compact });
     const b = SessionLog.create();
     seedCompacted(a.log, b, a.r.compaction!);
-    // The copied reply saw ~10k and the first of its own ~11k: past 25k it has doubled from that.
-    const next = await run([write, tool('c4', 'big', {}), tool('c6', 'big', {}), summary, call('c5', 'ls'), reply('x')], { handoffAt: 1_000_000, compact: { startAt: 25_000, keepTokens: 500 }, continues: { sessionId: a.log.id, changed: [] } }, b);
+    // Its first reply of its own sees ~11k (the summary and the copied turns); one more big result brings ~21k, short
+    // of doubled but more than keepTokens past it.
+    const next = await run([write, tool('c4', 'big', {}), summary, call('c5', 'ls'), reply('x')], { handoffAt: 1_000_000, compact: { startAt: 15_000, keepTokens: 5_000 }, continues: { sessionId: a.log.id, changed: [] } }, b);
     expect(next.r).toMatchObject({ subtype: 'handoff', compaction: { block } });
+    const own = firstReply(b.events, b.events.findIndex((e) => e.kind === 'user'))!;
+    expect(contextSize(own.usage)).toBeGreaterThan(9_000);
     // The cut is a request of this session, never a copied one.
-    const own = b.events.findIndex((e) => e.kind === 'user');
-    expect(b.events.findIndex((e) => e.id === next.r.compaction!.of)).toBeGreaterThan(own);
+    const ownStart = b.events.findIndex((e) => e.kind === 'user');
+    expect(b.events.findIndex((e) => e.id === next.r.compaction!.of)).toBeGreaterThan(ownStart);
   });
 });
 
