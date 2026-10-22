@@ -1,6 +1,6 @@
 import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, Text, TUI, matchesKey, truncateToWidth, type Component, type MarkdownTheme, type Terminal } from '@mariozechner/pi-tui';
 import { cediaHome, loadRoles } from '../../core/config.ts';
-import { gitStatus, statusText, workingDiff } from '../../core/project/git.ts';
+import { gitStatusAsync, statusText, workingDiff } from '../../core/project/git.ts';
 import { threadLine, threadsDir, ThreadStore } from '../../core/project/threads.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from '../../core/project/undo.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
@@ -55,11 +55,16 @@ export const COMMANDS: { name: string; description: string }[] = [
 
 const MAX_DIFF_LINES = 400;
 
+// Text from a command or the model, with the escapes and control characters that would move the cursor or
+// restyle the screen taken out (newlines and tabs stay).
+export const printable = (s: string) =>
+  s.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[ -\/]*[0-~]?|[\x00-\x08\x0b-\x1f\x7f\x9b]/g, '');
+
 // One line for a call: what it acts on.
 export function callLine(tool: string, input: JsonObject): string {
   const s = (k: string) => (typeof input[k] === 'string' ? (input[k] as string) : undefined);
   const what = s('command') ?? s('path') ?? s('pattern') ?? s('task') ?? JSON.stringify(input);
-  const one = what.split('\n')[0]!;
+  const one = printable(what.split('\n')[0]!);
   return `${tool} ${one.length > 160 ? `${one.slice(0, 157)}...` : one}${what.includes('\n') ? ' …' : ''}`;
 }
 
@@ -140,17 +145,20 @@ export class CediaTui {
     }
     if (matchesKey(data, 'ctrl+c')) {
       if (this.editor.getText()) this.editor.setText('');
-      else this.quit();
+      else void this.quit();
       return { consume: true };
     }
     if (matchesKey(data, 'ctrl+d') && !this.editor.getText()) {
-      this.quit();
+      void this.quit();
       return { consume: true };
     }
     return undefined;
   }
 
-  private quit() {
+  // A turn in progress is stopped and given a moment to close its sandbox and finish its logs.
+  private async quit() {
+    this.running?.stop.abort();
+    await Promise.race([this.idle(), Bun.sleep(5000)]);
     this.stop();
     this.exit();
   }
@@ -174,11 +182,31 @@ export class CediaTui {
       .join(' · ');
   }
 
-  private refreshStatus(git = false) {
-    if (git) {
-      const g = gitStatus(this.args.cwd);
-      this.git = g && statusText(g);
+  // Git is read in the background, at most one read at a time, with one more queued when asked meanwhile: the
+  // core's events arrive inside its own calls, so a slow `git status` must not hold them up.
+  private gitReading: 'idle' | 'reading' | 'again' = 'idle';
+  private readGit() {
+    if (this.gitReading !== 'idle') {
+      this.gitReading = 'again';
+      return;
     }
+    this.gitReading = 'reading';
+    void gitStatusAsync(this.args.cwd).then((g) => {
+      this.git = g && statusText(g);
+      const again = this.gitReading === 'again';
+      this.gitReading = 'idle';
+      this.refreshStatus();
+      if (again) this.readGit();
+    });
+  }
+
+  // Resolves once the git read in progress, if any, has landed (for tests).
+  async settled(): Promise<void> {
+    while (this.gitReading !== 'idle') await Bun.sleep(5);
+  }
+
+  private refreshStatus(git = false) {
+    if (git) this.readGit();
     try {
       this.status.setText(dim(this.statusLine()));
     } catch (e) {
@@ -214,7 +242,12 @@ export class CediaTui {
       for (let nl = buffer.indexOf('\n'); nl >= 0; nl = buffer.indexOf('\n')) {
         const line = buffer.slice(0, nl);
         buffer = buffer.slice(nl + 1);
-        if (line.trim()) this.onMessage(decode<CoreMessage>(line));
+        if (!line.trim()) continue;
+        try {
+          this.onMessage(decode<CoreMessage>(line));
+        } catch (e) {
+          this.say(red(`could not show a line of the run: ${(e as Error).message}`));
+        }
       }
     };
     try {
@@ -237,7 +270,7 @@ export class CediaTui {
         this.streamed = true;
       } else if (e.type === 'text_delta' && this.live) {
         this.live.text += e.delta;
-        this.live.md.setText(this.live.text);
+        this.live.md.setText(printable(this.live.text));
       } else if (e.type === 'text_end') this.live = undefined;
       else if (e.type === 'thinking_start') this.say(dim('thinking…'));
       this.tui.requestRender();
@@ -253,7 +286,7 @@ export class CediaTui {
         break;
       case 'assistant': {
         // A reply that did not stream (a scripted model, a retry) is drawn whole.
-        if (!this.streamed) for (const b of e.blocks) if (b.type === 'text' && b.text.trim()) this.chat.addChild(new Markdown(b.text, 0, 0, MARKDOWN));
+        if (!this.streamed) for (const b of e.blocks) if (b.type === 'text' && b.text.trim()) this.chat.addChild(new Markdown(printable(b.text), 0, 0, MARKDOWN));
         const u = e.usage;
         this.context = u.uncached + u.cacheRead + u.cacheWrite + u.output;
         break;
@@ -265,7 +298,7 @@ export class CediaTui {
         if (e.decision === 'deny') this.say(red(`✗ ${e.tool} denied by ${e.rule}${e.reason ? `: ${e.reason}` : ''}`));
         break;
       case 'tool_result': {
-        const lines = e.output.text.split('\n');
+        const lines = printable(e.output.text).split('\n');
         const first = lines.find((l) => l.trim()) ?? '';
         const more = lines.length > 1 ? dim(` (+${lines.length - 1} lines)`) : '';
         const head = `  ⎿ ${e.status === 'completed' ? '' : `${e.status}: `}${first.length > 160 ? `${first.slice(0, 157)}...` : first}`;
@@ -296,7 +329,11 @@ export class CediaTui {
           return;
         case 'quit':
         case 'exit':
-          return this.quit();
+          return void this.quit();
+      }
+      // The rest read or change what a turn works on, so they wait for it.
+      if (this.running && COMMANDS.some((c) => c.name === name)) return this.say(yellow(`a turn is running: stop it (Esc) before /${name}`));
+      switch (name) {
         case 'diff':
           return this.diff();
         case 'undo':
@@ -353,7 +390,6 @@ export class CediaTui {
   }
 
   private restore(action: 'undo' | 'redo', force: boolean) {
-    if (this.running) return this.say(yellow(`a turn is running: stop it before /${action}`));
     if (!this.thread) return this.say(dim(`no thread yet: nothing to ${action}`));
     const r = restoreTurn(this.store, this.thread, (cwd) => workspaceSnapshots(cwd, cediaHome()), action, { force });
     this.say('error' in r ? red(r.error) : restoredText(r));

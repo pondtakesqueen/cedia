@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Terminal } from '@mariozechner/pi-tui';
-import { callLine, CediaTui } from '../src/clients/tui/main.ts';
+import { callLine, CediaTui, printable } from '../src/clients/tui/main.ts';
 import { SessionLog } from '../src/core/session/log.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 
@@ -87,6 +87,7 @@ describe('the TUI (offline, faux)', () => {
     expect(first).toContain('cedia receipt: changed keep.txt');
     const thread = t.a.thread!;
     expect(thread).toMatch(/^t-/);
+    await t.a.settled();
     expect(t.a.statusLine()).toContain(thread);
     expect(t.a.statusLine()).not.toContain('working');
 
@@ -122,6 +123,11 @@ describe('the TUI (offline, faux)', () => {
     t.script([call('c1', 'sleep 20'), reply('never')]);
     t.type('wait a while');
     await Bun.sleep(300);
+    // What a turn works on waits for it.
+    t.type('/diff');
+    expect(t.shown()).toContain('a turn is running: stop it (Esc) before /diff');
+    t.type('/new');
+    expect(t.shown()).toContain('before /new');
     const t0 = Date.now();
     t.term.input('\x1b');
     await t.a.idle();
@@ -131,7 +137,25 @@ describe('the TUI (offline, faux)', () => {
     t.type('/nope');
     expect(t.shown()).toContain('unknown command /nope');
     t.term.input('\x03');
+    await Bun.sleep(20);
     expect(t.left()).toBe(true);
+  });
+
+  test('leaving during a turn stops it and lets it finish its logs first', async () => {
+    const t = app();
+    t.script([call('c1', 'sleep 20'), reply('never')]);
+    t.type('wait');
+    await Bun.sleep(300);
+    t.type('/quit');
+    await t.a.idle();
+    await Bun.sleep(20);
+    expect(t.left()).toBe(true);
+    expect(t.shown()).toContain('interrupted');
+  });
+
+  test('escapes and control characters from commands never reach the screen', () => {
+    expect(printable('a\x1b[2J\x1b[Hb\x1b]0;title\x07c\rd\te\nf\x1b(B')).toBe('abcd\te\nf');
+    expect(callLine('bash', { command: 'echo \x1b[31mred' })).toBe('bash echo red');
   });
 
   test('a call is one line naming what it acts on', () => {
