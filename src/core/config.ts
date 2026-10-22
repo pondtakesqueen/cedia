@@ -22,6 +22,10 @@ export type Settings = {
   roles?: { plan?: string; code?: string; review?: string; swarm?: string };
   // Whether writer sessions get the spawn tool for sub-threads (default true). User settings only.
   spawn?: boolean;
+  // Language servers for diagnostics after each edit: false turns them off; an object adds servers (or replaces a
+  // known one of the same name) as { "<name>": { "command": [...], "extensions": [".x"] } }. User settings only:
+  // a repo must not pick a command cedia runs.
+  lsp?: boolean | Record<string, { command: string[]; extensions: string[] }>;
   // Whether writer sessions of a thread get ask_user, to end a run with a question for the owner (default false: a
   // headless run has nobody to answer). The desktop turns it on. User settings only.
   ask?: boolean;
@@ -49,6 +53,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   fallback: 'any',
   roles: ['plan', 'code', 'review', 'swarm'],
   spawn: 'any',
+  lsp: 'any',
   ask: 'any',
   handoffAt: 'any',
   handoff: 'any',
@@ -156,6 +161,21 @@ export function loadQuotaWait(flag?: string): number | undefined {
 export function loadSpawn(flag?: string): boolean {
   if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--spawn must be on or off: ${flag}`);
   return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).spawn ?? true);
+}
+
+// Language servers: flag (on|off) > user settings > the known ones that are installed.
+export type LspSetting = NonNullable<Settings['lsp']>;
+export function loadLsp(flag?: string): LspSetting | undefined {
+  if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--lsp must be on or off: ${flag}`);
+  if (flag === 'off') return false;
+  const s = readSettings(join(cediaHome(), 'settings.json')).lsp;
+  if (s === undefined || typeof s === 'boolean') return flag === 'on' ? true : s;
+  if (!isObject(s)) throw new Error('"lsp" must be true, false or an object of servers');
+  for (const [name, v] of Object.entries(s)) {
+    const ok = isObject(v) && Array.isArray(v.command) && v.command.length > 0 && v.command.every((c) => typeof c === 'string') && Array.isArray(v.extensions) && v.extensions.every((e) => typeof e === 'string' && e.startsWith('.'));
+    if (!ok) throw new Error(`lsp.${name} must be { "command": ["<program>", ...], "extensions": [".ext", ...] }`);
+  }
+  return s;
 }
 
 // ask_user: flag > user settings > off.

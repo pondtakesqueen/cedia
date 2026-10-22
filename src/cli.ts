@@ -40,6 +40,8 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --review <ref>           the review role, after the done gate passes: a model, claude-code[:<model>]
                                (default sonnet there), or none. Changes it asks for go back to the writer once
       --spawn <on|off>         let the writer hand self-contained work to sub-threads (default: settings, on)
+      --lsp <on|off>           after each edit, add the file's errors from a language server when one is installed
+                               (typescript-language-server, pyright-langserver, gopls; more in settings "lsp"). Default on
       --ask <on|off>           give the writer ask_user, to end the run with one question for you when only you can
                                decide; the thread waits as 'asking' and your answer is its next prompt
                                (default: settings ask, off)
@@ -104,6 +106,7 @@ export async function main(argv: string[]): Promise<number> {
       'on-quota': { type: 'string' },
       thread: { type: 'string' },
       spawn: { type: 'string' },
+      lsp: { type: 'string' },
       ask: { type: 'string' },
       swarm: { type: 'string' },
       'handoff-at': { type: 'string' },
@@ -157,6 +160,7 @@ export async function main(argv: string[]): Promise<number> {
       ...(values['on-quota'] ? { onQuota: values['on-quota'] } : {}),
       ...(values.thread ? { thread: values.thread } : {}),
       ...(values.spawn ? { spawn: values.spawn } : {}),
+      ...(values.lsp ? { lsp: values.lsp } : {}),
       ...(values.ask ? { ask: values.ask } : {}),
       ...(values.swarm ? { swarm: values.swarm } : {}),
       ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),

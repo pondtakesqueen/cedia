@@ -7,7 +7,7 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadLsp, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { runTurn } from '../../core/project/undo.ts';
@@ -17,6 +17,8 @@ import { recallTool, threadTools, type EarlierSession } from '../../core/tools/t
 import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
+import { lspServers, openDiagnoser } from '../../core/lsp/diagnose.ts';
+import { scrubbedEnv } from '../../core/tools/bash.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
@@ -54,6 +56,8 @@ export type HeadlessArgs = {
   // The model explore sub-threads run on, and whether writer sessions may spawn sub-threads at all.
   swarm?: string;
   spawn?: string;
+  // Language servers for diagnostics after edits: on (the default) or off.
+  lsp?: string;
   // "on" gives the writer ask_user, to end the run with a question for the owner (core/tools/ask.ts).
   ask?: string;
   // "fallback" or "wait:<minutes>": what a spent quota does.
@@ -138,6 +142,7 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
 export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
   const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}) });
   const spawnOn = loadSpawn(args.spawn);
+  const lspSetting = loadLsp(args.lsp);
   const askOn = loadAsk(args.ask);
   const model = roles.code;
   const declared = loadChecks(args.cwd, args.checks);
@@ -159,6 +164,9 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   if (!sandbox.on && policy.mode === 'read-only' && !args.permission && !process.env.CEDIA_PERMISSION)
     process.stderr.write('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
   const snapshots = workspaceSnapshots(args.cwd, cediaHome(), sandbox.placeholders);
+  // Language servers start at the first edit they cover, run as bash does, and stop with the run.
+  const servers = lspServers(args.cwd, lspSetting);
+  const diagnoser = servers.length ? openDiagnoser(args.cwd, servers, { ...(sandbox.on ? { wrap: sandbox.wrap } : {}), env: scrubbedEnv(), warn: (l) => process.stderr.write(`${l}\n`) }) : undefined;
   const fallback = loadFallback(model, args.fallback);
   let quotaWaitMs: number | undefined;
   try {
@@ -287,6 +295,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         checks: reviewer ? [] : checks,
         ...(softChecks && !reviewer ? { softChecks } : {}),
         ...(sandbox.on ? { wrap: sandbox.wrap } : {}),
+        ...(diagnoser && !reviewer ? { diagnose: diagnoser.diagnose } : {}),
         ...(snapshots && !reviewer ? { snapshots } : {}),
         ...(continues ? { continues } : {}),
         ...(opts.role ? { role: opts.role } : {}),
@@ -512,6 +521,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     if (store && threadId) store.append(threadId, { kind: 'state', state: 'failed', result: (e as Error).message });
     throw e;
   } finally {
+    await diagnoser?.close();
     await sandbox.close();
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);

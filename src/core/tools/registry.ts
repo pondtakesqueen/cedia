@@ -2,7 +2,14 @@ import type { JsonObject, ToolDef, ToolEffect, ToolOutput } from '../types.ts';
 
 // `wrap` puts a shell command inside the OS sandbox when one is on. `spill` writes a whole output too long for
 // the result to a file (redacted like a result) and returns its path, or undefined when it could not.
-export type ToolCtx = { cwd: string; signal: AbortSignal; wrap?: (command: string) => Promise<string>; spill?: (text: string) => string | undefined };
+// `diagnose` gives a file's errors as a language server sees them (core/lsp/diagnose.ts), when one covers it.
+export type ToolCtx = {
+  cwd: string;
+  signal: AbortSignal;
+  wrap?: (command: string) => Promise<string>;
+  spill?: (text: string) => string | undefined;
+  diagnose?: (file: string, signal?: AbortSignal) => Promise<string | undefined>;
+};
 
 export type ToolSpec = ToolDef & {
   effect: ToolEffect;
