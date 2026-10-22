@@ -302,6 +302,34 @@ describe('--spawn worktree (offline, faux)', () => {
     expect(git(r.work, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
   });
 
+  test('best of N: each approach runs in a worktree of its own, cedia runs the checks in each, and only the one that passes most is applied', () => {
+    const r = repo();
+    const race = { type: 'tool_use', id: 's1', name: 'spawn', input: { kind: 'work', task: 'make out.txt', approaches: ['approach-bad: write bad', 'approach-good: write good'] } };
+    const out = cedia(
+      r.work,
+      [
+        { blocks: [race] },
+        ...child('approach-bad', 'echo bad > out.txt && echo extra > bad-only.txt', 'bad done'),
+        ...child('approach-good', 'echo good > out.txt', 'good done'),
+        call('p1', 'grep -q good out.txt'),
+        reply('kept the good one'),
+      ],
+      ['-p', 'make out.txt', '--spawn', 'worktree', '--check', 'grep -q good out.txt'],
+    );
+    const result = out.result();
+    expect(result).toMatchObject({ subtype: 'success', result: 'kept the good one' });
+    expect(readFileSync(join(r.work, 'out.txt'), 'utf8')).toBe('good\n');
+    expect(existsSync(join(r.work, 'bad-only.txt'))).toBe(false);
+    const text = report(result, r.work, 's1');
+    expect(text).toContain("Best of 2: kept approach 2; the others' changes were dropped.");
+    expect(text).toContain('1. approach-bad: write bad: 1/2 checks passed');
+    expect(text).toContain('2. approach-good: write good: 2/2 checks passed, ended success');
+    expect(text).toContain('Applied to your files: out.txt');
+    expect(result.spawned).toMatchObject({ work: 2 });
+    // Both worktrees are gone: the kept one once applied, the other once dropped.
+    expect(git(r.work, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
+  });
+
   test('a change that conflicts is not applied: the report says so and the worktree stays to be read', () => {
     const r = repo();
     const out = cedia(

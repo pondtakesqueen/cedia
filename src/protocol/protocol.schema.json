@@ -182,7 +182,8 @@
         "plan",
         "review",
         "ask",
-        "worktree.newest-wins"
+        "worktree.newest-wins",
+        "spawn.best-of-n"
       ]
     },
     "Check": {

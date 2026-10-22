@@ -20,7 +20,8 @@ export type Capability =
   | 'plan' // --plan
   | 'review' // --review
   | 'ask' // --ask: ask_user, the 'asked' result, the 'question' thread event and the 'asking' state
-  | 'worktree.newest-wins'; // a worktree's merge back takes lockfiles and generated files whole from the side written last
+  | 'worktree.newest-wins' // a worktree's merge back takes lockfiles and generated files whole from the side written last
+  | 'spawn.best-of-n'; // spawn{approaches}: several work sub-threads try a task, and the one that passes most checks is kept
 
 export type VersionInfo = { name: 'cedia'; version: string; protocol: string; capabilities: Capability[] };
 
@@ -28,7 +29,7 @@ export type VersionInfo = { name: 'cedia'; version: string; protocol: string; ca
 export const PROTOCOL = hash(schemaText as unknown as string);
 
 export function versionInfo(): VersionInfo {
-  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask', 'worktree.newest-wins'];
+  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask', 'worktree.newest-wins', 'spawn.best-of-n'];
   if (processKeychain()) capabilities.push('keychain');
   return { name: 'cedia', version: VERSION, protocol: PROTOCOL, capabilities };
 }
