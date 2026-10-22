@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { McpServerConfig } from './mcp/client.ts';
 import { GUARDS, PERMISSION_SETTINGS, type Guard, type PermissionSetting, type Policy } from './safety/policy.ts';
 import { DEFAULT_DOMAINS, SANDBOX_SETTINGS, type SandboxSetting } from './safety/sandbox.ts';
 import { defaultHandoffAt } from './project/handoff.ts';
@@ -33,6 +34,9 @@ export type Settings = {
   // On a spent quota: "fallback" (the default), or "wait:<minutes>" to wait up to that long in all for it to come
   // back before falling back. User settings only: a repo must not keep the user waiting.
   onQuota?: string;
+  // MCP servers whose tools the writer gets (core/mcp/tools.ts): a command to start, or a URL. User settings
+  // only: a repository must not start programs. `${VAR}` in env values and headers is read from the environment.
+  mcpServers?: Record<string, unknown>;
   // The desktop app's own settings (cedian: theme, keymap, layout and the like). cedia never reads them and checks
   // only that they are an object, so the desktop can keep them in this file without cedia knowing their shape.
   desktop?: Record<string, unknown>;
@@ -53,6 +57,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   handoffAt: 'any',
   handoff: 'any',
   onQuota: 'any',
+  mcpServers: 'any',
   desktop: 'any',
 };
 
@@ -162,6 +167,41 @@ export function loadSpawn(flag?: string): boolean {
 export function loadAsk(flag?: string): boolean {
   if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--ask must be on or off: ${flag}`);
   return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).ask ?? false);
+}
+
+// The user's MCP servers, checked: each a command (with args, env, cwd) or a URL (with headers), optionally
+// readOnly and timeoutSec. A bad entry is an error, like any bad setting.
+export function loadMcp(env = process.env): Record<string, McpServerConfig> {
+  const raw = readSettings(join(cediaHome(), 'settings.json')).mcpServers ?? {};
+  const expand = (v: string) => v.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, k: string) => env[k] ?? '');
+  const strings = (v: unknown, what: string): Record<string, string> | undefined => {
+    if (v === undefined) return undefined;
+    if (!isObject(v) || Object.values(v).some((x) => typeof x !== 'string')) throw new Error(`${what} must map names to strings`);
+    return Object.fromEntries(Object.entries(v as Record<string, string>).map(([k, x]) => [k, expand(x)]));
+  };
+  const out: Record<string, McpServerConfig> = {};
+  for (const [name, v] of Object.entries(raw)) {
+    const at = `mcpServers.${name}`;
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) throw new Error(`${at}: a server name is 1 to 32 letters, digits, _ or -`);
+    if (!isObject(v)) throw new Error(`${at} must be an object`);
+    const known = ['command', 'args', 'env', 'cwd', 'url', 'headers', 'readOnly', 'timeoutSec'];
+    const unknown = Object.keys(v).find((k) => !known.includes(k));
+    if (unknown) throw new Error(`${at}: unknown key "${unknown}" (known: ${known.join(', ')})`);
+    if (v.readOnly !== undefined && typeof v.readOnly !== 'boolean') throw new Error(`${at}.readOnly must be true or false`);
+    if (v.timeoutSec !== undefined && (typeof v.timeoutSec !== 'number' || !(v.timeoutSec > 0))) throw new Error(`${at}.timeoutSec must be a positive number`);
+    const common = { ...(v.readOnly !== undefined ? { readOnly: v.readOnly as boolean } : {}), ...(v.timeoutSec !== undefined ? { timeoutSec: v.timeoutSec as number } : {}) };
+    if (typeof v.command === 'string' && v.url === undefined) {
+      if (v.args !== undefined && (!Array.isArray(v.args) || v.args.some((a) => typeof a !== 'string'))) throw new Error(`${at}.args must be a list of strings`);
+      if (v.cwd !== undefined && typeof v.cwd !== 'string') throw new Error(`${at}.cwd must be a string`);
+      const e = strings(v.env, `${at}.env`);
+      out[name] = { command: v.command, ...(v.args ? { args: v.args as string[] } : {}), ...(e ? { env: e } : {}), ...(v.cwd ? { cwd: v.cwd as string } : {}), ...common };
+    } else if (typeof v.url === 'string' && v.command === undefined) {
+      if (!/^https?:\/\//.test(v.url)) throw new Error(`${at}.url must be http(s)`);
+      const h = strings(v.headers, `${at}.headers`);
+      out[name] = { url: v.url, ...(h ? { headers: h } : {}), ...common };
+    } else throw new Error(`${at} needs either a command or a url`);
+  }
+  return out;
 }
 
 // When a writer session hands off: flag > user settings > half the window, capped (core/project/handoff.ts).

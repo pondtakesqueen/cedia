@@ -14,6 +14,7 @@ cedia is a personal coding harness written from scratch in TypeScript on Bun. `S
 - `bin/cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | rate <id> <up|down> | archive <id>]`: the project's threads.
 - `bin/cedia memory [list | add <text> | forget <id>]`: the project's memory, which every new session gets in its first turn.
 - `bin/cedia skills`: the skills a session here can load (`~/.cedia/skills`, and the repository's `.agents/skills`, `.claude/skills`, `.cursor/skills`); the model loads one with the `skill` tool.
+- MCP servers come from `mcpServers` in `~/.cedia/settings.json` only (`src/core/mcp/`); `test/mcp/server.ts` is a fake stdio server for tests.
 - `bin/cedia --version --json`: version, protocol schema hash and capabilities, for clients.
 - `bin/cedia lint-session <file.jsonl>...`: check a session log against the trust invariants. `-m faux` with `CEDIA_FAUX_SCRIPT=<steps.json>` runs offline.
 - `bun scripts/protocol-schema.ts` regenerates `src/protocol/protocol.schema.json` after a protocol type changes; `bun scripts/session-fixtures.ts` re-records `test/fixtures/sessions/` after the output of a run changes. `test/fixtures.test.ts` fails when either is stale.
