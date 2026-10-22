@@ -257,7 +257,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         // They may also run the declared checks, to see what fails instead of only reading.
         permission: reviewer ? { ...policy, mode: 'read-only', allow: [...policy.allow, ...checks.map((c) => `bash(${c})`)] } : policy,
         privacy,
-        ...(hooked ? { hooks } : {}),
+        // Stop hooks judge the writer's claim of done, not a plan, a review or a sub-thread's report.
+        ...(hooked ? { hooks: writing ? hooks : { ...hooks, stop: [] }, hookHome: cediaHome() } : {}),
         checks: reviewer ? [] : checks,
         ...(softChecks && !reviewer ? { softChecks } : {}),
         ...(sandbox.on ? { wrap: sandbox.wrap } : {}),

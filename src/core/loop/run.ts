@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildMessages, sessionHeader } from '../context/build.ts';
 import { contextSize, HANDOFF_NO_TOOLS, HANDOFF_PROMPT } from '../project/handoff.ts';
@@ -77,8 +78,10 @@ export type RunOptions = {
   // is logged, so a crash in between shows a message twice rather than never.
   inbox?: { pending(): { ids: string[]; text: string } | undefined; delivered(ids: string[]): void };
   effort?: Effort;
-  // The user's hooks (core/hooks.ts): before and after each call, and on a claim of done.
+  // The user's hooks (core/hooks.ts): before and after each call, and on a claim of done. They run in
+  // `hookHome` (cedia's home; the temp dir when absent), never the workspace.
   hooks?: Hooks;
+  hookHome?: string;
   // The level the session moves to, once, when the done gate refuses a claim: cheap work up front, more thought
   // where it went wrong. Only upward from `effort`, and only on models with per-message effort, so the cached
   // prefix stays.
@@ -617,7 +620,7 @@ export const stopHookReminder = (hook: string, reason: string) =>
 async function stopHooks(opts: RunOptions, log: SessionLog, result: string, changed: string[]): Promise<{ hook: string; reason: string } | undefined> {
   for (const [i, h] of (opts.hooks?.stop ?? []).entries()) {
     const t0 = performance.now();
-    const o = await runHook(h, { event: 'stop', sessionId: log.id, cwd: opts.cwd, result, changed }, opts.cwd);
+    const o = await runHook(h, { event: 'stop', sessionId: log.id, cwd: opts.cwd, result, changed }, opts.hookHome ?? tmpdir(), opts.signal);
     const hook = hookName('stop', i, h);
     log.append({ kind: 'hook', hook, event: 'stop', decision: o.decision, ...(o.decision === 'block' && o.failed ? { failed: true } : {}), ms: Math.round(performance.now() - t0) });
     if (o.decision === 'block') return { hook, reason: o.reason };
@@ -631,7 +634,7 @@ async function preHooks(opts: RunOptions, log: SessionLog, spec: ToolSpec, callI
   for (const [i, h] of (opts.hooks?.preToolUse ?? []).entries()) {
     if (h.match && !ruleMatches(h.match, spec, input, opts.cwd)) continue;
     const t0 = performance.now();
-    const o = await runHook(h, { event: 'preToolUse', sessionId: log.id, cwd: opts.cwd, tool: spec.name, callId, input }, opts.cwd);
+    const o = await runHook(h, { event: 'preToolUse', sessionId: log.id, cwd: opts.cwd, tool: spec.name, callId, input }, opts.hookHome ?? tmpdir(), opts.signal);
     const hook = hookName('preToolUse', i, h);
     const updated = o.decision === 'allow' && o.updatedInput !== undefined;
     log.append({ kind: 'hook', hook, event: 'preToolUse', callId, decision: o.decision, ...(o.decision === 'block' && o.failed ? { failed: true } : {}), ...(updated ? { updated } : {}), ms: Math.round(performance.now() - t0) });
@@ -647,10 +650,11 @@ async function postHooks(opts: RunOptions, log: SessionLog, j: { callId: string;
   for (const [i, h] of (opts.hooks?.postToolUse ?? []).entries()) {
     if (h.match && !ruleMatches(h.match, j.spec, j.input, opts.cwd)) continue;
     const t0 = performance.now();
-    const o = await runHook(h, { event: 'postToolUse', sessionId: log.id, cwd: opts.cwd, tool: j.spec.name, callId: j.callId, input: j.input, output: { text: out.text, isError: out.isError, ...(out.exitCode !== undefined ? { exitCode: out.exitCode } : {}) } }, opts.cwd);
+    const o = await runHook(h, { event: 'postToolUse', sessionId: log.id, cwd: opts.cwd, tool: j.spec.name, callId: j.callId, input: j.input, output: { text: out.text, isError: out.isError, ...(out.exitCode !== undefined ? { exitCode: out.exitCode } : {}) } }, opts.hookHome ?? tmpdir(), opts.signal);
     const hook = hookName('postToolUse', i, h);
     log.append({ kind: 'hook', hook, event: 'postToolUse', callId: j.callId, decision: o.decision, ...(o.decision === 'block' && o.failed ? { failed: true } : {}), ms: Math.round(performance.now() - t0) });
-    if (o.decision === 'block') out = { ...out, text: `${out.text}\n[hook ${hook}: ${o.reason}]`, isError: true };
+    // A blocked result is a failed one for the done gate too: a check it blocks does not count as passing.
+    if (o.decision === 'block') out = { ...out, text: `${out.text}\n[hook ${hook}: ${o.reason}]`, isError: true, exitCode: out.exitCode ? out.exitCode : 1 };
     else if (o.note) out = { ...out, text: `${out.text}\n[hook ${hook}: ${o.note}]` };
   }
   return out;

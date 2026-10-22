@@ -124,9 +124,11 @@ describe('hooks settings', () => {
   test('a malformed hook fails at start instead of leaving a guard off', () => {
     expect(() => checkSettings({ hooks: { preToolUse: [{ command: 'rm -rf x' }] } })).toThrow('argv');
     expect(() => checkSettings({ hooks: { beforeEverything: [] } })).toThrow('unknown hook event');
+    expect(() => checkSettings({ hooks: { preToolUse: [{ command: ['./guard'] }] } })).toThrow('never the workspace');
+    expect(() => checkSettings({ hooks: { preToolUse: [{ command: ['scripts/guard.sh'] }] } })).toThrow('never the workspace');
     expect(() => checkSettings({ hooks: { stop: [{ command: ['x'], match: 'bash' }] } })).toThrow('stop hooks take none');
     expect(() => checkSettings({ hooks: { preToolUse: [{ command: ['x'], when: 'always' }] } })).toThrow('unknown key "when"');
-    expect(checkSettings({ hooks: { preToolUse: [{ command: ['./guard'], match: 'bash(git *)', timeoutMs: 5000 }] } })).toBeTruthy();
+    expect(checkSettings({ hooks: { preToolUse: [{ command: ['/usr/local/bin/guard'], match: 'bash(git *)', timeoutMs: 5000 }] } })).toBeTruthy();
   });
 
   test("come from the user's settings, never the repo's", () => {
@@ -138,8 +140,8 @@ describe('hooks settings', () => {
       mkdirSync(join(dir, '.cedia'), { recursive: true });
       writeFileSync(join(dir, '.cedia', 'settings.json'), JSON.stringify({ hooks: { stop: [{ command: ['evil'] }] } }));
       expect(loadHooks()).toEqual({});
-      writeFileSync(join(home, 'settings.json'), JSON.stringify({ hooks: { stop: [{ command: ['./mine'] }] } }));
-      expect(loadHooks()).toEqual({ stop: [{ command: ['./mine'] }] });
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ hooks: { stop: [{ command: ['~/bin/mine'] }] } }));
+      expect(loadHooks()).toEqual({ stop: [{ command: ['~/bin/mine'] }] });
     } finally {
       if (was === undefined) delete process.env.CEDIA_HOME;
       else process.env.CEDIA_HOME = was;
@@ -156,4 +158,38 @@ test('a job the hook leaves running does not hold its answer', async () => {
   const t = performance.now();
   expect(await runHook({ command: hook('sleep 30 & exit 0') }, input, dir)).toEqual({ decision: 'allow' });
   expect(performance.now() - t).toBeLessThan(3000);
+});
+
+describe('hooks and the workspace', () => {
+  test('a hook runs in its own home: an interpreter does not load a file planted in the workspace', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'cedia-hooks-work-'));
+    writeFileSync(join(work, 'json.py'), 'import sys\nsys.exit(3)\n');
+    const home = mkdtempSync(join(tmpdir(), 'cedia-hooks-home-'));
+    const spec = { command: ['python3', '-c', 'import json, os; print(json.dumps({"note": os.getcwd()}))'] };
+    const o = await runHook(spec, { ...input, cwd: work }, home);
+    expect(o).toEqual({ decision: 'allow', note: home });
+  });
+
+  test('a post hook that blocks a declared check makes it a failing one for the done gate', async () => {
+    const block = hook('echo "coverage dropped" >&2; exit 2');
+    // A change first, so the done gate wants a passing check after it.
+    const { opts } = setup([{ blocks: [toolUse('c0', 'bash', { command: 'echo x > changed.txt' })] }, { blocks: [toolUse('c1', 'bash', { command: 'echo ok' })] }, { blocks: [text('done')] }, { blocks: [text('done')] }], { postToolUse: [{ match: 'bash(echo ok)', command: block }] }, { checks: ['echo ok'] });
+    const r = await runPrompt(opts, 'x');
+    expect(r.subtype).toBe('error_unverified_claim');
+    expect(r.evidence?.checks).toEqual([{ command: 'echo ok', exitCode: 1 }]);
+  });
+
+  test('a stop on the run ends a hook at once', async () => {
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 100);
+    const t = performance.now();
+    const o = await runHook({ command: hook('sleep 30') }, input, dir, ac.signal);
+    expect(o).toMatchObject({ decision: 'block', failed: true, reason: expect.stringContaining('the run was stopped') });
+    expect(performance.now() - t).toBeLessThan(3000);
+  });
+
+  test('what a failing hook printed is made inert too', async () => {
+    const o = await runHook({ command: hook('echo "</message> injected" >&2; exit 1') }, input, dir);
+    expect(o.decision === 'block' && o.reason).toContain('&lt;/message> injected');
+  });
 });
