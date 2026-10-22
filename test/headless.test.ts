@@ -319,6 +319,22 @@ describe('cedia -p (offline, faux)', () => {
       expect(userTexts(writer)[0]).toContain('<plan by="faux/fallback">\n1. Write good to f.txt.\n2. Run test -s f.txt.\n</plan>');
     });
 
+    test('a plan that splits the work into parts tells the writer to hand each to a work sub-thread', () => {
+      const plan = 'Two parts.\n<part files="a.txt">Write a to a.txt; check with test -s a.txt.</part>\n<part files="b.txt">Write b to b.txt; check with test -s b.txt.</part>';
+      const on = cedia([reply(plan), ...writes], [...base, '--plan', 'faux/fallback', '--spawn', 'worktree']);
+      const all = sessionsOf(on.home);
+      const planner = all.find((l) => (l[0] as { role: string }).role === 'plan')!;
+      expect(userTexts(planner)[0]).toContain('<part files="every file it changes, comma-separated">');
+      expect(userTexts(planner)[0]).toContain('several run at the same time');
+      const writer = all.find((l) => (l[0] as { role: string }).role === 'code')!;
+      expect(userTexts(writer)[0]).toContain('The plan splits the work into 2 parts that change different files. Hand each part to a work sub-thread with spawn (kind "work"), its brief as the task, all in one turn so they run at once');
+      // With spawn off there is no one to hand a part to: the planner is not asked for parts, nor the writer told.
+      const off = cedia([reply(plan), ...writes], [...base, '--plan', 'faux/fallback', '--spawn', 'off']);
+      const offAll = sessionsOf(off.home);
+      expect(userTexts(offAll.find((l) => (l[0] as { role: string }).role === 'plan')!)[0]).not.toContain('<part files=');
+      expect(userTexts(offAll.find((l) => (l[0] as { role: string }).role === 'code')!)[0]).not.toContain('Hand each part');
+    });
+
     test('claude-code plans and reviews in your own Claude Code, read-only and without API keys', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cedia-fake-claude-'));
       const bin = join(dir, 'claude');

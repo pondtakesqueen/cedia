@@ -745,9 +745,12 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // Plan: a stronger model reads the repo and writes the plan the writer gets with the task.
     let plan: Step | undefined;
     if (roles.plan) {
-      const p = await side('plan', roles.plan, planPrompt(task));
+      // With spawn on, the planner may split the work into parts, and the writer is told to hand each to a work
+      // sub-thread: deciding what to delegate is left to the stronger model (no model delegated on its own).
+      const parts = !spawnOn || policy.plan || policy.mode === 'read-only' ? 'off' : spawnMode === 'worktree' ? 'parallel' : 'alone';
+      const p = await side('plan', roles.plan, planPrompt(task, parts));
       if (p.ok && p.text.trim()) {
-        task = withPlan(task, p.text.trim(), p.step.model);
+        task = withPlan(task, p.text.trim(), p.step.model, parts);
         plan = p.step;
       } else say('cedia: going on without a plan\n');
     }
