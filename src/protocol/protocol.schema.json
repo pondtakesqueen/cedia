@@ -19,6 +19,9 @@
     "Schedule": {
       "$ref": "#/definitions/Schedule"
     },
+    "ModelList": {
+      "$ref": "#/definitions/ModelList"
+    },
     "PermissionList": {
       "$ref": "#/definitions/PermissionList"
     },
@@ -197,6 +200,7 @@
         "profiles",
         "open_thread",
         "schedules",
+        "models",
         "permissions"
       ]
     },
@@ -682,6 +686,63 @@
     "JsonObject": {
       "type": "object",
       "additionalProperties": {}
+    },
+    "ModelEntry": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "alias": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "contextWindow": {
+          "type": "number"
+        },
+        "effort": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ref",
+        "label",
+        "provider",
+        "available",
+        "contextWindow",
+        "effort"
+      ],
+      "additionalProperties": false
+    },
+    "ModelList": {
+      "type": "object",
+      "properties": {
+        "default": {
+          "type": "string"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelEntry"
+          }
+        }
+      },
+      "required": [
+        "default",
+        "models"
+      ],
+      "additionalProperties": false
     },
     "PermissionEntry": {
       "type": "object",
