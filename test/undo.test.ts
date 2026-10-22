@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gitStatus, statusText, workingDiff } from '../src/core/project/git.ts';
 import { ThreadStore, threadsDir } from '../src/core/project/threads.ts';
-import { lastTurnChange } from '../src/core/project/undo.ts';
+import { runTurn } from '../src/core/project/undo.ts';
 import { projectKey, SessionLog } from '../src/core/session/log.ts';
 import type { SessionEvent } from '../src/core/types.ts';
 
@@ -88,13 +88,28 @@ describe('/undo and /redo of the last turn (offline, faux)', () => {
     expect(w.read('keep.txt')).toBe('old\n');
   });
 
-  test('a turn that changed nothing is not a turn to undo', () => {
+  test("a turn is the whole run, across its sessions and prompts (a review's fix, a handoff); one that changed nothing is none", () => {
     let n = 0;
     const e = (body: Record<string, unknown>): SessionEvent => ({ id: `e${n++}`, at: '', ...body }) as unknown as SessionEvent;
-    const head = e({ kind: 'session', cwd: '/w', role: 'code', model: 'faux', system: '', tools: [] });
-    const turn = [e({ kind: 'user', text: 'a' }), e({ kind: 'snapshot', tree: 't0', changed: [] }), e({ kind: 'snapshot', tree: 't1', callId: 'c', changed: ['x'] })];
-    expect(lastTurnChange('s', [head, ...turn, e({ kind: 'user', text: 'just a question' })])).toEqual({ sessionId: 's', cwd: '/w', before: 't0', after: 't1' });
-    expect(lastTurnChange('s', [head, e({ kind: 'user', text: 'a' })])).toBeUndefined();
+    const snap = (tree: string) => e({ kind: 'snapshot', tree, changed: [] });
+    const first = [e({ kind: 'user', text: 'earlier' }), snap('t-old'), snap('t0'), e({ kind: 'user', text: 'task' }), snap('t0'), snap('t1'), e({ kind: 'user', text: 'fix what the review found' }), snap('t1'), snap('t2')];
+    const second = [e({ kind: 'user', text: 'after a handoff' }), snap('t2'), snap('t3')];
+    expect(runTurn([{ events: first, from: 3 }, { events: second, from: 0 }])).toEqual({ before: 't0', after: 't3' });
+    expect(runTurn([{ events: [e({ kind: 'user', text: 'a question' })], from: 0 }])).toBeUndefined();
+    expect(runTurn([{ events: [snap('t5'), snap('t5')], from: 0 }])).toBeUndefined();
+  });
+
+  test('a forced redo refuses, before writing anything, where a directory or a symlinked parent now stands', () => {
+    const w = setup();
+    const first = w.run([call('c1', 'mkdir -p d && echo a > d/f.txt && echo b > top.txt'), reply('done')], ['-m', 'faux', '-p', 'make files', '--permission', 'workspace', '--sandbox', 'off', '--output-format', 'json']);
+    const thread = JSON.parse(first.out).thread as string;
+    expect(w.run([], ['threads', 'undo', thread]).out).toContain('undid d/f.txt, top.txt');
+    // The user puts a directory where top.txt was, and a symlink to a directory of theirs where d was.
+    Bun.spawnSync(['sh', '-c', 'mkdir top.txt mine && echo keep > mine/f.txt && ln -s mine d'], { cwd: w.dir });
+    const redo = w.run([], ['threads', 'redo', thread, '--force']);
+    expect(redo.code).toBe(1);
+    expect(redo.err).toMatch(/a parent directory is now a symlink|a directory is there now/);
+    expect(w.read('mine/f.txt')).toBe('keep\n');
   });
 });
 

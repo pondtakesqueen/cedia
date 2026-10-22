@@ -1,11 +1,11 @@
 import type { Snapshots } from '../safety/snapshot.ts';
-import { SessionLog, sessionExists } from '../session/log.ts';
 import type { EventOf, SessionEvent } from '../types.ts';
 import type { ThreadStore } from './threads.ts';
 
-// `/undo` and `/redo` of the last turn's files, from the shadow snapshots (core/safety/snapshot.ts). A turn is a
-// user prompt and the run that answered it; its writing calls ran between the snapshot taken before the first of
-// them and the one after the last. Undo puts the files that changed between the two back to the first; redo puts
+// `/undo` and `/redo` of the last turn's files, from the shadow snapshots (core/safety/snapshot.ts). A turn is one
+// run of a thread (one prompt): its writing calls ran between the snapshot taken before the first of them and the
+// one after the last, in whichever of the run's sessions they fell (a handoff, a fallback, a review's fix), and
+// the run records both trees in the thread (`turn` event). Undo puts the files that changed between the two back to the first; redo puts
 // them forward again. A file that changed again since (the user's own edit, another run) is left alone unless
 // forced, so an undo never takes back work it did not do. Commands the turn ran, and anything outside the
 // working tree, are not undone, and the note says so.
@@ -16,22 +16,6 @@ export type TurnChange = { sessionId: string; cwd: string; before: string; after
 
 // What an undo or redo did: the files it put back, and the ones it left because they changed since.
 export type Restored = { action: 'undo' | 'redo'; restored: string[]; skipped: string[] };
-
-export function lastTurnChange(sessionId: string, events: SessionEvent[]): TurnChange | undefined {
-  // Every user prompt starts a turn; the last one that took snapshots is the turn to undo.
-  let snaps: EventOf<'snapshot'>[] = [];
-  let last: EventOf<'snapshot'>[] = [];
-  for (const e of events) {
-    if (e.kind === 'user') {
-      if (snaps.length > 1) last = snaps;
-      snaps = [];
-    } else if (e.kind === 'snapshot' && e.tree) snaps.push(e);
-  }
-  if (snaps.length > 1) last = snaps;
-  const head = events[0];
-  if (last.length < 2 || head?.kind !== 'session') return undefined;
-  return { sessionId, cwd: head.cwd, before: last[0]!.tree, after: last.at(-1)!.tree };
-}
 
 // Puts the files the turn changed to `target`. A file already there is left out; one that no longer matches
 // `expected` (how the other side of the turn has it) changed since, and is skipped unless forced.
@@ -79,10 +63,17 @@ export function restoredNote(r: Restored): string {
   return `${head}${skipped} Only files were put back: commands the turn ran and anything outside the working tree are as they were. Read a file again before you edit it.`;
 }
 
-// The last turn of a thread that changed files: its last writer session's. Undefined when there is none.
+// The last run of a thread that changed files. Undefined when there is none.
 export function threadTurn(store: ThreadStore, thread: string): TurnChange | undefined {
-  const last = store.read(thread).sessions.findLast((s) => s.role === 'code' && s.path && sessionExists(s.path));
-  return last ? lastTurnChange(last.sessionId, SessionLog.load(last.path!).events) : undefined;
+  const t = store.read(thread).lastTurn;
+  return t ? { sessionId: t.sessions.at(-1) ?? '', cwd: t.cwd, before: t.before, after: t.after } : undefined;
+}
+
+// The trees around a run's writes, from its writer sessions' snapshots (each from where the run started in it).
+export function runTurn(runs: { events: SessionEvent[]; from: number }[]): { before: string; after: string } | undefined {
+  const snaps = runs.flatMap((r) => r.events.slice(r.from).filter((e): e is EventOf<'snapshot'> => e.kind === 'snapshot' && !!e.tree));
+  if (snaps.length < 2 || snaps[0]!.tree === snaps.at(-1)!.tree) return undefined;
+  return { before: snaps[0]!.tree, after: snaps.at(-1)!.tree };
 }
 
 // Undoes or redoes a thread's last turn in the working directory it ran in, and leaves the model a message saying

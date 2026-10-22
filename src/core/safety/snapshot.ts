@@ -34,9 +34,15 @@ export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [
     GIT_TERMINAL_PROMPT: '0',
   };
   const gitRaw = (args: string[]) => {
-    const p = Bun.spawnSync(['git', '-c', 'core.autocrlf=false', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0', ...args], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
-    if (p.exitCode !== 0) throw new Error(`git ${args[0]}: ${p.stderr.toString().trim()}`);
-    return p.stdout;
+    // Another cedia process (a /diff beside a run) may hold the shadow index for a moment: wait for it rather
+    // than lose a snapshot.
+    for (let tries = 0; ; tries++) {
+      const p = Bun.spawnSync(['git', '-c', 'core.autocrlf=false', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0', ...args], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
+      if (p.exitCode === 0) return p.stdout;
+      const err = p.stderr.toString().trim();
+      if (!err.includes('.lock') || tries >= 40) throw new Error(`git ${args[0]}: ${err}`);
+      Bun.sleepSync(50);
+    }
   };
   const git = (args: string[]) => gitRaw(args).toString();
   try {
@@ -86,25 +92,37 @@ export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [
     // none. Every other file stays as it is.
     restoreFiles(tree, files) {
       if (!files.length) return;
+      const wanted = new Set(files);
       const entries = new Map<string, { mode: string; blob: string }>();
-      for (const line of git(['ls-tree', '-z', '--full-tree', tree, '--', ...files]).split('\0').filter(Boolean)) {
-        const [meta, path] = [line.slice(0, line.indexOf('\t')), line.slice(line.indexOf('\t') + 1)];
-        const [mode, type, blob] = meta.split(' ');
-        if (type === 'blob') entries.set(path, { mode: mode!, blob: blob! });
+      // The whole tree, filtered here: a turn that changed thousands of files would not fit on a command line.
+      for (const line of git(['ls-tree', '-r', '-z', '--full-tree', tree]).split('\0').filter(Boolean)) {
+        const tab = line.indexOf('\t');
+        const path = line.slice(tab + 1);
+        const [mode, type, blob] = line.slice(0, tab).split(' ');
+        if (type === 'blob' && wanted.has(path)) entries.set(path, { mode: mode!, blob: blob! });
       }
-      for (const f of files) {
+      const at = (p: string) => {
+        try {
+          return lstatSync(p);
+        } catch {
+          return undefined;
+        }
+      };
+      // Checked for every file before any is written, so a refusal leaves the tree as it was.
+      const todo = files.filter((f) => {
+        const rel = relative(root, join(root, f));
+        return rel && !rel.startsWith('..') && !isAbsolute(rel);
+      });
+      for (const f of todo) {
+        const parts = f.split('/');
+        // A parent that is now a symlink would take the write outside the working tree.
+        if (parts.slice(0, -1).some((_, i) => at(join(root, ...parts.slice(0, i + 1)))?.isSymbolicLink())) throw new Error(`${f}: a parent directory is now a symlink`);
+        if (at(join(root, f))?.isDirectory()) throw new Error(`${f}: a directory is there now`);
+      }
+      for (const f of todo) {
         const abs = join(root, f);
-        const rel = relative(root, abs);
-        if (!rel || rel.startsWith('..') || isAbsolute(rel)) continue;
         const entry = entries.get(f);
-        const present = (() => {
-          try {
-            return lstatSync(abs);
-          } catch {
-            return undefined;
-          }
-        })();
-        if (present && !present.isDirectory()) rmSync(abs, { force: true });
+        if (at(abs)) rmSync(abs, { force: true });
         if (!entry) continue;
         mkdirSync(dirname(abs), { recursive: true });
         const bytes = gitRaw(['cat-file', 'blob', entry.blob]);
