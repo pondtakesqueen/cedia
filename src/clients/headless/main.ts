@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { historyRejected, runPrompt } from '../../core/loop/run.ts';
-import { modeNote, preamble, BASE_SYSTEM } from '../../core/prompts.ts';
+import { modeNote, preamble, systemFor } from '../../core/prompts.ts';
 import { resolveModel } from '../../core/providers/catalog.ts';
 import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
@@ -410,7 +410,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         model: m,
         // Plan and review get no write tools, and their policy is read-only whatever the run's mode.
         tools,
-        system: opts.role === 'advisor' ? ADVISOR_SYSTEM : opts.role === 'classifier' ? CLASSIFIER_SYSTEM : BASE_SYSTEM,
+        system: opts.role === 'advisor' ? ADVISOR_SYSTEM : opts.role === 'classifier' ? CLASSIFIER_SYSTEM : systemFor(m),
         ...(helper ? {} : { preamble: reviewer ? reviewPreamble : opts.note ? `${place?.preamble ?? basePreamble}\n\n${opts.note}` : (place?.preamble ?? basePreamble) }),
         cwd: place?.cwd ?? args.cwd,
         // They may also run the declared checks, to see what fails instead of only reading.
@@ -759,7 +759,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     let result: HeadlessResult;
     // A session whose cache has expired costs its whole context to resume; past a size, a new session from where
     // the thread stopped is cheaper, so the run says both prices and takes the cheaper.
-    const freshTokens = resumed ? Math.ceil((BASE_SYSTEM.length + JSON.stringify(toolDefs(CORE_TOOLS)).length + basePreamble.length + resumeNote(resumed).length + task.length) / 4) : 0;
+    const freshTokens = resumed ? Math.ceil((systemFor(model).length + JSON.stringify(toolDefs(CORE_TOOLS)).length + basePreamble.length + resumeNote(resumed).length + task.length) / 4) : 0;
     const choice = lastLog ? resumeChoice(lastLog.events, model, freshTokens) : undefined;
     if (choice?.fresh)
       say(
