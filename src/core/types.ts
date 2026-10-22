@@ -70,6 +70,9 @@ type EventBody =
   // A user hook ran (core/hooks.ts): which, at what point, for which call, and what it decided. What it said that
   // reaches the model is in the permission, tool_result or reminder that follows.
   | { kind: 'hook'; hook: string; event: 'preToolUse' | 'postToolUse' | 'stop'; callId?: string; decision: 'allow' | 'block'; failed?: boolean; updated?: boolean; ms: number }
+  // A call's input came in a known wrong shape and was put into the schema's (ToolSpec.repair). The assistant
+  // event keeps what the model sent; the intent holds the repaired input.
+  | { kind: 'input_repaired'; callId: string; tool: string; repairs: string[] }
   // A compaction request, sent with the messages of the request `of` (core/project/compact.ts), and its outcome:
   // the summary block, or why there is none.
   | { kind: 'compact_request'; of: EventId; bodyHash: string; headers: Record<string, string> }
@@ -195,6 +198,9 @@ export type HeadlessResult = {
   usage: Usage;
   costUsd: number;
   cacheHitRatio: number;
+  // Calls whose input was repaired, keyed `<tool>: <kind of repair>` (absent when none was). A call the policy then
+  // denied counts too: the count is of what the model sent.
+  inputRepairs?: Record<string, number>;
   // Requests after a session's first that missed the cache, with the cause (absent when none did).
   cacheMisses?: CacheMiss[];
   result: string;

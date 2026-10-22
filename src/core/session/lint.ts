@@ -52,6 +52,9 @@ export function lintSession(events: SessionEvent[]): LintFinding[] {
       case 'hook':
         if (e.callId !== undefined && !open.has(e.callId)) add(i, 'tool-pairing', `hook for unknown call ${e.callId}`);
         break;
+      case 'input_repaired':
+        if (!open.has(e.callId)) add(i, 'tool-pairing', `input_repaired for unknown call ${e.callId}`);
+        break;
       case 'permission':
         if (!open.has(e.callId)) add(i, 'tool-pairing', `permission for unknown call ${e.callId}`);
         (e.decision === 'allow' ? allowed : denied).add(e.callId);

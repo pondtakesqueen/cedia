@@ -334,6 +334,8 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     // A run's result pools its sub-threads' evidence, so each check says which thread ran it.
     if (opts.thread) ev.checks = ev.checks.map((c) => ({ ...c, thread: opts.thread }));
     const hasEvidence = ev.changed.length > 0 || ev.checks.length > 0;
+    const repairs: Record<string, number> = {};
+    for (const e of log.events.slice(runStart)) if (e.kind === 'input_repaired') for (const r of e.repairs) repairs[`${e.tool}: ${r}`] = (repairs[`${e.tool}: ${r}`] ?? 0) + 1;
     const misses = cacheMissesOf(log.events, model, log.id, runStart);
     return {
       type: 'result',
@@ -343,6 +345,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       usage,
       costUsd: cost,
       cacheHitRatio: hitRatio(usage),
+      ...(Object.keys(repairs).length ? { inputRepairs: repairs } : {}),
       ...(misses.length ? { cacheMisses: misses } : {}),
       result: result ?? lastText,
       ...(hasEvidence ? { evidence: ev } : {}),
@@ -640,9 +643,11 @@ async function runTools(
     else if (!spec) results.set(callId, { status: 'not_started', text: `not run: unknown tool "${c.name.length > 64 ? `${c.name.slice(0, 64)}…` : c.name}"`, isError: true });
     else {
       const policy = opts.permission ?? READ_ONLY_POLICY;
+      const fixed = spec.repair?.(c.input);
+      if (fixed) log.append({ kind: 'input_repaired', callId, tool: c.name, repairs: fixed.repairs });
       // The policy decides first; the user's pre hooks see only calls it allows. An input a hook rewrote is
       // decided again, so a hook can narrow a call but never get one past the policy.
-      let input = c.input;
+      let input = fixed?.input ?? c.input;
       let d = decide(policy, spec, input, opts.cwd);
       if (d.decision === 'allow') {
         const pre = await preHooks(opts, log, spec, callId, input);
