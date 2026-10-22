@@ -1,0 +1,36 @@
+{
+  "id": "real-three-changes",
+  "category": "real-repo",
+  "source": "cedia commits c7fb551, e7b8a79 and 14264ef (malformed turns, refused history, quota wait), redone together from 32774a7: a long task of three independent parts, for spawn and sub-thread handoff",
+  "repo": {
+    "base": "32774a796e2178eaf4609246c183c7bdd1dee462",
+    "target": "14264efc07debe3941414b54146ee515207bf63a",
+    "tests": [
+      "test/loop.test.ts",
+      "test/headless.test.ts",
+      "test/policy.test.ts"
+    ],
+    "exclude": [
+      "evals/results",
+      "evals/baseline"
+    ],
+    "edits": [
+      {
+        "path": "test/headless.test.ts",
+        "old": "test.skipIf(!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin')",
+        "new": "test.skipIf(Boolean(process.env.SANDBOX_RUNTIME) || (!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin'))",
+        "why": "The agent's commands already run in the OS sandbox, which cannot open another inside it; verify runs outside it, where this test still runs."
+      },
+      {
+        "path": "test/gate.test.ts",
+        "old": "test(\"the gate suite names existing tasks once, with thresholds and a spend cap\"",
+        "new": "test.skip(\"the gate suite names existing tasks once, with thresholds and a spend cap\"",
+        "why": "The workspace has no git history, so the suite's real-repository task is unavailable there and loading the suite throws."
+      }
+    ]
+  },
+  "prompt": "Implement this change in cedia, the repository you are in (a coding harness in TypeScript on Bun; AGENTS.md and SPEC.md describe it).\n\n<change>\nThree independent changes to the loop and the headless client. Each has its own tests.\n\n1. Loop: malformed turns end or recover instead of misreporting\n\nA reply with only thinking (or nothing) gets one reminder, then fails the run, instead of letting an earlier turn's text stand as the result. A refusal fails the run. A tool that returns no output or an object for text still gets a string result, and a non-Error throw is named. Calls that share an id run once and get one result, so the log stays paired. An unknown tool's name is cut to 64 characters in its result. Cut-off calls alternating with cut-off replies still stop at the turn limit.\n\n2. Go on in a new session when the provider refuses a session's history\n\nA bad_request or context_length error after the session's first accepted request means the history itself is refused (a thinking signature, a tool call the API cannot read back, a context past the window), and resending fails the same way: a left-alone run stopped there, and --thread resumed into the same refused session. The run now goes on once in a new session on the same model, as quota fallback does (parentSession, inherited changes for the done gate, recall, a logged note), and a resumed thread whose last session was refused starts a new one. The thread records it as why: 'rejected'; regenerate the protocol schema (bun scripts/protocol-schema.ts).\n\n3. Wait for a spent quota when asked, up to a ceiling\n\n--on-quota wait:<minutes> (or onQuota in user settings) waits in the same session for a quota error that says when it comes back (a 429 with retry-after), up to that many minutes across the whole run, and falls back only past it. A spent balance names no time and still falls back at once. The default stays fallback. Each wait is a logged attempt, a stderr line, and ends on SIGTERM.\n</change>\n\nThe tests in `test/loop.test.ts`, `test/headless.test.ts` and `test/policy.test.ts` were written for this change and say what it must do. Make them pass without changing them, and keep the whole `bun test` suite passing.",
+  "verify": "bun test",
+  "timeoutSec": 1800,
+  "budgetUsd": 2
+}

@@ -12,6 +12,9 @@
     },
     "ThreadEvent": {
       "$ref": "#/definitions/ThreadEvent"
+    },
+    "VersionInfo": {
+      "$ref": "#/definitions/VersionInfo"
     }
   },
   "definitions": {
@@ -128,6 +131,41 @@
         "context_length",
         "quota"
       ]
+    },
+    "Capability": {
+      "type": "string",
+      "enum": [
+        "stream-json",
+        "threads",
+        "threads.send",
+        "threads.unsend",
+        "threads.rate",
+        "evidence.check-thread",
+        "keychain",
+        "spawn",
+        "handoff",
+        "plan",
+        "review"
+      ]
+    },
+    "Check": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": "number"
+        },
+        "thread": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "exitCode"
+      ],
+      "additionalProperties": false
     },
     "Command": {
       "anyOf": [
@@ -278,20 +316,7 @@
         "checks": {
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "command": {
-                "type": "string"
-              },
-              "exitCode": {
-                "type": "number"
-              }
-            },
-            "required": [
-              "command",
-              "exitCode"
-            ],
-            "additionalProperties": false
+            "$ref": "#/definitions/Check"
           }
         },
         "unverified": {
@@ -405,6 +430,9 @@
         },
         "subthreads": {
           "type": "number"
+        },
+        "spawned": {
+          "$ref": "#/definitions/Spawned"
         }
       },
       "required": [
@@ -422,6 +450,13 @@
     "JsonObject": {
       "type": "object",
       "additionalProperties": {}
+    },
+    "Rating": {
+      "type": "string",
+      "enum": [
+        "up",
+        "down"
+      ]
     },
     "ResultSubtype": {
       "type": "string",
@@ -701,6 +736,52 @@
             "stop",
             "usage",
             "wire"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "keepalive"
+            },
+            "requestId": {
+              "$ref": "#/definitions/EventId"
+            },
+            "usage": {
+              "$ref": "#/definitions/Usage"
+            },
+            "error": {
+              "$ref": "#/definitions/AttemptError"
+            },
+            "ms": {
+              "type": "number"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "id",
+            "kind",
+            "ms",
+            "parentId",
+            "requestId"
           ]
         },
         {
@@ -1030,6 +1111,30 @@
         "quota",
         "rejected"
       ]
+    },
+    "Spawned": {
+      "type": "object",
+      "properties": {
+        "explore": {
+          "type": "number"
+        },
+        "work": {
+          "type": "number"
+        },
+        "handoffs": {
+          "type": "number"
+        },
+        "peakContext": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "explore",
+        "work",
+        "handoffs",
+        "peakContext"
+      ],
+      "additionalProperties": false
     },
     "Step": {
       "type": "object",
@@ -1458,6 +1563,57 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "unsend"
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "ids",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "rate"
+            },
+            "rating": {
+              "$ref": "#/definitions/Rating"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "note": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "kind",
+            "rating"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "state"
             },
             "state": {
@@ -1631,6 +1787,34 @@
         "cacheRead",
         "cacheWrite",
         "output"
+      ],
+      "additionalProperties": false
+    },
+    "VersionInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "cedia"
+        },
+        "version": {
+          "type": "string"
+        },
+        "protocol": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Capability"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "protocol",
+        "capabilities"
       ],
       "additionalProperties": false
     },

@@ -5,7 +5,7 @@
     "multifile", "multistep-orders", "refactor-extract", "refactor-rename", "tb-argmax", "tb-dedup",
     "hard-deny-list", "hard-edit-tiers", "hard-injection", "hard-ledger", "hard-redact-bugs", "hard-shell-split", "hard-sse",
     "long-migrate", "wide-bug-hunt", "wide-deprecate", "wide-three-features",
-    "real-slop-guard"
+    "real-slop-guard", "real-three-delegated"
   ],
   "runs": 2,
   "jobs": 4,

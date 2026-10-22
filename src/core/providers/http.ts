@@ -1,23 +1,35 @@
 import type { AttemptError, AttemptErrorCode, ModelSpec } from '../types.ts';
+import { processKeychain, type Keychain } from './keychain.ts';
+import { VERSION } from '../version.ts';
 
-export const USER_AGENT = `cedia/${process.env.CEDIA_VERSION ?? '0.1.0'}`;
+export const USER_AGENT = `cedia/${process.env.CEDIA_VERSION ?? VERSION}`;
 
 type Env = Record<string, string | undefined>;
 
-export const authKey = (model: ModelSpec, env: Env = process.env): string | undefined =>
-  env[model.auth.env] || (model.auth.altEnv ? env[model.auth.altEnv] : undefined) || undefined;
+// The environment first, then the Keychain under the same names (core/providers/keychain.ts). A caller that passes
+// its own env gets no Keychain unless it passes one too, so tests never read the real one.
+export function authKey(model: ModelSpec, env: Env = process.env, keychain: Keychain | undefined = env === process.env ? processKeychain() : undefined): string | undefined {
+  const names = [model.auth.env, ...(model.auth.altEnv ? [model.auth.altEnv] : [])];
+  for (const n of names) if (env[n]) return env[n];
+  if (model.wire === 'faux' || !keychain) return undefined;
+  for (const n of names) {
+    const key = keychain(n);
+    if (key) return key;
+  }
+  return undefined;
+}
 
-export function authHeaders(model: ModelSpec, env: Env = process.env): Record<string, string> {
-  const key = authKey(model, env);
+export function authHeaders(model: ModelSpec, env: Env = process.env, keychain?: Keychain): Record<string, string> {
+  const key = keychain ? authKey(model, env, keychain) : authKey(model, env);
   if (!key) return {};
   return model.auth.scheme === 'x-api-key' ? { 'x-api-key': key } : { authorization: `Bearer ${key}` };
 }
 
 // Credentials may also be added by an egress proxy (cloud network secrets), so a missing key is a note, not an error.
-export function missingKeyNote(model: ModelSpec, env: Env = process.env): string | undefined {
-  if (model.wire === 'faux' || authKey(model, env)) return undefined;
+export function missingKeyNote(model: ModelSpec, env: Env = process.env, keychain?: Keychain): string | undefined {
+  if (model.wire === 'faux' || (keychain ? authKey(model, env, keychain) : authKey(model, env))) return undefined;
   const names = model.auth.altEnv ? `${model.auth.env} (or ${model.auth.altEnv})` : model.auth.env;
-  return `cedia: ${names} is not set; sending ${model.ref} requests without credentials, expecting a proxy to add them`;
+  return `cedia: ${names} is not set${process.platform === 'darwin' ? ' or in the Keychain' : ''}; sending ${model.ref} requests without credentials, expecting a proxy to add them`;
 }
 
 // A spent plan or balance, told apart from a per-minute rate limit by its message.

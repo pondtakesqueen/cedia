@@ -52,6 +52,9 @@ type EventBody =
   // ttftMs: until the provider starts streaming; ms: the whole attempt.
   | { kind: 'attempt'; requestId: EventId; n: number; error?: AttemptError; ttftMs?: number; ms?: number }
   | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage }
+  // The request's body sent again with no output while a tool runs long, so its cached prefix does not expire
+  // (core/loop/run.ts). Nothing reaches the model's context; it is logged for its cost.
+  | { kind: 'keepalive'; requestId: EventId; usage?: Usage; error?: AttemptError; ms: number }
   | { kind: 'snapshot'; tree: string; callId?: string; changed: string[]; ms?: number } // shadow-git tree after a writing call
   | { kind: 'permission'; callId: string; tool: string; decision: 'allow' | 'deny'; rule: string; reason?: string }
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
@@ -142,10 +145,15 @@ export type Provider = {
   body(req: WireRequest): JsonObject;
   headers(req: WireRequest): Record<string, string>;
   stream(req: WireRequest, signal: AbortSignal): AsyncIterable<StreamEvent>;
+  // Reads the request's prefix into the cache again without generating anything, which restarts its lifetime.
+  // Only for a provider whose cache expires within minutes (Anthropic's 5-minute default).
+  keepAlive?(req: WireRequest, signal: AbortSignal): Promise<{ ok: true; usage: Usage } | { ok: false; error: AttemptError }>;
 };
 
-// flags: what the slop guard found in this run's changes (see core/trust/slop.ts).
-export type Evidence = { changed: string[]; checks: { command: string; exitCode: number }[]; unverified: string[]; flags?: string[] };
+// flags: what the slop guard found in this run's changes (see core/trust/slop.ts). A check's thread is the thread
+// whose session ran it: a run's result pools its sub-threads' checks with its own.
+export type Check = { command: string; exitCode: number; thread?: string };
+export type Evidence = { changed: string[]; checks: Check[]; unverified: string[]; flags?: string[] };
 
 // 'handoff' ends a session, never a run: the session wrote its handoff note (the result) and the client goes on
 // in a new session of the same thread.
@@ -164,7 +172,8 @@ export type HeadlessResult = {
   result: string;
   evidence?: Evidence;
   timing?: Timing;
-  // Tokens in the largest context one reply saw (the request plus the reply); across sessions, the largest.
+  // Tokens in the largest context one reply saw (the request plus the reply); across the run's own sessions, the
+  // largest. A sub-thread's sessions count in spawned.peakContext instead.
   peakContext?: number;
   // The plan the writer was given, and the review of its change (see core/trust/review.ts).
   plan?: Step;
@@ -174,7 +183,11 @@ export type HeadlessResult = {
   sessions?: string[];
   // Sub-threads the run spawned (core/tools/spawn.ts); their spend is in costUsd.
   subthreads?: number;
+  spawned?: Spawned;
 };
+
+// Sub-threads by kind, the handoffs their sessions made, and the largest context one of their replies saw.
+export type Spawned = { explore: number; work: number; handoffs: number; peakContext: number };
 
 // A role run around the writer. `via: 'claude-code'` is the user's own Claude Code CLI (their subscription): its
 // session lives in Claude Code, and its reported cost is not added to costUsd.

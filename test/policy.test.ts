@@ -173,6 +173,14 @@ describe('guards the user controls', () => {
     expect(decide({ ...SAFE, allow: ['read'] }, readTool, { path: '~/.ssh/id_rsa' }, cwd).decision).toBe('deny'); // allow rules do not lift it
   });
 
+  test('bash may not read the Keychain, where API keys live', () => {
+    for (const command of ['security find-generic-password -s cedia -a ANTHROPIC_API_KEY -w', '/usr/bin/security dump-keychain -d', 'echo x && security -q find-internet-password -w', 'security -i', 'security export -k login.keychain'])
+      expect([command, bash(WS, command).rule]).toEqual([command, 'deny-list:secret-path']);
+    for (const command of ['security list-keychains', 'security find-certificate -a', 'echo security find-generic-password'])
+      expect([command, bash(WS, command).decision]).toEqual([command, 'allow']);
+    expect(bash({ ...WS, unlock: ['secret-path'] }, 'security find-generic-password -s cedia -w').decision).toBe('allow');
+  });
+
   test('a store that holds the working directory does not lock the session out of it', () => {
     expect(decide({ ...WS, secrets: [join(cwd, '..')] }, readTool, { path: 'src/app.ts' }, cwd).decision).toBe('allow');
   });

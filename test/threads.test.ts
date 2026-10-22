@@ -48,6 +48,45 @@ describe('thread store', () => {
     expect(store.list()).toEqual([]);
   });
 
+  test('unsend takes back the user\'s waiting messages; one a session was shown stays delivered in either order', () => {
+    const store = new ThreadStore(join(tmp(), 'threads'));
+    const id = store.open('task');
+    store.append(id, { kind: 'session', sessionId: 's1', model: 'm', role: 'code', why: 'start' });
+    const a = store.send(id, 'user', 'first');
+    const b = store.send(id, 'user', 'second');
+    const c = store.send(id, 't-00000000', 'from another thread');
+    expect(store.unsend(id, [a])).toEqual([a]);
+    expect(store.read(id).pending.map((m) => m.id)).toEqual([b, c]);
+    expect(store.read(id).messages.find((m) => m.id === a)?.unsent).toBe(true);
+    expect(() => store.unsend(id, [a])).toThrow('already unsent');
+    expect(() => store.unsend(id, [c])).toThrow('not the user');
+    expect(() => store.unsend(id, ['nope'])).toThrow('no message nope');
+    store.append(id, { kind: 'delivered', ids: [b], sessionId: 's1' });
+    expect(() => store.unsend(id, [b])).toThrow('already delivered');
+    // With no ids: every user message still waiting, which is none now.
+    expect(store.unsend(id)).toEqual([]);
+    // A session picked the message up before the unsend line landed: it was seen, so it counts as delivered.
+    const d = store.send(id, 'user', 'raced');
+    store.append(id, { kind: 'delivered', ids: [d], sessionId: 's1' });
+    store.append(id, { kind: 'unsend', ids: [d] });
+    expect(store.read(id).messages.find((m) => m.id === d)?.unsent).toBeUndefined();
+  });
+
+  test('rate records a thumbs up or down on the latest answer, or on a named session', () => {
+    const store = new ThreadStore(join(tmp(), 'threads'));
+    const id = store.open('task');
+    store.append(id, { kind: 'session', sessionId: 's1', model: 'm', role: 'code', why: 'start' });
+    store.append(id, { kind: 'session', sessionId: 's2', model: 'm', role: 'code', why: 'resume' });
+    store.rate(id, 'up');
+    store.rate(id, 'down', { sessionId: 's1', note: 'missed the edge case' });
+    expect(store.read(id).ratings.map(({ at: _, ...r }) => r)).toEqual([
+      { rating: 'up', sessionId: 's2' },
+      { rating: 'down', sessionId: 's1', note: 'missed the edge case' },
+    ]);
+    expect(() => store.rate(id, 'meh' as 'up')).toThrow('a rating is up or down');
+    expect(() => store.rate(id, 'up', { sessionId: 's9' })).toThrow('no session s9');
+  });
+
   test('titles are the first line, cut at 60 characters', () => {
     expect(titleOf('  short task  \nsecond')).toBe('short task');
     expect(titleOf('x'.repeat(80))).toBe('x'.repeat(57) + '...');
@@ -137,8 +176,11 @@ describe('handoff in the loop', () => {
     expect(lintSession(never.log.events)).toEqual([]);
   });
 
-  test('a session that has only read does not hand off: its successor would read it all again', async () => {
-    const { r, log } = await run([tool('c1', 'big', {}), tool('c2', 'big', {}), write, tool('c3', 'big', {}), reply('the note')], { handoffAt: 2000 });
+  test('a first session that has only read hands off; one that picked up from another must change a file first', async () => {
+    const first = await run([tool('c1', 'big', {}), reply('the plan')], { handoffAt: 2000 });
+    expect(first.r).toMatchObject({ subtype: 'handoff', result: 'the plan' });
+    const continues = { sessionId: 'earlier', changed: [] };
+    const { r, log } = await run([tool('c1', 'big', {}), tool('c2', 'big', {}), write, tool('c3', 'big', {}), reply('the note')], { handoffAt: 2000, continues });
     expect(r).toMatchObject({ subtype: 'handoff', result: 'the note' });
     // Asked for the note only after the write, two turns past the point it first passed handoffAt.
     const asked = log.events.findIndex((e) => e.kind === 'reminder' && e.text === HANDOFF_PROMPT);
@@ -301,6 +343,35 @@ describe('cedia threads (offline, faux)', () => {
     expect(threadsCli(dir, 'show', 'nope').code).toBe(1);
   });
 
+  test('unsend and rate from the CLI: an unsent message never reaches the model, and neither does a rating', () => {
+    const dir = tmp();
+    const a = JSON.parse(cedia(dir, [reply('A done')], ['-p', 'build the API', ...base, '--check', 'true']).out);
+    const kept = /as (\S+)/.exec(threadsCli(dir, 'send', a.thread, 'keep this one').out)![1]!;
+    const taken = /as (\S+)/.exec(threadsCli(dir, 'send', a.thread, 'take this back').out)![1]!;
+    expect(threadsCli(dir, 'unsend', a.thread, taken).out).toContain(`unsent ${taken} from ${a.thread}`);
+    expect(threadsCli(dir, 'unsend', a.thread, taken).code).toBe(1);
+    expect(threadsCli(dir, 'rate', a.thread, 'down', '--note', 'too slow').out).toContain(`rated ${a.thread} down`);
+    expect(threadsCli(dir, 'rate', a.thread, 'sideways').code).toBe(1);
+    const shown = threadsCli(dir, 'show', a.thread).out;
+    expect(shown).toContain(`message ${taken} from user`);
+    expect(shown).toContain('(unsent)');
+    expect(shown).toContain(`rated down`);
+    expect(shown).toContain('too slow');
+
+    // B reads A with read_thread, then A resumes: neither sees the unsent message or the rating.
+    const b = JSON.parse(cedia(dir, [tool('c1', 'read_thread', { id: a.thread }), reply('B done')], ['-p', 'build the client', ...base, '--check', 'true']).out);
+    const resumed = JSON.parse(cedia(dir, [reply('ok')], ['-p', 'go on', ...base, '--check', 'true', '--thread', a.thread]).out);
+    expect(resumed.subtype).toBe('success');
+    for (const id of [b.sessionId, a.sessionId]) {
+      const seen = JSON.stringify(sessionsOf(dir).find((l) => l.id === id)!.events);
+      expect(seen).not.toContain('take this back');
+      expect(seen).not.toContain('too slow');
+    }
+    expect(JSON.stringify(sessionsOf(dir).find((l) => l.id === a.sessionId)!.events)).toContain('keep this one');
+    expect(storeOf(dir).read(a.thread).pending).toEqual([]);
+    expect(storeOf(dir).read(a.thread).messages.map((m) => m.id)).toEqual([kept, taken]);
+  });
+
   test('a read-only session cannot message another thread', () => {
     const dir = tmp();
     const a = JSON.parse(cedia(dir, [reply('A done')], ['-p', 'first', '--output-format', 'json', '--sandbox', 'off']).out);
@@ -346,6 +417,11 @@ describe('sub-threads (offline, faux)', () => {
     const store = storeOf(dir);
     const sub = store.list().find((t) => t.parent === result.thread)!;
     expect(sub).toMatchObject({ state: 'done', archived: true, title: 'Write good to f.txt, then run grep -q good f.txt.' });
+    // The result pools both threads' checks, each named by the thread that ran it.
+    expect(result.evidence.checks).toEqual([
+      { command: 'grep -q good f.txt', exitCode: 0, thread: sub.id },
+      { command: 'grep -q good f.txt', exitCode: 0, thread: result.thread },
+    ]);
     const child = sessionsOf(dir).find((l) => l.id === sub.sessions[0]!.sessionId)!;
     expect(head(child.events)).toMatchObject({ thread: sub.id });
     expect(head(child.events).tools.map((t) => t.name)).toEqual(['read', 'edit', 'write', 'bash']);
@@ -371,6 +447,10 @@ describe('sub-threads (offline, faux)', () => {
     expect(run.err).toContain("a sub-thread's context reached 2000 tokens; handing it off to a new session");
     // The parent itself did not hand off: one writer session.
     expect(result.sessions).toHaveLength(1);
+    // The result counts the sub-thread's handoff, and keeps its context apart from the parent's.
+    expect(result.spawned).toMatchObject({ explore: 0, work: 1, handoffs: 1 });
+    expect(result.spawned.peakContext).toBeGreaterThan(2000);
+    expect(result.peakContext).toBeLessThan(result.spawned.peakContext);
     const parent = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
     const report = parent.events.find((e): e is EventOf<'tool_result'> => e.kind === 'tool_result' && e.callId === 's1')!;
     expect(report).toMatchObject({ status: 'completed' });
@@ -454,6 +534,32 @@ describe('sub-threads (offline, faux)', () => {
     expect(parent.events.find((e) => e.kind === 'tool_result')).toMatchObject({ status: 'failed', output: { isError: true } });
     const sub = storeOf(dir).list().find((t) => t.parent === result.thread)!;
     expect(sub).toMatchObject({ state: 'failed', archived: false });
+  });
+
+  test("a sub-thread's spend counts against the run's budget, in the sub-thread and in the parent after it", () => {
+    const dir = tmp();
+    // Every faux turn here costs about the same, so the budget is a turn count: the parent's spawn, then the
+    // sub-thread's turns. Before spend was shared, the sub-thread had the whole budget to itself and the parent
+    // went on spending after it.
+    const one = JSON.parse(cedia(tmp(), [call('c0', 'true'), reply('ok')], ['-p', 'x', ...ws]).out).costUsd / 2;
+    const script = [
+      tool('s1', 'spawn', { kind: 'work', task: 'Run true three times.' }),
+      call('c1', 'true'),
+      call('c2', 'true'),
+      call('c3', 'true'),
+      reply('ran it'),
+      call('c4', 'true'),
+      reply('done'),
+    ];
+    const result = JSON.parse(cedia(dir, script, ['-p', 'run true', ...ws, '--max-budget-usd', String(one * 2.5)]).out);
+    expect(result.subtype).toBe('error_max_budget_usd');
+    expect(result.costUsd).toBeLessThan(one * 4);
+    // The sub-thread stopped at the run's budget, not at a budget of its own, and the parent ran nothing after it.
+    const parent = sessionsOf(dir).find((l) => l.id === result.sessionId)!;
+    const results = parent.events.filter((e): e is EventOf<'tool_result'> => e.kind === 'tool_result');
+    expect(results[0]!.output.text).toContain('ended="error_max_budget_usd"');
+    const ran = sessionsOf(dir).flatMap((l) => l.events.filter((e): e is EventOf<'tool_result'> => e.kind === 'tool_result' && e.status === 'completed').map((e) => e.callId));
+    expect(ran).toEqual(['c1', 'c2']);
   });
 
   test('--spawn off leaves the tool out', () => {

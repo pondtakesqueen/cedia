@@ -1,0 +1,3 @@
+{"at":"2026-10-22T02:12:35.197Z","kind":"open","title":"publish the package","task":"publish the package"}
+{"at":"2026-10-22T02:12:35.200Z","kind":"session","sessionId":"5a82fc23-439b-420b-bee0-6308a0eabc3f","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/5a82fc23-439b-420b-bee0-6308a0eabc3f.jsonl"}
+{"at":"2026-10-22T02:12:35.216Z","kind":"state","state":"done","result":"Publishing is on the deny list, so I left it for you."}

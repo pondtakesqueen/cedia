@@ -18,7 +18,7 @@ import { openSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
 import type { ToolSpec } from '../../core/tools/registry.ts';
 import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
-import { addUsage, hitRatio, ZERO_USAGE, type Effort, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
+import { addUsage, hitRatio, ZERO_USAGE, type Effort, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
 import { runClaudeCode } from './claude-code.ts';
 import { encode } from '../../protocol/index.ts';
 import { inert } from '../../core/trust/frame.ts';
@@ -58,10 +58,11 @@ export type HeadlessArgs = {
   allowDomains?: string[];
 };
 
-// Every run that changed files or ran checks ends with a receipt built from the ledger.
-export function receipt(ev: Evidence): string {
+// Every run that changed files or ran checks ends with a receipt built from the ledger. A check another thread ran
+// (a sub-thread) is named as that thread's.
+export function receipt(ev: Evidence, thread?: string): string {
   const list = (xs: string[]) => (xs.length ? xs.join(', ') : 'none');
-  const checks = ev.checks.map((c) => `${c.command} (exit ${c.exitCode})`);
+  const checks = ev.checks.map((c) => `${c.command} (exit ${c.exitCode}${c.thread && c.thread !== thread ? `, in sub-thread ${c.thread}` : ''})`);
   return `cedia receipt: changed ${list(ev.changed)}; checks ${list(checks)}; unverified ${list(ev.unverified)}${ev.flags?.length ? `; flagged ${ev.flags.join(', ')}` : ''}`;
 }
 
@@ -89,8 +90,9 @@ export const resumeNote = (t: Thread) => {
 
 // One result for a run made of several sessions (quota fallback, review, fix): spend and turns add up, changed
 // files and checks are pooled, and the rest is the last writer session's. A fallback session's evidence already
-// counts the first session's changes; a fix session's unverified list is the one that still stands.
-function combine(parts: HeadlessResult[], last: HeadlessResult): HeadlessResult {
+// counts the first session's changes; a fix session's unverified list is the one that still stands. The peak
+// context is the run's own sessions' (sub-threads report theirs apart): it is what spawn and handoff keep down.
+function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<HeadlessResult> = new Set()): HeadlessResult {
   const usage = parts.reduce((u, r) => addUsage(u, r.usage), ZERO_USAGE);
   const evs = parts.flatMap((r) => (r.evidence ? [r.evidence] : []));
   const flags = [...new Set(evs.flatMap((e) => e.flags ?? []))];
@@ -111,7 +113,7 @@ function combine(parts: HeadlessResult[], last: HeadlessResult): HeadlessResult 
     ? { wallMs: sum('wallMs'), modelMs: sum('modelMs'), ttftMs: sum('ttftMs'), toolMs: sum('toolMs'), retryMs: sum('retryMs'), harnessMs: sum('harnessMs'), outputTokPerSec: decodeSec > 0 ? Math.round((decoded / decodeSec) * 10) / 10 : 0 }
     : undefined;
   const { evidence: _, timing: __, ...rest } = last;
-  const peakContext = Math.max(0, ...parts.map((r) => r.peakContext ?? 0));
+  const peakContext = Math.max(0, ...parts.filter((r) => !children.has(r)).map((r) => r.peakContext ?? 0));
   return {
     ...rest,
     ...(peakContext ? { peakContext } : {}),
@@ -210,9 +212,13 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   // Scripted models share one script, so a later session reads on from where the last one stopped.
   let faux: Provider | undefined;
   const providerOf = (m: ModelSpec) => (m.wire === 'faux' ? (faux ??= providerFor(m, { fauxScript })) : providerFor(m));
-  // Every session of the run draws on one turn and budget allowance.
+  // Every session of the run draws on one turn and budget allowance. Spend is metered as it happens, so a
+  // sub-thread's counts against the budget of the session that spawned it, and the other way round.
   const parts: HeadlessResult[] = [];
-  const spent = () => ({ turns: parts.reduce((n, r) => n + r.numTurns, 0), costUsd: parts.reduce((c, r) => c + r.costUsd, 0) });
+  const meter = { usd: 0 };
+  // The parts that were sub-thread sessions.
+  const children = new Set<HeadlessResult>();
+  const turnsSpent = () => parts.reduce((n, r) => n + r.numTurns, 0);
   let handoffs = 0;
   // Quota waits add up across the run's sessions, against the one ceiling.
   let quotaWaited = 0;
@@ -229,7 +235,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     const reviewer = opts.role !== undefined; // plan, review and explore read and never write
     const child = opts.child;
     const writing = !reviewer && !child; // the run's own writer: the one that hands off, gets mail and may spawn
-    const used = spent();
+    const usedTurns = turnsSpent();
     // A resumed session keeps the tools it was opened with (its cached prefix); new ones get recall once the
     // thread has an earlier session, and the thread tools once the project has another thread.
     const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
@@ -275,13 +281,14 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
           : {}),
         ...(args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
         ...(escalate && !reviewer ? { escalate } : {}),
-        ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - used.turns } : {}),
-        ...(args.maxBudgetUsd !== undefined ? { maxBudgetUsd: args.maxBudgetUsd - used.costUsd } : {}),
+        ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - usedTurns } : {}),
+        ...(args.maxBudgetUsd !== undefined ? { maxBudgetUsd: args.maxBudgetUsd, meter } : {}),
         ...(args.outputFormat === 'stream-json' ? { onStream: (event) => out(encode({ type: 'stream', event })) } : {}),
       },
       prompt,
     );
     parts.push(result);
+    if (child) children.add(result);
     return result;
   };
   // A plan or review step, in cedia or through the user's own Claude Code.
@@ -308,6 +315,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   // Explore runs on the swarm model unless privacy keeps that model out; work runs on the writer's model.
   const explorer = privacy === 'zdr' && roles.swarm.dataPolicy !== 'zdr' ? model : roles.swarm;
   let subthreads = 0;
+  const spawned: Spawned = { explore: 0, work: 0, handoffs: 0, peakContext: 0 };
   // An explore sub-thread whose swarm model is out of quota (Beam's free tier answers with hours to wait) goes on
   // in a new session on the writer's model, as the writer itself would. A work sub-thread whose context grows long
   // hands off to a new session of the sub-thread, as the writer does: on Haiku a sub-thread past 100k tokens would
@@ -315,6 +323,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   // (core/loop/run.ts).
   const spawner: Spawner = async (brief: string, kind: SpawnKind) => {
     subthreads++;
+    spawned[kind]++;
     let m = kind === 'explore' ? explorer : writer.model;
     const sub = store?.open(brief, threadId ? { parent: threadId } : {});
     const prompt = subtaskPrompt(brief, threadId, kind);
@@ -330,6 +339,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       const child = { ...(sub ? { thread: sub } : {}), ...(kind === 'work' && handoffsHere < MAX_HANDOFFS ? { handoff: true } : {}), ...(mine.length > 1 ? { recall: recallMine } : {}) };
       const r = await run(m, log, prompt, { ...opts, ...(kind === 'explore' ? { role: 'explore' as const } : {}), child });
       cost += r.costUsd;
+      spawned.peakContext = Math.max(spawned.peakContext, r.peakContext ?? 0);
       return { log, r };
     };
     let r: HeadlessResult;
@@ -343,6 +353,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       }
       while (r.subtype === 'handoff') {
         handoffsHere++;
+        spawned.handoffs++;
         const from = last.log;
         if (store && sub) store.append(sub, { kind: 'handoff', sessionId: from.id, note: r.result });
         process.stderr.write(`cedia: a sub-thread's context reached ${handoffAt} tokens; handing it off to a new session\n`);
@@ -442,11 +453,11 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       } else if (verdict === 'unclear') process.stderr.write(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
     }
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
-    result = { ...combine(parts, result), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads } : {}) };
+    result = { ...combine(parts, result, children), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
     if (store && threadId) store.append(threadId, { kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
     if (args.outputFormat === 'text') {
       out(result.result + (result.result.endsWith('\n') ? '' : '\n'));
-      if (result.evidence) process.stderr.write(receipt(result.evidence) + '\n');
+      if (result.evidence) process.stderr.write(receipt(result.evidence, result.thread) + '\n');
       if (result.plan) process.stderr.write(`cedia plan: by ${result.plan.model}\n`);
       if (result.review) process.stderr.write(`cedia review: ${result.review.model} ${result.review.verdict === 'changes' ? 'asked for changes, sent back to the writer once' : result.review.verdict === 'approve' ? 'approved' : 'gave no verdict'}\n`);
       if (threadId) process.stderr.write(`cedia thread: ${threadId}${handoffs ? ` (${handoffs} handoff${handoffs === 1 ? '' : 's'})` : ''}; go on with --thread ${threadId}\n`);
