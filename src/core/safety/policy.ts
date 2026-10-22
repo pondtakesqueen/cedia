@@ -63,7 +63,11 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
   if (effect !== 'read' && JSON.stringify(input).includes(REDACTED))
     return deny('redacted-placeholder', `the input contains ${REDACTED}, which stands for a secret you were not shown; writing it would replace the real value. Leave that part as it is or ask the user`);
   for (const rule of policy.deny) {
-    if (matches(rule, spec.name, commands, path, cwd, 'any')) return deny(`deny:${rule}`, `matches the deny rule ${rule}`);
+    // edit and write change a file the same way, so a deny rule naming either covers both.
+    const tool = spec.name === 'write' && /^edit\b/.test(rule.trim()) ? 'edit' : spec.name === 'edit' && /^write\b/.test(rule.trim()) ? 'write' : spec.name;
+    if (matches(rule, tool, commands, path, cwd, 'any')) return deny(`deny:${rule}`, `matches the deny rule ${rule}`);
+    if (command !== undefined && commands && writesDenied(rule, command, commands, cwd))
+      return deny(`deny:${rule}`, `may write a path the deny rule ${rule} covers; that rule holds for commands too`);
   }
 
   if (effect === 'read' || effect === 'network') return { decision: 'allow', rule: 'effect:read' };
@@ -106,6 +110,21 @@ function matches(rule: string, tool: string, commands: string[][] | null | undef
   if (path === undefined) return false;
   const full = resolve(cwd, path);
   return re.test(path) || re.test(full) || re.test(relative(cwd, full));
+}
+
+// An edit or write deny rule says a path must not change, so a command that may write and names such a path (a
+// word, or the target of a redirection: `sed -i x`, `echo > x`, `cp y x`) is denied too. A read-only command
+// may still name it.
+function writesDenied(rule: string, command: string, commands: string[][], cwd: string): boolean {
+  const m = /^(edit|write)\((.+)\)$/.exec(rule.trim());
+  if (!m || checkReadOnly(command).ok) return false;
+  const re = glob(m[2]!);
+  const targets = [...command.matchAll(/>>?\|?\s*([^\s;|&<>()]+)/g)].map((t) => t[1]!.replace(/^['"]|['"]$/g, ''));
+  const words = commands.flatMap((argv) => argv.slice(1)).filter((w) => !w.startsWith('-'));
+  return [...words, ...targets].some((w) => {
+    const full = resolve(cwd, expandHome(w));
+    return re.test(w) || re.test(full) || re.test(relative(cwd, full));
+  });
 }
 
 function glob(pattern: string): RegExp {
