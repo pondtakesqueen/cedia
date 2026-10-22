@@ -12,6 +12,7 @@ import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Sch
 import { loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
 import { rewindThread, rewoundText, runLines } from './core/project/rewind.ts';
+import { forkThread } from './core/project/fork.ts';
 import { workspaceSnapshots } from './core/safety/snapshot.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
@@ -99,6 +100,10 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                             conversation and files together: the thread goes on from there, and
                                             every file a later run changed is put back. It refuses while the thread
                                             is working, or when such a file changed since (--force: anyway).
+       cedia threads fork <id> <n|run> [--json]
+                                            a new thread whose conversation is this one's just before run n (or the
+                                            run with that id), for sending its message again, edited; the original
+                                            thread and the files are left as they are
                                             Without n, lists the runs
        cedia schedules [list | due] [--json]
                                             the project's scheduled prompts, or the ones due now. Whoever runs
@@ -297,7 +302,7 @@ function threads(argv: string[]): number {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' } },
+    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' }, json: { type: 'boolean' } },
   });
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(values.cwd ?? process.cwd())));
   const [cmd = 'list', id, ...rest] = positionals;
@@ -356,6 +361,13 @@ function threads(argv: string[]): number {
       console.log(rewoundText(r));
       return 0;
     }
+    if (cmd === 'fork' && id && rest.length === 1) {
+      if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
+      const r = forkThread(store, id, rest[0]!, { sessionFile: (cwd, sid) => sessionPath(cwd, sid) });
+      if ('error' in r) throw new Error(r.error);
+      console.log(values.json ? JSON.stringify({ thread: r.thread, run: r.run.id, ...(r.sessionId ? { sessionId: r.sessionId } : {}) }) : `forked ${id} at run ${JSON.stringify(r.run.prompt.split('\n')[0])} into ${r.thread}; send the edited message with cedia -p <text> --thread ${r.thread}`);
+      return 0;
+    }
     if (cmd === 'diff' && id) {
       if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
       const change = threadTurn(store, id);
@@ -373,7 +385,7 @@ function threads(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] | redo <id> [--force] | rewind <id> [<n>] [--force] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
+  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] | redo <id> [--force] | rewind <id> [<n>] [--force] | fork <id> <n|run> [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
   return 2;
 }
 

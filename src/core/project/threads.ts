@@ -11,12 +11,13 @@ import { inert } from '../trust/frame.ts';
 export type ThreadState = 'queued' | 'working' | 'done' | 'failed' | 'stopped' | 'asking';
 // rejected: the provider refused the last session's history, so the thread went on in a new one.
 // rewind: a copy of a session as it was before a run, which the thread goes on from (core/project/rewind.ts).
-export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota' | 'rejected' | 'rewind';
+export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota' | 'rejected' | 'rewind' | 'fork';
 
 type ThreadBody =
   // parent: the thread that spawned this one as a sub-thread. by: the thread that opened it with open_thread, for a
   // client to run. profile: the profile its runs take unless another is named (core/profiles.ts).
-  | { kind: 'open'; title: string; task: string; parent?: string; by?: string; profile?: string }
+  // forkOf: the thread and run this one was forked at (core/project/fork.ts).
+  | { kind: 'open'; title: string; task: string; parent?: string; by?: string; profile?: string; forkOf?: ForkOf }
   | { kind: 'session'; sessionId: string; model: string; role: string; why: SessionWhy; path?: string }
   // Written when a session hands off: the note the next session starts from.
   | { kind: 'handoff'; sessionId: string; note: string }
@@ -47,6 +48,7 @@ type ThreadBody =
   | { kind: 'rewind'; run: string }
   // Hidden from lists, still readable. A sub-thread that finishes its task archives itself.
   | { kind: 'archived'; archived: boolean };
+export type ForkOf = { thread: string; run: string };
 export type RunFrom = { sessionId: string; path: string; events: number; model: string };
 // `run`: the run that wrote it, on what a run writes (core/project/rewind.ts).
 export type ThreadEvent = { at: string; run?: string } & ThreadBody;
@@ -67,6 +69,7 @@ export type Thread = {
   parent?: string;
   by?: string;
   profile?: string;
+  forkOf?: ForkOf;
   archived: boolean;
   sessions: (Extract<ThreadEvent, { kind: 'session' }> & { rewound?: boolean })[];
   handoff?: { sessionId: string; note: string };
@@ -126,9 +129,9 @@ export class ThreadStore {
     appendFileSync(this.path(id), JSON.stringify({ at: now.toISOString(), ...body }) + '\n');
   }
 
-  open(task: string, opts: { parent?: string; by?: string; profile?: string; title?: string; now?: Date } = {}): string {
+  open(task: string, opts: { parent?: string; by?: string; profile?: string; title?: string; forkOf?: ForkOf; now?: Date } = {}): string {
     const id = newThreadId();
-    this.append(id, { kind: 'open', title: titleOf(opts.title || task), task, ...(opts.parent ? { parent: opts.parent } : {}), ...(opts.by ? { by: opts.by } : {}), ...(opts.profile ? { profile: opts.profile } : {}) }, opts.now);
+    this.append(id, { kind: 'open', title: titleOf(opts.title || task), task, ...(opts.parent ? { parent: opts.parent } : {}), ...(opts.by ? { by: opts.by } : {}), ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.forkOf ? { forkOf: opts.forkOf } : {}) }, opts.now);
     return id;
   }
 
@@ -193,6 +196,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     ...(open?.parent ? { parent: open.parent } : {}),
     ...(open?.by ? { by: open.by } : {}),
     ...(open?.profile ? { profile: open.profile } : {}),
+    ...(open?.forkOf ? { forkOf: open.forkOf } : {}),
     archived: false,
     sessions: [],
     messages: [],
@@ -274,5 +278,5 @@ export function inboxReminder(messages: ThreadMessage[]): string {
 export function threadLine(t: Thread): string {
   const latest = (t.result ?? t.handoff?.note ?? '').trim().split('\n')[0] ?? '';
   const done = t.todo?.filter((i) => i.state === 'done').length;
-  return `${t.id}  ${t.state.padEnd(7)}  ${t.parent ? `(sub-thread of ${t.parent}) ` : ''}${t.by ? `(opened by ${t.by}) ` : ''}${t.archived ? '(archived) ' : ''}${t.todo?.length ? `[${done}/${t.todo.length}] ` : ''}${t.title}${latest ? `\n    ${latest.length > 120 ? `${latest.slice(0, 117)}...` : latest}` : ''}`;
+  return `${t.id}  ${t.state.padEnd(7)}  ${t.parent ? `(sub-thread of ${t.parent}) ` : ''}${t.by ? `(opened by ${t.by}) ` : ''}${t.forkOf ? `(forked from ${t.forkOf.thread}) ` : ''}${t.archived ? '(archived) ' : ''}${t.todo?.length ? `[${done}/${t.todo.length}] ` : ''}${t.title}${latest ? `\n    ${latest.length > 120 ? `${latest.slice(0, 117)}...` : latest}` : ''}`;
 }

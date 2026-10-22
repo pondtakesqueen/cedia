@@ -52,7 +52,7 @@ function plan(t: Thread, run: Run, cwd: string, snapshots: Snapshots): Plan | un
 }
 
 // A copy of a session's first `events` events, as a new session file.
-function copySession(from: NonNullable<Run['from']>, to: string): void {
+export function copySession(from: NonNullable<Run['from']>, to: string): void {
   if (!sessionExists(from.path)) throw new Error(`the session the run started in is gone: ${from.path}`);
   const lines = readFileSync(from.path, 'utf8').split('\n').filter(Boolean);
   if (lines.length < from.events) throw new Error(`session ${from.sessionId} has fewer events than when the run started`);
