@@ -1,11 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { McpServerConfig } from './mcp/client.ts';
 import { GUARDS, PERMISSION_SETTINGS, type Guard, type PermissionSetting, type Policy } from './safety/policy.ts';
 import { DEFAULT_DOMAINS, SANDBOX_SETTINGS, type SandboxSetting } from './safety/sandbox.ts';
 import { defaultHandoffAt } from './project/handoff.ts';
 import { FALLBACKS, resolveModel } from './providers/catalog.ts';
 import { secretPaths } from './safety/secrets.ts';
+import { checkHooks, type Hooks } from './hooks.ts';
 import type { ModelSpec, PrivacyLevel } from './types.ts';
 
 export type Settings = {
@@ -19,9 +21,10 @@ export type Settings = {
   fallback?: Record<string, string>;
   // The model for each role: an alias or ref, `claude-code[:<model>]` for plan and review, or "none". User
   // settings only: a repo must not pick what the user pays for.
-  roles?: { plan?: string; code?: string; review?: string; swarm?: string };
-  // Whether writer sessions get the spawn tool for sub-threads (default true). User settings only.
-  spawn?: boolean;
+  roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string };
+  // Whether writer sessions get the spawn tool for sub-threads (default true), and "worktree" to run each work
+  // sub-thread in a git worktree of its own, several at once. User settings only.
+  spawn?: boolean | 'worktree';
   // Whether writer sessions of a thread get ask_user, to end a run with a question for the owner (default false: a
   // headless run has nobody to answer). The desktop turns it on. User settings only.
   ask?: boolean;
@@ -33,9 +36,14 @@ export type Settings = {
   // On a spent quota: "fallback" (the default), or "wait:<minutes>" to wait up to that long in all for it to come
   // back before falling back. User settings only: a repo must not keep the user waiting.
   onQuota?: string;
+  // MCP servers whose tools the writer gets (core/mcp/tools.ts): a command to start, or a URL. User settings
+  // only: a repository must not start programs. `${VAR}` in env values and headers is read from the environment.
+  mcpServers?: Record<string, unknown>;
   // The desktop app's own settings (cedian: theme, keymap, layout and the like). cedia never reads them and checks
   // only that they are an object, so the desktop can keep them in this file without cedia knowing their shape.
   desktop?: Record<string, unknown>;
+  // The user's hooks (core/hooks.ts). User settings only: a repo must not run code outside the sandbox.
+  hooks?: Hooks;
 };
 
 // Every key cedia knows, with the keys allowed inside the objects it reads. A key that is not here is a typo or a
@@ -47,13 +55,15 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   privacy: 'any',
   context: 'any',
   fallback: 'any',
-  roles: ['plan', 'code', 'review', 'swarm'],
+  roles: ['plan', 'code', 'review', 'swarm', 'advisor'],
   spawn: 'any',
   ask: 'any',
   handoffAt: 'any',
   handoff: 'any',
   onQuota: 'any',
+  mcpServers: 'any',
   desktop: 'any',
+  hooks: 'any',
 };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -64,6 +74,7 @@ export function checkSettings(value: unknown): Settings {
     const allowed = SETTINGS_KEYS[key as keyof Settings];
     if (!allowed) throw new Error(`unknown setting "${key}" (known: ${Object.keys(SETTINGS_KEYS).join(', ')})`);
     if (key === 'desktop' && !isObject(inner)) throw new Error('"desktop" must be an object');
+    if (key === 'hooks') checkHooks(inner);
     if (allowed === 'any') continue;
     if (!isObject(inner)) throw new Error(`"${key}" must be an object`);
     const unknown = Object.keys(inner).find((k) => !allowed.includes(k));
@@ -153,15 +164,54 @@ export function loadQuotaWait(flag?: string): number | undefined {
 }
 
 // Sub-threads: flag > user settings > on.
-export function loadSpawn(flag?: string): boolean {
-  if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--spawn must be on or off: ${flag}`);
-  return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).spawn ?? true);
+export type SpawnMode = 'on' | 'off' | 'worktree';
+export function loadSpawn(flag?: string): SpawnMode {
+  if (flag !== undefined && flag !== 'on' && flag !== 'off' && flag !== 'worktree') throw new Error(`--spawn must be on, off or worktree: ${flag}`);
+  if (flag) return flag;
+  const s = readSettings(join(cediaHome(), 'settings.json')).spawn ?? true;
+  if (s !== true && s !== false && s !== 'worktree') throw new Error(`spawn in settings.json must be true, false or "worktree": ${JSON.stringify(s)}`);
+  return s === 'worktree' ? 'worktree' : s ? 'on' : 'off';
 }
 
 // ask_user: flag > user settings > off.
 export function loadAsk(flag?: string): boolean {
   if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--ask must be on or off: ${flag}`);
   return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).ask ?? false);
+}
+
+// The user's MCP servers, checked: each a command (with args, env, cwd) or a URL (with headers), optionally
+// readOnly and timeoutSec. A bad entry is an error, like any bad setting.
+export function loadMcp(env = process.env): Record<string, McpServerConfig> {
+  const raw = readSettings(join(cediaHome(), 'settings.json')).mcpServers ?? {};
+  const expand = (v: string) => v.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, k: string) => env[k] ?? '');
+  const strings = (v: unknown, what: string): Record<string, string> | undefined => {
+    if (v === undefined) return undefined;
+    if (!isObject(v) || Object.values(v).some((x) => typeof x !== 'string')) throw new Error(`${what} must map names to strings`);
+    return Object.fromEntries(Object.entries(v as Record<string, string>).map(([k, x]) => [k, expand(x)]));
+  };
+  const out: Record<string, McpServerConfig> = {};
+  for (const [name, v] of Object.entries(raw)) {
+    const at = `mcpServers.${name}`;
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) throw new Error(`${at}: a server name is 1 to 32 letters, digits, _ or -`);
+    if (!isObject(v)) throw new Error(`${at} must be an object`);
+    const known = ['command', 'args', 'env', 'cwd', 'url', 'headers', 'readOnly', 'timeoutSec'];
+    const unknown = Object.keys(v).find((k) => !known.includes(k));
+    if (unknown) throw new Error(`${at}: unknown key "${unknown}" (known: ${known.join(', ')})`);
+    if (v.readOnly !== undefined && typeof v.readOnly !== 'boolean') throw new Error(`${at}.readOnly must be true or false`);
+    if (v.timeoutSec !== undefined && (typeof v.timeoutSec !== 'number' || !(v.timeoutSec > 0))) throw new Error(`${at}.timeoutSec must be a positive number`);
+    const common = { ...(v.readOnly !== undefined ? { readOnly: v.readOnly as boolean } : {}), ...(v.timeoutSec !== undefined ? { timeoutSec: v.timeoutSec as number } : {}) };
+    if (typeof v.command === 'string' && v.url === undefined) {
+      if (v.args !== undefined && (!Array.isArray(v.args) || v.args.some((a) => typeof a !== 'string'))) throw new Error(`${at}.args must be a list of strings`);
+      if (v.cwd !== undefined && typeof v.cwd !== 'string') throw new Error(`${at}.cwd must be a string`);
+      const e = strings(v.env, `${at}.env`);
+      out[name] = { command: v.command, ...(v.args ? { args: v.args as string[] } : {}), ...(e ? { env: e } : {}), ...(v.cwd ? { cwd: v.cwd as string } : {}), ...common };
+    } else if (typeof v.url === 'string' && v.command === undefined) {
+      if (!/^https?:\/\//.test(v.url)) throw new Error(`${at}.url must be http(s)`);
+      const h = strings(v.headers, `${at}.headers`);
+      out[name] = { url: v.url, ...(h ? { headers: h } : {}), ...common };
+    } else throw new Error(`${at} needs either a command or a url`);
+  }
+  return out;
 }
 
 // When a writer session hands off: flag > user settings > half the window, capped (core/project/handoff.ts).
@@ -186,9 +236,9 @@ export function loadHandoff(flag?: string): 'note' | 'compact' {
 // `claude-code` alone means opus for plan and sonnet for review. The writer always runs in cedia, where its
 // writes go through the policy, the sandbox and the done gate.
 export function loadRoles(
-  flags: { plan?: string; code?: string; review?: string; swarm?: string } = {},
+  flags: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string } = {},
   env = process.env,
-): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice; swarm: ModelSpec } {
+): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice; swarm: ModelSpec; advisor?: ModelSpec } {
   const user = readSettings(join(cediaHome(), 'settings.json')).roles ?? {};
   const codeRef = flags.code ?? env.CEDIA_MODEL ?? user.code ?? 'deepseek';
   if (/^claude-code\b/.test(codeRef)) throw new Error('the code role runs in cedia, where its writes are checked; use claude-code for plan or review');
@@ -201,7 +251,11 @@ export function loadRoles(
   const review = role(flags.review ?? user.review, 'sonnet');
   // Explore sub-threads: free and fast on the Go plan, and it keeps prompts without training on them.
   const swarm = resolveModel(flags.swarm ?? user.swarm ?? 'beam');
-  return { code: resolveModel(codeRef), ...(plan ? { plan } : {}), ...(review ? { review } : {}), swarm };
+  // The advisor reads every turn, so it is off unless named: each turn of the writer costs one of its own.
+  const advisorRef = flags.advisor ?? user.advisor;
+  if (advisorRef && /^claude-code\b/.test(advisorRef)) throw new Error('the advisor runs in cedia, one reply a turn; claude-code is for plan or review');
+  const advisor = advisorRef && advisorRef !== 'none' && advisorRef !== 'off' ? resolveModel(advisorRef) : undefined;
+  return { code: resolveModel(codeRef), ...(plan ? { plan } : {}), ...(review ? { review } : {}), swarm, ...(advisor ? { advisor } : {}) };
 }
 
 // Declared checks for the done gate. Declaring a check grants nothing, so a repo may declare its own.
@@ -239,4 +293,9 @@ export function loadSandbox(flags: { mode?: string; allowDomains?: string[] } = 
   const mode = flags.mode || env.CEDIA_SANDBOX || user.mode || 'auto';
   if (!SANDBOX_SETTINGS.includes(mode as SandboxSetting)) throw new Error(`unknown sandbox setting "${mode}" (use ${SANDBOX_SETTINGS.join(', ')})`);
   return { mode: mode as SandboxSetting, allowedDomains: [...new Set([...DEFAULT_DOMAINS, ...(user.allowedDomains ?? []), ...(flags.allowDomains ?? [])])] };
+}
+
+// Hooks come from the user's settings only; a repo's .cedia/settings.json may name them but they are never read.
+export function loadHooks(): Hooks {
+  return readSettings(join(cediaHome(), 'settings.json')).hooks ?? {};
 }
