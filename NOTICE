@@ -1,3 +1,8 @@
+cedia
+Copyright 2026 Pongsathon Kheereekaew
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
 cedia adapts code from the following sources:
 
 - harness2 (Apache-2.0) — budget ledger identity (R rollouts + P sessions per task) adapted into evals/run.ts. Executor, benchmark, and recursion code were not copied.
