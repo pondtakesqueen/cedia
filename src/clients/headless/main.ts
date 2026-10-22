@@ -12,6 +12,7 @@ import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../..
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
 import { memoryBlock, memoryPath, MemoryStore, rememberTool } from '../../core/project/memory.ts';
+import { loadSkills, skillsBlock, skillTool } from '../../core/skills/skills.ts';
 import { runTurn } from '../../core/project/undo.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
 import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
@@ -215,7 +216,10 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     }
   })();
   const remember = store ? rememberTool(memory, threadId ?? 'cedia') : undefined;
-  const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}) });
+  const skills = loadSkills(args.cwd, cediaHome());
+  const skillList = skillsBlock(skills);
+  const skill = skillTool(skills);
+  const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}) });
   // Where each writer session of this run started in its log, for the change the run made.
   const writerRuns: { log: SessionLog; from: number }[] = [];
   // The change the run made: the first snapshot (taken before the first write) to the last, across its sessions.
@@ -234,7 +238,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     const trees = turnTrees();
     if (store && threadId && trees) store.append(threadId, { kind: 'turn', cwd: args.cwd, ...trees, sessions: [...new Set(writerRuns.map((w) => w.log.id))] });
   };
-  const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}) });
+  const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}) });
 
   const ac = new AbortController();
   const onSignal = () => ac.abort();
@@ -282,8 +286,11 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // A resumed session keeps the tools it was opened with (its cached prefix); new ones get recall once the
     // thread has an earlier session, and the thread tools once the project has another thread.
     const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
-    const extra = [...(spawnOn ? [spawn] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : [])];
-    const tools = reviewer ? REVIEW_TOOLS : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : [])] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
+    // With skills, or on a resumed session that had the tool: its tool list stays as it was even when the skills
+    // are gone since, and a call to one that is gone says so.
+    const withSkill = skills.length > 0 || !!header?.tools.some((d) => d.name === 'skill');
+    const extra = [...(spawnOn ? [spawn] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : [])];
+    const tools = reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : [])] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : [])] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
     if (writing) writerRuns.push({ log, from: log.events.length });
     const result = await runPrompt(
       {

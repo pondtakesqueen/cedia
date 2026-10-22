@@ -24,14 +24,14 @@ const MAX_IMPORT_DEPTH = 3;
 // A file larger than this is not read at all: instructions are prose, and the cap would cut it anyway.
 const MAX_FILE_BYTES = 256 * 1024;
 // Files an import never brings in, whatever the repository says.
-const SECRET_NAME = /^(\.env(\..*)?|.*\.(pem|key|p12|pfx|keystore|jks)|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|\.netrc|\.npmrc|\.pypirc|credentials(\.json)?)$/i;
+export const SECRET_NAME = /^(\.env(\..*)?|.*\.(pem|key|p12|pfx|keystore|jks)|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|\.netrc|\.npmrc|\.pypirc|credentials(\.json)?)$/i;
 
-const repoRoot = (cwd: string): string => {
+export const repoRoot = (cwd: string): string => {
   const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
   return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : cwd;
 };
 
-const real = (p: string): string | undefined => {
+export const real = (p: string): string | undefined => {
   try {
     return realpathSync(p);
   } catch {
@@ -39,7 +39,7 @@ const real = (p: string): string | undefined => {
   }
 };
 
-const inside = (root: string, p: string) => {
+export const inside = (root: string, p: string) => {
   const rel = relative(root, p);
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 };
