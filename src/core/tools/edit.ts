@@ -31,6 +31,20 @@ export function editsOf(input: JsonObject): TextEdit[] | { error: string } {
   return raw as TextEdit[];
 }
 
+// The kind of repair a call needed, for the log: which wrong shape it came in.
+export function editRepair(input: JsonObject): { input: JsonObject; repairs: string[] } | undefined {
+  const raw = input.edits;
+  const kind =
+    raw === undefined && typeof input.old_text === 'string' ? 'top-level old_text/new_text' : typeof raw === 'string' ? (/^\[\{"old_text">/.test(raw) ? 'broken edits string' : 'edits as a JSON string') : undefined;
+  if (!kind) return undefined;
+  const parsed = editsOf(input);
+  if ('error' in parsed) return undefined; // the tool's own error names the shape
+  // A top-level replace_all meant every edit of the call; the schema has it on each edit.
+  const all = input.replace_all === true && parsed.some((e) => !e.replace_all);
+  const edits = all ? parsed.map((e) => ({ ...e, replace_all: true })) : parsed;
+  return { input: { ...(input.path !== undefined ? { path: input.path } : {}), edits }, repairs: all ? [kind, 'top-level replace_all'] : [kind] };
+}
+
 const fullPath = (input: JsonObject, cwd: string) => {
   const path = String(input.path ?? '');
   return isAbsolute(path) ? path : resolve(cwd, path);
@@ -119,6 +133,7 @@ export const editTool: ToolSpec = {
   effect: 'write_workspace',
   replay: 'unsafe',
   pathOf: (input) => (typeof input.path === 'string' ? input.path : undefined),
+  repair: editRepair,
   async run(input, ctx) {
     const path = String(input.path ?? '');
     if (!path) return { text: 'path is required', isError: true };

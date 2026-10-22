@@ -19,6 +19,9 @@ export type ToolSpec = ToolDef & {
   // credential stores.
   pathOf?(input: JsonObject): string | undefined;
   replay: 'safe' | 'unsafe';
+  // Puts an input a model sent in a known wrong shape into the schema's shape, naming each repair; undefined when
+  // it needed none. The loop logs the repairs (input_repaired) and every later step sees the repaired input.
+  repair?(input: JsonObject): { input: JsonObject; repairs: string[] } | undefined;
   run(input: JsonObject, ctx: ToolCtx): Promise<ToolOutput>;
 };
 

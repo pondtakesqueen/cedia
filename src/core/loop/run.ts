@@ -328,6 +328,8 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     // A run's result pools its sub-threads' evidence, so each check says which thread ran it.
     if (opts.thread) ev.checks = ev.checks.map((c) => ({ ...c, thread: opts.thread }));
     const hasEvidence = ev.changed.length > 0 || ev.checks.length > 0;
+    const repairs: Record<string, number> = {};
+    for (const e of log.events.slice(runStart)) if (e.kind === 'input_repaired') for (const r of e.repairs) repairs[`${e.tool}: ${r}`] = (repairs[`${e.tool}: ${r}`] ?? 0) + 1;
     const misses = cacheMissesOf(log.events, model, log.id, runStart);
     return {
       type: 'result',
@@ -337,6 +339,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       usage,
       costUsd: cost,
       cacheHitRatio: hitRatio(usage),
+      ...(Object.keys(repairs).length ? { inputRepairs: repairs } : {}),
       ...(misses.length ? { cacheMisses: misses } : {}),
       result: result ?? lastText,
       ...(hasEvidence ? { evidence: ev } : {}),
@@ -626,15 +629,18 @@ async function runTools(
     if (c.inputError) results.set(callId, { status: 'not_started', text: `not run: ${c.inputError}`, isError: true });
     else if (!spec) results.set(callId, { status: 'not_started', text: `not run: unknown tool "${c.name.length > 64 ? `${c.name.slice(0, 64)}…` : c.name}"`, isError: true });
     else {
-      const d = decide(opts.permission ?? READ_ONLY_POLICY, spec, c.input, opts.cwd);
+      const fixed = spec.repair?.(c.input);
+      if (fixed) log.append({ kind: 'input_repaired', callId, tool: c.name, repairs: fixed.repairs });
+      const input = fixed?.input ?? c.input;
+      const d = decide(opts.permission ?? READ_ONLY_POLICY, spec, input, opts.cwd);
       log.append({ kind: 'permission', callId, tool: c.name, ...d });
       if (d.decision === 'deny') {
         results.set(callId, { status: 'denied', text: deniedText(d.rule, d.reason ?? ''), isError: true });
         continue;
       }
-      log.append({ kind: 'tool_intent', callId, tool: c.name, input: c.input });
-      const effect = effectOf(spec, c.input);
-      jobs.push({ callId, spec, input: c.input, parallel: effect === 'read' || effect === 'network' });
+      log.append({ kind: 'tool_intent', callId, tool: c.name, input });
+      const effect = effectOf(spec, input);
+      jobs.push({ callId, spec, input, parallel: effect === 'read' || effect === 'network' });
     }
   }
   // Secrets are replaced before the result is logged, so neither the log nor the provider ever holds them.
