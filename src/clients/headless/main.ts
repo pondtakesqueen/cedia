@@ -22,6 +22,8 @@ import { recallTool, threadTools, type EarlierSession } from '../../core/tools/t
 import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { todoTool } from '../../core/tools/todo.ts';
 import { openThreadTool } from '../../core/tools/open.ts';
+import { scheduleTool } from '../../core/tools/schedule.ts';
+import { ScheduleStore, schedulesPath } from '../../core/project/schedules.ts';
 import { resolveProfile, withProfile } from '../../core/profiles.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
@@ -373,7 +375,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // server is gone keeps the tool, and a call to it says the server is not there.
     const mcpTools = [...(mcp?.tools ?? []), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map(mcpStub)];
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
-    const extra = [...(spawnOn ? [spawnHere] : []), ...(askOn && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
+    const extra = [...(spawnOn ? [spawnHere] : []), ...(askOn && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened)] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
     const tools = opts.role === 'advisor' ? [] : reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
     // A work sub-thread in a worktree works there: its own directory, environment line and snapshots.
     const place = child?.place;

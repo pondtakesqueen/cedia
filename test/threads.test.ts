@@ -528,6 +528,28 @@ describe('cedia threads (offline, faux)', () => {
     expect(cedia(dir, [], ['-p', 'x', '--profile', 'coordinator']).err).toContain('unknown setting "profiles.coordinator.color"');
   });
 
+  test('the coordinator schedules a prompt for its own thread; the daemon finds it due, fires it and runs it', () => {
+    const dir = tmp();
+    const c = JSON.parse(cedia(dir, [tool('s1', 'schedule', { prompt: 'Check the nightly build.', at: '2020-01-01T00:00:00Z', every: '1d' }), reply('scheduled')], ['-p', 'every morning check the build', '--output-format', 'json', '--sandbox', 'off', '--profile', 'coordinator']).out);
+    expect(c.subtype).toBe('success');
+    const cli = (...a: string[]) => Bun.spawnSync([BIN, 'schedules', ...a, '--cwd', dir], { env: { ...process.env, CEDIA_HOME: join(dir, 'home') } });
+    const due = JSON.parse(cli('due', '--json').stdout.toString());
+    expect(due).toEqual([expect.objectContaining({ prompt: 'Check the nightly build.', thread: c.thread, by: c.thread, every: 1440, enabled: true, next: '2020-01-01T00:00:00.000Z' })]);
+    const fired = JSON.parse(cli('fire', due[0].id, '--json').stdout.toString());
+    expect(fired[0].next > new Date().toISOString()).toBe(true);
+    expect(JSON.parse(cli('due', '--json').stdout.toString())).toEqual([]);
+    const woke = JSON.parse(cedia(dir, [reply('build is green')], ['-p', due[0].prompt, '--output-format', 'json', '--sandbox', 'off', '--thread', c.thread]).out);
+    expect(woke).toMatchObject({ subtype: 'success', thread: c.thread });
+    // By hand: add, pause, list.
+    const added = cli('add', '30m', 'look again', '--thread', c.thread);
+    expect(added.exitCode).toBe(0);
+    const id = /^(s-[0-9a-f]{8})/.exec(added.stdout.toString())![1]!;
+    expect(cli('pause', id).stdout.toString()).toBe(`paused ${id}\n`);
+    expect(cli('list').stdout.toString()).toContain(`${id}  paused`);
+    expect(cli('add', 'later', 'x', '--thread', c.thread).stderr.toString()).toContain('not a time: later');
+    expect(cli('add', '1h', 'x', '--thread', 't-00000000').stderr.toString()).toContain('no thread t-00000000');
+  });
+
   test('a read-only session cannot message another thread', () => {
     const dir = tmp();
     const a = JSON.parse(cedia(dir, [reply('A done')], ['-p', 'first', '--output-format', 'json', '--sandbox', 'off']).out);

@@ -15,20 +15,23 @@ export type Profile = {
   todo?: boolean;
   // open_thread (core/tools/open.ts): the session may open threads of the project for others to run.
   openThread?: boolean;
+  // schedule (core/tools/schedule.ts): the session may schedule prompts for its own thread.
+  schedule?: boolean;
   instructions?: string;
 };
 
-const KEYS: (keyof Profile)[] = ['model', 'permission', 'spawn', 'ask', 'todo', 'openThread', 'instructions'];
+const KEYS: (keyof Profile)[] = ['model', 'permission', 'spawn', 'ask', 'todo', 'openThread', 'schedule', 'instructions'];
 
 export const COORDINATOR_INSTRUCTIONS = `You are this project's coordinator. The owner talks with you in the project chat; the work itself happens in threads, each a session of its own in a worktree of its own, which you open and follow.
 
 - When the owner asks for work, split it into pieces that can run on their own, and open one thread per piece with open_thread: a complete brief (the goal, the facts and paths it needs, what done looks like, and what to report), since the thread sees only that. Do not open a thread for a question you can answer yourself by reading.
 - You do not edit files or run the work yourself: you read, plan, open threads and report. A thread's progress is its todo list; read_thread shows what it did, and message_thread tells it something or answers it.
 - Keep your own todo list of the threads you opened and what each is for, so the owner sees the plan.
+- When the owner asks for something later or on a cadence, schedule it for yourself with the schedule tool; at the time you get the prompt and act on it, opening threads as needed.
 - Answer the owner briefly: what you opened and why, what is done, what needs them. Ask them (ask_user) only for a decision that changes the goal; a thread that asks you something, answer yourself when you can.`;
 
 export const BUILTIN_PROFILES: Record<string, Profile> = {
-  coordinator: { permission: 'read-only', spawn: 'on', ask: true, todo: true, openThread: true, instructions: COORDINATOR_INSTRUCTIONS },
+  coordinator: { permission: 'read-only', spawn: 'on', ask: true, todo: true, openThread: true, schedule: true, instructions: COORDINATOR_INSTRUCTIONS },
 };
 
 // The profile `name`, cedia's own with the user's laid over it. An unknown name or a bad field is an error.
@@ -48,7 +51,7 @@ function checkProfile(name: string, raw: unknown): Profile {
   if (p.model !== undefined && (typeof p.model !== 'string' || !p.model)) throw new Error(`${at}.model must be a model alias or ref`);
   if (p.permission !== undefined && p.permission !== 'read-only' && p.permission !== 'workspace') throw new Error(`${at}.permission must be read-only or workspace`);
   if (p.spawn !== undefined && p.spawn !== 'on' && p.spawn !== 'off' && p.spawn !== 'worktree') throw new Error(`${at}.spawn must be on, off or worktree`);
-  for (const k of ['ask', 'todo', 'openThread'] as const) if (p[k] !== undefined && typeof p[k] !== 'boolean') throw new Error(`${at}.${k} must be true or false`);
+  for (const k of ['ask', 'todo', 'openThread', 'schedule'] as const) if (p[k] !== undefined && typeof p[k] !== 'boolean') throw new Error(`${at}.${k} must be true or false`);
   if (p.instructions !== undefined && typeof p.instructions !== 'string') throw new Error(`${at}.instructions must be the text of the instructions`);
   return p as Profile;
 }
