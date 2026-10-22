@@ -68,6 +68,7 @@ History:
 | e967722 | 47/48, $0.27, 33 s | 47/48, $0.38, 68 s | first baseline |
 | 18f1760 (same code) | 47/48, $0.32, 37 s | 46/48, $0.45, 56 s | second run; found the `wide-three-features` comment and the cost-noise rules |
 | 32774a7 (main) | 48/48, $0.26, 29 s | 48/48, $0.39, 50 s | after #21 (spawn reminder, handoff note carries the plan): PASS on both against the earlier baseline, typical task cost -6% and -3%, time -9% and -8% |
+| 26ffc46 (spawn on long tasks) | 47/48, $0.23, 30 s | 48/48, $0.40 at one price, 55 s | first-session handoff, sub-thread budget meter: PASS on both; `real-three-delegated` added to the suite and its rows stored at 82363a0 |
 
 ## When to update the baseline
 
