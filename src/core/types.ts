@@ -40,7 +40,8 @@ export type AttemptError = { code: AttemptErrorCode; status?: number; retryAfter
 
 export type ToolDef = { name: string; description: string; schema: JsonObject };
 
-export type TurnEndReason = 'completed' | 'aborted' | 'error' | 'max_tokens' | 'budget' | 'max_turns' | 'handoff';
+// asked: the writer asked the owner a question (core/tools/ask.ts) and the run waits for the answer.
+export type TurnEndReason = 'completed' | 'aborted' | 'error' | 'max_tokens' | 'budget' | 'max_turns' | 'handoff' | 'asked';
 
 type EventBody =
   | { kind: 'session'; cwd: string; role: string; model: string; system: string; tools: ToolDef[]; parentSession?: string; thread?: string }
@@ -182,7 +183,9 @@ export type Evidence = { changed: string[]; checks: Check[]; unverified: string[
 // in a new session of the same thread.
 export type ResultSubtype =
   | 'success' | 'error_max_turns' | 'error_max_budget_usd' | 'error_during_execution' | 'interrupted' | 'error_unverified_claim'
-  | 'handoff';
+  | 'handoff'
+  // The writer asked the owner a question (core/tools/ask.ts); `question` holds it, and the thread waits for the answer.
+  | 'asked';
 
 export type HeadlessResult = {
   type: 'result';
@@ -210,7 +213,12 @@ export type HeadlessResult = {
   // A 'handoff' by compaction: the summary, and the request it summarized, after which the session's events are
   // kept word for word in the next session (core/project/compact.ts).
   compaction?: { block: CompactionBlock; of: EventId };
+  // An 'asked' run's question for the owner (core/tools/ask.ts).
+  question?: Question;
 };
+
+// A question the writer asked the owner: open, or with 2 to 4 answers to pick from, recommended one first.
+export type Question = { question: string; options?: string[] };
 
 // Sub-threads by kind, the handoffs their sessions made, and the largest context one of their replies saw.
 export type Spawned = { explore: number; work: number; handoffs: number; peakContext: number };

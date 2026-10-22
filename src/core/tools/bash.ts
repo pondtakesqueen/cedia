@@ -1,4 +1,4 @@
-import { clip, type ToolSpec } from './registry.ts';
+import { clip, MAX_OUTPUT_CHARS, preview, type ToolSpec } from './registry.ts';
 
 // A command counts as read-only when every command in its pipeline or && chain is on this list and
 // nothing writes, substitutes or redirects. Read-only commands run in parallel and in read-only sessions;
@@ -172,6 +172,7 @@ export const bashTool: ToolSpec = {
     };
     const onAbort = kill('aborted');
     ctx.signal.addEventListener('abort', onAbort, { once: true });
+    if (ctx.signal.aborted) onAbort();
     const timer = setTimeout(kill(`timed out after ${timeout} ms`), timeout);
     const out = drain(proc.stdout);
     const err = drain(proc.stderr);
@@ -183,6 +184,10 @@ export const bashTool: ToolSpec = {
     await Promise.race([Promise.all([out.done, err.done]), Bun.sleep(PIPE_GRACE_MS)]);
     const [o, e] = [out.stop(), err.stop()];
     const text = [o, e && `[stderr]\n${e}`].filter(Boolean).join('\n') || '(no output)';
-    return { text: clip(`${text}\n[exit ${code}${stopped ? `, ${stopped}` : ''}]`), isError: code !== 0, exitCode: code };
+    const full = `${text}\n[exit ${code}${stopped ? `, ${stopped}` : ''}]`;
+    // A long output goes to a file whole, so the lines in the middle (often the failing test) are still there.
+    const path = full.length > MAX_OUTPUT_CHARS ? ctx.spill?.(full) : undefined;
+    if (path) return { text: preview(full, path), isError: code !== 0, exitCode: code, spillPath: path };
+    return { text: clip(full), isError: code !== 0, exitCode: code };
   },
 };

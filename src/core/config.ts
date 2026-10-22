@@ -23,6 +23,9 @@ export type Settings = {
   roles?: { plan?: string; code?: string; review?: string; swarm?: string };
   // Whether writer sessions get the spawn tool for sub-threads (default true). User settings only.
   spawn?: boolean;
+  // Whether writer sessions of a thread get ask_user, to end a run with a question for the owner (default false: a
+  // headless run has nobody to answer). The desktop turns it on. User settings only.
+  ask?: boolean;
   // Tokens of context at which a session hands off to a new one, or "off". User settings only.
   handoffAt?: number | 'off';
   // How a session hands off: "note" (the model writes one) or "compact" (the provider summarizes, on models that
@@ -49,6 +52,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   fallback: 'any',
   roles: ['plan', 'code', 'review', 'swarm'],
   spawn: 'any',
+  ask: 'any',
   handoffAt: 'any',
   handoff: 'any',
   onQuota: 'any',
@@ -157,6 +161,12 @@ export function loadQuotaWait(flag?: string): number | undefined {
 export function loadSpawn(flag?: string): boolean {
   if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--spawn must be on or off: ${flag}`);
   return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).spawn ?? true);
+}
+
+// ask_user: flag > user settings > off.
+export function loadAsk(flag?: string): boolean {
+  if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--ask must be on or off: ${flag}`);
+  return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).ask ?? false);
 }
 
 // When a writer session hands off: flag > user settings > half the window, capped (core/project/handoff.ts).

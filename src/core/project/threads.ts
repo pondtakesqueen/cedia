@@ -6,7 +6,8 @@ import { inert } from '../trust/frame.ts';
 // hands off to the next when its context grows long, and threads leave each other messages. Each thread is an
 // append-only JSONL file, so two cedia processes can write to one without locking: a line is one small append.
 
-export type ThreadState = 'working' | 'done' | 'failed' | 'stopped';
+// asking: the last run ended with a question for the owner (core/tools/ask.ts); the answer is the thread's next prompt.
+export type ThreadState = 'working' | 'done' | 'failed' | 'stopped' | 'asking';
 // rejected: the provider refused the last session's history, so the thread went on in a new one.
 export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota' | 'rejected';
 
@@ -26,6 +27,8 @@ type ThreadBody =
   // The user's thumbs up or down on an answer: the session that gave it, if known. It picks eval cases and never
   // reaches a model.
   | { kind: 'rate'; rating: Rating; sessionId?: string; note?: string }
+  // The question a session asked the owner, written just before the 'asking' state.
+  | { kind: 'question'; sessionId: string; question: string; options?: string[] }
   | { kind: 'state'; state: ThreadState; result?: string }
   // Hidden from lists, still readable. A sub-thread that finishes its task archives itself.
   | { kind: 'archived'; archived: boolean };
@@ -49,6 +52,8 @@ export type Thread = {
   messages: ThreadMessage[];
   pending: ThreadMessage[];
   ratings: ThreadRating[];
+  // The open question while the thread is asking.
+  question?: { sessionId: string; question: string; options?: string[]; at: string };
   updatedAt: string;
 };
 
@@ -167,6 +172,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     else if (e.kind === 'message') t.messages.push({ id: e.id, from: e.from, text: e.text, at: e.at });
     else if (e.kind === 'delivered') for (const m of e.ids) delivered.add(m);
     else if (e.kind === 'unsend') for (const m of e.ids) unsent.add(m);
+    else if (e.kind === 'question') t.question = { sessionId: e.sessionId, question: e.question, ...(e.options ? { options: e.options } : {}), at: e.at };
     else if (e.kind === 'rate') t.ratings.push({ rating: e.rating, ...(e.sessionId ? { sessionId: e.sessionId } : {}), ...(e.note ? { note: e.note } : {}), at: e.at });
     else if (e.kind === 'archived') t.archived = e.archived;
     else if (e.kind === 'state') {
@@ -174,6 +180,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
       if (e.result !== undefined) t.result = e.result;
     }
   }
+  if (t.state !== 'asking') delete t.question;
   for (const m of t.messages) if (unsent.has(m.id) && !delivered.has(m.id)) m.unsent = true;
   t.pending = t.messages.filter((m) => !delivered.has(m.id) && !m.unsent);
   return t;

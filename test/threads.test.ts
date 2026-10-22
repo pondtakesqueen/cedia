@@ -391,6 +391,42 @@ describe('cedia threads (offline, faux)', () => {
     expect(storeOf(dir).read(a.thread).messages.map((m) => m.id)).toEqual([kept, taken]);
   });
 
+  test('--ask on: ask_user ends the run with a question, the thread waits as asking, and the answer resumes it', () => {
+    const dir = tmp();
+    const q = { question: 'Keep the v1 API or break it for v2? Breaking it is simpler; I recommend v2.', options: ['v2', 'keep v1'] };
+    const r = cedia(dir, [call('c1', 'echo good > f.txt'), tool('a1', 'ask_user', q), reply('never reached')], ['-p', 'make f.txt say good', ...base, '--ask', 'on']);
+    expect(r.code).toBe(0);
+    const asked = JSON.parse(r.out);
+    expect(asked).toMatchObject({ subtype: 'asked', result: q.question, question: q, evidence: { changed: ['f.txt'], unverified: ['f.txt'] } });
+    const log = sessionsOf(dir).find((l) => l.id === asked.sessionId)!;
+    expect(head(log.events).tools.map((t) => t.name)).toContain('ask_user');
+    expect(log.events.filter((e) => e.kind === 'turn_end').at(-1)).toMatchObject({ reason: 'asked' });
+    expect(lintSession(log.events)).toEqual([]);
+    expect(storeOf(dir).read(asked.thread)).toMatchObject({ state: 'asking', question: { sessionId: asked.sessionId, ...q } });
+    const shown = threadsCli(dir, 'show', asked.thread).out;
+    expect(shown).toContain('1. v2');
+    expect(shown).toContain(`--thread ${asked.thread}`);
+
+    // The answer is the next prompt: same session, framed with the question, and the done gate still applies.
+    const done = JSON.parse(cedia(dir, [call('c2', 'grep -q good f.txt'), reply('done with v2')], ['-p', 'v2', ...base, '--ask', 'on', '--thread', asked.thread]).out);
+    expect(done).toMatchObject({ subtype: 'success', sessionId: asked.sessionId });
+    const users = sessionsOf(dir).find((l) => l.id === asked.sessionId)!.events.filter((e): e is EventOf<'user'> => e.kind === 'user').map((e) => e.text);
+    expect(users.at(-1)).toContain(`<question>\n${q.question}\n</question>`);
+    expect(users.at(-1)).toEndWith('Their answer:\n\nv2');
+    const t = storeOf(dir).read(asked.thread);
+    expect(t.state).toBe('done');
+    expect(t.question).toBeUndefined();
+  });
+
+  test('without --ask the writer has no ask_user, and a bad question is an error result that does not end the run', () => {
+    const dir = tmp();
+    const off = JSON.parse(cedia(dir, [reply('done')], ['-p', 'x', ...base, '--check', 'true']).out);
+    expect(head(sessionsOf(dir).find((l) => l.id === off.sessionId)!.events).tools.map((t) => t.name)).not.toContain('ask_user');
+    const bad = JSON.parse(cedia(tmp(), [tool('a1', 'ask_user', { question: 'pick', options: ['only one'] }), reply('went on')], ['-p', 'x', ...base, '--check', 'true', '--ask', 'on']).out);
+    expect(bad).toMatchObject({ subtype: 'success', result: 'went on' });
+    expect(cedia(tmp(), [], ['-p', 'x', '--ask', 'maybe']).err).toContain('--ask must be on or off');
+  });
+
   test('a read-only session cannot message another thread', () => {
     const dir = tmp();
     const a = JSON.parse(cedia(dir, [reply('A done')], ['-p', 'first', '--output-format', 'json', '--sandbox', 'off']).out);
