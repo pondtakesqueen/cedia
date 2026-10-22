@@ -60,6 +60,9 @@ type EventBody =
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
   | { kind: 'tool_result'; callId: string; status: EffectStatus; output: ToolOutput }
   | { kind: 'reminder'; text: string; as: 'system' | 'user' }
+  // A user hook ran (core/hooks.ts): which, at what point, for which call, and what it decided. What it said that
+  // reaches the model is in the permission, tool_result or reminder that follows.
+  | { kind: 'hook'; hook: string; event: 'preToolUse' | 'postToolUse' | 'stop'; callId?: string; decision: 'allow' | 'block'; failed?: boolean; updated?: boolean; ms: number }
   // A per-message effort change: from the latest user turn with new input on, the model works at this level
   // (core/loop/run.ts escalation). Wires without it (caps.midConversationEffort) never get one.
   | { kind: 'effort'; effort: Effort }

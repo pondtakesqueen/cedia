@@ -5,7 +5,8 @@ import { contextSize, HANDOFF_NO_TOOLS, HANDOFF_PROMPT } from '../project/handof
 import { hash } from '../hash.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
-import { decide, READ_ONLY_POLICY, type Policy } from '../safety/policy.ts';
+import { hookName, runHook, type Hooks } from '../hooks.ts';
+import { decide, READ_ONLY_POLICY, ruleMatches, type Policy } from '../safety/policy.ts';
 import { redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
@@ -24,6 +25,7 @@ import {
   type EventId,
   type EventOf,
   type HeadlessResult,
+  type JsonObject,
   type ModelSpec,
   type PrivacyLevel,
   type Provider,
@@ -75,6 +77,8 @@ export type RunOptions = {
   // is logged, so a crash in between shows a message twice rather than never.
   inbox?: { pending(): { ids: string[]; text: string } | undefined; delivered(ids: string[]): void };
   effort?: Effort;
+  // The user's hooks (core/hooks.ts): before and after each call, and on a claim of done.
+  hooks?: Hooks;
   // The level the session moves to, once, when the done gate refuses a claim: cheap work up front, more thought
   // where it went wrong. Only upward from `effort`, and only on models with per-message effort, so the cached
   // prefix stays.
@@ -284,6 +288,8 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   // write calls when snapshots are off.
   const slopOn = !opts.permission?.unlock?.includes('slop-check');
   let slopNudged = false;
+  // Claims the user's stop hooks refused; past MAX_STOP_REFUSALS the run ends unverified.
+  let stopRefused = 0;
   const slop = (): SlopFinding[] => {
     if (!slopOn) return [];
     const run = log.events.slice(runStart);
@@ -494,6 +500,13 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       }
       if (!opts.softChecks) return finish('error_unverified_claim', 'completed');
     }
+    // The user's stop hooks judge the claim last, like a check the user wrote: a refusal goes back to the model.
+    const refusal = await stopHooks(opts, log, lastText, evidence(entries()).changed);
+    if (refusal) {
+      if (++stopRefused > MAX_STOP_REFUSALS) return finish('error_unverified_claim', 'completed');
+      log.append({ kind: 'reminder', as: 'user', text: stopHookReminder(refusal.hook, refusal.reason) });
+      continue;
+    }
     return finish('success', 'completed');
   }
 }
@@ -525,20 +538,32 @@ async function runTools(
     if (c.inputError) results.set(callId, { status: 'not_started', text: `not run: ${c.inputError}`, isError: true });
     else if (!spec) results.set(callId, { status: 'not_started', text: `not run: unknown tool "${c.name.length > 64 ? `${c.name.slice(0, 64)}…` : c.name}"`, isError: true });
     else {
-      const d = decide(opts.permission ?? READ_ONLY_POLICY, spec, c.input, opts.cwd);
+      const policy = opts.permission ?? READ_ONLY_POLICY;
+      // The policy decides first; the user's pre hooks see only calls it allows. An input a hook rewrote is
+      // decided again, so a hook can narrow a call but never get one past the policy.
+      let input = c.input;
+      let d = decide(policy, spec, input, opts.cwd);
+      if (d.decision === 'allow') {
+        const pre = await preHooks(opts, log, spec, callId, input);
+        if (pre.decision === 'block') d = { decision: 'deny', rule: `hook:${pre.hook}`, reason: pre.reason };
+        else if (pre.input !== input) {
+          input = pre.input;
+          d = decide(policy, spec, input, opts.cwd);
+        }
+      }
       log.append({ kind: 'permission', callId, tool: c.name, ...d });
       if (d.decision === 'deny') {
         results.set(callId, { status: 'denied', text: deniedText(d.rule, d.reason ?? ''), isError: true });
         continue;
       }
-      log.append({ kind: 'tool_intent', callId, tool: c.name, input: c.input });
-      const effect = effectOf(spec, c.input);
-      jobs.push({ callId, spec, input: c.input, parallel: effect === 'read' || effect === 'network' });
+      log.append({ kind: 'tool_intent', callId, tool: c.name, input });
+      const effect = effectOf(spec, input);
+      jobs.push({ callId, spec, input, parallel: effect === 'read' || effect === 'network' });
     }
   }
   const run = async (j: Job) => {
     try {
-      const out = asOutput(await j.spec.run(j.input, { cwd: opts.cwd, signal, ...(opts.wrap ? { wrap: opts.wrap } : {}) }));
+      const out = await postHooks(opts, log, j, asOutput(await j.spec.run(j.input, { cwd: opts.cwd, signal, ...(opts.wrap ? { wrap: opts.wrap } : {}) })));
       results.set(j.callId, { ...out, status: signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed' });
     } catch (e) {
       results.set(j.callId, { status: 'failed', text: `tool crashed: ${e instanceof Error ? e.message : String(e)}`, isError: true });
@@ -582,6 +607,53 @@ async function runTools(
     const r = redact ? redactSecrets(output.text) : { text: output.text, count: 0 };
     log.append({ kind: 'tool_result', callId, status, output: r.count ? { ...output, text: r.text, redacted: r.count } : output });
   }
+}
+
+export const MAX_STOP_REFUSALS = 2;
+
+export const stopHookReminder = (hook: string, reason: string) =>
+  `cedia: your claim that the task is done was refused by the user's stop hook ${hook}: ${reason}\nFix what it names, run the checks again, then reply.`;
+
+async function stopHooks(opts: RunOptions, log: SessionLog, result: string, changed: string[]): Promise<{ hook: string; reason: string } | undefined> {
+  for (const [i, h] of (opts.hooks?.stop ?? []).entries()) {
+    const t0 = performance.now();
+    const o = await runHook(h, { event: 'stop', sessionId: log.id, cwd: opts.cwd, result, changed }, opts.cwd);
+    const hook = hookName('stop', i, h);
+    log.append({ kind: 'hook', hook, event: 'stop', decision: o.decision, ...(o.decision === 'block' && o.failed ? { failed: true } : {}), ms: Math.round(performance.now() - t0) });
+    if (o.decision === 'block') return { hook, reason: o.reason };
+  }
+  return undefined;
+}
+
+// The user's pre hooks for one call, in order. The first block wins; each later hook sees the input as the
+// earlier ones left it.
+async function preHooks(opts: RunOptions, log: SessionLog, spec: ToolSpec, callId: string, input: JsonObject): Promise<{ decision: 'allow'; input: JsonObject } | { decision: 'block'; hook: string; reason: string }> {
+  for (const [i, h] of (opts.hooks?.preToolUse ?? []).entries()) {
+    if (h.match && !ruleMatches(h.match, spec, input, opts.cwd)) continue;
+    const t0 = performance.now();
+    const o = await runHook(h, { event: 'preToolUse', sessionId: log.id, cwd: opts.cwd, tool: spec.name, callId, input }, opts.cwd);
+    const hook = hookName('preToolUse', i, h);
+    const updated = o.decision === 'allow' && o.updatedInput !== undefined;
+    log.append({ kind: 'hook', hook, event: 'preToolUse', callId, decision: o.decision, ...(o.decision === 'block' && o.failed ? { failed: true } : {}), ...(updated ? { updated } : {}), ms: Math.round(performance.now() - t0) });
+    if (o.decision === 'block') return { decision: 'block', hook, reason: o.reason };
+    if (o.updatedInput) input = o.updatedInput;
+  }
+  return { decision: 'allow', input };
+}
+
+// The user's post hooks for one finished call: a note is added to the result, a block marks it failed. The call
+// has run either way.
+async function postHooks(opts: RunOptions, log: SessionLog, j: { callId: string; spec: ToolSpec; input: JsonObject }, out: ToolOutput): Promise<ToolOutput> {
+  for (const [i, h] of (opts.hooks?.postToolUse ?? []).entries()) {
+    if (h.match && !ruleMatches(h.match, j.spec, j.input, opts.cwd)) continue;
+    const t0 = performance.now();
+    const o = await runHook(h, { event: 'postToolUse', sessionId: log.id, cwd: opts.cwd, tool: j.spec.name, callId: j.callId, input: j.input, output: { text: out.text, isError: out.isError, ...(out.exitCode !== undefined ? { exitCode: out.exitCode } : {}) } }, opts.cwd);
+    const hook = hookName('postToolUse', i, h);
+    log.append({ kind: 'hook', hook, event: 'postToolUse', callId: j.callId, decision: o.decision, ...(o.decision === 'block' && o.failed ? { failed: true } : {}), ms: Math.round(performance.now() - t0) });
+    if (o.decision === 'block') out = { ...out, text: `${out.text}\n[hook ${hook}: ${o.reason}]`, isError: true };
+    else if (o.note) out = { ...out, text: `${out.text}\n[hook ${hook}: ${o.note}]` };
+  }
+  return out;
 }
 
 // What a tool hands back, as the wire needs it: a tool that returns nothing or an object for text (an MCP tool,

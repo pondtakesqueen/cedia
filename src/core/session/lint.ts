@@ -49,6 +49,9 @@ export function lintSession(events: SessionEvent[]): LintFinding[] {
         pendingRequest = undefined;
         for (const b of e.blocks) if (b.type === 'tool_use') open.set(b.callId ?? b.id, i);
         break;
+      case 'hook':
+        if (e.callId !== undefined && !open.has(e.callId)) add(i, 'tool-pairing', `hook for unknown call ${e.callId}`);
+        break;
       case 'permission':
         if (!open.has(e.callId)) add(i, 'tool-pairing', `permission for unknown call ${e.callId}`);
         (e.decision === 'allow' ? allowed : denied).add(e.callId);
