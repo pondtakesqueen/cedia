@@ -58,6 +58,9 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                (default: settings ask, off)
       --todo <on|off>          give the writer a todo list, kept in the thread as its progress (default: settings
                                todo, off)
+      --profile <name>         a named set of defaults under these flags: model, permission, tools, instructions
+                               (settings profiles; built in: coordinator, which opens threads with open_thread).
+                               A thread goes on with the profile it was opened with
       --swarm <ref>            the model explore sub-threads run on (default: roles.swarm in settings, beam)
       --thread <id>            go on with a thread of this project instead of opening a new one
       --handoff-at <n|off>     hand off to a new session of the thread once the context reaches n tokens
@@ -134,6 +137,7 @@ export async function main(argv: string[]): Promise<number> {
       spawn: { type: 'string' },
       ask: { type: 'string' },
       todo: { type: 'string' },
+      profile: { type: 'string' },
       swarm: { type: 'string' },
       'handoff-at': { type: 'string' },
       handoff: { type: 'string' },
@@ -182,6 +186,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.spawn ? { spawn: values.spawn } : {}),
     ...(values.ask ? { ask: values.ask } : {}),
     ...(values.todo ? { todo: values.todo } : {}),
+    ...(values.profile ? { profile: values.profile } : {}),
     ...(values.swarm ? { swarm: values.swarm } : {}),
     ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
     ...(values.handoff ? { handoff: values.handoff } : {}),
@@ -287,7 +292,7 @@ function threads(argv: string[]): number {
     }
     if (cmd === 'show' && id) {
       const t = store.read(id);
-      const lines = [`${t.id}  ${t.state}  ${t.title}`, '', t.task, ''];
+      const lines = [`${t.id}  ${t.state}  ${t.title}`, ...(t.by ? [`opened by ${t.by}`] : []), ...(t.profile ? [`profile ${t.profile}`] : []), '', t.task, ''];
       for (const s of t.sessions) lines.push(`session ${s.sessionId}  ${s.model}  ${s.why}${s.rewound ? '  (rewound)' : ''}${s.path ? `  ${s.path}` : ''}`);
       if (t.runs.length) lines.push('', ...runLines(t));
       if (t.handoff) lines.push('', `handoff from ${t.handoff.sessionId}:`, t.handoff.note);

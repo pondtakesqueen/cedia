@@ -7,7 +7,7 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
@@ -21,6 +21,8 @@ import { spawnNudgeAt, spawnPool, spawnTool, subtaskPrompt, type SpawnKind, type
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { todoTool } from '../../core/tools/todo.ts';
+import { openThreadTool } from '../../core/tools/open.ts';
+import { resolveProfile, withProfile } from '../../core/profiles.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
@@ -71,6 +73,8 @@ export type HeadlessArgs = {
   ask?: string;
   // "on" gives the writer the todo tool, whose list a client draws as the thread's progress (core/tools/todo.ts).
   todo?: string;
+  // A named set of defaults under the flags (core/profiles.ts); a thread goes on with the profile it was opened with.
+  profile?: string;
   // "fallback" or "wait:<minutes>": what a spent quota does.
   onQuota?: string;
   // Reviews the change once the writer's claim passes the done gate.
@@ -164,7 +168,15 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
   };
 }
 
-export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
+export async function runHeadless(given: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
+  // The profile named, else the one the thread was opened with; its defaults go under the flags.
+  const recorded = () => {
+    const st = new ThreadStore(threadsDir(cediaHome(), projectKey(given.cwd)));
+    return given.thread && st.has(given.thread) ? st.read(given.thread).profile : undefined;
+  };
+  const profileName = given.profile ?? (given.thread && !given.noSessionFile ? recorded() : undefined);
+  const profile = profileName ? { name: profileName, ...resolveProfile(profileName, loadProfiles()) } : undefined;
+  const args = profile ? withProfile(given, profile) : given;
   const say = args.note ?? ((text: string) => void process.stderr.write(text));
   const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}), ...(args.advisor ? { advisor: args.advisor } : {}) });
   const spawnMode = loadSpawn(args.spawn);
@@ -228,13 +240,15 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     throw new Error(`no thread ${args.thread} in this project${args.noSessionFile ? ' (threads need session files)' : ''}`);
   }
   const resumed = args.thread ? store!.read(args.thread) : undefined;
-  const threadId = resumed?.id ?? store?.open(args.prompt);
+  const threadId = resumed?.id ?? store?.open(args.prompt, profile ? { profile: profile.name } : {});
   // This run's id: every thread event it writes carries it, so a rewind past the run drops them even when they are
   // written after it (core/project/rewind.ts).
   const runId = `r-${crypto.randomUUID().slice(0, 8)}`;
   // Chosen once per run, so every new session of the run sees the same tools: thread tools when the project has
   // another thread to talk to.
-  const others = store ? store.list().some((t) => t.id !== threadId) : false;
+  // A profile that opens threads gets the thread tools from the start, to follow the ones it opens.
+  const others = store ? !!profile?.openThread || store.list().some((t) => t.id !== threadId) : false;
+  const opened = { count: 0 };
   const openLog = () => {
     const id = crypto.randomUUID();
     const log = SessionLog.create({ id, path: args.noSessionFile ? null : sessionPath(args.cwd, id) });
@@ -299,7 +313,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     const trees = turnTrees();
     if (store && threadId && trees) store.append(threadId, { run: runId, kind: 'turn', cwd: args.cwd, ...trees, sessions: [...new Set(writerRuns.map((w) => w.log.id))] });
   };
-  const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}) });
+  const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}), ...(profile?.instructions ? { profile: { name: profile.name, instructions: profile.instructions } } : {}) });
 
   const ac = new AbortController();
   const onSignal = () => ac.abort();
@@ -359,7 +373,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // server is gone keeps the tool, and a call to it says the server is not there.
     const mcpTools = [...(mcp?.tools ?? []), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map(mcpStub)];
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
-    const extra = [...(spawnOn ? [spawnHere] : []), ...(askOn && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
+    const extra = [...(spawnOn ? [spawnHere] : []), ...(askOn && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
     const tools = opts.role === 'advisor' ? [] : reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
     // A work sub-thread in a worktree works there: its own directory, environment line and snapshots.
     const place = child?.place;
