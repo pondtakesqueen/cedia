@@ -41,6 +41,10 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                before falling back (default: settings onQuota, fallback)
       --review <ref>           the review role, after the done gate passes: a model, claude-code[:<model>]
                                (default sonnet there), or none. Changes it asks for go back to the writer once
+      --goal <condition>       keep going until a separate judge finds the condition holds: after each claim of done
+                               it reads the change and answers met, not met (the writer goes on with what is
+                               missing, at most 3 more times) or impossible. Exit 1 unless met
+      --goal-judge <ref>       the judge's model (default: the writer's, in a fresh read-only session)
       --spawn <on|off>         let the writer hand self-contained work to sub-threads (default: settings, on)
       --ask <on|off>           give the writer ask_user, to end the run with one question for you when only you can
                                decide; the thread waits as 'asking' and your answer is its next prompt
@@ -111,6 +115,8 @@ export async function main(argv: string[]): Promise<number> {
       'handoff-at': { type: 'string' },
       handoff: { type: 'string' },
       review: { type: 'string' },
+      goal: { type: 'string' },
+      'goal-judge': { type: 'string' },
       plan: { type: 'string' },
       check: { type: 'string', multiple: true },
       sandbox: { type: 'string' },
@@ -155,6 +161,8 @@ export async function main(argv: string[]): Promise<number> {
     ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
     ...(values.handoff ? { handoff: values.handoff } : {}),
     ...(values.review ? { review: values.review } : {}),
+    ...(values.goal ? { goal: values.goal } : {}),
+    ...(values['goal-judge'] ? { goalJudge: values['goal-judge'] } : {}),
     ...(values.plan ? { plan: values.plan } : {}),
     ...(values.check ? { checks: values.check } : {}),
     ...(values.sandbox ? { sandbox: values.sandbox } : {}),
@@ -181,7 +189,7 @@ export async function main(argv: string[]): Promise<number> {
     // A question for the owner is not a failure: the thread waits for the answer.
     const ok = result.subtype === 'success' || result.subtype === 'asked';
     if (!ok && format === 'text') console.error(`cedia: ${result.subtype}`);
-    return ok ? 0 : 1;
+    return ok && (!result.goal || result.goal.verdict === 'met') ? 0 : 1;
   } catch (e) {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;

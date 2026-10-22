@@ -482,6 +482,64 @@
             "via"
           ]
         },
+        "goal": {
+          "type": "object",
+          "properties": {
+            "condition": {
+              "type": "string"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "met",
+                "not_met",
+                "impossible"
+              ]
+            },
+            "rounds": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "verdict": {
+                    "type": "string",
+                    "enum": [
+                      "met",
+                      "not_met",
+                      "impossible"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "judge": {
+                    "type": "string"
+                  },
+                  "sessionId": {
+                    "type": "string"
+                  },
+                  "costUsd": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "verdict",
+                  "reason",
+                  "judge",
+                  "sessionId",
+                  "costUsd"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "condition",
+            "verdict",
+            "rounds"
+          ],
+          "additionalProperties": false
+        },
         "thread": {
           "type": "string"
         },

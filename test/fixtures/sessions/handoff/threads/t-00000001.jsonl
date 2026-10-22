@@ -1,6 +1,6 @@
-{"at":"2026-10-22T05:04:18.577Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
-{"at":"2026-10-22T05:04:18.581Z","kind":"session","sessionId":"0bba898e-fcf3-4dc0-ba13-8a1f3d798f34","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/0bba898e-fcf3-4dc0-ba13-8a1f3d798f34.jsonl"}
-{"at":"2026-10-22T05:04:18.623Z","kind":"handoff","sessionId":"0bba898e-fcf3-4dc0-ba13-8a1f3d798f34","note":"Wrote f.txt. Next: run the check."}
-{"at":"2026-10-22T05:04:18.626Z","kind":"session","sessionId":"cf4b534f-0e38-4992-9ae4-75ff533e7b55","model":"faux/scripted","role":"code","why":"handoff","path":"/fixture/home/sessions/fixture-repo/cf4b534f-0e38-4992-9ae4-75ff533e7b55.jsonl"}
-{"at":"2026-10-22T05:04:18.634Z","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["0bba898e-fcf3-4dc0-ba13-8a1f3d798f34","cf4b534f-0e38-4992-9ae4-75ff533e7b55"]}
-{"at":"2026-10-22T05:04:18.634Z","kind":"state","state":"done","result":"done"}
+{"at":"2026-10-22T07:25:40.924Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
+{"at":"2026-10-22T07:25:40.929Z","kind":"session","sessionId":"a6cd4f65-1516-40ec-968d-26e0295a1305","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/a6cd4f65-1516-40ec-968d-26e0295a1305.jsonl"}
+{"at":"2026-10-22T07:25:40.970Z","kind":"handoff","sessionId":"a6cd4f65-1516-40ec-968d-26e0295a1305","note":"Wrote f.txt. Next: run the check."}
+{"at":"2026-10-22T07:25:40.973Z","kind":"session","sessionId":"5df46d80-39be-4e04-9379-8d7bfc9d3aef","model":"faux/scripted","role":"code","why":"handoff","path":"/fixture/home/sessions/fixture-repo/5df46d80-39be-4e04-9379-8d7bfc9d3aef.jsonl"}
+{"at":"2026-10-22T07:25:40.981Z","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["a6cd4f65-1516-40ec-968d-26e0295a1305","5df46d80-39be-4e04-9379-8d7bfc9d3aef"]}
+{"at":"2026-10-22T07:25:40.981Z","kind":"state","state":"done","result":"done"}
