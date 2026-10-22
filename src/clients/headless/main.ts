@@ -60,6 +60,9 @@ export type HeadlessArgs = {
   checks?: string[];
   sandbox?: string;
   allowDomains?: string[];
+  // For a client that owns the terminal (the TUI): where cedia's own notes go instead of stderr, and a stop.
+  note?: (text: string) => void;
+  signal?: AbortSignal;
 };
 
 // Every run that changed files or ran checks ends with a receipt built from the ledger. A check another thread ran
@@ -131,6 +134,7 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
 }
 
 export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
+  const say = args.note ?? ((text: string) => void process.stderr.write(text));
   const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}) });
   const spawnOn = loadSpawn(args.spawn);
   const model = roles.code;
@@ -141,7 +145,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const context = loadContext();
   const sandboxSettings = loadSandbox({ ...(args.sandbox ? { mode: args.sandbox } : {}), allowDomains: args.allowDomains ?? [] });
   const { sandbox, note: sandboxNote } = await openSandbox(args.cwd, sandboxSettings.mode, { allowedDomains: sandboxSettings.allowedDomains, cediaHome: cediaHome() });
-  if (sandboxNote) process.stderr.write(sandboxNote + '\n');
+  if (sandboxNote) say(sandboxNote + '\n');
   const policyFlags = { ...(args.permission ? { mode: args.permission } : {}), allow: args.allow ?? [], deny: args.deny ?? [], unlock: args.unlock ?? [] };
   let policy;
   try {
@@ -151,7 +155,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     throw e;
   }
   if (!sandbox.on && policy.mode === 'read-only' && !args.permission && !process.env.CEDIA_PERMISSION)
-    process.stderr.write('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
+    say('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
   const snapshots = workspaceSnapshots(args.cwd, cediaHome(), sandbox.placeholders);
   const fallback = loadFallback(model, args.fallback);
   let quotaWaitMs: number | undefined;
@@ -163,7 +167,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   }
   for (const m of [model, ...[roles.plan, roles.review].flatMap((r) => (r?.via === 'cedia' ? [r.model] : []))]) {
     const note = missingKeyNote(m);
-    if (note) process.stderr.write(note + '\n');
+    if (note) say(note + '\n');
   }
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? (JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) as FauxStep[]) : undefined;
   const handoffAt = loadHandoffAt(model, args.handoffAt);
@@ -218,6 +222,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
 
   const ac = new AbortController();
   const onSignal = () => ac.abort();
+  if (args.signal?.aborted) ac.abort();
+  else args.signal?.addEventListener('abort', onSignal, { once: true });
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
   // Scripted models share one script, so a later session reads on from where the last one stopped.
@@ -249,7 +255,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     ...(r.compaction ? { seed: { from, compaction: r.compaction }, note: compactedNote(from.id) } : { note: handoffNote(from.id, r.result) }),
   });
   const handingOff = (r: HeadlessResult, sub: boolean) =>
-    process.stderr.write(
+    say(
       `cedia: ${sub ? "a sub-thread's " : ''}context reached ${handoffAt} tokens; ${r.compaction ? 'going on in a new session from a summary of its older turns' : `handing ${sub ? 'it ' : ''}off to a new session`}\n`,
     );
   const run = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}) => {
@@ -300,7 +306,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
           : {}),
         signal: ac.signal,
         ...(quotaWaitMs !== undefined
-          ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), process.stderr.write(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
+          ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), say(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
           : {}),
         ...(args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
         ...(escalate && !reviewer ? { escalate } : {}),
@@ -319,17 +325,17 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     if (choice.via === 'claude-code') {
       const step: Step = { model: `claude-code:${choice.model}`, via: 'claude-code', sessionId: '' };
       if (privacy === 'zdr') {
-        process.stderr.write(`cedia: privacy is zdr, so the ${role} step does not go to Claude Code\n`);
+        say(`cedia: privacy is zdr, so the ${role} step does not go to Claude Code\n`);
         return { ok: false, text: '', step };
       }
       const allowed = ['Read', 'Grep', 'Glob', ...(role === 'review' ? GIT_READS : []), ...checks.map((c) => `Bash(${c})`)];
       const r = await runClaudeCode({ prompt, model: choice.model, cwd: args.cwd, allowed, signal: ac.signal });
-      if (!r.ok) process.stderr.write(`cedia: the ${role} step in Claude Code failed: ${r.error}\n`);
+      if (!r.ok) say(`cedia: the ${role} step in Claude Code failed: ${r.error}\n`);
       return { ok: r.ok, text: r.text, step: { ...step, sessionId: r.sessionId, ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}) } };
     }
     const log = openLog();
     const r = await run(choice.model, log, prompt, { role });
-    if (r.subtype !== 'success') process.stderr.write(`cedia: the ${role} step on ${choice.model.ref} ended with ${r.subtype}\n`);
+    if (r.subtype !== 'success') say(`cedia: the ${role} step on ${choice.model.ref} ended with ${r.subtype}\n`);
     return { ok: r.subtype === 'success', text: r.result, step: { model: choice.model.ref, via: 'cedia', sessionId: log.id, costUsd: r.costUsd } };
   };
   let task = args.prompt;
@@ -370,7 +376,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       let last = await once('start');
       r = last.r;
       if (kind === 'explore' && m !== writer.model && r.subtype === 'error_during_execution' && quotaSpent(last.log.events)) {
-        process.stderr.write(`cedia: ${m.ref} is out of quota; the explore sub-thread goes on on ${writer.model.ref}\n`);
+        say(`cedia: ${m.ref} is out of quota; the explore sub-thread goes on on ${writer.model.ref}\n`);
         m = writer.model;
         r = (await once('quota')).r;
       }
@@ -420,7 +426,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       if (p.ok && p.text.trim()) {
         task = withPlan(args.prompt, p.text.trim(), p.step.model);
         plan = p.step;
-      } else process.stderr.write('cedia: going on without a plan\n');
+      } else say('cedia: going on without a plan\n');
     }
     // A resumed thread goes on in its last session when the model is the same (its cache may still be warm) and
     // the provider still takes that session's history, otherwise in a new session that starts from where the
@@ -449,15 +455,15 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       const rejected = historyRejected(from.log.events);
       if (fallback && !fellBack && quotaSpent(from.log.events)) {
         fellBack = true;
-        process.stderr.write(`cedia: ${from.model.ref} is out of quota; continuing on ${fallback.ref} in a new session\n`);
+        say(`cedia: ${from.model.ref} is out of quota; continuing on ${fallback.ref} in a new session\n`);
         const note = missingKeyNote(fallback);
-        if (note) process.stderr.write(note + '\n');
+        if (note) say(note + '\n');
         const log = openLog();
         record(log, fallback, 'quota');
         result = await write(fallback, log, task, { continues: { sessionId: from.log.id, changed }, note: continueNote(from.model, from.log.id) });
       } else if (!restarted && rejected) {
         restarted = true;
-        process.stderr.write(`cedia: ${from.model.ref} refused this session's history (${rejected.code}: ${rejected.message.slice(0, 200)}); continuing in a new session\n`);
+        say(`cedia: ${from.model.ref} refused this session's history (${rejected.code}: ${rejected.message.slice(0, 200)}); continuing in a new session\n`);
         const log = openLog();
         record(log, from.model, 'rejected');
         result = await write(from.model, log, task, { continues: { sessionId: from.log.id, changed }, note: rejectedNote(from.model, from.log.id) });
@@ -473,7 +479,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       if (verdict === 'changes') {
         result = await write(writer.model, writer.log, fixPrompt(r.step.model, findings));
         review.fixed = true;
-      } else if (verdict === 'unclear') process.stderr.write(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
+      } else if (verdict === 'unclear') say(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
     }
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
     result = { ...combine(parts, result, children), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
@@ -484,10 +490,10 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     writer.log.append({ kind: 'result', result }, { quiet: true });
     if (args.outputFormat === 'text') {
       out(result.result + (result.result.endsWith('\n') ? '' : '\n'));
-      if (result.evidence) process.stderr.write(receipt(result.evidence, result.thread) + '\n');
-      if (result.plan) process.stderr.write(`cedia plan: by ${result.plan.model}\n`);
-      if (result.review) process.stderr.write(`cedia review: ${result.review.model} ${result.review.verdict === 'changes' ? 'asked for changes, sent back to the writer once' : result.review.verdict === 'approve' ? 'approved' : 'gave no verdict'}\n`);
-      if (threadId) process.stderr.write(`cedia thread: ${threadId}${handoffs ? ` (${handoffs} handoff${handoffs === 1 ? '' : 's'})` : ''}; go on with --thread ${threadId}\n`);
+      if (result.evidence) say(receipt(result.evidence, result.thread) + '\n');
+      if (result.plan) say(`cedia plan: by ${result.plan.model}\n`);
+      if (result.review) say(`cedia review: ${result.review.model} ${result.review.verdict === 'changes' ? 'asked for changes, sent back to the writer once' : result.review.verdict === 'approve' ? 'approved' : 'gave no verdict'}\n`);
+      if (threadId) say(`cedia thread: ${threadId}${handoffs ? ` (${handoffs} handoff${handoffs === 1 ? '' : 's'})` : ''}; go on with --thread ${threadId}\n`);
     }
     else out(encode(result));
     return result;
@@ -499,6 +505,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     await sandbox.close();
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
+    args.signal?.removeEventListener('abort', onSignal);
   }
 }
 
