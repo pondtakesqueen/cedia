@@ -13,6 +13,12 @@
     "ThreadEvent": {
       "$ref": "#/definitions/ThreadEvent"
     },
+    "ScheduleEvent": {
+      "$ref": "#/definitions/ScheduleEvent"
+    },
+    "Schedule": {
+      "$ref": "#/definitions/Schedule"
+    },
     "VersionInfo": {
       "$ref": "#/definitions/VersionInfo"
     }
@@ -182,7 +188,10 @@
         "plan",
         "review",
         "ask",
-        "todo"
+        "todo",
+        "profiles",
+        "open_thread",
+        "schedules"
       ]
     },
     "Check": {
@@ -694,6 +703,160 @@
         "model"
       ],
       "additionalProperties": false
+    },
+    "Schedule": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "thread": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "every": {
+          "type": "number"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "next": {
+          "type": "string"
+        },
+        "last": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "prompt",
+        "thread",
+        "enabled",
+        "createdAt"
+      ],
+      "additionalProperties": false
+    },
+    "ScheduleEvent": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "add"
+            },
+            "id": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            },
+            "first": {
+              "type": "string"
+            },
+            "every": {
+              "type": "number"
+            },
+            "by": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "first",
+            "id",
+            "kind",
+            "prompt",
+            "thread"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "enabled"
+            },
+            "id": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "enabled",
+            "id",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "cancel"
+            },
+            "id": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "id",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "fired"
+            },
+            "id": {
+              "type": "string"
+            },
+            "due": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "due",
+            "id",
+            "kind"
+          ]
+        }
+      ]
     },
     "SessionEvent": {
       "anyOf": [
@@ -1948,6 +2111,12 @@
             "parent": {
               "type": "string"
             },
+            "by": {
+              "type": "string"
+            },
+            "profile": {
+              "type": "string"
+            },
             "at": {
               "type": "string"
             },
@@ -2364,6 +2533,7 @@
     "ThreadState": {
       "type": "string",
       "enum": [
+        "queued",
         "working",
         "done",
         "failed",
