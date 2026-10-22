@@ -106,7 +106,9 @@ export const resumeNote = (t: Thread) => {
 // files and checks are pooled, and the rest is the last writer session's. A fallback session's evidence already
 // counts the first session's changes; a fix session's unverified list is the one that still stands. The peak
 // context is the run's own sessions' (sub-threads report theirs apart): it is what spawn and handoff keep down.
-function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<HeadlessResult> = new Set()): HeadlessResult {
+// The advisor's sessions (advised) count in spend and usage, but not in turns or time: its turns are not the run's
+// (--max-turns counts the writer's), and the writer's own time already holds every wait on it.
+function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<HeadlessResult> = new Set(), advised: Set<HeadlessResult> = new Set()): HeadlessResult {
   const usage = parts.reduce((u, r) => addUsage(u, r.usage), ZERO_USAGE);
   const evs = parts.flatMap((r) => (r.evidence ? [r.evidence] : []));
   const flags = [...new Set(evs.flatMap((e) => e.flags ?? []))];
@@ -119,7 +121,7 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
       }
     : undefined;
   // Time adds up too; the decode rate is all output over all decode time.
-  const timed = parts.flatMap((r) => (r.timing ? [{ t: r.timing, out: r.usage.output }] : []));
+  const timed = parts.flatMap((r) => (r.timing && !advised.has(r) ? [{ t: r.timing, out: r.usage.output }] : []));
   const sum = (k: Exclude<keyof Timing, 'outputTokPerSec'>) => timed.reduce((n, x) => n + x.t[k], 0);
   const decodeSec = timed.reduce((n, x) => n + (x.t.outputTokPerSec > 0 ? x.out / x.t.outputTokPerSec : 0), 0);
   const decoded = timed.reduce((n, x) => n + (x.t.outputTokPerSec > 0 ? x.out : 0), 0);
@@ -132,7 +134,7 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
     ...rest,
     ...(peakContext ? { peakContext } : {}),
     ...(timing ? { timing } : {}),
-    numTurns: parts.reduce((n, r) => n + r.numTurns, 0),
+    numTurns: parts.reduce((n, r) => n + (advised.has(r) ? 0 : r.numTurns), 0),
     usage,
     costUsd: parts.reduce((c, r) => c + r.costUsd, 0),
     cacheHitRatio: hitRatio(usage),
@@ -342,7 +344,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
             }
           : {}),
         signal: ac.signal,
-        ...(quotaWaitMs !== undefined
+        // An advisor out of quota is dropped at once: the writer never waits on an optional helper.
+        ...(quotaWaitMs !== undefined && opts.role !== 'advisor'
           ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), process.stderr.write(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
           : {}),
         ...(opts.role === 'advisor' ? (m.defaultEffort ? { effort: 'low' as Effort } : {}) : args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
@@ -352,7 +355,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         ...(opts.role === 'advisor' ? { maxTurns: 2 } : {}),
         ...(writing && advise ? { advise } : {}),
         ...(args.maxBudgetUsd !== undefined ? { maxBudgetUsd: args.maxBudgetUsd, meter } : {}),
-        ...(args.outputFormat === 'stream-json' ? { onStream: (event) => out(encode({ type: 'stream', event })) } : {}),
+        // The advisor's tokens are not the writer's reply: a client drawing the stream would show them as one.
+        ...(args.outputFormat === 'stream-json' && opts.role !== 'advisor' ? { onStream: (event) => out(encode({ type: 'stream', event })) } : {}),
       },
       prompt,
     );
@@ -392,6 +396,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         adv.turns++;
         const r = await run(roles.advisor!, adv.log, advicePrompt(first ? task : undefined, turnDigest(turn, adv.turns)), { role: 'advisor' });
         adv.costUsd += r.costUsd;
+        // A long run outgrows one advisor session: the next turn starts a new one, from the task again.
+        if ((r.peakContext ?? 0) >= defaultHandoffAt(roles.advisor!)) adv.log = undefined;
         if (r.subtype !== 'success') {
           adv.off = true;
           if (r.subtype !== 'interrupted') process.stderr.write(`cedia: the advisor on ${roles.advisor!.ref} ended with ${r.subtype}; going on without it\n`);
@@ -552,7 +558,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     }
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
     const advice = adv.log ? { model: roles.advisor!.ref, via: 'cedia' as const, sessionId: adv.log.id, costUsd: adv.costUsd, turns: adv.turns, notes: adv.notes } : undefined;
-    result = { ...combine(parts, result, new Set([...children, ...advised])), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(advice ? { advice } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
+    result = { ...combine(parts, result, new Set([...children, ...advised]), advised), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(advice ? { advice } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
     if (store && threadId && result.question) store.append(threadId, { kind: 'question', sessionId: result.sessionId, ...result.question });
     if (store && threadId) store.append(threadId, { kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
     // The receipt goes in the writer's log too, so a thread rebuilt from the files shows it. Quiet: a stream-json

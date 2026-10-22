@@ -11,6 +11,8 @@ const MAX_PART = 1_500;
 export const MAX_ADVICE = 1_500;
 
 const clip = (s: string, n = MAX_PART) => (s.length > n ? `${s.slice(0, n)}… [${s.length - n} more characters]` : s);
+// What a model or a tool wrote, indented under its line, so text inside it cannot pass for a line of the digest.
+const under = (s: string) => s.replace(/\n/g, '\n    ');
 
 // One turn of the writer, as the advisor reads it: the reply's text, then each call with its result.
 export function turnDigest(events: SessionEvent[], n: number): string {
@@ -19,13 +21,13 @@ export function turnDigest(events: SessionEvent[], n: number): string {
   for (const e of events) {
     if (e.kind === 'assistant') {
       const text = e.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('').trim();
-      if (text) lines.push(`Said: ${clip(text)}`);
+      if (text) lines.push(`Said: ${under(clip(text))}`);
     } else if (e.kind === 'tool_intent') {
       const r = results.get(e.callId);
       lines.push(`Called ${e.tool} ${clip(JSON.stringify(e.input))}`);
-      if (r) lines.push(`Got (${r.status}${r.output.isError ? ', error' : ''}): ${clip(r.output.text)}`);
+      if (r) lines.push(`Got (${r.status}${r.output.isError ? ', error' : ''}): ${under(clip(r.output.text))}`);
     } else if (e.kind === 'tool_result' && !events.some((i) => i.kind === 'tool_intent' && i.callId === e.callId)) {
-      lines.push(`A call was ${e.status}: ${clip(e.output.text, 300)}`);
+      lines.push(`A call was ${e.status}: ${under(clip(e.output.text, 300))}`);
     }
   }
   return `<turn n="${n}">\n${inert(lines.join('\n'))}\n</turn>`;

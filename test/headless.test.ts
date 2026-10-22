@@ -234,7 +234,7 @@ describe('cedia -p (offline, faux)', () => {
 
     test("the advisor's turns do not count against the writer's, and a turn with no tools is not sent to it", () => {
       const r = cedia([call('c1', 'echo good > f.txt'), reply('OK'), call('c2', 'test -s f.txt'), reply('OK'), reply('done')], [...args, '--max-turns', '3']);
-      expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success', numTurns: 5, advice: { turns: 2, notes: 0 } });
+      expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success', numTurns: 3, advice: { turns: 2, notes: 0 } });
     });
 
     test('a note cannot close its frame or speak as cedia', () => {
