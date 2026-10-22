@@ -406,8 +406,9 @@ describe('--spawn worktree (offline, faux)', () => {
     expect(text).toContain('Not applied, since you may not write them: .vscode/settings.json');
     expect(existsSync(join(r.work, '.vscode'))).toBe(false);
 
-    // The parent's own deny rules hold for what comes back.
-    const denied = cedia(r.work, [{ blocks: [spawnCall('s1', 'alpha-task: two files')] }, ...child('alpha-task', 'echo x > locked.txt && echo ok > fine.txt', 'alpha done'), call('p1', 'true'), reply('done')], ['-p', 'files', '--spawn', 'worktree', '--deny', 'edit(locked.txt)']);
+    // The parent's own deny rules hold for what comes back, even for a write the rule could not see in the
+    // command (`$n.txt` names locked.txt only when it runs).
+    const denied = cedia(r.work, [{ blocks: [spawnCall('s1', 'alpha-task: two files')] }, ...child('alpha-task', 'n=locked; echo x > $n.txt && echo ok > fine.txt', 'alpha done'), call('p1', 'true'), reply('done')], ['-p', 'files', '--spawn', 'worktree', '--deny', 'edit(locked.txt)']);
     const deniedText = report(denied.result(), r.work, 's1');
     expect(deniedText).toContain('Applied to your files: fine.txt');
     expect(deniedText).toContain('Not applied, since you may not write them: locked.txt');

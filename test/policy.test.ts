@@ -148,10 +148,13 @@ describe('modes and rules', () => {
     expect(decide(p, writeTool, { path: 'a', content: '' }, cwd).rule).toBe('deny:write');
   });
 
-  test('an edit or write deny rule also stops a command that may write that path', () => {
+  test('an edit or write deny rule covers both tools and a command that may write that path', () => {
     const p: Policy = { mode: 'workspace', allow: [], deny: ['edit(src/locked/*)', 'write(.env*)'] };
     for (const command of ["sed -i 's/a/b/' src/locked/a.ts", 'echo x > src/locked/a.ts', 'cp b.ts src/locked/a.ts', 'printf x >> .env.local', "python3 -c 'open(1)' && rm src/locked/a.ts"])
       expect(bash(p, command).rule).toMatch(/^deny:(edit|write)\(/);
+    expect(decide(p, writeTool, { path: 'src/locked/a.ts', content: '' }, cwd).rule).toBe('deny:edit(src/locked/*)');
+    expect(decide(p, editTool, { path: '.env', edits: [] }, cwd).decision).toBe('deny');
+    expect(decide(p, writeTool, { path: 'src/open/a.ts', content: '' }, cwd).decision).toBe('allow');
     for (const command of ['cat src/locked/a.ts', 'grep -n x src/locked/a.ts', "sed -i 's/a/b/' src/open/a.ts", 'bun test'])
       expect(bash(p, command).decision).toBe('allow');
   });

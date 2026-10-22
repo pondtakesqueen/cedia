@@ -63,7 +63,9 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
   if (effect !== 'read' && JSON.stringify(input).includes(REDACTED))
     return deny('redacted-placeholder', `the input contains ${REDACTED}, which stands for a secret you were not shown; writing it would replace the real value. Leave that part as it is or ask the user`);
   for (const rule of policy.deny) {
-    if (matches(rule, spec.name, commands, path, cwd, 'any')) return deny(`deny:${rule}`, `matches the deny rule ${rule}`);
+    // edit and write change a file the same way, so a deny rule naming either covers both.
+    const tool = spec.name === 'write' && /^edit\b/.test(rule.trim()) ? 'edit' : spec.name === 'edit' && /^write\b/.test(rule.trim()) ? 'write' : spec.name;
+    if (matches(rule, tool, commands, path, cwd, 'any')) return deny(`deny:${rule}`, `matches the deny rule ${rule}`);
     if (command !== undefined && commands && writesDenied(rule, command, commands, cwd))
       return deny(`deny:${rule}`, `may write a path the deny rule ${rule} covers; that rule holds for commands too`);
   }
