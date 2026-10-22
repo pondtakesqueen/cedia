@@ -222,3 +222,18 @@ Files: `2026-10-22-ab-B-flash-review-claude-code.jsonl` stayed on the owner's ma
 - A's one miss, `hard-shell-split#2`, ran out the 300 s task timeout after $0.0005 and 2k tokens of context: the provider stalled, not the model. The 9 against 10 is not a signal.
 - The review asked for changes on all six `hard-*` and `real-slop-guard` runs, which A passed without it, so on these verify commands it costs 39% more API spend, 24% more time and subscription use for the same score, as the Haiku and Sonnet round found. Two B runs ended within a second of the 300 s timeout, so a task with review needs more time.
 - Reading: no review by default. Turn it on per run (`--review claude-code`) where the checks do not cover what matters.
+
+## 2026-10-22: cedia on DeepSeek Flash against Claude Code (`claude -p`)
+
+Six tasks (`hard-injection`, `hard-redact-bugs`, `hard-shell-split`, `wide-bug-hunt`, `wide-three-features`, `real-slop-guard`), 2 runs each, run one arm after the other on the owner's Mac at main 5237104. Claude Code ran on the owner's subscription with its default model; its cost is its own estimate, not a charge.
+
+| Harness | pass@1 | False-done | Avg time | Tokens per run (in / out) | Cache hit | Cost | Cost per passed run |
+|---|---|---|---|---|---|---|---|
+| cedia, DeepSeek V4.1 Flash via Go | 100% | 0% | 230.1 s | 1,009,563 / 23,549 | 94.4% | $0.305 | $0.025 |
+| Claude Code (`claude -p`) | 100% | 0% | 76.2 s | 341,961 / 6,836 | 90.7% | $5.429 (estimate) | $0.452 |
+
+Files: `2026-10-22-vs-cedia-flash.jsonl` and `2026-10-22-vs-claude-p.jsonl`, kept on the owner's machine.
+
+- Both pass every run, the injection task included, so this set cannot rank them on quality.
+- Claude Code is three times faster and reads a third of the tokens; cedia on Flash costs about an eighteenth at API prices. On a subscription `claude -p` costs nothing extra until its quota runs out, so cedia's case is long or many unattended runs past that quota, and runs that need the done gate and a session log that can be checked.
+- Next: a task set hard enough that one of them fails.
