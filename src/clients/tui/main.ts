@@ -1,6 +1,6 @@
 import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, Text, TUI, matchesKey, truncateToWidth, type Component, type MarkdownTheme, type Terminal } from '@mariozechner/pi-tui';
 import { readFileSync } from 'node:fs';
-import { cediaHome, loadPrivacy, loadRoles } from '../../core/config.ts';
+import { cediaHome, loadPolicy, loadPrivacy, loadRoles } from '../../core/config.ts';
 import { COMMIT_SYSTEM, commitFiles, commitMessage, commitPatch, commitPrompt, currentBranch, defaultBranch, prBlocked, pullRequest, pushAndOpenPr, recentSubjects, threadChanges } from '../../core/project/commit.ts';
 import { runPrompt } from '../../core/loop/run.ts';
 import { resolveModel } from '../../core/providers/catalog.ts';
@@ -504,7 +504,8 @@ export class CediaTui {
         system: BASE_SYSTEM,
         cwd: this.args.cwd,
         role: 'review',
-        permission: { mode: 'read-only', allow: [], deny: [] },
+        // The user's policy, its guards and deny rules included, made read-only: a PR's text may ask for a secret.
+        permission: { ...loadPolicy(this.args.cwd, { allow: this.args.allow ?? [], deny: this.args.deny ?? [], unlock: this.args.unlock ?? [] }), mode: 'read-only' },
         privacy: loadPrivacy(this.args.cwd, this.args.privacy),
         maxTurns: 40,
         signal,
@@ -513,7 +514,7 @@ export class CediaTui {
     );
     this.spent += r.costUsd;
     this.say(dim(`review ${r.subtype === 'success' ? 'done' : r.subtype} · ${r.numTurns} turn${r.numTurns === 1 ? '' : 's'} · $${r.costUsd.toFixed(4)}`));
-    if (r.subtype !== 'success') return;
+    if (r.subtype !== 'success') return void (r.result.trim() && this.say(red(printable(r.result.trim()))));
     const { verdict, findings } = parseVerdict(r.result);
     // Findings on a pull request stay with the user: its branch may not be this working tree's.
     if (verdict !== 'changes' || subject.kind !== 'changes' || !findings) return;

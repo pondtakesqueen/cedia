@@ -65,8 +65,14 @@ export function askedReviewPrompt(subject: ReviewSubject, patch: string): string
 <pr title="${inert(subject.title).replace(/"/g, '&quot;')}">
 ${inert(subject.body.trim()) || '(no description)'}
 </pr>`
-      : `the uncommitted changes in this working directory (against HEAD).${subject.untracked.length ? ` Files not yet tracked, not in the diff, read them: ${subject.untracked.join(', ')}.` : ''}`;
-  const diff = patch.length > MAX_REVIEW_DIFF ? `The diff is ${patch.length} characters, too long to include. Read it with git diff, or the changed files.` : `<diff>\n${inert(patch)}\n</diff>`;
+      : `the uncommitted changes in this working directory (against HEAD).${subject.untracked.length ? ` Files not yet tracked, not in the diff, read them: ${inert(subject.untracked.map((f) => JSON.stringify(f)).join(', '))}.` : ''}`;
+  // A pull request's diff is not in this working tree, so a long one is cut rather than left out.
+  const diff =
+    patch.length <= MAX_REVIEW_DIFF
+      ? `<diff>\n${inert(patch)}\n</diff>`
+      : subject.kind === 'pr'
+        ? `The diff is ${patch.length} characters; its first ${MAX_REVIEW_DIFF} follow. Review those, and say in your findings that the rest was not seen.\n\n<diff>\n${inert(patch.slice(0, MAX_REVIEW_DIFF))}\n</diff>`
+        : `The diff is ${patch.length} characters, too long to include. Read it with git diff, or the changed files.`;
   return `Review ${what}
 
 You cannot edit files: read them, and run read-only commands such as git diff, git log or the tests when they help.

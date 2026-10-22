@@ -241,13 +241,15 @@ describe('the TUI (offline, faux)', () => {
     writeFileSync(join(repo, 'a.txt'), 'one\ntwo');
     writeFileSync(join(repo, 'new.txt'), 'new\n');
     // The reviewer may read and run read-only commands, never write.
-    script([call('r1', 'echo x > hacked.txt'), call('r2', 'tail -c 3 a.txt'), reply('a.txt:2 has no newline at the end (tail -c 3 shows "two").\nVERDICT: changes')]);
+    script([call('r1', 'echo x > hacked.txt'), call('r0', 'cat ~/.aws/credentials'), call('r2', 'tail -c 3 a.txt'), reply('a.txt:2 has no newline at the end (tail -c 3 shows "two").\nVERDICT: changes')]);
     type('/review');
     await a.idle();
     expect(shown()).toContain('reviewing the uncommitted changes with faux/');
     expect(shown()).toContain('a.txt:2 has no newline at the end');
     expect(shown()).toContain("send these findings to a new thread to fix?");
     expect(Bun.spawnSync(['test', '-e', join(repo, 'hacked.txt')]).exitCode).not.toBe(0);
+    // The user's guards hold in the review: a credential store stays out of reach.
+    expect(shown()).toContain('denied by deny-list:secret-path');
     script([call('c1', "printf '\\n' >> a.txt"), reply('fixed')]);
     type('y');
     await a.idle();
@@ -257,7 +259,7 @@ describe('the TUI (offline, faux)', () => {
     const review = logs.find((e) => e.kind === 'session' && e.role === 'review');
     expect(review.tools.map((t: { name: string }) => t.name)).toEqual(['read', 'bash']);
     const asked = logs.find((e) => e.kind === 'user' && String(e.text).startsWith('Review the uncommitted'));
-    expect(asked.text).toContain('Files not yet tracked, not in the diff, read them: new.txt.');
+    expect(asked.text).toContain('Files not yet tracked, not in the diff, read them: "new.txt".');
     expect(asked.text).toContain('+two');
     const fix = logs.find((e) => e.kind === 'user' && String(e.text).includes('<review>'));
     expect(fix.text).toContain('a.txt:2 has no newline at the end');
