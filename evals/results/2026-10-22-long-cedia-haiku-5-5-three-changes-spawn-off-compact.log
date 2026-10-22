@@ -1,0 +1,12 @@
+Running 1 tasks x 3 runs on cedia (anthropic/claude-haiku-5-5), 3 at a time...
+  PASS real-three-changes#1 (230.0s $0.0727, 1 handoff, peak 108k)
+  PASS real-three-changes#2 (272.2s $0.0767, 1 handoff, peak 107k)
+  PASS real-three-changes#3 (283.1s $0.0817, 2 handoff, peak 98k)
+
+Results written to evals/results/2026-10-22-long-cedia-haiku-5-5-three-changes-spawn-off-compact.jsonl
+cedia (anthropic/claude-haiku-5-5): 1 tasks, 3 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 261.8s per run, 2221686 input / 48039 output tokens per run, cache hit 90.6%
+  peak context 104k mean, 108k max, 2 of 3 runs past 100k; 4 handoffs, 0 sub-threads
+  speed 285 output tok/s, 0.99s to first token per call; model 77.2% of time, cedia 4.9%
+  cost $0.2311 total, $0.0770 per passed run

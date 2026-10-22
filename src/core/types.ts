@@ -12,13 +12,19 @@ export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 export type Usage = { uncached: number; cacheRead: number; cacheWrite: number; output: number; reasoning?: number };
 export const ZERO_USAGE: Usage = { uncached: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
 
-export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'aborted' | 'error';
+// 'compaction': the reply to a compaction request, which holds the summary block and nothing else.
+export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'aborted' | 'error' | 'compaction';
 
 // Opaque fields carry each wire's reasoning payload so it replays byte for byte to the same wire.
 export type AssistantBlock =
   | { type: 'text'; text: string; sig?: string }
   | { type: 'thinking'; text: string; opaque?: string; redacted?: boolean }
-  | { type: 'tool_use'; id: string; callId?: string; name: string; input: JsonObject; inputError?: string };
+  | { type: 'tool_use'; id: string; callId?: string; name: string; input: JsonObject; inputError?: string }
+  | CompactionBlock;
+
+// A summary the provider wrote of a session's earlier messages (Anthropic on-demand compaction): its text and the
+// signature that lets it stand in for those messages. Replayed byte for byte, first in the session it starts.
+export type CompactionBlock = { type: 'compaction'; text: string; opaque: string };
 
 export type EffectStatus = 'completed' | 'failed' | 'denied' | 'not_started' | 'interrupted_safe' | 'interrupted_unknown';
 // `redacted` counts secrets cedia replaced before the output was logged and sent.
@@ -63,6 +69,13 @@ type EventBody =
   // A call's input came in a known wrong shape and was put into the schema's (ToolSpec.repair). The assistant
   // event keeps what the model sent; the intent holds the repaired input.
   | { kind: 'input_repaired'; callId: string; tool: string; repairs: string[] }
+  // A compaction request, sent with the messages of the request `of` (core/project/compact.ts), and its outcome:
+  // the summary block, or why there is none.
+  | { kind: 'compact_request'; of: EventId; bodyHash: string; headers: Record<string, string> }
+  | { kind: 'compaction'; requestId: EventId; stop: StopReason; usage: Usage; block?: CompactionBlock; error?: AttemptError; ms?: number }
+  // First in a session that goes on from another one's summary: the block stands in for that session's messages up
+  // to the summarized request, and the next `kept` events are copies of what that session logged after it.
+  | { kind: 'summary'; session: string; block: CompactionBlock; kept: number }
   // A per-message effort change: from the latest user turn with new input on, the model works at this level
   // (core/loop/run.ts escalation). Wires without it (caps.midConversationEffort) never get one.
   | { kind: 'effort'; effort: Effort }
@@ -117,6 +130,8 @@ export type ModelSpec = {
   // Anthropic fast mode: the same model decoding up to 2.5x faster at a premium price. Its own catalog entry,
   // because a speed change invalidates the prompt cache and changes the price.
   speed?: 'fast';
+  // Takes on-demand compaction requests (Anthropic beta compact-2026-09-04), so a handoff can be a summary.
+  compaction?: boolean;
   caps: ModelCapabilities;
 };
 
@@ -129,6 +144,8 @@ export type WireRequest = {
   effort?: Effort;
   maxTokens: number;
   ttl?: '5m' | '1h';
+  // Asks for a summary of `messages` instead of a reply (Anthropic on-demand compaction).
+  compaction?: { instructions: string };
 };
 
 export type StreamEvent =
@@ -193,6 +210,9 @@ export type HeadlessResult = {
   // Sub-threads the run spawned (core/tools/spawn.ts); their spend is in costUsd.
   subthreads?: number;
   spawned?: Spawned;
+  // A 'handoff' by compaction: the summary, and the request it summarized, after which the session's events are
+  // kept word for word in the next session (core/project/compact.ts).
+  compaction?: { block: CompactionBlock; of: EventId };
 };
 
 // Sub-threads by kind, the handoffs their sessions made, and the largest context one of their replies saw.
