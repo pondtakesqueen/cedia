@@ -14,6 +14,7 @@ cedia is a personal coding harness written from scratch in TypeScript on Bun. `S
 - `bin/cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | rate <id> <up|down> | archive <id> | diff <id> | undo <id> | redo <id>]`: the project's threads. `undo` and `redo` move the files of the thread's last turn that changed files, from the shadow snapshots.
 - `bin/cedia memory [list | add <text> | forget <id>]`: the project's memory, which every new session gets in its first turn.
 - `bin/cedia skills`: the skills a session here can load (`~/.cedia/skills`, and the repository's `.agents/skills`, `.claude/skills`, `.cursor/skills`); the model loads one with the `skill` tool.
+- MCP servers come from `mcpServers` in `~/.cedia/settings.json` only (`src/core/mcp/`); `test/mcp/server.ts` is a fake stdio server for tests.
 - `bin/cedia --version --json`: version, protocol schema hash and capabilities, for clients.
 - `bin/cedia usage [<file.jsonl>... | --thread <id> | --last <n>] [--json]`: where a project's spend went, from its session logs: input by source (counted each time a request resent it), the costliest tool results, cache misses by cause, requests past a long-context price line or at effort max, handoffs. A run's JSON result names its own misses in `cacheMisses`.
 - `bin/cedia lint-session <file.jsonl>...`: check a session log against the trust invariants. `-m faux` with `CEDIA_FAUX_SCRIPT=<steps.json>` runs offline.

@@ -7,12 +7,13 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
 import { memoryBlock, memoryPath, MemoryStore, rememberTool } from '../../core/project/memory.ts';
 import { loadSkills, skillsBlock, skillTool } from '../../core/skills/skills.ts';
+import { mcpStub, startMcp, type McpServers } from '../../core/mcp/tools.ts';
 import { runTurn } from '../../core/project/undo.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
 import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
@@ -219,6 +220,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const skills = loadSkills(args.cwd, cediaHome());
   const skillList = skillsBlock(skills);
   const skill = skillTool(skills);
+  // Started inside the run's try below, so they are closed however it ends.
+  let mcp: McpServers | undefined;
   const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}) });
   // Where each writer session of this run started in its log, for the change the run made.
   const writerRuns: { log: SessionLog; from: number }[] = [];
@@ -289,8 +292,12 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // With skills, or on a resumed session that had the tool: its tool list stays as it was even when the skills
     // are gone since, and a call to one that is gone says so.
     const withSkill = skills.length > 0 || !!header?.tools.some((d) => d.name === 'skill');
-    const extra = [...(spawnOn ? [spawn] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : [])];
-    const tools = reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : [])] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : [])] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
+    // MCP tools: all for the writer, the read-only ones for reviewers and sub-threads. A resumed session whose
+    // server is gone keeps the tool, and a call to it says the server is not there.
+    const mcpTools = [...(mcp?.tools ?? []), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map(mcpStub)];
+    const mcpRead = mcpTools.filter((t) => t.effect === 'read');
+    const extra = [...(spawnOn ? [spawn] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), ...mcpTools];
+    const tools = reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
     if (writing) writerRuns.push({ log, from: log.events.length });
     const result = await runPrompt(
       {
@@ -441,6 +448,11 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     return r;
   };
   try {
+    const servers = loadMcp();
+    if (Object.keys(servers).length) {
+      mcp = await startMcp(servers);
+      for (const n of mcp.notes) process.stderr.write(n + '\n');
+    }
     // Plan: a stronger model reads the repo and writes the plan the writer gets with the task.
     let plan: Step | undefined;
     if (roles.plan) {
@@ -533,6 +545,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     if (store && threadId) store.append(threadId, { kind: 'state', state: 'failed', result: (e as Error).message });
     throw e;
   } finally {
+    await mcp?.close();
     await sandbox.close();
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);
