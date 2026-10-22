@@ -3,7 +3,7 @@ import { runHeadless } from './clients/headless/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
 import { GUARDS } from './core/safety/policy.ts';
 import { cediaHome } from './core/config.ts';
-import { threadLine, threadsDir, ThreadStore } from './core/project/threads.ts';
+import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, SessionLog } from './core/session/log.ts';
 import type { Effort } from './core/types.ts';
@@ -43,7 +43,11 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
        cedia lint-session <file.jsonl>...   check session logs against the trust invariants
        cedia threads [--all] [--cwd <dir>]  list this project's threads (--all: archived ones too)
        cedia threads show <id>              a thread's task, state, sessions, handoff note, result and messages
-       cedia threads send <id> <text>       leave a message the thread sees at its next turn
+       cedia threads send <id> <text>       leave a message the thread sees at its next turn; prints the message id
+       cedia threads unsend <id> [<msg>...] take back your messages it has not seen yet (all of them by default)
+       cedia threads rate <id> <up|down> [--session <sid>] [--note <text>]
+                                            rate an answer (default: the thread's latest) for picking eval cases;
+                                            no model ever sees it
        cedia threads archive|unarchive <id> hide a thread from the list, or bring it back
 
 models: ${Object.keys(ALIASES).join(', ')}`;
@@ -147,7 +151,11 @@ function lintFiles(files: string[]): number {
 }
 
 function threads(argv: string[]): number {
-  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' }, all: { type: 'boolean' } } });
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' } },
+  });
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(values.cwd ?? process.cwd())));
   const [cmd = 'list', id, ...rest] = positionals;
   try {
@@ -162,7 +170,8 @@ function threads(argv: string[]): number {
       for (const s of t.sessions) lines.push(`session ${s.sessionId}  ${s.model}  ${s.why}${s.path ? `  ${s.path}` : ''}`);
       if (t.handoff) lines.push('', `handoff from ${t.handoff.sessionId}:`, t.handoff.note);
       if (t.result) lines.push('', 'result:', t.result);
-      for (const m of t.messages) lines.push('', `message from ${m.from} at ${m.at}${t.pending.includes(m) ? ' (not seen yet)' : ''}:`, m.text);
+      for (const m of t.messages) lines.push('', `message ${m.id} from ${m.from} at ${m.at}${m.unsent ? ' (unsent)' : t.pending.includes(m) ? ' (not seen yet)' : ''}:`, m.text);
+      for (const r of t.ratings) lines.push('', `rated ${r.rating} at ${r.at}${r.sessionId ? ` (session ${r.sessionId})` : ''}${r.note ? `: ${r.note}` : ''}`);
       console.log(lines.join('\n'));
       return 0;
     }
@@ -173,15 +182,25 @@ function threads(argv: string[]): number {
       return 0;
     }
     if (cmd === 'send' && id && rest.length) {
-      store.send(id, 'user', rest.join(' '));
-      console.log(`sent to ${id}`);
+      const mid = store.send(id, 'user', rest.join(' '));
+      console.log(`sent to ${id} as ${mid}`);
+      return 0;
+    }
+    if (cmd === 'unsend' && id) {
+      const taken = store.unsend(id, rest);
+      console.log(taken.length ? `unsent ${taken.join(', ')} from ${id}` : `no messages waiting in ${id}`);
+      return 0;
+    }
+    if (cmd === 'rate' && id && rest.length === 1) {
+      store.rate(id, rest[0] as Rating, { ...(values.session ? { sessionId: values.session } : {}), ...(values.note ? { note: values.note } : {}) });
+      console.log(`rated ${id} ${rest[0]}`);
       return 0;
     }
   } catch (e) {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | archive <id> | unarchive <id>] [--cwd <dir>]');
+  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
   return 2;
 }
 

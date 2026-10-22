@@ -429,6 +429,13 @@
       "type": "object",
       "additionalProperties": {}
     },
+    "Rating": {
+      "type": "string",
+      "enum": [
+        "up",
+        "down"
+      ]
+    },
     "ResultSubtype": {
       "type": "string",
       "enum": [
@@ -1420,6 +1427,57 @@
             "ids",
             "kind",
             "sessionId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "unsend"
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "ids",
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "rate"
+            },
+            "rating": {
+              "$ref": "#/definitions/Rating"
+            },
+            "sessionId": {
+              "type": "string"
+            },
+            "note": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "kind",
+            "rating"
           ]
         },
         {
