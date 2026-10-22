@@ -1,8 +1,8 @@
 {
  "suite": "gate",
  "model": "anthropic/claude-haiku-5-5",
- "commit": "43bd436",
- "date": "2026-10-21T19:00:09.958Z",
+ "commit": "82363a0-dirty",
+ "date": "2026-10-22T01:11:26.975Z",
  "runs": 2,
  "jobs": 4,
  "cediaArgs": [],
@@ -30,7 +30,8 @@
   "wide-bug-hunt": "6fd6e23119deb920",
   "wide-deprecate": "f904950c84ebeba7",
   "wide-three-features": "677a9774135741df",
-  "real-slop-guard": "a5c8323fd6491b3f"
+  "real-slop-guard": "a5c8323fd6491b3f",
+  "real-three-delegated": "b7abc9c966af4980"
  },
  "results": [
   {
@@ -1868,6 +1869,128 @@
    "attempts": 1,
    "verifyExitCode": 0,
    "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 186 pass\n 5 skip\n 0 fail\n 611 expect() calls\nRan 191 tests across 13 files. [2.21s]\n",
+   "passed": true,
+   "falseDone": false
+  },
+  {
+   "id": "real-three-delegated",
+   "category": "real-repo",
+   "harness": "cedia",
+   "model": "anthropic/claude-haiku-5-5",
+   "run": 1,
+   "ts": "2026-10-22T01:15:52.079Z",
+   "ledger": [
+    {
+     "kind": "rollout",
+     "label": "real-three-delegated#1:harness",
+     "ms": 251840
+    },
+    {
+     "kind": "session",
+     "label": "real-three-delegated#1:verify",
+     "ms": 13244
+    }
+   ],
+   "wallMs": 251840,
+   "output": "ota` setting are in `src/cli.ts` and `src/core/config.ts`. `main.ts` tracks the total wait across the run. The default stays `fallback`.\n- **Docs:** `SPEC.md` and `AGENTS.md` are updated.\n\n**Not verified:**\n- I did not re-read the `run.ts` edits. The passing suite is the only evidence for them.\n- The CLI was not run by hand. Checks were `bun test`, `bun run typecheck` (reported exit 0 by the sub-thread, not rerun by me), and the schema script.\n- The three test files were not edited, as required.",
+   "stderr": "cedia: sandbox unavailable (bubblewrap (bwrap) not installed; socat not installed); bash runs unsandboxed. Use --sandbox on to require it.\ncedia: a sub-thread's context reached 90000 tokens; handing it off to a new session\n",
+   "exitCode": 0,
+   "reported": {
+    "subtype": "success",
+    "costUsd": 0.072588015,
+    "tokens": {
+     "input": 995946,
+     "cacheRead": 840623,
+     "output": 44469
+    },
+    "cacheHitRatio": 0.8440447574466888,
+    "turns": 31,
+    "timing": {
+     "wallMs": 479993,
+     "modelMs": 191823,
+     "ttftMs": 20190,
+     "toolMs": 288086,
+     "retryMs": 0,
+     "harnessMs": 84,
+     "outputTokPerSec": 259.1
+    },
+    "handoffs": 0,
+    "subthreads": 1,
+    "spawned": {
+     "explore": 0,
+     "work": 1,
+     "handoffs": 1,
+     "peakContext": 114927
+    },
+    "peakContext": 8474
+   },
+   "claimedDone": false,
+   "refusedClaim": false,
+   "infraError": false,
+   "attempts": 1,
+   "verifyExitCode": 0,
+   "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 297 pass\n 11 skip\n 0 fail\n 1101 expect() calls\nRan 308 tests across 19 files. [13.22s]\n",
+   "passed": true,
+   "falseDone": false
+  },
+  {
+   "id": "real-three-delegated",
+   "category": "real-repo",
+   "harness": "cedia",
+   "model": "anthropic/claude-haiku-5-5",
+   "run": 2,
+   "ts": "2026-10-22T01:16:37.979Z",
+   "ledger": [
+    {
+     "kind": "rollout",
+     "label": "real-three-delegated#2:harness",
+     "ms": 298125
+    },
+    {
+     "kind": "session",
+     "label": "real-three-delegated#2:verify",
+     "ms": 12840
+    }
+   ],
+   "wallMs": 298125,
+   "output": "p is a sandbox-dependent test gated on `bwrap`/darwin, not one of the new tests.\n- I ran `bun scripts/protocol-schema.ts` (exit 0) to regenerate the schema.\n\n**Not verified:**\n- I did not review the diffs line by line. This is not a git repo, so I could not diff against a baseline.\n- I did not confirm each sub-item in the brief against the code. I only confirmed the surface markers above and that the tests pass.\n- I did not check whether the sub-thread's SPEC.md and AGENTS.md edits are accurate.",
+   "stderr": "cedia: sandbox unavailable (bubblewrap (bwrap) not installed; socat not installed); bash runs unsandboxed. Use --sandbox on to require it.\ncedia: a sub-thread's context reached 90000 tokens; handing it off to a new session\n",
+   "exitCode": 0,
+   "reported": {
+    "subtype": "success",
+    "costUsd": 0.06606312500000001,
+    "tokens": {
+     "input": 2532188,
+     "cacheRead": 2347995,
+     "output": 39124
+    },
+    "cacheHitRatio": 0.9272593504115808,
+    "turns": 54,
+    "timing": {
+     "wallMs": 549116,
+     "modelMs": 204898,
+     "ttftMs": 57028,
+     "toolMs": 344069,
+     "retryMs": 0,
+     "harnessMs": 149,
+     "outputTokPerSec": 264.6
+    },
+    "handoffs": 0,
+    "subthreads": 1,
+    "spawned": {
+     "explore": 0,
+     "work": 1,
+     "handoffs": 1,
+     "peakContext": 96420
+    },
+    "peakContext": 10717
+   },
+   "claimedDone": false,
+   "refusedClaim": false,
+   "infraError": false,
+   "attempts": 1,
+   "verifyExitCode": 0,
+   "verifyOutput": "bun test v1.4.2 (744846f84)\n\n 297 pass\n 11 skip\n 0 fail\n 1101 expect() calls\nRan 308 tests across 19 files. [12.81s]\n",
    "passed": true,
    "falseDone": false
   },

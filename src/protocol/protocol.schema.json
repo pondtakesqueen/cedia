@@ -430,6 +430,9 @@
         },
         "subthreads": {
           "type": "number"
+        },
+        "spawned": {
+          "$ref": "#/definitions/Spawned"
         }
       },
       "required": [
@@ -741,6 +744,52 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "keepalive"
+            },
+            "requestId": {
+              "$ref": "#/definitions/EventId"
+            },
+            "usage": {
+              "$ref": "#/definitions/Usage"
+            },
+            "error": {
+              "$ref": "#/definitions/AttemptError"
+            },
+            "ms": {
+              "type": "number"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "id",
+            "kind",
+            "ms",
+            "parentId",
+            "requestId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "snapshot"
             },
             "tree": {
@@ -1026,6 +1075,30 @@
         "quota",
         "rejected"
       ]
+    },
+    "Spawned": {
+      "type": "object",
+      "properties": {
+        "explore": {
+          "type": "number"
+        },
+        "work": {
+          "type": "number"
+        },
+        "handoffs": {
+          "type": "number"
+        },
+        "peakContext": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "explore",
+        "work",
+        "handoffs",
+        "peakContext"
+      ],
+      "additionalProperties": false
     },
     "Step": {
       "type": "object",

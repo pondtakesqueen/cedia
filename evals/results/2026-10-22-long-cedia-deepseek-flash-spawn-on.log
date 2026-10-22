@@ -1,0 +1,11 @@
+Running 1 tasks x 2 runs on cedia (opencode-go/deepseek-v4.1-flash), 2 at a time...
+  PASS real-three-changes#1 (272.4s $0.0569, peak 103k)
+  PASS real-three-changes#2 (287.5s $0.0548, peak 102k)
+
+Results written to evals/results/2026-10-22-long-cedia-deepseek-flash-spawn-on.jsonl
+cedia (opencode-go/deepseek-v4.1-flash): 1 tasks, 2 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 279.9s per run, 2929254 input / 27970 output tokens per run, cache hit 93.0%
+  peak context 103k mean, 103k max, 2 of 2 runs past 100k; 0 handoffs, 0 sub-threads
+  speed 230.1 output tok/s, 2.09s to first token per call; model 73.9% of time, cedia 0.1%
+  cost $0.1117 total, $0.0559 per passed run

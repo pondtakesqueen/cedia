@@ -15,7 +15,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { ALIASES } from "../src/core/providers/catalog.ts";
+import { ALIASES, CATALOG } from "../src/core/providers/catalog.ts";
 import { estimateCost, formatSummary, loadTasks, missingVerifyTools, REPO_ROOT, runAll, summarize, type Result, type Task } from "./run.ts";
 
 export type Thresholds = {
@@ -123,6 +123,20 @@ function paired(base: Map<string, Result[]>, cand: Map<string, Result[]>, f: (r:
   return b || c ? { base: b, cand: c, ...(logs.length ? { typical: Math.exp(mean(logs)) } : {}) } : undefined;
 }
 
+// A model whose price changes with the hour (DeepSeek's off-peak discount) is compared at its standard price,
+// re-priced from each run's tokens: otherwise a gate run at peak hours fails against an off-peak baseline on price
+// alone (Flash: +63% reported, +3% at one price, on 2026-10-22). Undefined for any other model.
+export function listCost(model: string): ((r: Result) => number | undefined) | undefined {
+  const m = CATALOG.find((c) => c.ref === (ALIASES[model] ?? model));
+  if (!m?.price.offPeak) return undefined;
+  const pr = m.price;
+  return (r) => {
+    const t = r.reported.tokens;
+    if (!t) return r.reported.costUsd;
+    return ((t.input - t.cacheRead) * pr.input + t.cacheRead * pr.cacheRead + t.output * pr.output) / 1_000_000;
+  };
+}
+
 export function compare(
   baseAll: Result[],
   candAll: Result[],
@@ -200,7 +214,9 @@ export function compare(
       note: `typical task ${signed(typical)} (limit +${pct(limit)}), whole set ${signed(total)} (limit +${pct(th.totalRise)})`,
     });
   };
-  rise("cost", (r) => r.reported.costUsd, th.costRise, 0.002, (x) => `$${x.toFixed(4)}`);
+  const listed = listCost(model);
+  rise("cost", listed ?? ((r) => r.reported.costUsd), th.costRise, 0.002, (x) => `$${x.toFixed(4)}`);
+  if (listed) checks.at(-1)!.note += "; at the standard price, since this model's off-peak discount depends on the hour a run happened to start";
   rise("time", (r) => r.wallMs, th.timeRise, 10_000, (x) => `${(x / 1000).toFixed(0)}s`, opts.sameJobs === false ? "the baseline ran at another --jobs, which changes wall time" : undefined);
   // Reported, never gated: they explain a cost or time change.
   const nTasks = ct.size;

@@ -175,6 +175,28 @@ describe('request bodies', () => {
   });
 });
 
+describe('anthropic keep-alive', () => {
+  test('sends the same body with max_tokens 0 and no stream, to the same place, and reads the usage', async () => {
+    const seen: { url: string; headers: Record<string, string>; body: any }[] = [];
+    const fetcher = async (url: string, init: RequestInit) => {
+      seen.push({ url, headers: init.headers as Record<string, string>, body: JSON.parse(String(init.body)) });
+      return new Response(JSON.stringify({ content: [], stop_reason: 'max_tokens', usage: { input_tokens: 3, cache_read_input_tokens: 9000, cache_creation_input_tokens: 0, output_tokens: 0 } }));
+    };
+    process.env.OPENCODE_API_KEY = 'test-key';
+    const p = anthropicProvider(fetcher);
+    const r = await p.keepAlive!(req('haiku'), new AbortController().signal);
+    expect(r).toEqual({ ok: true, usage: { uncached: 3, cacheRead: 9000, cacheWrite: 0, output: 0 } });
+    const { max_tokens, stream, ...rest } = seen[0]!.body;
+    expect([max_tokens, stream]).toEqual([0, false]);
+    const { max_tokens: _, stream: __, ...same } = anthropicBody(req('haiku')) as any;
+    expect(rest).toEqual(same);
+    expect(seen[0]!.url).toBe('https://opencode.ai/inference/go/anthropic/v1/messages');
+    expect(seen[0]!.headers['x-opencode-session']).toBe('sess-1');
+    const failing = anthropicProvider(async () => new Response('{"error":{"type":"overloaded_error"}}', { status: 529 }));
+    expect(await failing.keepAlive!(req('haiku'), new AbortController().signal)).toMatchObject({ ok: false });
+  });
+});
+
 describe('http', () => {
   test('Go requests carry x-opencode-session, our User-Agent and bearer auth', async () => {
     const seen: { url: string; headers: Record<string, string> }[] = [];

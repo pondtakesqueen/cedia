@@ -20,6 +20,7 @@ import {
   type AssistantBlock,
   type AttemptError,
   type Effort,
+  type EventId,
   type EventOf,
   type HeadlessResult,
   type ModelSpec,
@@ -76,6 +77,10 @@ export type RunOptions = {
   ttl?: '5m' | '1h';
   maxTurns?: number;
   maxBudgetUsd?: number;
+  // The run's spend so far, across all its sessions, when the client keeps one: each turn adds to it, and
+  // maxBudgetUsd is checked against it instead of this session's own cost. A session that spawns sub-threads
+  // shares it with them, so their spend counts against the run's budget while the session is still going.
+  meter?: { usd: number };
   signal?: AbortSignal;
   onStream?: (e: StreamEvent) => void;
   retry?: { max?: number; baseMs?: number; capMs?: number; sleep?: (ms: number) => Promise<void> };
@@ -83,8 +88,46 @@ export type RunOptions = {
   // absent means a spent quota ends the session at once, so the client can fall back. `onQuotaWait` hears each wait.
   quotaWaitMs?: number;
   onQuotaWait?: (ms: number) => void;
+  // While tools run longer than this after a request was sent, its body is sent again with no output every this
+  // often, so the cached prefix outlives the provider's cache lifetime (default 4 minutes, under Anthropic's 5).
+  keepAliveMs?: number;
   now?: () => Date;
 };
+
+// Anthropic's default cache lifetime is 5 minutes from a request's start; a refresh within 4 keeps it. In the
+// long evals every parent that waited over 5 minutes on a work sub-thread wrote its whole context to the cache
+// again on its next request: at Opus 5.5's prices about $0.75 for a 150k parent, against $0.03 for a refresh.
+export const KEEP_ALIVE_MS = 4 * 60_000;
+
+// Refreshes the request's cached prefix while tools run, from `sentAt` + `every` and every `every` after, until
+// stop() (which waits for one in flight, so its event lands before the next request). A provider without
+// keepAlive, or every <= 0, does nothing. A failed refresh is logged and the next one is still tried.
+export function keepWarm(provider: Provider, req: WireRequest, requestId: EventId, sentAt: number, every: number, log: SessionLog, signal: AbortSignal, spent: (u: Usage) => void): { stop(): Promise<void> } {
+  if (!provider.keepAlive || every <= 0) return { stop: async () => {} };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let inFlight: Promise<void> | undefined;
+  let stopped = false;
+  const fire = () => {
+    inFlight = (async () => {
+      const start = performance.now();
+      const r = await provider.keepAlive!(req, signal).catch((e: Error) => ({ ok: false as const, error: { code: 'network' as const, message: e.message } }));
+      const ms = Math.round(performance.now() - start);
+      if (r.ok) {
+        log.append({ kind: 'keepalive', requestId, usage: r.usage, ms });
+        spent(r.usage);
+      } else log.append({ kind: 'keepalive', requestId, error: r.error, ms });
+      if (!stopped && !signal.aborted) timer = setTimeout(fire, Math.max(0, every - ms));
+    })();
+  };
+  timer = setTimeout(fire, Math.max(0, sentAt + every - performance.now()));
+  return {
+    async stop() {
+      stopped = true;
+      clearTimeout(timer);
+      await inFlight;
+    },
+  };
+}
 
 export const CONTINUE_AFTER_LIMIT = 'Your previous reply was cut off by the output limit. Continue exactly where it stopped.';
 
@@ -298,8 +341,10 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     });
 
     let got: Collected | undefined;
+    let sentAt = 0;
     for (let n = 1; ; n++) {
       const t: { ttftMs?: number; ms?: number } = {};
+      sentAt = performance.now();
       got = await collect(provider, req, signal, opts.onStream, t);
       if (got.ok === 'aborted') {
         log.append({ kind: 'attempt', requestId: request.id, n, error: { code: 'network', message: 'aborted' } });
@@ -334,7 +379,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: got.blocks, stop: got.stop, usage: got.usage });
     usage = addUsage(usage, got.usage);
     peakContext = Math.max(peakContext, contextSize(got.usage));
-    cost += costUsd(model, got.usage, now());
+    const turnCost = costUsd(model, got.usage, now());
+    cost += turnCost;
+    if (opts.meter) opts.meter.usd += turnCost;
     const text = got.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
     if (text) lastText = text;
 
@@ -343,7 +390,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     const calls = all.filter((c, i) => all.findIndex((d) => callIdOf(d) === callIdOf(c)) === i);
     const shared = new Set(all.filter((c) => !calls.includes(c)).map(callIdOf));
     if (calls.length || text.trim()) emptyNudged = false;
-    const overBudget = opts.maxBudgetUsd !== undefined && cost >= opts.maxBudgetUsd;
+    const overBudget = opts.maxBudgetUsd !== undefined && (opts.meter?.usd ?? cost) >= opts.maxBudgetUsd;
 
     if (handoff === 1 || handoff === 2) {
       if (!calls.length && text.trim()) return finish('handoff', 'handoff', text.trim());
@@ -364,19 +411,29 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       }
       const toolStart = performance.now();
       const before = log.events.length;
+      const warm = keepWarm(provider, req, request.id, sentAt, opts.keepAliveMs ?? KEEP_ALIVE_MS, log, signal, (u) => {
+        usage = addUsage(usage, u);
+        const c = costUsd(model, u, now());
+        cost += c;
+        if (opts.meter) opts.meter.usd += c;
+      });
       await runTools(calls, byName, opts, signal, log, snap, shared);
+      await warm.stop();
       timing.toolMs += performance.now() - toolStart;
       // Hand off at a turn boundary, while the whole prefix is still cached: the note costs one cheap turn.
       // The size is the last reply's usage plus chars/4 for the results just added. The context must also have
       // doubled since the session's first reply, so a session that starts large (a long note, a big task) does
-      // not hand off again straight away. And the session must have changed a file itself: a note cannot carry
-      // what was read, so a session that only read would leave its successor to read it all again (in the repo
-      // evals, sessions that handed off before any change did exactly that, five in a row on one run).
+      // not hand off again straight away. A session that picked up from another must have changed a file itself
+      // before it hands off: a note cannot carry what was read, so a chain of sessions that only read would each
+      // read it all again (in the repo evals, five in a row on one run, before notes carried the plan). The first
+      // session may hand off having only read, with a plan and the line ranges to read: on Haiku it otherwise
+      // read on past 100k, where every turn costs the long-context price, and handed off after its first edit
+      // anyway, at 125k to 145k (evals/results/README.md, long tasks).
       const added = log.events.slice(before).reduce((n, e) => n + (e.kind === 'tool_result' ? Math.ceil(e.output.text.length / 4) : 0), 0);
       const size = contextSize(got.usage) + added;
       const first = log.events.find((e): e is EventOf<'assistant'> => e.kind === 'assistant')!;
       const changedHere = () => ledgerEntries(log.events.slice(runStart), checks, opts.cwd).some((e) => e.kind === 'write' && e.path !== undefined);
-      if (handoff === 0 && opts.handoffAt !== undefined && size >= opts.handoffAt && size >= 2 * contextSize(first.usage) && changedHere()) {
+      if (handoff === 0 && opts.handoffAt !== undefined && size >= opts.handoffAt && size >= 2 * contextSize(first.usage) && (!opts.continues || changedHere())) {
         handoff = 1;
         log.append({ kind: 'reminder', as: 'user', text: HANDOFF_PROMPT });
       } else if (!spawnNudged && handoff === 0 && opts.spawnNudgeAt !== undefined && size >= opts.spawnNudgeAt && byName.has('spawn')) {

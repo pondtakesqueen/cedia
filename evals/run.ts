@@ -57,7 +57,9 @@ export type Reported = {
   // cedia: handoffs to a new session, and sub-threads spawned.
   handoffs?: number;
   subthreads?: number;
-  // cedia: tokens in the largest context one reply saw.
+  // cedia: sub-threads by kind, the handoffs their sessions made, and the largest context one of them saw.
+  spawned?: { explore: number; work: number; handoffs: number; peakContext: number };
+  // cedia: tokens in the largest context one reply of the run's own sessions saw.
   peakContext?: number;
 };
 
@@ -180,6 +182,7 @@ export function parseReported(stdout: string): { reported: Reported; text: strin
         ...(j.review ? { review: { verdict: String((j.review as { verdict: unknown }).verdict), fixed: Boolean((j.review as { fixed: unknown }).fixed) } } : {}),
         ...(Array.isArray(j.sessions) ? { handoffs: j.sessions.length - 1 } : {}),
         ...(typeof j.subthreads === "number" ? { subthreads: j.subthreads } : {}),
+        ...(j.spawned && typeof j.spawned === "object" ? { spawned: j.spawned as Reported["spawned"] } : {}),
         ...(typeof j.peakContext === "number" ? { peakContext: j.peakContext } : {}),
       },
     };
@@ -326,7 +329,7 @@ export async function runAll(
       results.push(r);
       spent += r.reported.costUsd ?? 0;
       const cost = r.reported.costUsd !== undefined ? ` $${r.reported.costUsd.toFixed(4)}` : "";
-      log(`  ${r.passed ? "PASS" : "FAIL"} ${task.id}#${run} (${(r.wallMs / 1000).toFixed(1)}s${cost}${r.falseDone ? ", FALSE DONE" : ""}${r.refusedClaim ? ", claim refused" : ""}${r.reported.review ? `, review ${r.reported.review.verdict}` : ""}${r.reported.handoffs ? `, ${r.reported.handoffs} handoff` : ""}${r.reported.subthreads ? `, ${r.reported.subthreads} sub-thread` : ""}${r.reported.peakContext ? `, peak ${Math.round(r.reported.peakContext / 1000)}k` : ""})`);
+      log(`  ${r.passed ? "PASS" : "FAIL"} ${task.id}#${run} (${(r.wallMs / 1000).toFixed(1)}s${cost}${r.falseDone ? ", FALSE DONE" : ""}${r.refusedClaim ? ", claim refused" : ""}${r.reported.review ? `, review ${r.reported.review.verdict}` : ""}${r.reported.handoffs ? `, ${r.reported.handoffs} handoff` : ""}${r.reported.subthreads ? `, ${spawnedNote(r.reported)}` : ""}${r.reported.peakContext ? `, peak ${Math.round(r.reported.peakContext / 1000)}k` : ""})`);
       if (spent >= opts.budget && !stopped) {
         stopped = true;
         console.error(`budget $${opts.budget} reached after $${spent.toFixed(4)}; stopping`);
@@ -447,8 +450,9 @@ export type Summary = {
   cacheHitRatio?: number;
   // From runs that report timing: mean decode rate, time to first token per model call, and cedia's own share.
   speed?: { outputTokPerSec: number; ttftMs: number; harnessShare: number; modelShare: number };
-  // cedia: the mean and largest peak context per run, runs whose peak passed 100k, handoffs and sub-threads.
-  context?: { meanPeak: number; maxPeak: number; over100k: number; handoffs: number; subthreads: number };
+  // cedia: the mean and largest peak context per run, runs whose peak passed 100k, handoffs and sub-threads, and of
+  // those the work ones, the handoffs sub-threads made and the largest context one saw (when runs report them).
+  context?: { meanPeak: number; maxPeak: number; over100k: number; handoffs: number; subthreads: number; work?: number; subHandoffs?: number; subPeak?: number };
 };
 
 export function summarize(all: Result[]): Summary {
@@ -491,8 +495,19 @@ function contextOf(results: Result[]): { context?: Summary["context"] } {
       over100k: peaks.filter((p) => p > 100_000).length,
       handoffs: count((r) => r.reported.handoffs),
       subthreads: count((r) => r.reported.subthreads),
+      ...(results.some((r) => r.reported.spawned)
+        ? { work: count((r) => r.reported.spawned?.work), subHandoffs: count((r) => r.reported.spawned?.handoffs), subPeak: Math.max(...results.map((r) => r.reported.spawned?.peakContext ?? 0)) }
+        : {}),
     },
   };
+}
+
+// "3 sub-threads (1 work, 2 handoffs in them, peak 95k)", or the bare count from a run that reports no detail.
+export function spawnedNote(r: Reported): string {
+  const n = `${r.subthreads} sub-thread${r.subthreads === 1 ? "" : "s"}`;
+  const s = r.spawned;
+  if (!s) return n;
+  return `${n} (${s.work} work${s.handoffs ? `, ${s.handoffs} handoff${s.handoffs === 1 ? "" : "s"} in them` : ""}, peak ${Math.round(s.peakContext / 1000)}k)`;
 }
 
 function speedOf(results: Result[]): { speed?: Summary["speed"] } {
@@ -535,7 +550,7 @@ export function formatSummary(s: Summary): string {
     `  pass@1 ${pct(s.pass1)}  pass^k ${pct(s.passAll)}  false-done ${pct(s.falseDone)}  refused claims ${pct(s.refused)}`,
     `  avg ${(s.avgMs / 1000).toFixed(1)}s per run` +
       (s.tokens ? `, ${Math.round(s.tokens.input / s.runs)} input / ${Math.round(s.tokens.output / s.runs)} output tokens per run, cache hit ${pct(s.cacheHitRatio ?? 0)}` : ""),
-    ...(s.context ? [`  peak context ${Math.round(s.context.meanPeak / 1000)}k mean, ${Math.round(s.context.maxPeak / 1000)}k max, ${s.context.over100k} of ${s.runs} runs past 100k; ${s.context.handoffs} handoffs, ${s.context.subthreads} sub-threads`] : []),
+    ...(s.context ? [`  peak context ${Math.round(s.context.meanPeak / 1000)}k mean, ${Math.round(s.context.maxPeak / 1000)}k max, ${s.context.over100k} of ${s.runs} runs past 100k; ${s.context.handoffs} handoffs, ${s.context.subthreads} sub-threads${s.context.work !== undefined ? ` (${s.context.work} work, ${s.context.subHandoffs} handoffs in them, peak ${Math.round((s.context.subPeak ?? 0) / 1000)}k)` : ""}`] : []),
     ...(s.speed ? [`  speed ${s.speed.outputTokPerSec} output tok/s, ${(s.speed.ttftMs / 1000).toFixed(2)}s to first token per call; model ${pct(s.speed.modelShare)} of time, cedia ${pct(s.speed.harnessShare)}`] : []),
     s.costUsd !== undefined ? `  cost $${s.costUsd.toFixed(4)} total, ${s.costPerPass !== undefined ? `$${s.costPerPass.toFixed(4)} per passed run` : "no passes"}` : "  cost not reported",
   ].join("\n");
