@@ -13,6 +13,7 @@ import { redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
 import { evidence, ledgerEntries, verified } from '../trust/ledger.ts';
+import type { Verdict } from '../trust/classifier.ts';
 import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
 import { spawnNudge } from '../tools/spawn.ts';
@@ -29,6 +30,7 @@ import {
   type EventId,
   type EventOf,
   type HeadlessResult,
+  type JsonObject,
   type ModelSpec,
   type Question,
   type PrivacyLevel,
@@ -89,6 +91,9 @@ export type RunOptions = {
   // The advisor role (core/trust/advisor.ts): after each turn that ran tools, it reads the turn's events and may
   // return a note, which the session logs as a reminder before its next request. Absent means no advisor.
   advise?: (turn: SessionEvent[]) => Promise<string | undefined>;
+  // The classifier role (core/trust/classifier.ts): reads each command the mode alone would allow and may block
+  // it. Absent means none.
+  classify?: (call: { tool: string; input: JsonObject }) => Promise<Verdict>;
   effort?: Effort;
   // The level the session moves to, once, when the done gate refuses a claim: cheap work up front, more thought
   // where it went wrong. Only upward from `effort`, and only on models with per-message effort, so the cached
@@ -636,7 +641,13 @@ async function runTools(
     if (c.inputError) results.set(callId, { status: 'not_started', text: `not run: ${c.inputError}`, isError: true });
     else if (!spec) results.set(callId, { status: 'not_started', text: `not run: unknown tool "${c.name.length > 64 ? `${c.name.slice(0, 64)}…` : c.name}"`, isError: true });
     else {
-      const d = decide(opts.permission ?? READ_ONLY_POLICY, spec, c.input, opts.cwd);
+      let d = decide(opts.permission ?? READ_ONLY_POLICY, spec, c.input, opts.cwd);
+      // The classifier reads what the mode alone let through: a command that may write or reach out, which no
+      // allow rule of the user's named.
+      if (opts.classify && d.decision === 'allow' && d.rule === 'mode:workspace' && effectOf(spec, c.input) === 'exec' && !signal.aborted) {
+        const v = await opts.classify({ tool: c.name, input: c.input });
+        d = v.decision === 'allow' ? { decision: 'allow', rule: 'classifier' } : { decision: 'deny', rule: 'classifier', reason: v.reason };
+      }
       log.append({ kind: 'permission', callId, tool: c.name, ...d });
       if (d.decision === 'deny') {
         results.set(callId, { status: 'denied', text: deniedText(d.rule, d.reason ?? ''), isError: true });

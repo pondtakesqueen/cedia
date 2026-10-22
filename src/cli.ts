@@ -43,6 +43,8 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
                                (default sonnet there), or none. Changes it asks for go back to the writer once
       --advisor <ref|none>     the advisor role: a model that reads each of the writer's turns and may leave it a
                                note before the next (default: settings roles.advisor, none). One reply a turn
+      --classifier <ref|none>  the classifier role: a model that reads each command no allow rule names before it
+                               runs, and may block it (default: settings roles.classifier, none). One reply a command
       --spawn <on|off>         let the writer hand self-contained work to sub-threads (default: settings, on)
       --ask <on|off>           give the writer ask_user, to end the run with one question for you when only you can
                                decide; the thread waits as 'asking' and your answer is its next prompt
@@ -121,6 +123,7 @@ export async function main(argv: string[]): Promise<number> {
       handoff: { type: 'string' },
       review: { type: 'string' },
       advisor: { type: 'string' },
+      classifier: { type: 'string' },
       plan: { type: 'string' },
       check: { type: 'string', multiple: true },
       sandbox: { type: 'string' },
@@ -175,6 +178,7 @@ export async function main(argv: string[]): Promise<number> {
       ...(values.handoff ? { handoff: values.handoff } : {}),
       ...(values.review ? { review: values.review } : {}),
       ...(values.advisor ? { advisor: values.advisor } : {}),
+      ...(values.classifier ? { classifier: values.classifier } : {}),
       ...(values.plan ? { plan: values.plan } : {}),
       ...(values.check ? { checks: values.check } : {}),
       ...(values.sandbox ? { sandbox: values.sandbox } : {}),
