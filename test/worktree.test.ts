@@ -419,7 +419,8 @@ describe('--spawn worktree (offline, faux)', () => {
     expect(inPlace.err).toContain('no worktree for the work sub-thread (not in a git repository); it runs in place');
     expect(inPlace.result()).toMatchObject({ subtype: 'success' });
     expect(readFileSync(join(plain, 'w', 'one.txt'), 'utf8')).toBe('good\n');
-  });
+    // Three runs, each with a worktree: past the default 5 s on a slow macOS runner.
+  }, 20_000);
 });
 
 describe('--spawn worktree in the OS sandbox', () => {
