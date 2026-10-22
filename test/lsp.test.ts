@@ -18,7 +18,8 @@ describe('diagnostics after an edit', () => {
     try {
       writeFileSync(join(cwd, 'a.txt'), 'fine\nhere ERR\nWARN only\n');
       expect(await d.diagnose(join(cwd, 'a.txt'))).toBe('fake reports 1 error in a.txt as it is now:\n  2:6 bad thing on line 2 [E1]');
-      // The same file again, changed: the server is told, and the new state is what comes back.
+      // The same file again, changed: it is opened afresh (this server, like typescript-language-server, says
+      // nothing on a change that keeps its diagnostics), and the new state is what comes back.
       writeFileSync(join(cwd, 'a.txt'), 'all fine\n');
       expect(await d.diagnose(join(cwd, 'a.txt'))).toBeUndefined();
       writeFileSync(join(cwd, 'b.md'), 'ERR\n');
@@ -45,6 +46,56 @@ describe('diagnostics after an edit', () => {
     expect(warned).toHaveLength(1);
     expect(warned[0]).toContain('the broken language server did not start');
     await d.close();
+  });
+
+  test('a clean file comes back clean at once each time, however its path is encoded; a slow second step is waited for', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'cedia-lsp-'));
+    mkdirSync(join(cwd, 'at@x'));
+    const file = join(cwd, 'at@x', 'a.txt');
+    const d = openDiagnoser(cwd, [fake(['--encode'])], { env: scrubbedEnv() });
+    try {
+      for (const text of ['fine\n', 'still fine\n', 'fine again\n']) {
+        writeFileSync(file, text);
+        const t = Date.now();
+        expect(await d.diagnose(file)).toBeUndefined();
+        expect(Date.now() - t).toBeLessThan(1_500);
+      }
+      writeFileSync(file, 'ERR\n');
+      expect(await d.diagnose(file)).toContain('1 error in at@x/a.txt');
+    } finally {
+      await d.close();
+    }
+    const slow = openDiagnoser(cwd, [fake(['--late', '400'])], { env: scrubbedEnv() });
+    try {
+      writeFileSync(join(cwd, 'b.txt'), 'ERR one\n');
+      expect(await slow.diagnose(join(cwd, 'b.txt'))).toContain('1 error in b.txt');
+      // Its late step for the old text, if any, is not read as the new text's.
+      writeFileSync(join(cwd, 'b.txt'), 'all fine now\n');
+      expect(await slow.diagnose(join(cwd, 'b.txt'))).toBeUndefined();
+    } finally {
+      await slow.close();
+    }
+  });
+
+  test('an abort stops the wait, a server still starting is not waited for, and closing stops it', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'cedia-lsp-'));
+    writeFileSync(join(cwd, 'a.txt'), 'ERR\n');
+    const silent = openDiagnoser(cwd, [fake(['--silent'])], { env: scrubbedEnv() });
+    let t = Date.now();
+    expect(await silent.diagnose(join(cwd, 'a.txt'), AbortSignal.timeout(300))).toBeUndefined();
+    expect(Date.now() - t).toBeLessThan(1_500);
+    await silent.close();
+
+    const pidfile = join(cwd, 'pid');
+    const stuck = openDiagnoser(cwd, [fake(['--init-delay', '600000', '--pidfile', pidfile])], { env: scrubbedEnv() });
+    t = Date.now();
+    expect(await stuck.diagnose(join(cwd, 'a.txt'), AbortSignal.timeout(300))).toBeUndefined();
+    expect(Date.now() - t).toBeLessThan(1_500);
+    await stuck.close();
+    expect(Date.now() - t).toBeLessThan(3_000);
+    const pid = Number(require('node:fs').readFileSync(pidfile, 'utf8'));
+    await Bun.sleep(100);
+    expect(() => process.kill(pid, 0)).toThrow();
   });
 
   test('servers: the known ones found on PATH or in node_modules/.bin, the user\'s own beside them, none when off', () => {
@@ -108,6 +159,10 @@ describe('cedia -p with a language server (offline, faux)', () => {
     expect(on.result('w1')!.output.isError).toBe(false);
     const off = run(settings, script, ['-p', 'write it', '--sandbox', 'off', '--lsp', 'off']);
     expect(off.result('w1')!.output.text).toBe('created a.txt (2 lines)');
+    // A server the policy would not let bash run is not started.
+    const denied = run(settings, script, ['-p', 'write it', '--sandbox', 'off', '--deny', 'bash(*fake-lsp*)']);
+    expect(denied.result('w1')!.output.text).toBe('created a.txt (2 lines)');
+    expect(denied.err).toContain('the fake language server was not started: the permission policy does not let bash run');
   });
 
   test.skipIf(!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin')('the server runs in the sandbox, as bash does', () => {

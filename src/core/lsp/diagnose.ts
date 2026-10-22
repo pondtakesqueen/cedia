@@ -1,13 +1,14 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { delimiter, extname, join, relative } from 'node:path';
+import { delimiter, extname, join, relative, resolve } from 'node:path';
 import { LspClient, type Diagnostic } from './client.ts';
 
 // Diagnostics after each edit: when a language server for the file's language is there, the edit and write tools
 // tell the model the errors the file has once written, so a type error is seen at the edit that made it, not at
 // the next check. The server runs as bash does (in the OS sandbox when one is on, with the same scrubbed
-// environment), since some servers run the project's own code (TypeScript plugins named in tsconfig, build
-// scripts). One server per language for the run, started at the first edit it covers; one that fails to start
-// is not tried again.
+// environment, and only when the permission policy would let bash run its command line), since some servers run
+// the project's own code (TypeScript plugins named in tsconfig, build scripts, a server in node_modules/.bin).
+// One server per language for the run, started at the first edit it covers; one that fails to start or stops is
+// not tried again. Calls to one server go one at a time.
 
 export type LspServer = { name: string; command: string[]; extensions: string[] };
 
@@ -42,7 +43,10 @@ const LATER_MS = 5_000;
 
 // Where a command is: the project's node_modules/.bin first, then PATH.
 export function findCommand(cmd: string, cwd: string, path = process.env.PATH ?? ''): string | undefined {
-  if (cmd.includes('/')) return existsSync(cmd) ? cmd : undefined;
+  if (cmd.includes('/')) {
+    const p = resolve(cwd, cmd);
+    return existsSync(p) ? p : undefined;
+  }
   for (const dir of [join(cwd, 'node_modules', '.bin'), ...path.split(delimiter).filter(Boolean)]) {
     const p = join(dir, cmd);
     if (existsSync(p)) return p;
@@ -69,22 +73,44 @@ export type Diagnoser = { diagnose(file: string, signal?: AbortSignal): Promise<
 export function openDiagnoser(
   cwd: string,
   servers: LspServer[],
-  opts: { wrap?: (command: string) => Promise<string>; env: Record<string, string>; warn?: (line: string) => void },
+  opts: {
+    wrap?: (command: string) => Promise<string>;
+    env: Record<string, string>;
+    warn?: (line: string) => void;
+    // Whether the permission policy lets bash run this command line; a server it would not is not started.
+    may?: (command: string) => boolean;
+  },
 ): Diagnoser {
   const clients = new Map<string, Promise<LspClient | undefined>>();
+  const started: LspClient[] = [];
   const used = new Set<string>();
+  // The last call to each server, so the next waits for it.
+  const queue = new Map<string, Promise<unknown>>();
+  let closing = false;
   const client = (s: LspServer) => {
     let c = clients.get(s.name);
     if (!c) {
       c = (async () => {
+        const line = s.command.map(quote).join(' ');
+        if (opts.may && !opts.may(line)) {
+          opts.warn?.(`cedia: the ${s.name} language server was not started: the permission policy does not let bash run ${line}`);
+          return undefined;
+        }
+        let lsp: LspClient | undefined;
         try {
-          const line = s.command.map(quote).join(' ');
           const argv = opts.wrap ? ['bash', '-c', await opts.wrap(line)] : s.command;
-          const lsp = new LspClient(argv, cwd, opts.env);
+          if (closing) return undefined;
+          lsp = new LspClient(argv, cwd, opts.env);
+          started.push(lsp);
+          lsp.onExit = (why) => opts.warn?.(`cedia: the ${s.name} language server stopped (${why}); edits go on without its diagnostics`);
           await lsp.start(START_MS);
           return lsp;
         } catch (e) {
-          opts.warn?.(`cedia: the ${s.name} language server did not start (${(e as Error).message}); edits go on without its diagnostics`);
+          if (lsp) {
+            lsp.onExit = undefined;
+            lsp.kill();
+          }
+          if (!closing) opts.warn?.(`cedia: the ${s.name} language server did not start (${(e as Error).message}); edits go on without its diagnostics`);
           return undefined;
         }
       })();
@@ -92,26 +118,45 @@ export function openDiagnoser(
     }
     return c;
   };
+  const aborted = (signal?: AbortSignal) =>
+    new Promise<undefined>((resolve) => {
+      if (signal?.aborted) resolve(undefined);
+      signal?.addEventListener('abort', () => resolve(undefined), { once: true });
+    });
   return {
     async diagnose(file, signal) {
       const ext = extname(file);
       const s = servers.find((x) => x.extensions.includes(ext));
-      if (!s) return undefined;
-      const lsp = await client(s);
-      if (!lsp) return undefined;
-      let text: string;
-      try {
-        text = readFileSync(file, 'utf8');
-      } catch {
-        return undefined;
-      }
-      const first = !used.has(s.name);
-      used.add(s.name);
-      const got = await lsp.diagnostics(file, text, LANGUAGE[ext] ?? ext.slice(1), first ? FIRST_MS : LATER_MS, signal);
-      return got && diagnosticsText(relative(cwd, file), s.name, got);
+      if (!s || closing) return undefined;
+      const prev = queue.get(s.name) ?? Promise.resolve();
+      const mine = prev.then(async () => {
+        // A server still starting does not hold up an aborted call; it goes on starting for the next one.
+        const lsp = await Promise.race([client(s), aborted(signal)]);
+        if (!lsp || signal?.aborted) return undefined;
+        let text: string;
+        try {
+          text = readFileSync(file, 'utf8');
+        } catch {
+          return undefined;
+        }
+        const first = !used.has(s.name);
+        used.add(s.name);
+        const got = await lsp.diagnostics(file, text, LANGUAGE[ext] ?? ext.slice(1), first ? FIRST_MS : LATER_MS, signal);
+        return got && diagnosticsText(relative(cwd, file), s.name, got);
+      });
+      queue.set(s.name, mine.catch(() => {}));
+      return mine;
     },
     async close() {
-      await Promise.all([...clients.values()].map(async (c) => (await c)?.close()));
+      closing = true;
+      await Promise.all(
+        started.map(async (c) => {
+          c.onExit = undefined;
+          // One still starting is stopped, not waited for.
+          if (c.ready) await c.close();
+          else c.kill();
+        }),
+      );
     },
   };
 }
@@ -121,7 +166,9 @@ export function openDiagnoser(
 export function diagnosticsText(file: string, server: string, diagnostics: Diagnostic[]): string | undefined {
   const errors = diagnostics.filter((d) => (d.severity ?? 1) === 1).sort((a, b) => a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character);
   if (!errors.length) return undefined;
-  const line = (d: Diagnostic) => `  ${d.range.start.line + 1}:${d.range.start.character + 1} ${d.message.split('\n')[0]!.slice(0, 300)}${d.code !== undefined ? ` [${d.code}]` : ''}`;
+  // The first lines of a message: TypeScript says why a type does not fit on the lines after the first.
+  const message = (m: string) => m.split('\n').slice(0, 3).map((l) => l.trim()).filter(Boolean).join(' ').slice(0, 300);
+  const line = (d: Diagnostic) => `  ${d.range.start.line + 1}:${d.range.start.character + 1} ${message(d.message)}${d.code !== undefined ? ` [${d.code}]` : ''}`;
   const more = errors.length > MAX_SHOWN ? [`  and ${errors.length - MAX_SHOWN} more`] : [];
   return `${server} reports ${errors.length} error${errors.length === 1 ? '' : 's'} in ${file} as it is now:\n${errors.slice(0, MAX_SHOWN).map(line).join('\n')}${more.length ? `\n${more[0]}` : ''}`;
 }

@@ -18,7 +18,8 @@ import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { lspServers, openDiagnoser } from '../../core/lsp/diagnose.ts';
-import { scrubbedEnv } from '../../core/tools/bash.ts';
+import { bashTool, scrubbedEnv } from '../../core/tools/bash.ts';
+import { decide } from '../../core/safety/policy.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
@@ -164,9 +165,18 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   if (!sandbox.on && policy.mode === 'read-only' && !args.permission && !process.env.CEDIA_PERMISSION)
     process.stderr.write('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
   const snapshots = workspaceSnapshots(args.cwd, cediaHome(), sandbox.placeholders);
-  // Language servers start at the first edit they cover, run as bash does, and stop with the run.
+  // Language servers start at the first edit they cover, run as bash does (when the policy lets bash run them), and
+  // stop with the run.
   const servers = lspServers(args.cwd, lspSetting);
-  const diagnoser = servers.length ? openDiagnoser(args.cwd, servers, { ...(sandbox.on ? { wrap: sandbox.wrap } : {}), env: scrubbedEnv(), warn: (l) => process.stderr.write(`${l}\n`) }) : undefined;
+  const lspPolicy = policy;
+  const diagnoser = servers.length
+    ? openDiagnoser(args.cwd, servers, {
+        ...(sandbox.on ? { wrap: sandbox.wrap } : {}),
+        env: scrubbedEnv(),
+        warn: (l) => process.stderr.write(`${l}\n`),
+        may: (line) => decide(lspPolicy, bashTool, { command: line }, args.cwd).decision === 'allow',
+      })
+    : undefined;
   const fallback = loadFallback(model, args.fallback);
   let quotaWaitMs: number | undefined;
   try {
