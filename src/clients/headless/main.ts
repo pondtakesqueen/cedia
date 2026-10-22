@@ -24,6 +24,7 @@ import { openSandbox } from '../../core/safety/sandbox.ts';
 import { openSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
 import type { ToolSpec } from '../../core/tools/registry.ts';
+import { ADVISOR_SYSTEM, adviceOf, advicePrompt, adviceReminder, turnDigest } from '../../core/trust/advisor.ts';
 import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
 import { runClaudeCode } from './claude-code.ts';
@@ -64,6 +65,8 @@ export type HeadlessArgs = {
   onQuota?: string;
   // Reviews the change once the writer's claim passes the done gate.
   review?: string;
+  // Reads each of the writer's turns and may leave a note before the next.
+  advisor?: string;
   checks?: string[];
   sandbox?: string;
   allowDomains?: string[];
@@ -138,7 +141,7 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
 }
 
 export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
-  const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}) });
+  const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}), ...(args.advisor ? { advisor: args.advisor } : {}) });
   const spawnOn = loadSpawn(args.spawn);
   const askOn = loadAsk(args.ask);
   const model = roles.code;
@@ -169,7 +172,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     await sandbox.close();
     throw e;
   }
-  for (const m of [model, ...[roles.plan, roles.review].flatMap((r) => (r?.via === 'cedia' ? [r.model] : []))]) {
+  for (const m of [model, ...[roles.plan, roles.review].flatMap((r) => (r?.via === 'cedia' ? [r.model] : [])), ...(roles.advisor ? [roles.advisor] : [])]) {
     const note = missingKeyNote(m);
     if (note) process.stderr.write(note + '\n');
   }
@@ -260,7 +263,9 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const meter = { usd: 0 };
   // The parts that were sub-thread sessions.
   const children = new Set<HeadlessResult>();
-  const turnsSpent = () => parts.reduce((n, r) => n + r.numTurns, 0);
+  // The advisor's sessions: their turns do not count against the writer's, and their context is their own.
+  const advised = new Set<HeadlessResult>();
+  const turnsSpent = () => parts.reduce((n, r) => n + (advised.has(r) ? 0 : r.numTurns), 0);
   let handoffs = 0;
   // Quota waits add up across the run's sessions, against the one ceiling.
   let quotaWaited = 0;
@@ -269,7 +274,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   type RunOpts = {
     continues?: { sessionId: string; changed: string[] };
     note?: string;
-    role?: 'plan' | 'review' | 'explore';
+    role?: 'plan' | 'review' | 'explore' | 'advisor';
     child?: { thread?: string; handoff?: boolean; recall?: ToolSpec };
     // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
     seed?: { from: SessionLog; compaction: NonNullable<HeadlessResult['compaction']> };
@@ -301,7 +306,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     const mcpTools = [...(mcp?.tools ?? []), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map(mcpStub)];
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
     const extra = [...(spawnOn ? [spawn] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
-    const tools = reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
+    const tools = opts.role === 'advisor' ? [] : reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
     if (writing) writerRuns.push({ log, from: log.events.length });
     const result = await runPrompt(
       {
@@ -310,8 +315,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         model: m,
         // Plan and review get no write tools, and their policy is read-only whatever the run's mode.
         tools,
-        system: BASE_SYSTEM,
-        preamble: reviewer ? reviewPreamble : opts.note ? `${basePreamble}\n\n${opts.note}` : basePreamble,
+        system: opts.role === 'advisor' ? ADVISOR_SYSTEM : BASE_SYSTEM,
+        ...(opts.role === 'advisor' ? {} : { preamble: reviewer ? reviewPreamble : opts.note ? `${basePreamble}\n\n${opts.note}` : basePreamble }),
         cwd: args.cwd,
         // They may also run the declared checks, to see what fails instead of only reading.
         permission: reviewer ? { ...policy, mode: 'read-only', allow: [...policy.allow, ...checks.map((c) => `bash(${c})`)] } : policy,
@@ -340,9 +345,12 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         ...(quotaWaitMs !== undefined
           ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), process.stderr.write(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
           : {}),
-        ...(args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
+        ...(opts.role === 'advisor' ? (m.defaultEffort ? { effort: 'low' as Effort } : {}) : args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
         ...(escalate && !reviewer ? { escalate } : {}),
         ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - usedTurns } : {}),
+        // One reply a turn, and one more if that came back empty.
+        ...(opts.role === 'advisor' ? { maxTurns: 2 } : {}),
+        ...(writing && advise ? { advise } : {}),
         ...(args.maxBudgetUsd !== undefined ? { maxBudgetUsd: args.maxBudgetUsd, meter } : {}),
         ...(args.outputFormat === 'stream-json' ? { onStream: (event) => out(encode({ type: 'stream', event })) } : {}),
       },
@@ -350,6 +358,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     );
     parts.push(result);
     if (child) children.add(result);
+    if (opts.role === 'advisor') advised.add(result);
     return result;
   };
   // A plan or review step, in cedia or through the user's own Claude Code.
@@ -372,6 +381,28 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   };
   // A thread that asked the owner a question goes on with their answer, framed as one.
   let task = resumed?.question ? answerPrompt(resumed.question.question, args.prompt) : args.prompt;
+  // The advisor: one session for the run, which reads each of the writer's turns and answers OK or a note. A
+  // failed advisor (its quota, an error) is left out for the rest of the run; the writer goes on without it.
+  const adv = { log: undefined as SessionLog | undefined, turns: 0, notes: 0, costUsd: 0, off: false };
+  const advise = roles.advisor
+    ? async (turn: SessionEvent[]): Promise<string | undefined> => {
+        if (adv.off || ac.signal.aborted) return undefined;
+        const first = !adv.log;
+        adv.log ??= openLog();
+        adv.turns++;
+        const r = await run(roles.advisor!, adv.log, advicePrompt(first ? task : undefined, turnDigest(turn, adv.turns)), { role: 'advisor' });
+        adv.costUsd += r.costUsd;
+        if (r.subtype !== 'success') {
+          adv.off = true;
+          if (r.subtype !== 'interrupted') process.stderr.write(`cedia: the advisor on ${roles.advisor!.ref} ended with ${r.subtype}; going on without it\n`);
+          return undefined;
+        }
+        const note = adviceOf(r.result);
+        if (!note) return undefined;
+        adv.notes++;
+        return adviceReminder(roles.advisor!.ref, note);
+      }
+    : undefined;
   let writer = { model, log: undefined as unknown as SessionLog };
   // A sub-thread: its own thread (archived once it succeeds) and session, on the model its kind calls for.
   // Explore runs on the swarm model unless privacy keeps that model out; work runs on the writer's model.
@@ -520,7 +551,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       } else if (verdict === 'unclear') process.stderr.write(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
     }
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
-    result = { ...combine(parts, result, children), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
+    const advice = adv.log ? { model: roles.advisor!.ref, via: 'cedia' as const, sessionId: adv.log.id, costUsd: adv.costUsd, turns: adv.turns, notes: adv.notes } : undefined;
+    result = { ...combine(parts, result, new Set([...children, ...advised])), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(advice ? { advice } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
     if (store && threadId && result.question) store.append(threadId, { kind: 'question', sessionId: result.sessionId, ...result.question });
     if (store && threadId) store.append(threadId, { kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
     // The receipt goes in the writer's log too, so a thread rebuilt from the files shows it. Quiet: a stream-json
@@ -530,6 +562,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       out(result.result + (result.result.endsWith('\n') ? '' : '\n'));
       if (result.evidence) process.stderr.write(receipt(result.evidence, result.thread) + '\n');
       if (result.plan) process.stderr.write(`cedia plan: by ${result.plan.model}\n`);
+      if (result.advice) process.stderr.write(`cedia advisor: ${result.advice.model} read ${result.advice.turns} turn${result.advice.turns === 1 ? '' : 's'} and left ${result.advice.notes} note${result.advice.notes === 1 ? '' : 's'}\n`);
       if (result.review) process.stderr.write(`cedia review: ${result.review.model} ${result.review.verdict === 'changes' ? 'asked for changes, sent back to the writer once' : result.review.verdict === 'approve' ? 'approved' : 'gave no verdict'}\n`);
       if (threadId) process.stderr.write(`cedia thread: ${threadId}${handoffs ? ` (${handoffs} handoff${handoffs === 1 ? '' : 's'})` : ''}; go on with --thread ${threadId}\n`);
     }
