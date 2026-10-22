@@ -5,7 +5,9 @@ import { runHeadless } from './clients/headless/main.ts';
 import type { TuiArgs } from './clients/tui/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
 import { GUARDS } from './core/safety/policy.ts';
-import { cediaHome } from './core/config.ts';
+import { cediaHome, loadRoles } from './core/config.ts';
+import { processKeychain } from './core/providers/keychain.ts';
+import { modelLine, modelList } from './core/providers/models.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
 import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Schedule } from './core/project/schedules.ts';
@@ -115,6 +117,8 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia memory [list | add <text> | forget <id>]
                                             the project's memory: short facts every new session gets in its first
                                             turn; writer sessions add to it with the remember tool
+       cedia models [--json]                the models a session may use, which of them have a key here, and the
+                                            one the code role takes now (marked *)
        cedia skills [--cwd <dir>]           the skills a session here can load: the user's (~/.cedia/skills) and the
                                             repository's (.agents/skills, .claude/skills, .cursor/skills)
 
@@ -131,6 +135,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'memory') return memory(argv.slice(1));
   if (argv[0] === 'schedules') return schedules(argv.slice(1));
   if (argv[0] === 'skills') return skills(argv.slice(1));
+  if (argv[0] === 'models') return models(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
   const { values, positionals } = parseArgs({
     args: argv,
@@ -405,6 +410,25 @@ function skills(argv: string[]): number {
   // A repository's description could carry terminal escapes; they are shown as text.
   const shown = (t: string) => t.replace(/[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
   console.log(found.length ? found.map((s) => `${s.name}  (${s.source})  ${shown(s.dir)}\n    ${shown(s.description)}`).join('\n') : 'no skills here');
+  return 0;
+}
+
+function models(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  let list;
+  try {
+    list = modelList(loadRoles().code.ref, process.env, processKeychain());
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 1;
+  }
+  console.log(parsed.values.json ? JSON.stringify(list) : list.models.map((m) => modelLine(m, m.ref === list.default)).join('\n'));
   return 0;
 }
 
