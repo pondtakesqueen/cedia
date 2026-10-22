@@ -1951,6 +1951,42 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "turn"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "before": {
+              "type": "string"
+            },
+            "after": {
+              "type": "string"
+            },
+            "sessions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "after",
+            "at",
+            "before",
+            "cwd",
+            "kind",
+            "sessions"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "archived"
             },
             "archived": {

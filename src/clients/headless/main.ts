@@ -10,13 +10,14 @@ import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from 
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, type RoleChoice } from '../../core/config.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
+import { runTurn } from '../../core/project/undo.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
 import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { planPrompt, withPlan } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
-import { openSnapshots } from '../../core/safety/snapshot.ts';
+import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
 import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
@@ -157,7 +158,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   }
   if (!sandbox.on && policy.mode === 'read-only' && !args.permission && !process.env.CEDIA_PERMISSION)
     process.stderr.write('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
-  const snapshots = openSnapshots(args.cwd, join(cediaHome(), 'snapshots', projectSlug(args.cwd)), [cediaHome(), ...sandbox.placeholders]);
+  const snapshots = workspaceSnapshots(args.cwd, cediaHome(), sandbox.placeholders);
   const fallback = loadFallback(model, args.fallback);
   let quotaWaitMs: number | undefined;
   try {
@@ -204,14 +205,20 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   // Where each writer session of this run started in its log, for the change the run made.
   const writerRuns: { log: SessionLog; from: number }[] = [];
   // The change the run made: the first snapshot (taken before the first write) to the last, across its sessions.
+  const turnTrees = () => runTurn(writerRuns.map((w) => ({ events: w.log.events, from: w.from })));
   const changesPatch = (): string | undefined => {
-    const snaps = writerRuns.flatMap((w) => w.log.events.slice(w.from).filter((e): e is EventOf<'snapshot'> => e.kind === 'snapshot'));
-    if (!snapshots || snaps.length < 2) return undefined;
+    const trees = turnTrees();
+    if (!snapshots || !trees) return undefined;
     try {
-      return snapshots.patch(snaps[0]!.tree, snaps.at(-1)!.tree);
+      return snapshots.patch(trees.before, trees.after);
     } catch {
       return undefined;
     }
+  };
+  // What /undo and /diff take as this run's turn (core/project/undo.ts), however the run ended.
+  const recordTurn = () => {
+    const trees = turnTrees();
+    if (store && threadId && trees) store.append(threadId, { kind: 'turn', cwd: args.cwd, ...trees, sessions: [...new Set(writerRuns.map((w) => w.log.id))] });
   };
   const basePreamble = preamble(args.cwd, { mode: policy.mode, unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}) });
 
@@ -485,6 +492,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     }
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
     result = { ...combine(parts, result, children), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
+    recordTurn();
     if (store && threadId && result.question) store.append(threadId, { kind: 'question', sessionId: result.sessionId, ...result.question });
     if (store && threadId) store.append(threadId, { kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
     // The receipt goes in the writer's log too, so a thread rebuilt from the files shows it. Quiet: a stream-json
@@ -500,6 +508,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     else out(encode(result));
     return result;
   } catch (e) {
+    recordTurn();
     if (store && threadId) store.append(threadId, { kind: 'state', state: 'failed', result: (e as Error).message });
     throw e;
   } finally {
