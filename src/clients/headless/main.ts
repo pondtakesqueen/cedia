@@ -26,7 +26,7 @@ import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
 import { ADVISOR_SYSTEM, adviceOf, advicePrompt, adviceReminder, turnDigest } from '../../core/trust/advisor.ts';
-import { CLASSIFIER_SYSTEM, classifyPrompt, verdictOf, type Verdict } from '../../core/trust/classifier.ts';
+import { callText, CLASSIFIER_SYSTEM, classifyPrompt, MAX_INPUT, namedFiles, verdictOf, type Verdict } from '../../core/trust/classifier.ts';
 import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type JsonObject, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
 import { runClaudeCode } from './claude-code.ts';
@@ -424,29 +424,33 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
         return adviceReminder(roles.advisor!.ref, note);
       }
     : undefined;
-  // The classifier: one session for the run, which reads each command the mode alone would allow and answers ALLOW
-  // or BLOCK. Unlike the advisor it does not drop out when it fails: a guard that is not answering blocks, and the
+  // The classifier: a session of its own for each command the mode alone would allow, which answers ALLOW or
+  // BLOCK. Unlike the advisor it does not drop out when it fails: a guard that is not answering blocks, and the
   // writer is told why, so it can do what it can without the command.
-  const cls = { log: undefined as SessionLog | undefined, calls: 0, blocked: 0, costUsd: 0, queue: Promise.resolve() as Promise<unknown> };
-  // One question at a time: its session is one conversation, and sub-threads may ask beside the writer.
+  const cls = { last: undefined as string | undefined, calls: 0, blocked: 0, costUsd: 0 };
+  // The user's own words, read again for each command so a message the user sent the thread mid-run counts: the
+  // thread's first task, this run's prompt when it goes on with the thread, and the user's messages.
+  const ownerTask = () => {
+    const t = store && threadId ? store.read(threadId) : undefined;
+    const first = t?.task ?? args.prompt;
+    const said = (t?.messages ?? []).filter((m) => m.from === 'user' && !m.unsent).map((m) => `The user said later: ${m.text}`);
+    return [first, ...(args.prompt !== first ? [`The user, going on with it: ${args.prompt}`] : []), ...said].join('\n\n');
+  };
   const classify = roles.classifier
-    ? (call: { tool: string; input: JsonObject }): Promise<Verdict> => {
-        const next = cls.queue.then(() => classifyOne!(call));
-        cls.queue = next.catch(() => {});
-        return next;
-      }
-    : undefined;
-  const classifyOne = roles.classifier
-    ? async (call: { tool: string; input: JsonObject }): Promise<Verdict> => {
+    ? async (call: { tool: string; input: JsonObject; cwd: string }): Promise<Verdict> => {
         if (ac.signal.aborted) return { decision: 'deny', reason: 'the run was stopped' };
-        const first = !cls.log;
-        cls.log ??= openLog();
+        if (callText(call).length > MAX_INPUT) {
+          cls.calls++;
+          cls.blocked++;
+          return { decision: 'deny', reason: `the command is longer than the classifier reads (${MAX_INPUT} characters); split it into shorter ones` };
+        }
+        const log = openLog();
+        cls.last = log.id;
         cls.calls++;
-        const r = await run(roles.classifier!, cls.log, classifyPrompt(first ? task : undefined, call, args.cwd), { role: 'classifier' });
+        const r = await run(roles.classifier!, log, classifyPrompt(ownerTask(), call, call.cwd, call.tool === 'bash' ? namedFiles(callText(call), call.cwd) : []), { role: 'classifier' });
         cls.costUsd += r.costUsd;
-        if ((r.peakContext ?? 0) >= defaultHandoffAt(roles.classifier!)) cls.log = undefined;
         const v: Verdict = r.subtype === 'success' ? verdictOf(r.result) : { decision: 'deny', reason: `the classifier on ${roles.classifier!.ref} did not answer (${r.subtype}), so nothing it has not read runs` };
-        if (v.decision === 'deny') cls.blocked++;
+        if (v.decision === 'deny' && !ac.signal.aborted) cls.blocked++;
         return v;
       }
     : undefined;
@@ -606,7 +610,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
       } else if (verdict === 'unclear') process.stderr.write(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
     }
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
-    const classified = cls.calls ? { model: roles.classifier!.ref, via: 'cedia' as const, sessionId: cls.log?.id ?? '', costUsd: cls.costUsd, calls: cls.calls, blocked: cls.blocked } : undefined;
+    const classified = cls.calls ? { model: roles.classifier!.ref, via: 'cedia' as const, sessionId: cls.last ?? '', costUsd: cls.costUsd, calls: cls.calls, blocked: cls.blocked } : undefined;
     const advice = adv.log ? { model: roles.advisor!.ref, via: 'cedia' as const, sessionId: adv.log.id, costUsd: adv.costUsd, turns: adv.turns, notes: adv.notes } : undefined;
     result = { ...combine(parts, result, new Set([...children, ...advised]), advised), ...(plan ? { plan } : {}), ...(review ? { review } : {}), ...(advice ? { advice } : {}), ...(classified ? { classified } : {}), ...(threadId ? { thread: threadId } : {}), sessions, ...(subthreads ? { subthreads, spawned } : {}) };
     recordTurn();

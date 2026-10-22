@@ -93,7 +93,7 @@ export type RunOptions = {
   advise?: (turn: SessionEvent[]) => Promise<string | undefined>;
   // The classifier role (core/trust/classifier.ts): reads each command the mode alone would allow and may block
   // it. Absent means none.
-  classify?: (call: { tool: string; input: JsonObject }) => Promise<Verdict>;
+  classify?: (call: { tool: string; input: JsonObject; cwd: string }) => Promise<Verdict>;
   effort?: Effort;
   // The level the session moves to, once, when the done gate refuses a claim: cheap work up front, more thought
   // where it went wrong. Only upward from `effort`, and only on models with per-message effort, so the cached
@@ -645,7 +645,18 @@ async function runTools(
       // The classifier reads what the mode alone let through: a command that may write or reach out, which no
       // allow rule of the user's named.
       if (opts.classify && d.decision === 'allow' && d.rule === 'mode:workspace' && effectOf(spec, c.input) === 'exec' && !signal.aborted) {
-        const v = await opts.classify({ tool: c.name, input: c.input });
+        let v: Verdict;
+        try {
+          v = await opts.classify({ tool: c.name, input: c.input, cwd: opts.cwd });
+        } catch (e) {
+          // A guard that fails blocks; the call still gets its result.
+          v = { decision: 'deny', reason: `the classifier failed (${(e as Error).message}), so nothing it has not read runs` };
+        }
+        // A stop while it read: the call was never decided, so it is not started rather than blocked.
+        if (signal.aborted) {
+          results.set(callId, { status: 'not_started', text: 'not run: the run was stopped', isError: true });
+          continue;
+        }
         d = v.decision === 'allow' ? { decision: 'allow', rule: 'classifier' } : { decision: 'deny', rule: 'classifier', reason: v.reason };
       }
       log.append({ kind: 'permission', callId, tool: c.name, ...d });
