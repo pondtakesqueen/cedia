@@ -20,6 +20,7 @@ import {
   type AssistantBlock,
   type AttemptError,
   type Effort,
+  type EventId,
   type EventOf,
   type HeadlessResult,
   type ModelSpec,
@@ -87,8 +88,46 @@ export type RunOptions = {
   // absent means a spent quota ends the session at once, so the client can fall back. `onQuotaWait` hears each wait.
   quotaWaitMs?: number;
   onQuotaWait?: (ms: number) => void;
+  // While tools run longer than this after a request was sent, its body is sent again with no output every this
+  // often, so the cached prefix outlives the provider's cache lifetime (default 4 minutes, under Anthropic's 5).
+  keepAliveMs?: number;
   now?: () => Date;
 };
+
+// Anthropic's default cache lifetime is 5 minutes from a request's start; a refresh within 4 keeps it. In the
+// long evals every parent that waited over 5 minutes on a work sub-thread wrote its whole context to the cache
+// again on its next request: at Opus 5.5's prices about $0.75 for a 150k parent, against $0.03 for a refresh.
+export const KEEP_ALIVE_MS = 4 * 60_000;
+
+// Refreshes the request's cached prefix while tools run, from `sentAt` + `every` and every `every` after, until
+// stop() (which waits for one in flight, so its event lands before the next request). A provider without
+// keepAlive, or every <= 0, does nothing. A failed refresh is logged and the next one is still tried.
+export function keepWarm(provider: Provider, req: WireRequest, requestId: EventId, sentAt: number, every: number, log: SessionLog, signal: AbortSignal, spent: (u: Usage) => void): { stop(): Promise<void> } {
+  if (!provider.keepAlive || every <= 0) return { stop: async () => {} };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let inFlight: Promise<void> | undefined;
+  let stopped = false;
+  const fire = () => {
+    inFlight = (async () => {
+      const start = performance.now();
+      const r = await provider.keepAlive!(req, signal).catch((e: Error) => ({ ok: false as const, error: { code: 'network' as const, message: e.message } }));
+      const ms = Math.round(performance.now() - start);
+      if (r.ok) {
+        log.append({ kind: 'keepalive', requestId, usage: r.usage, ms });
+        spent(r.usage);
+      } else log.append({ kind: 'keepalive', requestId, error: r.error, ms });
+      if (!stopped && !signal.aborted) timer = setTimeout(fire, Math.max(0, every - ms));
+    })();
+  };
+  timer = setTimeout(fire, Math.max(0, sentAt + every - performance.now()));
+  return {
+    async stop() {
+      stopped = true;
+      clearTimeout(timer);
+      await inFlight;
+    },
+  };
+}
 
 export const CONTINUE_AFTER_LIMIT = 'Your previous reply was cut off by the output limit. Continue exactly where it stopped.';
 
@@ -300,8 +339,10 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     });
 
     let got: Collected | undefined;
+    let sentAt = 0;
     for (let n = 1; ; n++) {
       const t: { ttftMs?: number; ms?: number } = {};
+      sentAt = performance.now();
       got = await collect(provider, req, signal, opts.onStream, t);
       if (got.ok === 'aborted') {
         log.append({ kind: 'attempt', requestId: request.id, n, error: { code: 'network', message: 'aborted' } });
@@ -368,7 +409,14 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       }
       const toolStart = performance.now();
       const before = log.events.length;
+      const warm = keepWarm(provider, req, request.id, sentAt, opts.keepAliveMs ?? KEEP_ALIVE_MS, log, signal, (u) => {
+        usage = addUsage(usage, u);
+        const c = costUsd(model, u, now());
+        cost += c;
+        if (opts.meter) opts.meter.usd += c;
+      });
       await runTools(calls, byName, opts, signal, log, snap, shared);
+      await warm.stop();
       timing.toolMs += performance.now() - toolStart;
       // Hand off at a turn boundary, while the whole prefix is still cached: the note costs one cheap turn.
       // The size is the last reply's usage plus chars/4 for the results just added. The context must also have

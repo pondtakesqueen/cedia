@@ -50,6 +50,9 @@ type EventBody =
   // ttftMs: until the provider starts streaming; ms: the whole attempt.
   | { kind: 'attempt'; requestId: EventId; n: number; error?: AttemptError; ttftMs?: number; ms?: number }
   | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage }
+  // The request's body sent again with no output while a tool runs long, so its cached prefix does not expire
+  // (core/loop/run.ts). Nothing reaches the model's context; it is logged for its cost.
+  | { kind: 'keepalive'; requestId: EventId; usage?: Usage; error?: AttemptError; ms: number }
   | { kind: 'snapshot'; tree: string; callId?: string; changed: string[]; ms?: number } // shadow-git tree after a writing call
   | { kind: 'permission'; callId: string; tool: string; decision: 'allow' | 'deny'; rule: string; reason?: string }
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
@@ -134,6 +137,9 @@ export type Provider = {
   body(req: WireRequest): JsonObject;
   headers(req: WireRequest): Record<string, string>;
   stream(req: WireRequest, signal: AbortSignal): AsyncIterable<StreamEvent>;
+  // Reads the request's prefix into the cache again without generating anything, which restarts its lifetime.
+  // Only for a provider whose cache expires within minutes (Anthropic's 5-minute default).
+  keepAlive?(req: WireRequest, signal: AbortSignal): Promise<{ ok: true; usage: Usage } | { ok: false; error: AttemptError }>;
 };
 
 // flags: what the slop guard found in this run's changes (see core/trust/slop.ts).

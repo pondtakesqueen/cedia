@@ -160,6 +160,18 @@ export function anthropicProvider(fetcher?: Fetcher): Provider {
       }
       yield* parseAnthropic(res.body);
     },
+    // The same body with max_tokens 0 and no stream: the API reads the prompt into the cache and returns at once.
+    // It bills the prefix as a cache read (a write if it had already expired) and no output.
+    async keepAlive(req, signal) {
+      const res = await post(req.model.url, p.headers(req), { ...p.body(req), max_tokens: 0, stream: false }, signal, fetcher);
+      if (!res.ok) return res;
+      try {
+        const u = ((await new Response(res.body).json()) as { usage?: Record<string, number | undefined> }).usage ?? {};
+        return { ok: true, usage: { uncached: u.input_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0, output: u.output_tokens ?? 0 } };
+      } catch (e) {
+        return { ok: false, error: { code: 'network', message: `keep-alive response: ${(e as Error).message}` } };
+      }
+    },
   };
   return p;
 }
