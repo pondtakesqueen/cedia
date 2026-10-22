@@ -260,8 +260,9 @@ describe('--spawn worktree (offline, faux)', () => {
       r.work,
       [
         { blocks: [spawnCall('s1', 'alpha-task: edit line 4'), spawnCall('s2', 'beta-task: edit line 4 too')] },
-        ...child('alpha-task', "sed -i '4s/.*/4 alpha/' src/a.txt", 'alpha done'),
-        ...child('beta-task', "sed -i '4s/.*/4 beta/' src/a.txt", 'beta done'),
+        // The whole file rather than sed -i, which BSD sed (macOS) reads differently.
+        ...child('alpha-task', "printf '1 parent\\n2\\n3\\n4 alpha\\n5\\n6\\n7\\n8\\n' > src/a.txt", 'alpha done'),
+        ...child('beta-task', "printf '1 parent\\n2\\n3\\n4 beta\\n5\\n6\\n7\\n8\\n' > src/a.txt", 'beta done'),
         call('p1', 'true'),
         reply('one of them conflicted'),
       ],
