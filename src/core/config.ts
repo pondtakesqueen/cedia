@@ -20,7 +20,7 @@ export type Settings = {
   fallback?: Record<string, string>;
   // The model for each role: an alias or ref, `claude-code[:<model>]` for plan and review, or "none". User
   // settings only: a repo must not pick what the user pays for.
-  roles?: { plan?: string; code?: string; review?: string; swarm?: string };
+  roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string };
   // Whether writer sessions get the spawn tool for sub-threads (default true). User settings only.
   spawn?: boolean;
   // Whether writer sessions of a thread get ask_user, to end a run with a question for the owner (default false: a
@@ -51,7 +51,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   privacy: 'any',
   context: 'any',
   fallback: 'any',
-  roles: ['plan', 'code', 'review', 'swarm'],
+  roles: ['plan', 'code', 'review', 'swarm', 'advisor'],
   spawn: 'any',
   ask: 'any',
   handoffAt: 'any',
@@ -226,9 +226,9 @@ export function loadHandoff(flag?: string): 'note' | 'compact' {
 // `claude-code` alone means opus for plan and sonnet for review. The writer always runs in cedia, where its
 // writes go through the policy, the sandbox and the done gate.
 export function loadRoles(
-  flags: { plan?: string; code?: string; review?: string; swarm?: string } = {},
+  flags: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string } = {},
   env = process.env,
-): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice; swarm: ModelSpec } {
+): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice; swarm: ModelSpec; advisor?: ModelSpec } {
   const user = readSettings(join(cediaHome(), 'settings.json')).roles ?? {};
   const codeRef = flags.code ?? env.CEDIA_MODEL ?? user.code ?? 'deepseek';
   if (/^claude-code\b/.test(codeRef)) throw new Error('the code role runs in cedia, where its writes are checked; use claude-code for plan or review');
@@ -241,7 +241,11 @@ export function loadRoles(
   const review = role(flags.review ?? user.review, 'sonnet');
   // Explore sub-threads: free and fast on the Go plan, and it keeps prompts without training on them.
   const swarm = resolveModel(flags.swarm ?? user.swarm ?? 'beam');
-  return { code: resolveModel(codeRef), ...(plan ? { plan } : {}), ...(review ? { review } : {}), swarm };
+  // The advisor reads every turn, so it is off unless named: each turn of the writer costs one of its own.
+  const advisorRef = flags.advisor ?? user.advisor;
+  if (advisorRef && /^claude-code\b/.test(advisorRef)) throw new Error('the advisor runs in cedia, one reply a turn; claude-code is for plan or review');
+  const advisor = advisorRef && advisorRef !== 'none' && advisorRef !== 'off' ? resolveModel(advisorRef) : undefined;
+  return { code: resolveModel(codeRef), ...(plan ? { plan } : {}), ...(review ? { review } : {}), swarm, ...(advisor ? { advisor } : {}) };
 }
 
 // Declared checks for the done gate. Declaring a check grants nothing, so a repo may declare its own.

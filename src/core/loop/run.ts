@@ -86,6 +86,9 @@ export type RunOptions = {
   // Messages from other threads, shown as a reminder at each turn boundary. `delivered` runs after the reminder
   // is logged, so a crash in between shows a message twice rather than never.
   inbox?: { pending(): { ids: string[]; text: string } | undefined; delivered(ids: string[]): void };
+  // The advisor role (core/trust/advisor.ts): after each turn that ran tools, it reads the turn's events and may
+  // return a note, which the session logs as a reminder before its next request. Absent means no advisor.
+  advise?: (turn: SessionEvent[]) => Promise<string | undefined>;
   effort?: Effort;
   // The level the session moves to, once, when the done gate refuses a claim: cheap work up front, more thought
   // where it went wrong. Only upward from `effort`, and only on models with per-message effort, so the cached
@@ -461,6 +464,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     }
     if (!got.ok) throw new Error('unreachable');
 
+    const turnFrom = log.events.length;
     log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: got.blocks, stop: got.stop, usage: got.usage });
     usage = addUsage(usage, got.usage);
     peakContext = Math.max(peakContext, contextSize(got.usage));
@@ -508,6 +512,14 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       // A question for the owner ends the run once the turn's other calls are done; the answer is the next prompt.
       const asked = askedIn(log.events.slice(before), calls);
       if (asked) return { ...finish('asked', 'asked', asked.question), question: asked };
+      // The advisor reads the turn; its note is the first thing the next request carries after the results. Its
+      // time counts as model time: the run waits on a model.
+      if (opts.advise && handoff === 0 && !signal.aborted) {
+        const t0 = performance.now();
+        const note = await opts.advise(log.events.slice(turnFrom));
+        timing.modelMs += performance.now() - t0;
+        if (note && !signal.aborted) log.append({ kind: 'reminder', as: 'user', text: note });
+      }
       // Hand off at a turn boundary, while the whole prefix is still cached: the note costs one cheap turn.
       // The size is the last reply's usage plus chars/4 for the results just added. The context must also have
       // doubled since the session's first reply, so a session that starts large (a long note, a big task) does
