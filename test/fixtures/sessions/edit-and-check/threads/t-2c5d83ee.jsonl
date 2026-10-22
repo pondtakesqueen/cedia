@@ -1,3 +1,0 @@
-{"at":"2026-10-22T02:06:31.936Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
-{"at":"2026-10-22T02:06:31.939Z","kind":"session","sessionId":"782baec2-6918-41ec-964f-6692235208d8","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/782baec2-6918-41ec-964f-6692235208d8.jsonl"}
-{"at":"2026-10-22T02:06:31.988Z","kind":"state","state":"done","result":"f.txt now says good, and grep -q good f.txt passes."}

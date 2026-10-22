@@ -48,7 +48,10 @@ describe('client contract', () => {
       const c = committed(s.name);
       for (const text of Object.values(c.sessions)) expect(lintSession(lines(text) as SessionEvent[])).toEqual([]);
       for (const text of [c.stream, ...Object.values(c.threads), ...Object.values(c.sessions)]) expect(text).not.toMatch(/cedia-fixture-/);
-      expect(shape(record(s))).toEqual(shape(c));
+      const fresh = record(s);
+      expect(shape(fresh)).toEqual(shape(c));
+      // Thread ids are numbered, not random, so a re-record keeps them.
+      expect(Object.keys(fresh.threads).sort()).toEqual(Object.keys(c.threads).sort());
     });
   }
 });

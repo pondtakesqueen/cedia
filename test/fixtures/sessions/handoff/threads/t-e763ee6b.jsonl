@@ -1,5 +1,0 @@
-{"at":"2026-10-22T02:06:32.086Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
-{"at":"2026-10-22T02:06:32.090Z","kind":"session","sessionId":"ef08f23b-7deb-45f4-95a2-465dbc13c566","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/ef08f23b-7deb-45f4-95a2-465dbc13c566.jsonl"}
-{"at":"2026-10-22T02:06:32.124Z","kind":"handoff","sessionId":"ef08f23b-7deb-45f4-95a2-465dbc13c566","note":"Wrote f.txt. Next: run the check."}
-{"at":"2026-10-22T02:06:32.126Z","kind":"session","sessionId":"3efe3ddf-1b1d-4b5f-8e64-75700b689525","model":"faux/scripted","role":"code","why":"handoff","path":"/fixture/home/sessions/fixture-repo/3efe3ddf-1b1d-4b5f-8e64-75700b689525.jsonl"}
-{"at":"2026-10-22T02:06:32.133Z","kind":"state","state":"done","result":"done"}
