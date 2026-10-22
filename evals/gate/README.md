@@ -3,7 +3,7 @@
 ```
 bun evals/gate.ts --estimate          # what a run will cost, from the baseline's own spend
 bun evals/gate.ts                     # run the suite on every model in suite.json and compare
-bun evals/gate.ts -m anthropic/claude-haiku-5-5   # one model
+bun evals/gate.ts -m opencode-go/claude-haiku-5-5   # one model
 bun evals/gate.ts --update-baseline   # run, compare, then store the new numbers as the baseline
 bun evals/gate.ts --compare evals/results/<file>.jsonl [--against <rows.jsonl|baseline.json>]   # re-score, free
 ```
@@ -12,7 +12,7 @@ Exit 0: no model got worse. 1: a model regressed. 3: no comparison could be made
 
 ## What it runs
 
-`suite.json`: 25 tasks, 2 runs each, 4 at a time, on Haiku 5.5 (Claude API) and DeepSeek V4.1 Flash (OpenCode Go). The 12 pi-era floor tasks, the 7 hard tasks, the 4 wide and long tasks, `real-slop-guard`, the cheapest real-repository task, and `real-three-delegated`, which hands three real commits to one work sub-thread: on Haiku that sub-thread passes the 90k handoff point in every run, so the gate checks that sub-thread handoff triggers and the work still passes (about $0.06 a run on Haiku, 5 to 6 minutes). `real-threads` and `real-subthreads` are left out: they cost $0.3 to $0.5 a run on Haiku and hit the 1200 s limit when handoff is on, so they belong in a measured experiment, not a gate. The tasks need `python3 -m pytest` and the full git history (`fetch-depth: 0`).
+`suite.json`: 25 tasks, 2 runs each, 4 at a time, on Haiku 5.5 and DeepSeek V4.1 Flash, both through OpenCode Go, so a gate run spends the Go plan's quota instead of API credit (since 2026-10-22; the same Haiku model, at the same list price). A change that only the Claude API carries, such as `--handoff compact`, is gated with `-m anthropic/claude-haiku-5-5`, against `baseline/anthropic_claude-haiku-5-5.json`, the Claude API baseline kept from before (still at `medium`, from before Haiku started at `low`; re-record it with API credit before it judges anything). The 12 pi-era floor tasks, the 7 hard tasks, the 4 wide and long tasks, `real-slop-guard`, the cheapest real-repository task, and `real-three-delegated`, which hands three real commits to one work sub-thread: on Haiku that sub-thread passes the 90k handoff point in every run, so the gate checks that sub-thread handoff triggers and the work still passes (about $0.06 a run on Haiku, 5 to 6 minutes). `real-threads` and `real-subthreads` are left out: they cost $0.3 to $0.5 a run on Haiku and hit the 1200 s limit when handoff is on, so they belong in a measured experiment, not a gate. The tasks need `python3 -m pytest` and the full git history (`fetch-depth: 0`).
 
 Each run writes its rows to `evals/results/<date>-gate-<model>-<commit>-<time>.jsonl`. A baseline is `baseline/<model>.json`: the commit, date, runs, jobs and cedia flags it was made with, a hash of each task, and the rows.
 
@@ -70,6 +70,8 @@ History:
 | 32774a7 (main) | 48/48, $0.26, 29 s | 48/48, $0.39, 50 s | after #21 (spawn reminder, handoff note carries the plan): PASS on both against the earlier baseline, typical task cost -6% and -3%, time -9% and -8% |
 | 26ffc46 (spawn on long tasks) | 47/48, $0.23, 30 s | 48/48, $0.63 at peak price ($0.80 against $0.77 at one price), 55 s | first-session handoff, sub-thread budget meter: PASS on both; `real-three-delegated` added to the suite and its rows stored at 82363a0 |
 | 6ef1dfd | 48/48, $0.16, 21 s | (not rerun) | Haiku starts at `low` and escalates to `high` when the done gate refuses a claim: PASS, typical task cost -14%, whole set -36%, time -14%. About half the runs escalated, and every reply after an escalation read the whole previous input from cache. On the 24-task suite; main then added `real-three-delegated`, and the re-record on 25 tasks stopped when the API credit ran out, so `baseline/anthropic_claude-haiku-5-5.json` is still main's at `medium`: run `bun evals/gate.ts -m anthropic/claude-haiku-5-5 --update-baseline` once credit is back |
+| 2bc8b7f (main, Haiku via Go) | 48/50, $0.27, 38 s | 50/50, $1.12, 87 s | Haiku moved to OpenCode Go; this run is `baseline/opencode-go_claude-haiku-5-5.json` (the two failures are `hard-redact-bugs`, refused claims, as before). Flash against its 82363a0 baseline: same pass and cost, time +40% for the typical task, so Go was slower that hour, not the code; a gate run's time against an old baseline needs a run of main beside it |
+| 9a91283 (server compaction, run beside the row above) | 48/50, $0.26, 42 s | 50/50, $1.11, 90 s | PASS on both against main's rows from the same hour: Haiku typical task cost -0.2%, time +3%; Flash cost -6.5%, time -2.7% |
 
 Effort arms on Haiku 5.5 (2026-10-22, one gate run each, against the 32774a7 baseline at `medium`):
 

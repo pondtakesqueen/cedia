@@ -48,6 +48,8 @@ export function fauxProvider(script: FauxStep[] | ((req: WireRequest, state: Fau
           yield { type: 'done', blocks: reply.blocks.slice(0, index), stop: 'aborted', usage };
           return;
         }
+        // A compaction block arrives whole, as on the Anthropic wire.
+        if (b.type === 'compaction') continue;
         const text = b.type === 'tool_use' ? JSON.stringify(b.input) : b.text;
         out += Math.ceil(text.length / 4);
         if (b.type === 'tool_use') yield { type: 'toolcall_start', index, id: b.id, name: b.name };

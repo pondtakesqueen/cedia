@@ -11,7 +11,17 @@ export function attributeMisses(events: SessionEvent[], opts: { blockTokens?: nu
   const rows: RequestCacheRow[] = [];
   let prev: { req: EventOf<'request'>; at: number; input: number } | undefined;
   let pending: EventOf<'request'> | undefined;
+  // Turns a session copied from the one it went on from (core/project/compact.ts) were requests of that session.
+  let copied = 0;
   for (const e of events) {
+    if (e.kind === 'summary') {
+      copied = e.kept;
+      continue;
+    }
+    if (copied > 0) {
+      copied--;
+      continue;
+    }
     if (e.kind === 'request') pending = e;
     if (e.kind !== 'assistant' || !pending) continue;
     const u = e.usage;
