@@ -6,6 +6,7 @@
 //   --silent           never publishes
 //   --init-delay <ms>  answers initialize that late
 //   --encode           names files with `@` encoded, as some servers do
+// Like real servers, it exits when the processId the client names is not alive.
 import { writeFileSync } from 'node:fs';
 
 const flag = (name: string) => {
@@ -58,6 +59,15 @@ process.stdin.on('data', (chunk: Buffer) => {
     const msg = JSON.parse(buf.subarray(head + 4, head + 4 + length).toString());
     buf = buf.subarray(head + 4 + length);
     if (msg.method === 'initialize') {
+      const parent = msg.params.processId;
+      if (typeof parent === 'number')
+        setInterval(() => {
+          try {
+            process.kill(parent, 0);
+          } catch {
+            process.exit(1);
+          }
+        }, 100).unref();
       setTimeout(() => {
         send({ id: msg.id, result: { capabilities: { textDocumentSync: 1 } } });
         send({ id: 'cfg', method: 'workspace/configuration', params: { items: [{ section: 'fake' }] } });

@@ -170,9 +170,14 @@ describe('cedia -p with a language server (offline, faux)', () => {
     const probe = join(outside, 'escaped');
     const settings = { lsp: { fake: { command: [process.execPath, FAKE, '--probe', probe], extensions: ['.txt'] } } };
     try {
-      const r = run(settings, [write('w1', 'a.txt', 'ERR\n'), reply('done')], ['-p', 'write it', '--sandbox', 'on']);
+      const bash = (id: string, command: string) => ({ blocks: [{ type: 'tool_use', id, name: 'bash', input: { command } }] });
+      const script = [write('w1', 'a.txt', 'ERR\n'), bash('b1', 'sleep 1'), write('w2', 'b.txt', 'ok\nERR\n'), reply('done')];
+      const r = run(settings, script, ['-p', 'write it', '--sandbox', 'on']);
       expect(r.result('w1')!.output.text).toContain('fake reports 1 error in a.txt');
       expect(existsSync(probe)).toBe(false);
+      // It is still there for the next edit: it does not take cedia, which it cannot see from the sandbox, for gone.
+      expect(r.result('w2')!.output.text).toContain('fake reports 1 error in b.txt');
+      expect(r.err).not.toContain('language server stopped');
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }

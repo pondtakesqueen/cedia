@@ -47,6 +47,9 @@ export class LspClient {
     argv: string[],
     readonly root: string,
     env: Record<string, string>,
+    // The process the server watches, exiting when it is gone; null when it cannot see cedia's (in the Linux
+    // sandbox it has a process namespace of its own, and the sandbox stops it with cedia instead).
+    private parentPid: number | null = process.pid,
   ) {
     // Its own process group, so the servers it starts (tsserver) stop with it.
     const proc = Bun.spawn(argv, { cwd: root, env, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe', detached: true });
@@ -176,7 +179,7 @@ export class LspClient {
     await this.request(
       'initialize',
       {
-        processId: process.pid,
+        processId: this.parentPid,
         rootUri,
         workspaceFolders: [{ uri: rootUri, name: 'root' }],
         capabilities: { textDocument: { synchronization: {}, publishDiagnostics: { relatedInformation: false, versionSupport: true } }, workspace: { configuration: true, workspaceFolders: true } },
