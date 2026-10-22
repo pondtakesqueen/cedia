@@ -18,6 +18,8 @@ const CONNECT_TIMEOUT_MS = 15_000;
 const CALL_TIMEOUT_MS = 120_000;
 // What of a server's stderr is kept, to say why it failed.
 const MAX_STDERR = 2_000;
+// The longest message a server may send; past it the server is closed rather than read into memory forever.
+const MAX_MESSAGE = 16 * 1024 * 1024;
 // The variables a local server inherits from cedia; the rest (cedia's own API keys among them) stay out unless
 // the server's config names them.
 const PASSED_ENV = ['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TERM', 'TMPDIR', 'TZ', 'SYSTEMROOT', 'APPDATA', 'USERPROFILE'];
@@ -67,6 +69,11 @@ class StdioTransport implements Transport {
           } catch {
             // A line that is not JSON (a server logging to stdout by mistake) is skipped.
           }
+        }
+        if (buf.length > MAX_MESSAGE) {
+          this.onClose(`the server sent a message longer than ${MAX_MESSAGE} bytes`);
+          this.proc.kill('SIGKILL');
+          return;
         }
       }
     } catch {
@@ -119,12 +126,15 @@ class HttpTransport implements Transport {
     if (id) this.session = id;
     if (!res.ok) throw new Error(`HTTP ${res.status}${res.status === 401 || res.status === 403 ? ' (check the headers in the server config)' : ''}: ${(await res.text()).slice(0, 300)}`);
     if (res.status === 202 || !res.body) return;
+    // A notification has no answer to wait for: a server that opens a stream for one is not read.
+    if (msg.id === undefined) return void (await res.body.cancel().catch(() => {}));
     const type = res.headers.get('content-type') ?? '';
     if (type.includes('text/event-stream')) {
       const dec = new TextDecoder();
       let buf = '';
       for await (const chunk of res.body) {
         buf += dec.decode(chunk, { stream: true }).replace(/\r\n/g, '\n');
+        if (buf.length > MAX_MESSAGE) throw new Error(`the server sent an event longer than ${MAX_MESSAGE} bytes`);
         let end: number;
         while ((end = buf.indexOf('\n\n')) >= 0) {
           const event = buf.slice(0, end);
@@ -171,7 +181,7 @@ export class McpClient {
     this.transport = 'command' in config ? new StdioTransport(config) : new HttpTransport(config);
     this.transport.onMessage = (m) => this.receive(m);
     this.transport.onClose = (why) => {
-      this.closed = why;
+      this.closed ??= why;
       for (const p of this.pending.values()) p.reject(new Error(why));
       this.pending.clear();
     };
@@ -195,6 +205,7 @@ export class McpClient {
     const id = this.next++;
     const done = new AbortController();
     const stop = AbortSignal.any([done.signal, AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
+    if (stop.aborted) throw new Error('stopped');
     try {
       return await new Promise<T>((resolve, reject) => {
         this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
@@ -203,13 +214,19 @@ export class McpClient {
           if (!this.pending.delete(id)) return;
           const why = signal?.aborted ? 'stopped' : `no answer to ${method} in ${Math.round(timeoutMs / 1000)}s`;
           // Tell the server it may stop working on it.
-          void this.transport.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: id, reason: why } }).catch(() => {});
+          void this.notify('notifications/cancelled', { requestId: id, reason: why });
           reject(new Error(why));
         });
-        this.transport.send({ jsonrpc: '2.0', id, method, params }, stop).catch((e: Error) => {
-          this.pending.delete(id);
-          reject(e);
-        });
+        this.transport.send({ jsonrpc: '2.0', id, method, params }, stop).then(
+          () => {
+            // Over HTTP the answer comes in the POST's own response: when that has ended without it, none will come.
+            if (this.transport instanceof HttpTransport && this.pending.delete(id)) reject(new Error(`the server's response to ${method} ended without an answer`));
+          },
+          (e: Error) => {
+            this.pending.delete(id);
+            reject(e);
+          },
+        );
       });
     } finally {
       done.abort();
@@ -219,7 +236,12 @@ export class McpClient {
   async connect(): Promise<void> {
     const init = await this.request<{ protocolVersion?: string }>('initialize', { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'cedia', version: '0.1.0' } }, CONNECT_TIMEOUT_MS);
     if (this.transport instanceof HttpTransport) this.transport.setVersion(init?.protocolVersion ?? PROTOCOL_VERSION);
-    await this.transport.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    await this.notify('notifications/initialized', {});
+  }
+
+  // A notification: no answer, and no longer than a connect may take.
+  private notify(method: string, params: JsonObject): Promise<void> {
+    return this.transport.send({ jsonrpc: '2.0', method, params }, AbortSignal.timeout(CONNECT_TIMEOUT_MS)).catch(() => {});
   }
 
   async tools(): Promise<McpTool[]> {
