@@ -3,7 +3,7 @@
 ```
 bun evals/gate.ts --estimate          # what a run will cost, from the baseline's own spend
 bun evals/gate.ts                     # run the suite on every model in suite.json and compare
-bun evals/gate.ts -m anthropic/claude-haiku-5-5   # one model
+bun evals/gate.ts -m opencode-go/claude-haiku-5-5   # one model
 bun evals/gate.ts --update-baseline   # run, compare, then store the new numbers as the baseline
 bun evals/gate.ts --compare evals/results/<file>.jsonl [--against <rows.jsonl|baseline.json>]   # re-score, free
 ```
@@ -12,7 +12,7 @@ Exit 0: no model got worse. 1: a model regressed. 3: no comparison could be made
 
 ## What it runs
 
-`suite.json`: 25 tasks, 2 runs each, 4 at a time, on Haiku 5.5 (Claude API) and DeepSeek V4.1 Flash (OpenCode Go). The 12 pi-era floor tasks, the 7 hard tasks, the 4 wide and long tasks, `real-slop-guard`, the cheapest real-repository task, and `real-three-delegated`, which hands three real commits to one work sub-thread: on Haiku that sub-thread passes the 90k handoff point in every run, so the gate checks that sub-thread handoff triggers and the work still passes (about $0.06 a run on Haiku, 5 to 6 minutes). `real-threads` and `real-subthreads` are left out: they cost $0.3 to $0.5 a run on Haiku and hit the 1200 s limit when handoff is on, so they belong in a measured experiment, not a gate. The tasks need `python3 -m pytest` and the full git history (`fetch-depth: 0`).
+`suite.json`: 25 tasks, 2 runs each, 4 at a time, on Haiku 5.5 and DeepSeek V4.1 Flash, both through OpenCode Go, so a gate run spends the Go plan's quota instead of API credit (since 2026-10-22; the same Haiku model, at the same list price). A change that only the Claude API carries, such as `--handoff compact`, is gated with `-m anthropic/claude-haiku-5-5`, against `baseline/anthropic_claude-haiku-5-5.json`, the Claude API baseline kept from before. The 12 pi-era floor tasks, the 7 hard tasks, the 4 wide and long tasks, `real-slop-guard`, the cheapest real-repository task, and `real-three-delegated`, which hands three real commits to one work sub-thread: on Haiku that sub-thread passes the 90k handoff point in every run, so the gate checks that sub-thread handoff triggers and the work still passes (about $0.06 a run on Haiku, 5 to 6 minutes). `real-threads` and `real-subthreads` are left out: they cost $0.3 to $0.5 a run on Haiku and hit the 1200 s limit when handoff is on, so they belong in a measured experiment, not a gate. The tasks need `python3 -m pytest` and the full git history (`fetch-depth: 0`).
 
 Each run writes its rows to `evals/results/<date>-gate-<model>-<commit>-<time>.jsonl`. A baseline is `baseline/<model>.json`: the commit, date, runs, jobs and cedia flags it was made with, a hash of each task, and the rows.
 
