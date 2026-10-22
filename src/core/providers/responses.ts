@@ -21,7 +21,7 @@ export function responsesInput(req: WireRequest): JsonObject[] {
           if (m.wire === WIRE && b.opaque) out.push(JSON.parse(b.opaque) as JsonObject);
         } else if (b.type === 'text') {
           if (b.text) out.push({ role: 'assistant', content: b.text });
-        } else out.push({ type: 'function_call', call_id: b.callId ?? b.id, name: b.name, arguments: JSON.stringify(b.input) });
+        } else if (b.type === 'tool_use') out.push({ type: 'function_call', call_id: b.callId ?? b.id, name: b.name, arguments: JSON.stringify(b.input) });
       }
     }
   }

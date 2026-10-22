@@ -17,6 +17,10 @@ export function buildMessages(events: SessionEvent[]): Message[] {
       case 'user':
         pushUser({ type: 'text', text: e.text });
         break;
+      case 'summary':
+        // Only Anthropic writes summaries, so the block replays to its wire.
+        out.push({ role: 'assistant', wire: 'anthropic-messages', blocks: [e.block] });
+        break;
       case 'assistant':
         if (e.blocks.length) out.push({ role: 'assistant', wire: e.wire, blocks: e.blocks });
         break;
