@@ -7,14 +7,16 @@ import { inert } from '../trust/frame.ts';
 // append-only JSONL file, so two cedia processes can write to one without locking: a line is one small append.
 
 // asking: the last run ended with a question for the owner (core/tools/ask.ts); the answer is the thread's next prompt.
-export type ThreadState = 'working' | 'done' | 'failed' | 'stopped' | 'asking';
+// queued: another thread opened it (core/tools/open.ts) and no run of it has started yet.
+export type ThreadState = 'queued' | 'working' | 'done' | 'failed' | 'stopped' | 'asking';
 // rejected: the provider refused the last session's history, so the thread went on in a new one.
 // rewind: a copy of a session as it was before a run, which the thread goes on from (core/project/rewind.ts).
 export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota' | 'rejected' | 'rewind';
 
 type ThreadBody =
-  // parent: the thread that spawned this one as a sub-thread.
-  | { kind: 'open'; title: string; task: string; parent?: string }
+  // parent: the thread that spawned this one as a sub-thread. by: the thread that opened it with open_thread, for a
+  // client to run. profile: the profile its runs take unless another is named (core/profiles.ts).
+  | { kind: 'open'; title: string; task: string; parent?: string; by?: string; profile?: string }
   | { kind: 'session'; sessionId: string; model: string; role: string; why: SessionWhy; path?: string }
   // Written when a session hands off: the note the next session starts from.
   | { kind: 'handoff'; sessionId: string; note: string }
@@ -63,6 +65,8 @@ export type Thread = {
   task: string;
   state: ThreadState;
   parent?: string;
+  by?: string;
+  profile?: string;
   archived: boolean;
   sessions: (Extract<ThreadEvent, { kind: 'session' }> & { rewound?: boolean })[];
   handoff?: { sessionId: string; note: string };
@@ -122,9 +126,9 @@ export class ThreadStore {
     appendFileSync(this.path(id), JSON.stringify({ at: now.toISOString(), ...body }) + '\n');
   }
 
-  open(task: string, opts: { parent?: string; now?: Date } = {}): string {
+  open(task: string, opts: { parent?: string; by?: string; profile?: string; title?: string; now?: Date } = {}): string {
     const id = newThreadId();
-    this.append(id, { kind: 'open', title: titleOf(task), task, ...(opts.parent ? { parent: opts.parent } : {}) }, opts.now);
+    this.append(id, { kind: 'open', title: titleOf(opts.title || task), task, ...(opts.parent ? { parent: opts.parent } : {}), ...(opts.by ? { by: opts.by } : {}), ...(opts.profile ? { profile: opts.profile } : {}) }, opts.now);
     return id;
   }
 
@@ -185,8 +189,10 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     id,
     title: open?.title ?? id,
     task: open?.task ?? '',
-    state: 'working',
+    state: open?.by ? 'queued' : 'working',
     ...(open?.parent ? { parent: open.parent } : {}),
+    ...(open?.by ? { by: open.by } : {}),
+    ...(open?.profile ? { profile: open.profile } : {}),
     archived: false,
     sessions: [],
     messages: [],
@@ -214,7 +220,10 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     else if (e.kind === 'rate') t.ratings.push({ rating: e.rating, ...(e.sessionId ? { sessionId: e.sessionId } : {}), ...(e.note ? { note: e.note } : {}), at: e.at });
     else if (e.kind === 'archived') t.archived = e.archived;
     else if (e.kind === 'turn') t.turns.push({ ...(t.lastTurn = { cwd: e.cwd, before: e.before, after: e.after, sessions: e.sessions, at: e.at }), runs: t.runs.length });
-    else if (e.kind === 'run') t.runs.push(e);
+    else if (e.kind === 'run') {
+      t.runs.push(e);
+      if (t.state === 'queued') t.state = 'working';
+    }
     else if (e.kind === 'state') {
       t.state = e.state;
       if (e.result !== undefined) t.result = e.result;
@@ -265,5 +274,5 @@ export function inboxReminder(messages: ThreadMessage[]): string {
 export function threadLine(t: Thread): string {
   const latest = (t.result ?? t.handoff?.note ?? '').trim().split('\n')[0] ?? '';
   const done = t.todo?.filter((i) => i.state === 'done').length;
-  return `${t.id}  ${t.state.padEnd(7)}  ${t.parent ? `(sub-thread of ${t.parent}) ` : ''}${t.archived ? '(archived) ' : ''}${t.todo?.length ? `[${done}/${t.todo.length}] ` : ''}${t.title}${latest ? `\n    ${latest.length > 120 ? `${latest.slice(0, 117)}...` : latest}` : ''}`;
+  return `${t.id}  ${t.state.padEnd(7)}  ${t.parent ? `(sub-thread of ${t.parent}) ` : ''}${t.by ? `(opened by ${t.by}) ` : ''}${t.archived ? '(archived) ' : ''}${t.todo?.length ? `[${done}/${t.todo.length}] ` : ''}${t.title}${latest ? `\n    ${latest.length > 120 ? `${latest.slice(0, 117)}...` : latest}` : ''}`;
 }

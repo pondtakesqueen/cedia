@@ -182,7 +182,9 @@
         "plan",
         "review",
         "ask",
-        "todo"
+        "todo",
+        "profiles",
+        "open_thread"
       ]
     },
     "Check": {
@@ -1948,6 +1950,12 @@
             "parent": {
               "type": "string"
             },
+            "by": {
+              "type": "string"
+            },
+            "profile": {
+              "type": "string"
+            },
             "at": {
               "type": "string"
             },
@@ -2364,6 +2372,7 @@
     "ThreadState": {
       "type": "string",
       "enum": [
+        "queued",
         "working",
         "done",
         "failed",
