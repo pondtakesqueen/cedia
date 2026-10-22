@@ -9,17 +9,19 @@ import { decide, READ_ONLY_POLICY, type Policy } from '../safety/policy.ts';
 import { redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
-import { evidence, ledgerEntries, verified } from '../trust/ledger.ts';
+import { evidence, ledgerEntries, verified, type LedgerEntry } from '../trust/ledger.ts';
 import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
 import { spawnNudge } from '../tools/spawn.ts';
 import {
   addUsage,
+  EFFORTS,
   hitRatio,
   ZERO_USAGE,
   type AssistantBlock,
   type AttemptError,
   type Effort,
+  type EscalationCause,
   type EventOf,
   type HeadlessResult,
   type ModelSpec,
@@ -73,6 +75,10 @@ export type RunOptions = {
   // is logged, so a crash in between shows a message twice rather than never.
   inbox?: { pending(): { ids: string[]; text: string } | undefined; delivered(ids: string[]): void };
   effort?: Effort;
+  // The level the session moves to, once, when the done gate refuses a claim or a declared check fails after a
+  // change: cheap work up front, more thought where it went wrong. Only upward from `effort`, and only on models
+  // with per-message effort, so the cached prefix stays.
+  escalate?: Effort;
   ttl?: '5m' | '1h';
   maxTurns?: number;
   maxBudgetUsd?: number;
@@ -91,6 +97,17 @@ export const CONTINUE_AFTER_LIMIT = 'Your previous reply was cut off by the outp
 // A reply with no text and no tool call (thinking only, or nothing at all) ends no task: an earlier turn's text
 // would otherwise stand as the result.
 export const EMPTY_REPLY = 'Your last reply had no text and no tool call. Go on with the task, or reply with what you found or did.';
+
+// A user turn with only tool results is not new input, and a per-message effort change waits for one: this text
+// is that input after a failed check.
+export const CHECK_FAILED_ESCALATION = 'A declared check failed after your change, so cedia raised your effort level for the rest of this task.';
+
+// The level a session escalates to, or undefined when it cannot: no per-message effort on this model, a level the
+// model lacks, or no step up from where it starts.
+export function escalationTarget(model: ModelSpec, start: Effort | undefined, to: Effort | undefined): Effort | undefined {
+  if (!to || !start || !model.caps.midConversationEffort || !model.caps.effortLevels.includes(to)) return undefined;
+  return EFFORTS.indexOf(to) > EFFORTS.indexOf(start) ? to : undefined;
+}
 
 export const unverifiedReminder = (checks: string[]) =>
   `cedia has no record of a declared check passing since your last change, so the task is not done yet. A check counts only when the whole bash command is ${checks.map((c) => `\`${c}\``).join(' or ')} (a leading \`cd\` to the working directory is fine; pipes, \`;\` or other commands are not). Run it that way now, fix what fails, then report.`;
@@ -211,6 +228,11 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   // 0: working; 1: asked for the note; 2: asked again after a tool call; 'off': gave up on handing off.
   let handoff: 0 | 1 | 2 | 'off' = 0;
   let spawnNudged = false;
+  // Soft checks were found, not declared: they never refuse a claim, so they never escalate either.
+  const escalateTo = opts.softChecks ? undefined : escalationTarget(model, opts.effort ?? model.defaultEffort, opts.escalate);
+  const canEscalate = () => escalateTo !== undefined && !log.events.some((e) => e.kind === 'effort');
+  // Logged after the user text that carries it, so the change applies from that turn on (core/providers/anthropic.ts).
+  const escalate = (why: EscalationCause) => log.append({ kind: 'effort', effort: escalateTo!, why });
   const wallStart = performance.now();
   const timing = { modelMs: 0, ttftMs: 0, decodeMs: 0, toolMs: 0, retryMs: 0 };
   // The largest context any reply of this run saw: what handoff and sub-threads are meant to keep down.
@@ -364,6 +386,10 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       const before = log.events.length;
       await runTools(calls, byName, opts, signal, log, snap, shared);
       timing.toolMs += performance.now() - toolStart;
+      if (handoff === 0 && canEscalate() && checkFailedAfterChange(entries(), before - runStart)) {
+        log.append({ kind: 'reminder', as: 'user', text: CHECK_FAILED_ESCALATION });
+        escalate('check_failed');
+      }
       // Hand off at a turn boundary, while the whole prefix is still cached: the note costs one cheap turn.
       // The size is the last reply's usage plus chars/4 for the results just added. The context must also have
       // doubled since the session's first reply, so a session that starts large (a long note, a big task) does
@@ -410,12 +436,20 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       if (!nudged) {
         nudged = true;
         log.append({ kind: 'reminder', as: 'user', text: unverifiedReminder(checks) });
+        if (canEscalate()) escalate('unverified');
         continue;
       }
       if (!opts.softChecks) return finish('error_unverified_claim', 'completed');
     }
     return finish('success', 'completed');
   }
+}
+
+// A declared check that ran at or after `from` (an index into this run's events) failed, and the run had changed a
+// file before it. A check that fails before any change is the bug the task names, not a failed attempt.
+export function checkFailedAfterChange(entries: LedgerEntry[], from: number): boolean {
+  const firstWrite = Math.min(...entries.filter((e) => e.kind === 'write').map((e) => e.at));
+  return entries.some((e) => e.kind === 'check' && e.exitCode !== 0 && e.at >= from && e.at > firstWrite);
 }
 
 // A guard's denial is final; a command cedia could not read can be rewritten, since nothing was refused.

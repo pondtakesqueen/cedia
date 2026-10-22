@@ -33,6 +33,9 @@ export type HeadlessArgs = {
   maxTurns?: number;
   maxBudgetUsd?: number;
   effort?: Effort;
+  // The level a writer session moves to when the done gate refuses its claim or a declared check fails after a
+  // change, or "off". Default high.
+  escalate?: string;
   noSessionFile?: boolean;
   permission?: string;
   allow?: string[];
@@ -159,6 +162,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   }
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? (JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) as FauxStep[]) : undefined;
   const handoffAt = loadHandoffAt(model, args.handoffAt);
+  const escalate = args.escalate === 'off' ? undefined : ((args.escalate ?? 'high') as Effort);
   // Every run belongs to a thread of the project, unless nothing is written to disk.
   const store = args.noSessionFile ? undefined : new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
   if (args.thread && !store?.has(args.thread)) {
@@ -271,6 +275,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
           ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), process.stderr.write(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
           : {}),
         ...(args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
+        ...(escalate && !reviewer ? { escalate } : {}),
         ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - used.turns } : {}),
         ...(args.maxBudgetUsd !== undefined ? { maxBudgetUsd: args.maxBudgetUsd - used.costUsd } : {}),
         ...(args.outputFormat === 'stream-json' ? { onStream: (event) => out(encode({ type: 'stream', event })) } : {}),

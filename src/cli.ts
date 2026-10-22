@@ -6,7 +6,7 @@ import { cediaHome } from './core/config.ts';
 import { threadLine, threadsDir, ThreadStore } from './core/project/threads.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, SessionLog } from './core/session/log.ts';
-import type { Effort } from './core/types.ts';
+import { EFFORTS, type Effort } from './core/types.ts';
 
 const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on stdin)
 
@@ -16,7 +16,10 @@ const USAGE = `usage: cedia -p "<prompt>" [options]   (prompt may also come on s
       --output-format <f>      text | json | stream-json (default text)
       --max-turns <n>          stop after n model calls (default 200)
       --max-budget-usd <x>     stop once spend reaches x
-      --effort <level>         low | medium | high | xhigh | max
+      --effort <level>         low | medium | high | xhigh | max (default: the model's, see catalog)
+      --escalate <level|off>   the effort a writer session moves to, once, when the done gate refuses its claim or a
+                               declared check fails after a change (default high). Claude 5.5 models only: the
+                               change is a message, so the prompt cache stays
       --cwd <dir>              working directory (default: current)
       --permission <mode>      auto | read-only | workspace (default: $CEDIA_PERMISSION, ~/.cedia/settings.json, auto).
                                auto is workspace when the sandbox is on, read-only when it is off. cedia never stops to ask
@@ -61,6 +64,7 @@ export async function main(argv: string[]): Promise<number> {
       'max-turns': { type: 'string' },
       'max-budget-usd': { type: 'string' },
       effort: { type: 'string' },
+      escalate: { type: 'string' },
       cwd: { type: 'string' },
       permission: { type: 'string' },
       allow: { type: 'string', multiple: true },
@@ -92,6 +96,11 @@ export async function main(argv: string[]): Promise<number> {
     console.error(USAGE);
     return 2;
   }
+  for (const [flag, v] of [['effort', values.effort], ['escalate', values.escalate]] as const)
+    if (v !== undefined && !EFFORTS.includes(v as Effort) && !(flag === 'escalate' && v === 'off')) {
+      console.error(`unknown --${flag} ${v}`);
+      return 2;
+    }
   const format = values['output-format'];
   if (format !== 'text' && format !== 'json' && format !== 'stream-json') {
     console.error(`unknown --output-format ${format}`);
@@ -106,6 +115,7 @@ export async function main(argv: string[]): Promise<number> {
       ...(values['max-turns'] ? { maxTurns: Number(values['max-turns']) } : {}),
       ...(values['max-budget-usd'] ? { maxBudgetUsd: Number(values['max-budget-usd']) } : {}),
       ...(values.effort ? { effort: values.effort as Effort } : {}),
+      ...(values.escalate ? { escalate: values.escalate } : {}),
       ...(values['no-session-file'] ? { noSessionFile: true } : {}),
       ...(values.permission ? { permission: values.permission } : {}),
       ...(values.allow ? { allow: values.allow } : {}),

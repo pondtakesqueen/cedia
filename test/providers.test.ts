@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { anthropicBody, anthropicProvider, parseAnthropic } from '../src/core/providers/anthropic.ts';
+import { anthropicBody, anthropicProvider, EFFORT_BETA, parseAnthropic } from '../src/core/providers/anthropic.ts';
 import { costUsd, deepseekOffPeak, FALLBACKS, resolveModel } from '../src/core/providers/catalog.ts';
 import { chatBody, chatProvider, chatUsage, parseChat } from '../src/core/providers/chat.ts';
 import { classifyStatus, isRetryable, USER_AGENT } from '../src/core/providers/http.ts';
@@ -151,6 +151,22 @@ describe('request bodies', () => {
     const foreign = history.map((m) => (m.role === 'assistant' ? { ...m, wire: 'chat-completions' as const } : m));
     const f = anthropicBody(req('opus', foreign)) as any;
     expect(f.messages[1].content.map((c: any) => c.type)).toEqual(['tool_use']);
+  });
+
+  test('anthropic: a per-message effort change is an empty system message, sent with its beta header', () => {
+    const raised: Message[] = [...history, { role: 'effort', effort: 'high' }];
+    const b = anthropicBody(req('opus', raised)) as any;
+    // Everything before it is unchanged, and the top-level effort stays, so the cached prefix still matches.
+    expect(b.messages.slice(0, -1)).toEqual((anthropicBody(req('opus')) as any).messages);
+    expect(b.messages.at(-1)).toEqual({ role: 'system', content: [], output_config: { effort: 'high' } });
+    expect(b.output_config).toEqual({ effort: 'medium' });
+    const p = anthropicProvider();
+    expect(p.headers(req('opus'))['anthropic-beta']).toBeUndefined();
+    expect(p.headers(req('opus', raised))['anthropic-beta']).toBe(EFFORT_BETA);
+    expect(p.headers(req('opus-fast', raised))['anthropic-beta']).toBe(`fast-mode-2026-02-01,${EFFORT_BETA}`);
+    // Other wires have no such message and drop it.
+    expect((chatBody(req('deepseek', raised)) as any).messages).toEqual((chatBody(req('deepseek')) as any).messages);
+    expect((responsesBody(req('grok', raised)) as any).input).toEqual((responsesBody(req('grok')) as any).input);
   });
 
   test('chat: tool messages, system role mid-conversation, reasoning only from its own wire', () => {

@@ -5,6 +5,8 @@ export type JsonObject = { [key: string]: unknown };
 export type EventId = string & { readonly brand: 'EventId' };
 export type Wire = 'anthropic-messages' | 'chat-completions' | 'openai-responses' | 'faux';
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+// Lowest first.
+export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 // Disjoint counts: total input = uncached + cacheRead + cacheWrite.
 export type Usage = { uncached: number; cacheRead: number; cacheWrite: number; output: number; reasoning?: number };
@@ -32,6 +34,9 @@ export type AttemptError = { code: AttemptErrorCode; status?: number; retryAfter
 
 export type ToolDef = { name: string; description: string; schema: JsonObject };
 
+// What raised the writer's effort: the done gate refused a claim, or a declared check failed after a change.
+export type EscalationCause = 'unverified' | 'check_failed';
+
 export type TurnEndReason = 'completed' | 'aborted' | 'error' | 'max_tokens' | 'budget' | 'max_turns' | 'handoff';
 
 type EventBody =
@@ -55,6 +60,9 @@ type EventBody =
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
   | { kind: 'tool_result'; callId: string; status: EffectStatus; output: ToolOutput }
   | { kind: 'reminder'; text: string; as: 'system' | 'user' }
+  // A per-message effort change: from the latest user turn with new input on, the model works at this level
+  // (core/loop/run.ts escalation). Wires without it (caps.midConversationEffort) never get one.
+  | { kind: 'effort'; effort: Effort; why: EscalationCause }
   | { kind: 'turn_end'; reason: TurnEndReason; cause?: 'user' | 'parent' | 'hook' };
 
 export type SessionEvent = { id: EventId; parentId: EventId | null; at: string } & EventBody;
@@ -68,7 +76,8 @@ export type UserPart =
 export type Message =
   | { role: 'user'; parts: UserPart[] }
   | { role: 'assistant'; wire: Wire; blocks: AssistantBlock[] }
-  | { role: 'system'; text: string };
+  | { role: 'system'; text: string }
+  | { role: 'effort'; effort: Effort };
 
 export type Price = { input: number; output: number; cacheRead: number; cacheWrite: number }; // USD per 1M tokens
 
@@ -81,6 +90,8 @@ export type ModelCapabilities = {
   cacheMinTokens: number;
   cacheBlockTokens: number; // providers cache whole blocks; a read up to one block short of the previous input is a full hit
   midConversationSystem: boolean;
+  // Effort can change by a message mid-conversation, keeping the cached prefix (Anthropic's per-message effort).
+  midConversationEffort: boolean;
   contextWindow: number;
 };
 

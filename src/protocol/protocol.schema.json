@@ -263,6 +263,13 @@
         "max"
       ]
     },
+    "EscalationCause": {
+      "type": "string",
+      "enum": [
+        "unverified",
+        "check_failed"
+      ]
+    },
     "EventId": {
       "type": "string"
     },
@@ -937,6 +944,46 @@
             "kind",
             "parentId",
             "text"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "effort"
+            },
+            "effort": {
+              "$ref": "#/definitions/Effort"
+            },
+            "why": {
+              "$ref": "#/definitions/EscalationCause"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "effort",
+            "id",
+            "kind",
+            "parentId",
+            "why"
           ]
         },
         {
