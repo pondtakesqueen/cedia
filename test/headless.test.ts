@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { attributeMisses } from '../src/core/context/cache.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { authHeaders, missingKeyNote } from '../src/core/providers/http.ts';
+import { securityKeychain, systemKeychain } from '../src/core/providers/keychain.ts';
 import { SessionLog } from '../src/core/session/log.ts';
 import type { SessionEvent } from '../src/core/types.ts';
 
@@ -301,6 +302,36 @@ describe('cedia -p (offline, faux)', () => {
     expect(authHeaders(resolveModel('opus'), { CEDIA_ANTHROPIC_API_KEY: 'alt' })).toEqual({ 'x-api-key': 'alt' });
     expect(authHeaders(resolveModel('opus'), { ANTHROPIC_API_KEY: 'main', CEDIA_ANTHROPIC_API_KEY: 'alt' })).toEqual({ 'x-api-key': 'main' });
     expect(missingKeyNote(resolveModel('faux'), {})).toBeUndefined();
+  });
+
+  test('after the environment, a key comes from the Keychain under the same names', () => {
+    const asked: string[] = [];
+    const keychain = (account: string) => (asked.push(account), account === 'CEDIA_ANTHROPIC_API_KEY' ? 'from-keychain' : undefined);
+    expect(authHeaders(resolveModel('opus'), {}, keychain)).toEqual({ 'x-api-key': 'from-keychain' });
+    expect(asked).toEqual(['ANTHROPIC_API_KEY', 'CEDIA_ANTHROPIC_API_KEY']);
+    expect(authHeaders(resolveModel('opus'), { ANTHROPIC_API_KEY: 'env' }, keychain)).toEqual({ 'x-api-key': 'env' });
+    expect(missingKeyNote(resolveModel('opus'), {}, keychain)).toBeUndefined();
+    expect(missingKeyNote(resolveModel('deepseek'), {}, keychain)).toContain('OPENCODE_API_KEY is not set');
+    // A caller's own env reads no Keychain unless it passes one.
+    expect(authHeaders(resolveModel('opus'), {})).toEqual({});
+  });
+
+  test('the Keychain is read with security, once per name, and only where it exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-keychain-'));
+    const bin = join(dir, 'security');
+    const calls = join(dir, 'calls');
+    writeFileSync(bin, `#!/bin/sh\necho "$@" >> ${calls}\n[ "$5" = DEEPSEEK_API_KEY ] && { echo sk-from-keychain; exit 0; }\nexit 44\n`);
+    chmodSync(bin, 0o755);
+    const keychain = securityKeychain(bin);
+    expect(keychain('DEEPSEEK_API_KEY')).toBe('sk-from-keychain');
+    expect(keychain('DEEPSEEK_API_KEY')).toBe('sk-from-keychain');
+    expect(keychain('OPENCODE_API_KEY')).toBeUndefined();
+    expect(readFileSync(calls, 'utf8')).toBe('find-generic-password -s cedia -a DEEPSEEK_API_KEY -w\nfind-generic-password -s cedia -a OPENCODE_API_KEY -w\n');
+    expect(securityKeychain(join(dir, 'missing'))('X')).toBeUndefined();
+    expect(systemKeychain({}, 'linux')).toBeUndefined();
+    expect(systemKeychain({}, 'darwin')).toBeDefined();
+    expect(systemKeychain({ CEDIA_KEYCHAIN: 'off' }, 'darwin')).toBeUndefined();
+    expect(systemKeychain({ CEDIA_SECURITY_BIN: bin }, 'linux')!('DEEPSEEK_API_KEY')).toBe('sk-from-keychain');
   });
 });
 

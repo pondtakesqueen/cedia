@@ -56,10 +56,11 @@ export type HeadlessArgs = {
   allowDomains?: string[];
 };
 
-// Every run that changed files or ran checks ends with a receipt built from the ledger.
-export function receipt(ev: Evidence): string {
+// Every run that changed files or ran checks ends with a receipt built from the ledger. A check another thread ran
+// (a sub-thread) is named as that thread's.
+export function receipt(ev: Evidence, thread?: string): string {
   const list = (xs: string[]) => (xs.length ? xs.join(', ') : 'none');
-  const checks = ev.checks.map((c) => `${c.command} (exit ${c.exitCode})`);
+  const checks = ev.checks.map((c) => `${c.command} (exit ${c.exitCode}${c.thread && c.thread !== thread ? `, in sub-thread ${c.thread}` : ''})`);
   return `cedia receipt: changed ${list(ev.changed)}; checks ${list(checks)}; unverified ${list(ev.unverified)}${ev.flags?.length ? `; flagged ${ev.flags.join(', ')}` : ''}`;
 }
 
@@ -452,7 +453,7 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     if (store && threadId) store.append(threadId, { kind: 'state', state: stateOf(result), result: result.result.slice(0, MAX_RESULT) });
     if (args.outputFormat === 'text') {
       out(result.result + (result.result.endsWith('\n') ? '' : '\n'));
-      if (result.evidence) process.stderr.write(receipt(result.evidence) + '\n');
+      if (result.evidence) process.stderr.write(receipt(result.evidence, result.thread) + '\n');
       if (result.plan) process.stderr.write(`cedia plan: by ${result.plan.model}\n`);
       if (result.review) process.stderr.write(`cedia review: ${result.review.model} ${result.review.verdict === 'changes' ? 'asked for changes, sent back to the writer once' : result.review.verdict === 'approve' ? 'approved' : 'gave no verdict'}\n`);
       if (threadId) process.stderr.write(`cedia thread: ${threadId}${handoffs ? ` (${handoffs} handoff${handoffs === 1 ? '' : 's'})` : ''}; go on with --thread ${threadId}\n`);

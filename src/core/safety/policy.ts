@@ -201,6 +201,8 @@ export function denyListed(argv: string[], cwd: string): Hit | undefined {
   const name = cmd.split('/').pop()!;
   if (name === 'git') return gitHit(args);
   if (name === 'rm') return rmHit(args, cwd);
+  if (name === 'security' && args.some((a) => KEYCHAIN_READS.includes(a)))
+    return { name: 'secret-path', reason: `security ${args.join(' ')} reads the Keychain, where cedia's API keys live; ask the user to run it` };
   if (name === 'find' && args.some((a) => a === '-delete' || a === '-exec' || a === '-execdir')) {
     const starts = args.slice(0, Math.max(0, args.findIndex((a) => a.startsWith('-')))).filter(Boolean);
     if ((starts.length ? starts : ['.']).some((p) => !resolvable(p) || !insideWorkspace(p, cwd)))
@@ -210,6 +212,9 @@ export function denyListed(argv: string[], cwd: string): Hit | undefined {
   if (deploy?.(args)) return { name: 'deploy', reason: `${name} ${args.join(' ')} publishes or deploys; ask the user to run it` };
   return undefined;
 }
+
+// macOS `security` subcommands that print a password or key, export them, or take commands from stdin (-i).
+const KEYCHAIN_READS = ['find-generic-password', 'find-internet-password', 'find-key', 'dump-keychain', 'export', 'export-item', '-i', 'interactive'];
 
 function gitHit(args: string[]): Hit | undefined {
   // Skip global options such as -C <dir> and -c k=v to reach the subcommand.

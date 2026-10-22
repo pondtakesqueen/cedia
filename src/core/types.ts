@@ -142,8 +142,10 @@ export type Provider = {
   keepAlive?(req: WireRequest, signal: AbortSignal): Promise<{ ok: true; usage: Usage } | { ok: false; error: AttemptError }>;
 };
 
-// flags: what the slop guard found in this run's changes (see core/trust/slop.ts).
-export type Evidence = { changed: string[]; checks: { command: string; exitCode: number }[]; unverified: string[]; flags?: string[] };
+// flags: what the slop guard found in this run's changes (see core/trust/slop.ts). A check's thread is the thread
+// whose session ran it: a run's result pools its sub-threads' checks with its own.
+export type Check = { command: string; exitCode: number; thread?: string };
+export type Evidence = { changed: string[]; checks: Check[]; unverified: string[]; flags?: string[] };
 
 // 'handoff' ends a session, never a run: the session wrote its handoff note (the result) and the client goes on
 // in a new session of the same thread.

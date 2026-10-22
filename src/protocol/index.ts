@@ -7,6 +7,7 @@ import type { HeadlessResult, SessionEvent, StreamEvent } from '../core/types.ts
 // when it is stale.
 export type { SessionEvent } from '../core/types.ts';
 export type { ThreadEvent } from '../core/project/threads.ts';
+export type { Capability, VersionInfo } from './version.ts';
 
 export type CoreMessage = { type: 'event'; event: SessionEvent } | { type: 'stream'; event: StreamEvent } | HeadlessResult;
 

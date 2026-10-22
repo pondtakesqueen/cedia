@@ -20,12 +20,22 @@ type ThreadBody =
   | { kind: 'message'; id: string; from: string; text: string }
   // The messages a session was shown; they are in its log as a reminder.
   | { kind: 'delivered'; ids: string[]; sessionId: string }
+  // The user took back messages no session has seen yet (the desktop's message queue). A message that was
+  // delivered stays delivered whatever the order of the two lines: the model saw it.
+  | { kind: 'unsend'; ids: string[] }
+  // The user's thumbs up or down on an answer: the session that gave it, if known. It picks eval cases and never
+  // reaches a model.
+  | { kind: 'rate'; rating: Rating; sessionId?: string; note?: string }
   | { kind: 'state'; state: ThreadState; result?: string }
   // Hidden from lists, still readable. A sub-thread that finishes its task archives itself.
   | { kind: 'archived'; archived: boolean };
 export type ThreadEvent = { at: string } & ThreadBody;
 
-export type ThreadMessage = { id: string; from: string; text: string; at: string };
+export type Rating = 'up' | 'down';
+export const RATINGS: Rating[] = ['up', 'down'];
+
+export type ThreadMessage = { id: string; from: string; text: string; at: string; unsent?: boolean };
+export type ThreadRating = { rating: Rating; sessionId?: string; note?: string; at: string };
 export type Thread = {
   id: string;
   title: string;
@@ -38,6 +48,7 @@ export type Thread = {
   result?: string;
   messages: ThreadMessage[];
   pending: ThreadMessage[];
+  ratings: ThreadRating[];
   updatedAt: string;
 };
 
@@ -107,6 +118,30 @@ export class ThreadStore {
     this.append(to, { kind: 'message', id, from, text }, now);
     return id;
   }
+
+  // Takes back the user's messages that no session has seen: the ids given, or all of them. A session may still
+  // pick one up between the read here and the append; then the fold counts it as delivered.
+  unsend(id: string, ids: string[] = [], now = new Date()): string[] {
+    const t = this.read(id);
+    const mine = t.pending.filter((m) => m.from === 'user');
+    for (const m of ids) {
+      if (mine.some((p) => p.id === m)) continue;
+      const known = t.messages.find((x) => x.id === m);
+      throw new Error(!known ? `no message ${m} in ${id}` : known.from !== 'user' ? `message ${m} is from ${known.from}, not the user` : known.unsent ? `message ${m} was already unsent` : `message ${m} was already delivered`);
+    }
+    const taken = ids.length ? ids : mine.map((m) => m.id);
+    if (taken.length) this.append(id, { kind: 'unsend', ids: taken }, now);
+    return taken;
+  }
+
+  rate(id: string, rating: Rating, opts: { sessionId?: string; note?: string; now?: Date } = {}): void {
+    if (!RATINGS.includes(rating)) throw new Error(`a rating is ${RATINGS.join(' or ')}: ${rating}`);
+    const t = this.read(id);
+    if (opts.sessionId && !t.sessions.some((s) => s.sessionId === opts.sessionId)) throw new Error(`no session ${opts.sessionId} in ${id}`);
+    // Unnamed, the answer is the thread's latest: its last writer session's.
+    const sessionId = opts.sessionId ?? t.sessions.findLast((s) => s.role === 'code')?.sessionId;
+    this.append(id, { kind: 'rate', rating, ...(sessionId ? { sessionId } : {}), ...(opts.note ? { note: opts.note } : {}) }, opts.now);
+  }
 }
 
 export function foldThread(id: string, events: ThreadEvent[]): Thread {
@@ -121,21 +156,26 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     sessions: [],
     messages: [],
     pending: [],
+    ratings: [],
     updatedAt: events.at(-1)?.at ?? '',
   };
   const delivered = new Set<string>();
+  const unsent = new Set<string>();
   for (const e of events) {
     if (e.kind === 'session') t.sessions.push(e);
     else if (e.kind === 'handoff') t.handoff = { sessionId: e.sessionId, note: e.note };
     else if (e.kind === 'message') t.messages.push({ id: e.id, from: e.from, text: e.text, at: e.at });
     else if (e.kind === 'delivered') for (const m of e.ids) delivered.add(m);
+    else if (e.kind === 'unsend') for (const m of e.ids) unsent.add(m);
+    else if (e.kind === 'rate') t.ratings.push({ rating: e.rating, ...(e.sessionId ? { sessionId: e.sessionId } : {}), ...(e.note ? { note: e.note } : {}), at: e.at });
     else if (e.kind === 'archived') t.archived = e.archived;
     else if (e.kind === 'state') {
       t.state = e.state;
       if (e.result !== undefined) t.result = e.result;
     }
   }
-  t.pending = t.messages.filter((m) => !delivered.has(m.id));
+  for (const m of t.messages) if (unsent.has(m.id) && !delivered.has(m.id)) m.unsent = true;
+  t.pending = t.messages.filter((m) => !delivered.has(m.id) && !m.unsent);
   return t;
 }
 

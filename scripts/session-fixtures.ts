@@ -78,9 +78,17 @@ export function record(s: Scenario): Recording {
     });
     if (!run.stdout.length) throw new Error(`${s.name}: no output\n${run.stderr.toString()}`);
     const [slug] = readdirSync(join(home, 'sessions'));
-    const norm = (text: string) => text.split(slug!).join('fixture-repo').split(repo).join('/fixture/repo').split(home).join('/fixture/home').split(dir).join('/fixture');
-    const filesIn = (d: string) => Object.fromEntries(readdirSync(d).sort().map((f) => [f, norm(readFileSync(join(d, f), 'utf8'))]));
-    return { stream: norm(run.stdout.toString()), threads: filesIn(join(home, 'projects', slug!, 'threads')), sessions: filesIn(join(home, 'sessions', slug!)) };
+    // Thread ids are numbered in the order they first appear (the stream, then the thread files), so a re-record
+    // keeps them and a client's replay outlines do not churn.
+    const ids = new Map<string, string>();
+    const threadsRoot = join(home, 'projects', slug!, 'threads');
+    const stream = run.stdout.toString();
+    for (const text of [stream, ...readdirSync(threadsRoot).sort().map((f) => f + readFileSync(join(threadsRoot, f), 'utf8'))])
+      for (const [id] of text.matchAll(/\bt-[0-9a-f]{8}\b/g)) if (!ids.has(id)) ids.set(id, `t-${String(ids.size + 1).padStart(8, '0')}`);
+    const norm = (text: string) =>
+      text.split(slug!).join('fixture-repo').split(repo).join('/fixture/repo').split(home).join('/fixture/home').split(dir).join('/fixture').replace(/\bt-[0-9a-f]{8}\b/g, (id) => ids.get(id) ?? id);
+    const filesIn = (d: string) => Object.fromEntries(readdirSync(d).sort().map((f) => [norm(f), norm(readFileSync(join(d, f), 'utf8'))]));
+    return { stream: norm(stream), threads: filesIn(threadsRoot), sessions: filesIn(join(home, 'sessions', slug!)) };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
