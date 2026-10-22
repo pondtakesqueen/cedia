@@ -2,6 +2,7 @@ import { lookup } from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
 import { isIP } from 'node:net';
+import zlib from 'node:zlib';
 import { inert } from '../trust/frame.ts';
 import { MAX_OUTPUT_CHARS, type ToolSpec } from './registry.ts';
 
@@ -29,7 +30,9 @@ export type WebAccess = { anyHost: boolean; allowedDomains: string[] };
 export function namedHost(host: string, port: number, domains: string[]): boolean {
   const h = host.toLowerCase().replace(/\.$/, '');
   return domains.some((d) => {
-    const m = /^(.*?)(?::(\d+))?$/.exec(d.trim().toLowerCase())!;
+    const t = d.trim().toLowerCase();
+    // `[::1]:8080` or `[::1]`; a bare IPv6 address has no port; anything else may end with `:port`.
+    const m = /^\[([^\]]+)\](?::(\d+))?$/.exec(t) ?? ((t.match(/:/g)?.length ?? 0) > 1 ? [t, t] : /^(.*?)(?::(\d+))?$/.exec(t)!);
     if (m[2] !== undefined && Number(m[2]) !== port) return false;
     const p = m[1]!;
     if (p === '*') return true;
@@ -89,6 +92,10 @@ export function privateAddress(ip: string): boolean {
   if (zero(0, 8) && x[8] === 255 && x[9] === 255 && x[10] === 0 && x[11] === 0) return v4(12);
   if (x[0] === 0 && x[1] === 0x64 && x[2] === 0xff && x[3] === 0x9b && zero(4, 12)) return v4(12);
   if (x[0] === 0x20 && x[1] === 0x02) return v4(2);
+  // Teredo (2001::/32) carries the client's IPv4 address inverted in its last four bytes.
+  if (x[0] === 0x20 && x[1] === 0x01 && x[2] === 0 && x[3] === 0) return privateAddress(x.slice(12, 16).map((b) => b ^ 0xff).join('.'));
+  // Local-use NAT64 (64:ff9b:1::/48) and the discard prefix (100::/64).
+  if ((x[0] === 0 && x[1] === 0x64 && x[2] === 0xff && x[3] === 0x9b && x[4] === 0 && x[5] === 1) || (x[0] === 1 && x[1] === 0 && zero(2, 8))) return true;
   return (
     (x[0]! & 0xfe) === 0xfc || // unique local
     (x[0] === 0xfe && (x[1]! & 0xc0) === 0x80) || // link-local
@@ -137,7 +144,7 @@ const proxied = (url: URL) => {
   return !no.some((n) => n === '*' || h === n.replace(/^\./, '') || h.endsWith(n.startsWith('.') ? n : `.${n}`));
 };
 
-const HEADERS = { accept: 'text/html, text/plain, text/markdown, application/json;q=0.9, */*;q=0.5', 'user-agent': 'cedia (web_fetch)' };
+const HEADERS = { accept: 'text/html, text/plain, text/markdown, application/json;q=0.9, */*;q=0.5', 'accept-encoding': 'identity', 'user-agent': 'cedia (web_fetch)' };
 
 // One GET. Straight to the checked address with node's http (its lookup answers with that address), or through
 // the user's HTTP proxy with fetch, which leaves the name to the proxy.
@@ -166,7 +173,19 @@ async function get(t: Target, signal: AbortSignal): Promise<Reply> {
         const v = res.headers[n.toLowerCase()];
         return Array.isArray(v) ? v[0] : v;
       };
-      resolve({ status: res.statusCode ?? 0, header: one, body: res, cancel: () => res.destroy() });
+      // A server that compresses although asked not to: undone as it streams, so the cap counts the page's bytes.
+      const enc = String(one('content-encoding') ?? '').toLowerCase().trim();
+      const unzip = enc === 'gzip' || enc === 'x-gzip' ? zlib.createGunzip() : enc === 'deflate' ? zlib.createInflate() : enc === 'br' ? zlib.createBrotliDecompress() : undefined;
+      const body = unzip ? res.pipe(unzip) : res;
+      resolve({
+        status: res.statusCode ?? 0,
+        header: one,
+        body,
+        cancel: () => {
+          res.destroy();
+          unzip?.destroy();
+        },
+      });
     });
     req.on('error', reject);
     req.end();
@@ -185,12 +204,15 @@ const decode = (s: string) =>
 
 // Elements whose content is not page text, and blocks that end a line.
 const SKIP = new Set(['script', 'style', 'noscript', 'svg', 'template', 'iframe', 'head', 'nav', 'footer', 'object', 'canvas']);
+const MAX_LINK_DEPTH = 32;
+const MAX_LABEL = 2_000;
 const BLOCK = new Set(['p', 'div', 'section', 'article', 'ul', 'ol', 'table', 'tr', 'blockquote', 'main', 'header', 'aside', 'figure', 'dl', 'dt', 'dd', 'form']);
 
 // A page's readable text, with headings, list items, links and code kept in a markdown-like shape. One pass over
 // the page, never back: a page of unclosed tags or comments costs what its length does, not its square.
 export function htmlText(html: string): string {
-  const lower = html.toLowerCase();
+  // ASCII only, so every index in lower is the same index in html (toLowerCase makes İ two characters).
+  const lower = html.replace(/[A-Z]+/g, (c) => c.toLowerCase());
   const n = html.length;
   let title: string | undefined;
   const t0 = lower.indexOf('<title');
@@ -207,7 +229,8 @@ export function htmlText(html: string): string {
   while (i < n) {
     const lt = html.indexOf('<', i);
     const text = html.slice(i, lt < 0 ? n : lt);
-    out += pre ? text : text.replace(/\s+/g, ' ');
+    // Inside pre, spaces and tabs are held as placeholders until the whitespace of the rest is settled.
+    out += pre ? text.replace(/[\u0001\u0002]/g, '').replace(/ /g, '\u0001').replace(/\t/g, '\u0002') : text.replace(/\s+/g, ' ');
     if (lt < 0) break;
     i = lt;
     if (lower.startsWith('<!--', i)) {
@@ -227,15 +250,19 @@ export function htmlText(html: string): string {
       i++;
       continue;
     }
-    // The tag's end: the first > outside quotes. A tag that never ends takes the rest of the page with it.
+    // The tag's end: the first > outside a quoted attribute value (a quote right after =; an apostrophe in an
+    // unquoted value is just a letter). A tag that never ends takes the rest of the page with it.
     let j = NAME.lastIndex;
     let q = '';
+    let eq = false;
     for (; j < n; j++) {
-      const c = html[j];
+      const c = html[j]!;
       if (q) {
         if (c === q) q = '';
-      } else if (c === '"' || c === "'") q = c;
+      } else if ((c === '"' || c === "'") && eq) q = c;
       else if (c === '>') break;
+      if (c === '=') eq = true;
+      else if (!/\s/.test(c)) eq = false;
     }
     if (j >= n) break;
     const closing = lower[i + 1] === '/';
@@ -243,7 +270,14 @@ export function htmlText(html: string): string {
     const attrs = html.slice(NAME.lastIndex, j);
     i = j + 1;
     if (SKIP.has(name) && !closing && !attrs.trimEnd().endsWith('/')) {
-      const e = lower.indexOf(`</${name}`, i);
+      // The end tag of head may be left out: the body starts it then.
+      const close = lower.indexOf(`</${name}`, i);
+      const body = name === 'head' ? lower.indexOf('<body', i) : -1;
+      const e = close < 0 ? body : body < 0 ? close : Math.min(close, body);
+      if (e >= 0 && e === body) {
+        i = e;
+        continue;
+      }
       const e2 = e < 0 ? -1 : lower.indexOf('>', e);
       i = e2 < 0 ? n : e2 + 1;
       continue;
@@ -260,11 +294,13 @@ export function htmlText(html: string): string {
     else if (name === 'a') {
       if (!closing) {
         const href = /href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i.exec(attrs);
-        links.push({ href: href ? (href[1] ?? href[2] ?? href[3] ?? '') : '', at: out.length });
+        // Anchors nested past any real page's depth are text only.
+        if (links.length < MAX_LINK_DEPTH) links.push({ href: href ? (href[1] ?? href[2] ?? href[3] ?? '') : '', at: out.length });
       } else {
         const l = links.pop();
         if (l) {
-          const label = out.slice(l.at).trim();
+          // A label too long to be one is left as text: rebuilding the page around each would cost its square.
+          const label = out.length - l.at <= MAX_LABEL ? out.slice(l.at).trim() : '';
           if (label && l.href && !l.href.startsWith('#') && !/^javascript:/i.test(l.href)) out = `${out.slice(0, l.at)}[${label}](${l.href})`;
         }
       }
@@ -272,7 +308,7 @@ export function htmlText(html: string): string {
   }
   const s = decode(out)
     .split('\n')
-    .map((l) => l.replace(/[ \t\u00a0]+/g, ' ').trimEnd())
+    .map((l) => l.replace(/[ \t\u00a0]+/g, ' ').trim().replace(/\u0001/g, ' ').replace(/\u0002/g, '\t'))
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/\n- *\n/g, '\n- ')
