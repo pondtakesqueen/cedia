@@ -57,6 +57,20 @@ describe('cedia -p (offline, faux)', () => {
     expect(existsSync(join(r.dir, 'out.txt'))).toBe(true);
   });
 
+  // Claude Code's Linux sandbox once reported 0 for failed commands when the user's shell was zsh. The done gate
+  // trusts the exit code of the declared check. cedia runs bash inside the sandbox whatever $SHELL says (neither
+  // the bash tool nor the sandbox wrapper reads it), and this keeps it so: a change that took the login shell
+  // would have to keep a failing check a failure under each of these.
+  test.skipIf(!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin')('a failing check inside the sandbox stays a failure whatever the login shell', () => {
+    for (const shell of ['/bin/bash', '/usr/bin/zsh', '/bin/sh']) {
+      if (!existsSync(shell)) continue;
+      const script = [call('c1', 'echo hi > out.txt'), call('c2', 'false'), reply('done'), reply('done')];
+      const r = cedia(script, ['-p', 'make it', '--sandbox', 'on', '--check', 'false', '--output-format', 'json'], undefined, { SHELL: shell });
+      expect([shell, r.code]).toEqual([shell, 1]);
+      expect(JSON.parse(r.out)).toMatchObject({ subtype: 'error_unverified_claim', evidence: { checks: [{ command: 'false', exitCode: 1 }], unverified: ['out.txt'] } });
+    }
+  });
+
   test('--check gates the claim, the receipt goes to stderr, and lint-session passes the log', () => {
     const script = [call('c1', 'echo hi > out.txt'), call('c2', 'test -f out.txt'), reply('done')];
     const r = cedia(script, ['-p', 'make it', '--permission', 'workspace', '--check', 'test -f out.txt']);
