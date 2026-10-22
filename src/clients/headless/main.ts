@@ -14,6 +14,7 @@ import { instructionsBlock, loadInstructions } from '../../core/project/instruct
 import { memoryBlock, memoryPath, MemoryStore, rememberTool } from '../../core/project/memory.ts';
 import { loadSkills, skillsBlock, skillTool } from '../../core/skills/skills.ts';
 import { mcpStub, startMcp, type McpServers } from '../../core/mcp/tools.ts';
+import { webFetchTool } from '../../core/tools/web.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
 import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
@@ -217,6 +218,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
   const skills = loadSkills(args.cwd, cediaHome());
   const skillList = skillsBlock(skills);
   const skill = skillTool(skills);
+  // The hosts the shell may reach, so a fetch is no way around the sandbox.
+  const webFetch = webFetchTool({ anyHost: !sandbox.on, allowedDomains: sandboxSettings.allowedDomains });
   // Started inside the run's try below, so they are closed however it ends.
   let mcp: McpServers | undefined;
   const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}) });
@@ -287,8 +290,8 @@ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void =
     // server is gone keeps the tool, and a call to it says the server is not there.
     const mcpTools = [...(mcp?.tools ?? []), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map(mcpStub)];
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
-    const extra = [...(spawnOn ? [spawn] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), ...mcpTools];
-    const tools = reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
+    const extra = [...(spawnOn ? [spawn] : []), ...(askOn && store && threadId ? [askTool] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
+    const tools = reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
     if (writing) writerRuns.push({ log, from: log.events.length });
     const result = await runPrompt(
       {
