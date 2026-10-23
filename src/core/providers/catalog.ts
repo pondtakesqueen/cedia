@@ -86,6 +86,12 @@ const go = (id: string, wire: ModelSpec['wire'], price: ModelSpec['price'], extr
   ...extra,
 });
 
+// The idea of ponytail's ladder (MIT, github.com/dietrichgebert/ponytail), in cedia's own words, for the models that
+// write the code: Flash and Haiku.
+const LEAN_LINES = `- Before writing new code, take the first of these that does the job: nothing, when the task does not need it; code the repository already has; the standard library or the platform; a dependency already installed; one line. Only then write the smallest new code that works. Shorter code is never a reason to drop input checks, error handling that keeps data safe, or security checks.
+- When new logic branches, loops, parses, or handles money or security, add a test of it to the test file that covers that code, in the same edit.
+- End your report with one line on what you left out or did not check.`;
+
 // DeepSeek V4.1 Flash's own lines. Against Claude Code on hard-pool (2026-10-22) it took 12 to 14 turns to
 // Claude's 5: it wrote test files of its own and then fixed them, ran the tests five times in a loop to look for
 // flakiness, and spent a call on each ls, cat and grep. On hard-csv-stream and hard-memo-async (2026-10-23) it
@@ -101,9 +107,12 @@ const DEEPSEEK_PROMPT = `For this model in particular:
 - Put independent shell steps in one bash call (\`ls src && cat package.json && grep -n foo src/a.ts\`) instead of one call each.
 - Once the checks pass after your last change, report. Do not write fuzz, timing or mutation scripts of your own to test the change further: they ran for minutes and changed nothing in every run that tried, and a run that is still checking when its time runs out reports nothing.
 - Make the changes a file needs in as few edits as you can: write a new function whole in one edit rather than building it up over several.
-- Before writing new code, take the first of these that does the job: nothing, when the task does not need it; code the repository already has; the standard library or the platform; a dependency already installed; one line. Only then write the smallest new code that works. Shorter code is never a reason to drop input checks, error handling that keeps data safe, or security checks.
-- When new logic branches, loops, parses, or handles money or security, add a test of it to the test file that covers that code, in the same edit.
-- End your report with one line on what you left out or did not check.`;
+${LEAN_LINES}`;
+
+// Haiku 5.5's own lines: the ladder, so its changes come out as short as the task allows. In blind reviews against
+// Claude Code with Opus (2026-10-23), the one axis Haiku kept losing on was the clarity and size of its code.
+const HAIKU_PROMPT = `For this model in particular:
+${LEAN_LINES}`;
 
 const deepseekFlashPrice = { ...p(0.3, 1.2, 0.006), offPeak: { ...p(0.15, 0.6, 0.003), isOffPeak: deepseekOffPeak } };
 const haikuPrice = { ...p(0.1, 0.5, 0.01, 0.125), above: { tokens: 100_000, price: p(0.5, 2.5, 0.05, 0.625) } };
@@ -116,8 +125,8 @@ export const CATALOG: ModelSpec[] = [
   claude('claude-sonnet-5-5', p(2, 10, 0.2, 2.5), { defaultEffort: 'high' }),
   // Haiku starts at low and escalates to high when the done gate refuses a claim: on the gate suite that kept
   // 48/48 and cost 21% less for the typical task than medium (2026-10-22, evals/gate/README.md).
-  claude('claude-haiku-5-5', haikuPrice, { defaultEffort: 'low' }),
-  go('claude-haiku-5-5', 'anthropic-messages', haikuPrice, { maxOutput: 128_000, dataPolicy: 'retained', defaultEffort: 'low' }),
+  claude('claude-haiku-5-5', haikuPrice, { defaultEffort: 'low', prompt: HAIKU_PROMPT }),
+  go('claude-haiku-5-5', 'anthropic-messages', haikuPrice, { maxOutput: 128_000, dataPolicy: 'retained', defaultEffort: 'low', prompt: HAIKU_PROMPT }),
   go('deepseek-v4.1-flash', 'chat-completions', deepseekFlashPrice, { prompt: DEEPSEEK_PROMPT }),
   go('deepseek-v4-pro', 'chat-completions', { ...p(1.32, 3.96, 0.044), offPeak: { ...p(0.66, 1.98, 0.022), isOffPeak: deepseekOffPeak } }),
   go('beam-free', 'chat-completions', p(0, 0, 0), { dataPolicy: 'retained' }),
@@ -170,6 +179,7 @@ export const CATALOG: ModelSpec[] = [
     auth: OPENROUTER_AUTH,
     maxOutput: 64_000,
     defaultEffort: 'low',
+    prompt: HAIKU_PROMPT,
     price: haikuPrice,
     dataPolicy: 'zdr',
     body: { provider: { order: ['amazon-bedrock'], allow_fallbacks: false, zdr: true, data_collection: 'deny' } },

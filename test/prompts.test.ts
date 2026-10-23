@@ -3,14 +3,19 @@ import { BASE_SYSTEM, preamble, systemFor } from '../src/core/prompts.ts';
 import { CATALOG, FAUX_MODEL, resolveModel } from '../src/core/providers/catalog.ts';
 
 describe('system prompt per model', () => {
-  test("DeepSeek Flash gets its own lines after the base on every route; other models get the base alone", () => {
+  test("Flash and Haiku get their own lines after the base on every route; other models get the base alone", () => {
     for (const ref of ['opencode-go/deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash', 'openrouter/deepseek-v4.1-flash']) {
       const s = systemFor(resolveModel(ref));
       expect(s.startsWith(`${BASE_SYSTEM}\n\nFor this model in particular:\n`)).toBe(true);
       expect(s).toContain('Do not create test files of your own.');
       expect(s).toContain('Run a check once after your last change.');
     }
-    expect(systemFor(resolveModel('haiku'))).toBe(BASE_SYSTEM);
+    for (const ref of ['anthropic/claude-haiku-5-5', 'opencode-go/claude-haiku-5-5', 'openrouter/claude-haiku-5-5']) {
+      const s = systemFor(resolveModel(ref));
+      expect(s.startsWith(`${BASE_SYSTEM}\n\nFor this model in particular:\n`)).toBe(true);
+      expect(s).toContain('take the first of these that does the job');
+      expect(s).not.toContain('Do not create test files of your own.');
+    }
     expect(systemFor(resolveModel('opus'))).toBe(BASE_SYSTEM);
     expect(systemFor(FAUX_MODEL)).toBe(BASE_SYSTEM);
   });
