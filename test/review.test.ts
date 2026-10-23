@@ -9,6 +9,19 @@ describe('review', () => {
     expect(parseVerdict('looks fine to me')).toEqual({ verdict: 'unclear', findings: 'looks fine to me' });
   });
 
+  test('an approval that still names a file and line counts as changes', () => {
+    const named = '- `memo.ts:41` counts expired entries in size, so eviction drops a live one.\n\nVERDICT: approve';
+    expect(parseVerdict(named)).toEqual({ verdict: 'changes', findings: '- `memo.ts:41` counts expired entries in size, so eviction drops a live one.', overruled: true });
+    expect(parseVerdict('src/csv/stream.ts:12-20 leaves the stream open on an early return.\nVERDICT: approve').verdict).toBe('changes');
+    expect(parseVerdict('(see lib/window.ts:7)\n**VERDICT: Approve**').overruled).toBe(true);
+    // No file and line: the approval stands, whatever else the text holds.
+    for (const t of ['Nothing to fix.\nVERDICT: approve', 'Checked at 12:30, v1.2 is fine.\nVERDICT: approve', 'The parser handles quotes.\nVERDICT: approve'])
+      expect(parseVerdict(t)).toEqual({ verdict: 'approve', findings: t.split('\n')[0]! });
+    expect(parseVerdict('a.ts:3 drops the error.\nVERDICT: changes').overruled).toBeUndefined();
+    expect(reviewPrompt('t', undefined, undefined)).toContain('an approval names none');
+    expect(askedReviewPrompt({ kind: 'changes', untracked: [] }, '+x')).toContain('an approval names none');
+  });
+
   test('the prompt carries the task, the receipt and the diff, and drops a diff that is too long', () => {
     const ev = { changed: ['a.ts'], checks: [{ command: 'bun test', exitCode: 0 }], unverified: [] };
     const p = reviewPrompt('fix the parser', ev, '+x');
