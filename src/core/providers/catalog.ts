@@ -84,6 +84,14 @@ const go = (id: string, wire: ModelSpec['wire'], price: ModelSpec['price'], extr
   ...extra,
 });
 
+// DeepSeek V4.1 Flash's own lines. Against Claude Code on hard-pool (2026-10-22) it took 12 to 14 turns to
+// Claude's 5: it wrote test files of its own and then fixed them, ran the tests five times in a loop to look for
+// flakiness, and spent a call on each ls, cat and grep. Each rule says why, in cedia's own words.
+const DEEPSEEK_PROMPT = `For this model in particular:
+- Do not create test files of your own. When the task needs a new case, add it to the test file that already covers that code, in the same edit as the fix. A new file is one more thing to run, read and fix.
+- Run a check once after your last change. A pass is the evidence; running it again in a loop to look for flakiness proves nothing new and costs a turn each time.
+- Put independent shell steps in one bash call (\`ls src && cat package.json && grep -n foo src/a.ts\`) instead of one call each.`;
+
 const deepseekFlashPrice = { ...p(0.3, 1.2, 0.006), offPeak: { ...p(0.15, 0.6, 0.003), isOffPeak: deepseekOffPeak } };
 const haikuPrice = { ...p(0.1, 0.5, 0.01, 0.125), above: { tokens: 100_000, price: p(0.5, 2.5, 0.05, 0.625) } };
 
@@ -97,7 +105,7 @@ export const CATALOG: ModelSpec[] = [
   // 48/48 and cost 21% less for the typical task than medium (2026-10-22, evals/gate/README.md).
   claude('claude-haiku-5-5', haikuPrice, { defaultEffort: 'low' }),
   go('claude-haiku-5-5', 'anthropic-messages', haikuPrice, { maxOutput: 128_000, dataPolicy: 'retained', defaultEffort: 'low' }),
-  go('deepseek-v4.1-flash', 'chat-completions', deepseekFlashPrice),
+  go('deepseek-v4.1-flash', 'chat-completions', deepseekFlashPrice, { prompt: DEEPSEEK_PROMPT }),
   go('deepseek-v4-pro', 'chat-completions', { ...p(1.32, 3.96, 0.044), offPeak: { ...p(0.66, 1.98, 0.022), isOffPeak: deepseekOffPeak } }),
   go('beam-free', 'chat-completions', p(0, 0, 0), { dataPolicy: 'retained' }),
   go('muse-spark-1.3-contributor', 'openai-responses', p(0.1, 0.2, 0.002), { dataPolicy: 'trains' }),
@@ -113,6 +121,7 @@ export const CATALOG: ModelSpec[] = [
     maxOutput: 32_000,
     price: deepseekFlashPrice,
     dataPolicy: 'trains',
+    prompt: DEEPSEEK_PROMPT,
     caps: chatCaps,
   },
   // The same model through OpenRouter, paid per token. OpenRouter serves it from about 30 endpoints with caches
@@ -132,6 +141,7 @@ export const CATALOG: ModelSpec[] = [
     price: p(0.1, 0.6, 0.003),
     dataPolicy: 'zdr',
     body: { provider: { order: ['cloudflare', 'deepinfra/fp8'], allow_fallbacks: false, zdr: true, data_collection: 'deny' } },
+    prompt: DEEPSEEK_PROMPT,
     caps: chatCaps,
   },
 ];

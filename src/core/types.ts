@@ -129,6 +129,9 @@ export type ModelSpec = {
   cacheKeyField?: 'prompt_cache_key';
   // Fields every request body carries as they are (chat wire), e.g. OpenRouter's provider routing.
   body?: JsonObject;
+  // Lines for this model after cedia's base prompt (core/prompts.ts systemFor): where a model family's habits
+  // cost turns that the base prompt's rules do not stop. Fixed per model, so a session's prefix stays the same.
+  prompt?: string;
   maxOutput: number;
   defaultEffort?: Effort;
   price: Price & { offPeak?: Price & { isOffPeak: (d: Date) => boolean }; above?: { tokens: number; price: Price } };
