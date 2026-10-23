@@ -14,6 +14,7 @@ export type { PermissionEntry, PermissionList } from '../core/safety/policy.ts';
 export type { CommandEntry, CommandList } from '../core/skills/skills.ts';
 export type { Restored } from '../core/project/undo.ts';
 export type { RewindResult } from '../core/project/rewind.ts';
+export type { DeleteResult } from '../core/project/delete.ts';
 export type { Capability, VersionInfo } from './version.ts';
 
 export type CoreMessage = { type: 'event'; event: SessionEvent } | { type: 'stream'; event: StreamEvent } | HeadlessResult;
