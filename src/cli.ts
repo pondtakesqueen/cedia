@@ -18,7 +18,7 @@ import { forkThread } from './core/project/fork.ts';
 import { workspaceSnapshots } from './core/safety/snapshot.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
-import { formatUsage, isUsageEvent, readEventsLenient, usageReport, type SessionInput } from './core/session/usage.ts';
+import { formatUsage, isUsageEvent, readEventsLenient, sinceOf, usageReport, type SessionInput } from './core/session/usage.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
 import { versionInfo } from './protocol/version.ts';
 
@@ -82,9 +82,11 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --no-session-file        keep the session log in memory only
 
        cedia lint-session <file.jsonl>...   check session logs against the trust invariants
-       cedia usage [<file.jsonl>... | --thread <id> | --last <n>] [--json] [--cwd <dir>]
+       cedia usage [<file.jsonl>... | --thread <id> | --last <n> | --since <day|Nd>] [--all] [--json] [--cwd <dir>]
                                             where the spend went: input by source, the costliest tool results,
-                                            cache misses by cause (default: this project's last 20 sessions)
+                                            cache misses by cause, and cost by day, model, project and thread
+                                            (default: this project's last 20 sessions; --since: every session
+                                            in the range; --all: every project)
        cedia threads [--all] [--cwd <dir>]  list this project's threads (--all: archived ones too)
        cedia threads show <id>              a thread's task, state, sessions, handoff note, result and messages
        cedia threads send <id> <text>       leave a message the thread sees at its next turn; prints the message id
@@ -279,29 +281,58 @@ function usage(argv: string[]): number {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { cwd: { type: 'string' }, thread: { type: 'string' }, last: { type: 'string' }, json: { type: 'boolean' } },
+    options: { cwd: { type: 'string' }, thread: { type: 'string' }, last: { type: 'string' }, since: { type: 'string' }, all: { type: 'boolean' }, json: { type: 'boolean' } },
   });
   const cwd = values.cwd ?? process.cwd();
-  let files = positionals;
+  const home = cediaHome();
   try {
-    if (!files.length && values.thread) {
-      const store = new ThreadStore(threadsDir(cediaHome(), projectKey(cwd)));
+    const since = values.since === undefined ? undefined : sinceOf(values.since);
+    let inputs: { path: string; project?: string }[] = positionals.map((path) => ({ path }));
+    if (!inputs.length && values.thread) {
+      const store = new ThreadStore(threadsDir(home, projectKey(cwd)));
       // The thread and every sub-thread under it, however deep.
       const all = store.list();
       const ids = [values.thread];
       for (let i = 0; i < ids.length; i++) ids.push(...all.filter((t) => t.parent === ids[i]).map((t) => t.id));
-      files = ids.flatMap((id) => store.read(id).sessions.map((s) => s.path ?? sessionPath(cwd, s.sessionId, cediaHome())));
-    } else if (!files.length) {
-      const dir = join(cediaHome(), 'sessions', projectKey(cwd));
-      const all = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => join(dir, f)) : [];
-      files = all.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs).slice(0, Number(values.last ?? 20));
+      inputs = ids.flatMap((id) => store.read(id).sessions.map((s) => ({ path: s.path ?? sessionPath(cwd, s.sessionId, home), project: projectKey(cwd) })));
+    } else if (!inputs.length) {
+      const root = join(home, 'sessions');
+      const keys = values.all ? (existsSync(root) ? readdirSync(root) : []) : [projectKey(cwd)];
+      const found = keys.flatMap((project) => {
+        const dir = join(root, project);
+        if (!existsSync(dir) || !statSync(dir).isDirectory()) return [];
+        return readdirSync(dir)
+          .filter((f) => f.endsWith('.jsonl'))
+          .map((f) => ({ path: join(dir, f), project, mtime: statSync(join(dir, f)).mtimeMs }));
+      });
+      found.sort((a, b) => b.mtime - a.mtime);
+      // A range reads every session written in it; otherwise the newest few.
+      inputs = since ? found.filter((f) => f.mtime >= since.getTime()) : found.slice(0, Number(values.last ?? 20));
     }
-    const sessions: SessionInput[] = files.filter(existsSync).map((f) => ({ id: basename(f).replace(/\.jsonl$/, ''), events: readEventsLenient(readFileSync(f, 'utf8')).filter(isUsageEvent) }));
+    // Which thread each session is part of, from each project's threads.
+    const threadOf = new Map<string, { thread: string; title: string }>();
+    for (const project of new Set(inputs.map((i) => i.project).filter((p) => p !== undefined))) {
+      for (const t of new ThreadStore(threadsDir(home, project)).list()) {
+        for (const s of t.sessions) threadOf.set(s.sessionId, { thread: t.id, title: t.title });
+      }
+    }
+    const sessions: SessionInput[] = inputs
+      .filter((i) => existsSync(i.path))
+      .map((i) => {
+        const id = basename(i.path).replace(/\.jsonl$/, '');
+        const t = threadOf.get(id);
+        return { id, events: readEventsLenient(readFileSync(i.path, 'utf8')).filter(isUsageEvent), ...(i.project ? { project: i.project } : {}), ...(t ?? {}) };
+      });
     if (!sessions.length) {
+      // An empty range is an answer, not an error, for a client that asks for one.
+      if (since && values.json) {
+        console.log(JSON.stringify(usageReport([], { since })));
+        return 0;
+      }
       console.error('cedia: no session logs to read');
       return 1;
     }
-    const report = usageReport(sessions);
+    const report = usageReport(sessions, { since });
     console.log(values.json ? JSON.stringify(report) : formatUsage(report));
     return 0;
   } catch (e) {
