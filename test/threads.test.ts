@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { loadHandoff } from '../src/core/config.ts';
 import { runPrompt } from '../src/core/loop/run.ts';
 import { HANDOFF_NO_TOOLS, HANDOFF_PROMPT, defaultHandoffAt, resumeChoice } from '../src/core/project/handoff.ts';
+import { deleteThread } from '../src/core/project/delete.ts';
 import { foldThread, threadsDir, ThreadStore, titleOf, type TodoState } from '../src/core/project/threads.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, type FauxStep } from '../src/core/providers/faux.ts';
@@ -39,6 +40,48 @@ describe('thread store', () => {
     expect(t.messages.map((m) => m.id)).toEqual([a, b]);
     expect(t.pending.map((m) => m.id)).toEqual([b]);
     expect(store.list().map((x) => x.id)).toEqual([id]);
+  });
+
+  test('a rename is the title from then on, and a rewind keeps it', () => {
+    const store = new ThreadStore(join(tmp(), 'threads'));
+    const id = store.open('Fix the login bug');
+    store.append(id, { kind: 'run', id: 'r1', prompt: 'Fix the login bug', cwd: '/' });
+    expect(store.rename(id, '  Login redirect\nignored line')).toBe('Login redirect');
+    store.append(id, { kind: 'rewind', run: 'r1' });
+    expect(store.read(id).title).toBe('Login redirect');
+    store.rename(id, 'Login, again');
+    expect(store.read(id).title).toBe('Login, again');
+    expect(() => store.rename(id, '   ')).toThrow('cannot be empty');
+    expect(() => store.rename('t-12345678', 'x')).toThrow('no thread t-12345678');
+  });
+
+  test('delete takes the thread, its sub-threads and their logs, keeps a log another thread names, and refuses a run', () => {
+    const dir = tmp();
+    const store = new ThreadStore(join(dir, 'threads'));
+    const log = (name: string) => {
+      const path = join(dir, `${name}.jsonl`);
+      writeFileSync(path, '{}\n');
+      return path;
+    };
+    const id = store.open('task');
+    store.append(id, { kind: 'session', sessionId: 's1', model: 'm', role: 'code', why: 'start', path: log('s1') });
+    store.append(id, { kind: 'session', sessionId: 'shared', model: 'm', role: 'code', why: 'handoff', path: log('shared') });
+    const sub = store.open('part', { parent: id });
+    store.append(sub, { kind: 'session', sessionId: 's2', model: 'm', role: 'code', why: 'start', path: log('s2') });
+    const other = store.open('other');
+    store.append(other, { kind: 'session', sessionId: 'shared', model: 'm', role: 'code', why: 'fork', path: join(dir, 'shared.jsonl') });
+
+    store.append(sub, { kind: 'run', id: 'r1', prompt: 'part', cwd: '/' });
+    expect(deleteThread(store, id)).toEqual({ error: `thread ${sub} is running; stop it first, or pass --force` });
+    expect(store.has(id)).toBe(true);
+    store.append(sub, { kind: 'state', state: 'done' });
+
+    expect(deleteThread(store, id)).toEqual({ threads: [id, sub], sessions: [join(dir, 's1.jsonl'), join(dir, 's2.jsonl')] });
+    expect(store.list().map((t) => t.id)).toEqual([other]);
+    expect(existsSync(join(dir, 's1.jsonl'))).toBe(false);
+    expect(existsSync(join(dir, 's2.jsonl'))).toBe(false);
+    expect(existsSync(join(dir, 'shared.jsonl'))).toBe(true);
+    expect(deleteThread(store, id)).toEqual({ error: `no thread ${id} in this project` });
   });
 
   test('refuses an unknown thread and anything that is not a thread id', () => {
