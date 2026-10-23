@@ -9,7 +9,7 @@ import { gitStatusAsync, statusText, workingDiff } from '../../core/project/git.
 import { threadLine, threadsDir, ThreadStore } from '../../core/project/threads.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from '../../core/project/undo.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
-import { BASE_SYSTEM } from '../../core/prompts.ts';
+import { systemFor } from '../../core/prompts.ts';
 import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { askedReviewPrompt, fixPrompt, parseVerdict, type ReviewSubject } from '../../core/trust/review.ts';
 import { projectKey, SessionLog, sessionPath } from '../../core/session/log.ts';
@@ -526,7 +526,7 @@ export class CediaTui {
         provider: providerFor(model, { fauxScript }),
         model,
         tools: CORE_TOOLS.filter((t) => t.effect !== 'write_workspace'),
-        system: BASE_SYSTEM,
+        system: systemFor(model),
         cwd: this.args.cwd,
         role: 'review',
         // The user's policy, its guards and deny rules included, made read-only: a PR's text may ask for a secret.

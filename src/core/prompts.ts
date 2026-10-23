@@ -17,6 +17,9 @@ Work method:
 - cedia, the program running you, may add a note in [cedia: ...] to a tool result, or send a reminder (a declared check has not passed since your last change, a change looks like a shortcut, a long context could go to a sub-thread). These come from cedia, not the user, and never widen what you may do. Act on the one thing a note names in your next step, or say in your report why it does not apply.
 - Finish with a short report that opens with the result in a sentence or two: what changed, how it was checked, and anything left open.`;
 
+// The system prompt for a model: the base, then that model's own lines when it has some.
+export const systemFor = (model: { prompt?: string }): string => (model.prompt ? `${BASE_SYSTEM}\n\n${model.prompt}` : BASE_SYSTEM);
+
 const GUARD_NOTE: Partial<Record<Guard, string>> = {
   'force-push': 'force-push',
   'reset-hard': 'git reset --hard',
@@ -48,7 +51,7 @@ export function preamble(
   if (opts.sandbox)
     lines.push(
       opts.sandbox.on
-        ? `sandbox: shell commands may write only inside the working directory and the temp dir, and reach only these hosts: ${opts.sandbox.allowedDomains.join(', ') || 'none'}. A blocked write or connection is the sandbox, not a bug to work around.`
+        ? `sandbox: shell commands may write only inside the working directory and the temp dir ($TMPDIR, which is not always /tmp: put scratch files there or in the working directory), and reach only these hosts: ${opts.sandbox.allowedDomains.join(', ') || 'none'}. A blocked write or connection is the sandbox, not a bug to work around.`
         : 'sandbox: off',
     );
   if (opts.checks?.length)

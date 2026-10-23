@@ -129,6 +129,9 @@ export type ModelSpec = {
   cacheKeyField?: 'prompt_cache_key';
   // Fields every request body carries as they are (chat wire), e.g. OpenRouter's provider routing.
   body?: JsonObject;
+  // Lines for this model after cedia's base prompt (core/prompts.ts systemFor): where a model family's habits
+  // cost turns that the base prompt's rules do not stop. Fixed per model, so a session's prefix stays the same.
+  prompt?: string;
   maxOutput: number;
   defaultEffort?: Effort;
   price: Price & { offPeak?: Price & { isOffPeak: (d: Date) => boolean }; above?: { tokens: number; price: Price } };
@@ -214,8 +217,15 @@ export type HeadlessResult = {
   // The plan the writer was given, and the review of its change (see core/trust/review.ts).
   plan?: Step;
   review?: Step & { verdict: 'approve' | 'changes' | 'unclear'; fixed: boolean };
-  // Light goal mode (core/trust/goal.ts): the condition, the last judge's verdict, and each judgement.
-  goal?: { condition: string; verdict: 'met' | 'not_met' | 'impossible'; rounds: { verdict: 'met' | 'not_met' | 'impossible'; reason: string; judge: string; sessionId: string; costUsd: number }[] };
+  // Goal mode (core/trust/goal.ts): the condition, the last judge's verdict, and each judgement. Full mode adds the
+  // planner's criteria, which each round left unmet, and the strategist's proposal when one ran.
+  goal?: {
+    condition: string;
+    verdict: 'met' | 'not_met' | 'impossible';
+    rounds: { verdict: 'met' | 'not_met' | 'impossible'; reason: string; judge: string; sessionId: string; costUsd: number; unmet?: string[] }[];
+    plan?: { criteria: { id: string; text: string }[]; sessionId: string; costUsd: number };
+    strategy?: { text: string; sessionId: string; costUsd: number; round: number };
+  };
   // The advisor's session: the writer turns it read and the notes it left (see core/trust/advisor.ts).
   advice?: Step & { turns: number; notes: number };
   // The classifier's session: the commands it read and the ones it blocked (see core/trust/classifier.ts).
