@@ -8,7 +8,7 @@ export type FileChange = { path: string; added: string[]; removed: string[]; del
 export type SlopRule = 'test-deleted' | 'test-weakened' | 'test-skipped' | 'suppression' | 'swallowed-error' | 'type-escape' | 'stub';
 export type SlopFinding = { rule: SlopRule; path: string; line?: string };
 
-const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.(py|go|rs)$/;
+export const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]*\.py$|_test\.(py|go|rs)$/;
 // Prose may quote any of these patterns; only code is scanned.
 const PROSE = /\.(md|mdx|markdown|txt|rst|adoc)$/i;
 const ASSERTION = /\b(expect|assert\w*|should)\b|\b(it|test|describe)\s*\(/;

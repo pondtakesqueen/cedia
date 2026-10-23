@@ -37,8 +37,10 @@ export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'drop
 
 // Rules look like `bash`, `bash(bun test*)` or `edit(src/*)`. `*` matches anything. A bash pattern is
 // matched against each simple command in the line, so `bun test && rm -rf x` needs both to be allowed.
-// `secrets` are credential stores no tool may read or write (see secretPaths).
-export type Policy = { mode: PermissionMode; plan?: boolean; allow: string[]; deny: string[]; unlock?: Guard[]; secrets?: string[] };
+// `secrets` are credential stores no tool may read or write (see secretPaths). `protect`: files no tool may change
+// for this run, and why: the tests a task said to leave alone (core/trust/tests.ts). They hold as edit deny rules
+// do, for commands too.
+export type Policy = { mode: PermissionMode; plan?: boolean; allow: string[]; deny: string[]; unlock?: Guard[]; secrets?: string[]; protect?: { paths: string[]; reason: string } };
 export const READ_ONLY_POLICY: Policy = { mode: 'read-only', allow: [], deny: [] };
 
 export type Decision = { decision: 'allow' | 'deny'; rule: string; reason?: string };
@@ -68,6 +70,14 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
     if (matches(rule, tool, commands, path, cwd, 'any')) return deny(`deny:${rule}`, `matches the deny rule ${rule}`);
     if (command !== undefined && commands && writesDenied(rule, command, commands, cwd))
       return deny(`deny:${rule}`, `may write a path the deny rule ${rule} covers; that rule holds for commands too`);
+  }
+  if (effect !== 'read' && policy.protect) {
+    const tool = spec.name === 'write' ? 'edit' : spec.name;
+    const hit = policy.protect.paths.find((p) => {
+      const rule = `edit(${p})`;
+      return commands ? writesDenied(rule, command!, commands, cwd) : matches(rule, tool, commands, path, cwd, 'any');
+    });
+    if (hit !== undefined) return deny('protected-test', `${hit}: ${policy.protect.reason}`);
   }
 
   if (effect === 'read' || effect === 'network') return { decision: 'allow', rule: 'effect:read' };
