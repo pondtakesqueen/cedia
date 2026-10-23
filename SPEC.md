@@ -79,11 +79,13 @@ These are fixed before stage 1 code is written. Names may change; the informatio
 // Assistant content keeps each wire's opaque reasoning payload so it can be replayed byte for byte.
 type AssistantBlock =
   | { type: 'text'; text: string; sig?: string }
-  | { type: 'thinking'; text: string; opaque?: string; redacted?: boolean }
+  | { type: 'thinking'; text: string; opaque?: string; redacted?: boolean; ms?: number } // ms: from its first delta to its end
   | { type: 'tool_use'; id: string; callId?: string; name: string; input: JsonObject; inputError?: string }
   | { type: 'compaction'; text: string; opaque: string }; // a provider-written summary and its signature
-// The assistant event records which wire produced it; blocks are only replayed to the same wire.
-type AssistantEvent = { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage };
+// The assistant event records which wire produced it; blocks are only replayed to the same wire. costUsd is the
+// reply's cost at the model's price when it ran, so a client shows a run's spend as it grows; a block's ms and the
+// event's costUsd never reach a provider.
+type AssistantEvent = { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; costUsd?: number };
 type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'aborted' | 'error' | 'compaction';
 // Handoff by compaction: the request (`of`: the request whose messages it summarizes) and its outcome in the old
 // session; first in the new one, the summary, followed by `kept` copies of the old session's events.
