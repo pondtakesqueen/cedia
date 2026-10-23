@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { loadHandoff } from '../src/core/config.ts';
 import { runPrompt } from '../src/core/loop/run.ts';
 import { HANDOFF_NO_TOOLS, HANDOFF_PROMPT, defaultHandoffAt, resumeChoice } from '../src/core/project/handoff.ts';
 import { foldThread, threadsDir, ThreadStore, titleOf, type TodoState } from '../src/core/project/threads.ts';
@@ -255,6 +256,26 @@ describe('handoff in the loop', () => {
     const m = resolveModel('faux');
     expect(defaultHandoffAt({ ...m, caps: { ...m.caps, contextWindow: 128_000 } })).toBe(64_000);
     expect(defaultHandoffAt({ ...m, caps: { ...m.caps, contextWindow: 1_000_000 }, price: { ...m.price, above: { tokens: 100_000, price: m.price } } })).toBe(90_000);
+    // Where a cache read costs a twentieth of input, sooner; a fortieth stays at the cap.
+    expect(defaultHandoffAt(resolveModel('anthropic/claude-opus-5-5'))).toBe(115_000);
+    expect(defaultHandoffAt(resolveModel('anthropic/claude-sonnet-5-5'))).toBe(115_000);
+    expect(defaultHandoffAt(resolveModel('anthropic/claude-fable-5-1'))).toBe(150_000);
+    expect(defaultHandoffAt(resolveModel('anthropic/claude-haiku-5-5'))).toBe(90_000);
+  });
+
+  test('a session hands off by compaction unless a flag or the settings say note', () => {
+    const home = tmp();
+    const was = process.env.CEDIA_HOME;
+    process.env.CEDIA_HOME = home;
+    try {
+      expect(loadHandoff()).toBe('compact');
+      expect(loadHandoff('note')).toBe('note');
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ handoff: 'note' }));
+      expect(loadHandoff()).toBe('note');
+    } finally {
+      if (was === undefined) delete process.env.CEDIA_HOME;
+      else process.env.CEDIA_HOME = was;
+    }
   });
 });
 
@@ -286,7 +307,7 @@ describe('cedia threads (offline, faux)', () => {
 
   test('a long session hands off: the new session starts from the task and the note, can recall, and must still verify', () => {
     const dir = tmp();
-    const r = cedia(dir, [call('c1', 'echo good > f.txt && seq 1 6000'), reply('Wrote f.txt. Next: run the check.'), call('c2', 'grep -q good f.txt'), reply('done')], ['-p', 'make f.txt say good', ...base, '--handoff-at', '2000']);
+    const r = cedia(dir, [call('c1', 'echo good > f.txt && seq 1 6000'), reply('Wrote f.txt. Next: run the check.'), call('c2', 'grep -q good f.txt'), reply('done')], ['-p', 'make f.txt say good', ...base, '--handoff-at', '2000', '--handoff', 'note']);
     const result = JSON.parse(r.out);
     expect(result).toMatchObject({ subtype: 'success', numTurns: 4, evidence: { changed: ['f.txt'], unverified: [] } });
     expect(result.sessions).toHaveLength(2);
@@ -303,7 +324,7 @@ describe('cedia threads (offline, faux)', () => {
     expect(t.sessions.map((s) => s.why)).toEqual(['start', 'handoff']);
 
     // The handed-off session's claim still needs a check after the first session's write.
-    const lazy = cedia(tmp(), [call('c1', 'echo good > f.txt && seq 1 6000'), reply('note'), reply('done'), reply('done')], ['-p', 'make f.txt say good', ...base, '--handoff-at', '2000']);
+    const lazy = cedia(tmp(), [call('c1', 'echo good > f.txt && seq 1 6000'), reply('note'), reply('done'), reply('done')], ['-p', 'make f.txt say good', ...base, '--handoff-at', '2000', '--handoff', 'note']);
     expect(JSON.parse(lazy.out)).toMatchObject({ subtype: 'error_unverified_claim', evidence: { unverified: ['f.txt'] } });
   });
 
@@ -669,7 +690,7 @@ describe('sub-threads (offline, faux)', () => {
       call('c3', 'grep -q good f.txt'),
       reply('done, checked'),
     ];
-    const run = cedia(dir, script, ['-p', 'make f.txt say good', ...ws, '--handoff-at', '2000']);
+    const run = cedia(dir, script, ['-p', 'make f.txt say good', ...ws, '--handoff-at', '2000', '--handoff', 'note']);
     const result = JSON.parse(run.out);
     expect(result).toMatchObject({ subtype: 'success', result: 'done, checked', evidence: { unverified: [] } });
     expect(run.err).toContain("a sub-thread's context reached 2000 tokens; handing it off to a new session");
@@ -700,7 +721,7 @@ describe('sub-threads (offline, faux)', () => {
 
     // The new session inherits the first one's write, so its claim still needs a check after it.
     const lazyDir = tmp();
-    const lazy = cedia(lazyDir, [script[0], script[1], script[2], reply('done'), reply('done'), call('c3', 'grep -q good f.txt'), reply('fixed it myself')], ['-p', 'make f.txt say good', ...ws, '--handoff-at', '2000']);
+    const lazy = cedia(lazyDir, [script[0], script[1], script[2], reply('done'), reply('done'), call('c3', 'grep -q good f.txt'), reply('fixed it myself')], ['-p', 'make f.txt say good', ...ws, '--handoff-at', '2000', '--handoff', 'note']);
     const lazyResult = JSON.parse(lazy.out);
     expect(lazyResult.subtype).toBe('success');
     const lazyParent = sessionsOf(lazyDir).find((l) => l.id === lazyResult.sessionId)!;

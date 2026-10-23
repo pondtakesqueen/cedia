@@ -11,9 +11,16 @@ import { inert } from '../trust/frame.ts';
 // otherwise re-read up to 500k cached tokens every turn. A model with a long-context price hands off before the
 // whole request moves to it, with room for one more turn.
 export const HANDOFF_CAP = 150_000;
+// Where cache reads cost a twentieth of input (Opus 5.5, Sonnet 5.5), each turn's re-read outweighs a handoff
+// sooner: replaying the 65 sessions on file that passed 60k at those prices put the cheapest point at 80k to 90k,
+// with 115k 0.8% above it and 150k 2.1%. 115k keeps more of the task in one session for about the same cost.
+// Fable (a fortieth) stays at the cap, and the replay found it flat there.
+export const HANDOFF_CAP_TWENTIETH = 115_000;
 export function defaultHandoffAt(model: ModelSpec): number {
   const above = model.price.above?.tokens;
-  return Math.min(Math.floor(model.caps.contextWindow / 2), HANDOFF_CAP, above ? Math.floor(above * 0.9) : Infinity);
+  const ratio = model.price.input ? model.price.cacheRead / model.price.input : 0;
+  const cap = ratio > 0.025 && ratio <= 0.05 ? HANDOFF_CAP_TWENTIETH : HANDOFF_CAP;
+  return Math.min(Math.floor(model.caps.contextWindow / 2), cap, above ? Math.floor(above * 0.9) : Infinity);
 }
 
 // Handoffs in one run, at most; past it the session goes on in its own context until it ends.
