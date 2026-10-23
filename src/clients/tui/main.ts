@@ -1,6 +1,6 @@
 import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, Text, TUI, matchesKey, truncateToWidth, type Component, type MarkdownTheme, type Terminal } from '@mariozechner/pi-tui';
 import { readFileSync } from 'node:fs';
-import { cediaHome, loadPolicy, loadPrivacy, loadRoles } from '../../core/config.ts';
+import { cediaHome, isMode, loadPolicy, loadPrivacy, loadRoles, MODES } from '../../core/config.ts';
 import { COMMIT_SYSTEM, commitFiles, commitMessage, commitPatch, commitPrompt, currentBranch, defaultBranch, prBlocked, pullRequest, pushAndOpenPr, recentSubjects, threadChanges } from '../../core/project/commit.ts';
 import { runPrompt } from '../../core/loop/run.ts';
 import { resolveModel } from '../../core/providers/catalog.ts';
@@ -218,9 +218,14 @@ export class CediaTui {
     this.tui.requestRender();
   }
 
+  // The writer's model: the one picked, or the code role when a mode or nothing is.
+  private writer(): string {
+    return this.model && !isMode(this.model) ? this.model : loadRoles({}).code.ref;
+  }
+
   statusLine(): string {
     return [
-      this.model ?? loadRoles({}).code.ref,
+      isMode(this.model) ? `${this.model} · ${this.writer()}` : this.writer(),
       this.args.permission ?? 'auto',
       this.git,
       this.thread ?? 'new thread',
@@ -513,8 +518,11 @@ export class CediaTui {
           }
           break;
         case 'model':
-          if (!rest[0]) this.say(dim(`the next turn runs on ${this.model ?? loadRoles({}).code.ref}`));
-          else {
+          if (!rest[0]) this.say(dim(`the next turn runs on ${this.model ?? loadRoles({}).code.ref}; /model auto or /model oplan pick the steps around your writer`));
+          else if (isMode(rest[0])) {
+            this.model = rest[0];
+            this.say(dim(MODES.find((m) => m.name === rest[0])!.label));
+          } else {
             this.model = loadRoles({ code: rest[0] }).code.ref;
             this.say(dim(`the next turn runs on ${this.model}; a thread whose last session used another model goes on in a new session`));
           }
@@ -567,7 +575,7 @@ export class CediaTui {
 
   // The message comes from the next turn's model, in a session of its own with no tools, logged like any other.
   private async draftMessage(prompt: string, signal: AbortSignal): Promise<string> {
-    const model = resolveModel(this.model ?? loadRoles({}).code.ref);
+    const model = resolveModel(this.writer());
     const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
     const id = crypto.randomUUID();
     const log = SessionLog.create({ id, path: sessionPath(this.args.cwd, id) });
@@ -612,8 +620,8 @@ export class CediaTui {
       subject = { kind: 'changes', untracked: w.untracked };
       patch = w.patch;
     }
-    const roles = loadRoles(this.model ? { code: this.model } : {});
-    const model = roles.review?.via === 'cedia' ? roles.review.model : resolveModel(this.model ?? roles.code.ref);
+    const roles = loadRoles(this.model && !isMode(this.model) ? { code: this.model } : {});
+    const model = roles.review?.via === 'cedia' ? roles.review.model : resolveModel(this.writer());
     this.say(dim(`reviewing ${subject.kind === 'pr' ? `pull request #${subject.number}` : 'the uncommitted changes'} with ${model.ref}…`));
     const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
     const id = crypto.randomUUID();

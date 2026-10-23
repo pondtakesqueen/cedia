@@ -1,5 +1,6 @@
 // `cedia models --json`: the models a client may offer in a picker, and which of them this machine can send to
 // now. Available means a key for it is in the environment or the Keychain, as authKey finds it; nothing is sent.
+import { MODES } from '../config.ts';
 import { ALIASES, CATALOG, FAUX_MODEL } from './catalog.ts';
 import { authKey } from './http.ts';
 import type { Keychain } from './keychain.ts';
@@ -22,7 +23,8 @@ export type ModelEntry = {
   defaultEffort?: Effort;
 };
 
-export type ModelList = { default: string; models: ModelEntry[] };
+// modes: what a picker offers beside the models (`-m auto`, `-m oplan`; core/config.ts).
+export type ModelList = { default: string; models: ModelEntry[]; modes: { name: string; label: string }[] };
 
 const LABELS: Record<string, string> = {
   'claude-fable-5-1': 'Claude Fable 5.1',
@@ -65,7 +67,7 @@ export function modelEntry(m: ModelSpec, env: Env, keychain: Keychain | undefine
 // for it is set, as it is in offline tests.
 export function modelList(defaultRef: string, env: Env, keychain: Keychain | undefined): ModelList {
   const models = [...CATALOG, ...(env.CEDIA_FAUX_SCRIPT ? [FAUX_MODEL] : [])];
-  return { default: defaultRef, models: models.map((m) => modelEntry(m, env, keychain)) };
+  return { default: defaultRef, models: models.map((m) => modelEntry(m, env, keychain)), modes: MODES };
 }
 
 export function modelLine(e: ModelEntry, isDefault: boolean): string {

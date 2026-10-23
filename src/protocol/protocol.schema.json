@@ -932,11 +932,31 @@
           "items": {
             "$ref": "#/definitions/ModelEntry"
           }
+        },
+        "modes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "label"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [
         "default",
-        "models"
+        "models",
+        "modes"
       ],
       "additionalProperties": false
     },

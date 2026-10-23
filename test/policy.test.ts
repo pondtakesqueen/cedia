@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { checkSettings, loadContext, loadFallback, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSpawn } from '../src/core/config.ts';
+import { checkSettings, loadContext, loadFallback, loadPolicy, loadPrivacy, loadQuotaWait, isMode, loadPlanWhen, loadRoles, modeFlags, loadSpawn } from '../src/core/config.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
 import { preamble } from '../src/core/prompts.ts';
 import { decide, denyListed, insideWorkspace, real, type Policy } from '../src/core/safety/policy.ts';
@@ -291,15 +291,31 @@ describe('settings', () => {
 
       // Roles: flags > CEDIA_MODEL (code) > user settings > defaults; claude-code only for plan and review.
       const beam = resolveModel('beam');
-      expect(loadRoles({}, {})).toEqual({ code: flash, swarm: beam, workers: [] });
+      expect(loadRoles({}, {})).toEqual({ code: flash, triage: flash, swarm: beam, workers: [] });
       writeFileSync(join(home, 'settings.json'), JSON.stringify({ roles: { plan: 'claude-code', code: 'anthropic/claude-haiku-5-5', review: 'sonnet', swarm: 'deepseek', workers: 'haiku, deepseek,haiku' } }));
-      expect(loadRoles({}, {})).toEqual({ plan: { via: 'claude-code', model: 'opus', effort: 'medium' }, code: resolveModel('anthropic/claude-haiku-5-5'), review: { via: 'cedia', model: resolveModel('sonnet') }, swarm: flash, workers: [resolveModel('haiku'), flash] });
+      expect(loadRoles({}, {})).toEqual({ plan: { via: 'claude-code', model: 'opus', effort: 'medium' }, code: resolveModel('anthropic/claude-haiku-5-5'), triage: resolveModel('anthropic/claude-haiku-5-5'), review: { via: 'cedia', model: resolveModel('sonnet') }, swarm: flash, workers: [resolveModel('haiku'), flash] });
       expect(loadRoles({ workers: 'none' }, {}).workers).toEqual([]);
       expect(() => loadRoles({ workers: 'claude-code:sonnet' }, {})).toThrow('workers write');
       expect(loadRoles({}, { CEDIA_MODEL: 'beam' }).code.ref).toBe('opencode-go/beam-free');
-      expect(loadRoles({ code: 'deepseek', plan: 'none', review: 'claude-code:fable', swarm: 'beam' }, { CEDIA_MODEL: 'beam' })).toEqual({ code: flash, review: { via: 'claude-code', model: 'fable', effort: 'medium' }, swarm: beam, workers: [resolveModel('haiku'), flash] });
+      expect(loadRoles({ code: 'deepseek', plan: 'none', review: 'claude-code:fable', swarm: 'beam' }, { CEDIA_MODEL: 'beam' })).toEqual({ code: flash, triage: flash, review: { via: 'claude-code', model: 'fable', effort: 'medium' }, swarm: beam, workers: [resolveModel('haiku'), flash] });
       expect(loadRoles({ plan: 'claude-code@high', review: 'claude-code' }, {})).toMatchObject({ plan: { via: 'claude-code', model: 'opus', effort: 'high' }, review: { via: 'claude-code', model: 'opus', effort: 'medium' } });
       expect(loadRoles({ review: 'claude-code:sonnet@xhigh' }, {}).review).toEqual({ via: 'claude-code', model: 'sonnet', effort: 'xhigh' });
+      // A cedia model for plan or review takes its own effort; triage defaults to the code model.
+      expect(loadRoles({ plan: 'anthropic/claude-opus-5-5@high' }, {}).plan).toEqual({ via: 'cedia', model: resolveModel('anthropic/claude-opus-5-5'), effort: 'high' });
+      expect(() => loadRoles({ plan: 'deepseek@max' }, {})).toThrow('takes no effort max');
+      expect(loadRoles({ triage: 'haiku' }, {}).triage.ref).toBe('opencode-go/claude-haiku-5-5');
+      expect(() => loadRoles({ triage: 'claude-code' }, {})).toThrow('triage runs in cedia');
+      expect(loadPlanWhen()).toBe('auto');
+      expect(loadPlanWhen('never')).toBe('never');
+      // Modes keep the writer and pick the steps around it.
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({}));
+      expect(modeFlags('auto', {})).toEqual({ plan: 'claude-code', review: 'claude-code', planWhen: 'auto' });
+      expect(modeFlags('auto', { review: 'none', planWhen: 'always' })).toEqual({ plan: 'claude-code', planWhen: 'always' });
+      expect(() => modeFlags('oplan', {})).toThrow('roles.plan');
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ roles: { plan: 'claude-code:opus@high' } }));
+      expect(modeFlags('oplan', {})).toEqual({ planWhen: 'always' });
+      expect(modeFlags('auto', {})).toEqual({ review: 'claude-code', planWhen: 'auto' });
+      expect(isMode('auto') && isMode('oplan') && !isMode('haiku')).toBe(true);
       expect(() => loadRoles({ review: 'claude-code:opus@huge' }, {})).toThrow('claude-code[:<model>][@low|medium|high|xhigh|max]');
       expect(() => loadRoles({ code: 'claude-code:opus' }, {})).toThrow('the code role runs in cedia');
       // A repo cannot pick roles.

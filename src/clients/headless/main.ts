@@ -7,7 +7,7 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
 import { attachedNote, storeImage, type ImageRef } from '../../core/images.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
@@ -106,6 +106,8 @@ export type HeadlessArgs = {
   // auto (default): the writer's model first says whether the message is work a plan helps (a greeting or a
   // question is not); always: every prompt is planned; never: none is.
   planWhen?: string;
+  // The model that says whether a message needs the planner (default: the code model).
+  triage?: string;
   sandbox?: string;
   allowDomains?: string[];
   // For a client that owns the terminal (the TUI): where cedia's own notes go instead of stderr, and a stop.
@@ -194,6 +196,8 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
   };
 }
 
+const withMode = ({ model: _, ...rest }: HeadlessArgs, mode: Mode): HeadlessArgs => ({ ...rest, ...modeFlags(mode, rest) });
+
 export async function runHeadless(given: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
   // The profile named, else the one the thread was opened with; its defaults go under the flags.
   const recorded = () => {
@@ -202,16 +206,17 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   };
   const profileName = given.profile ?? (given.thread && !given.noSessionFile ? recorded() : undefined);
   const profile = profileName ? { name: profileName, ...resolveProfile(profileName, loadProfiles()) } : undefined;
-  const args = profile ? withProfile(given, profile) : given;
+  const profiled = profile ? withProfile(given, profile) : given;
+  // `-m auto` and `-m oplan` pick the steps around the user's own writer (core/config.ts).
+  const args: HeadlessArgs = isMode(profiled.model) ? withMode(profiled, profiled.model) : profiled;
   const say = args.note ?? ((text: string) => void process.stderr.write(text));
-  const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}), ...(args.advisor ? { advisor: args.advisor } : {}), ...(args.classifier ? { classifier: args.classifier } : {}), ...(args.workers ? { workers: args.workers } : {}) });
+  const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}), ...(args.advisor ? { advisor: args.advisor } : {}), ...(args.classifier ? { classifier: args.classifier } : {}), ...(args.workers ? { workers: args.workers } : {}), ...(args.triage ? { triage: args.triage } : {}) });
   const spawnMode = loadSpawn(args.spawn);
   const spawnOn = spawnMode !== 'off';
   const lspSetting = loadLsp(args.lsp);
   const askOn = loadAsk(args.ask);
   const todoOn = loadTodo(args.todo);
-  const planWhen = args.planWhen ?? 'auto';
-  if (planWhen !== 'auto' && planWhen !== 'always' && planWhen !== 'never') throw new Error(`--plan-when must be auto, always or never, not ${planWhen}`);
+  const planWhen = loadPlanWhen(args.planWhen);
   const cacheTtl = args.cacheTtl ?? '5m';
   if (cacheTtl !== '5m' && cacheTtl !== '1h') throw new Error(`--cache-ttl must be 5m or 1h, not ${cacheTtl}`);
   const model = roles.code;
@@ -398,6 +403,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     note?: string;
     images?: ImageRef[];
     role?: 'plan' | 'review' | 'explore' | 'goal' | 'advisor' | 'classifier' | 'triage';
+    // The step's own effort (`<ref>@<effort>` for plan and review), over the writer's.
+    effort?: Effort;
     child?: { thread?: string; handoff?: boolean; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots; wrap: (command: string) => Promise<string> } };
     // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
     seed?: { from: SessionLog; compaction: NonNullable<HeadlessResult['compaction']> };
@@ -484,7 +491,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         ...(quotaWaitMs !== undefined && !helper
           ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), say(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
           : {}),
-        ...(helper ? (m.defaultEffort ? { effort: 'low' as Effort } : {}) : args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
+        ...(opts.effort ? { effort: opts.effort } : helper ? (m.defaultEffort ? { effort: 'low' as Effort } : {}) : args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
         ...(escalate && !reviewer ? { escalate } : {}),
         ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - usedTurns } : {}),
         // One reply a turn, and one more if that came back empty.
@@ -517,13 +524,13 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       return { ok: r.ok, text: r.text, step: { ...step, sessionId: r.sessionId, ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}) } };
     }
     const log = openLog();
-    const r = await run(choice.model, log, prompt, { role });
+    const r = await run(choice.model, log, prompt, { role, ...(choice.effort ? { effort: choice.effort } : {}) });
     if (r.subtype !== 'success') say(`cedia: the ${role} step on ${choice.model.ref} ended with ${r.subtype}\n`);
     return { ok: r.subtype === 'success', text: r.result, step: { model: choice.model.ref, via: 'cedia', sessionId: log.id, costUsd: r.costUsd } };
   };
   // True unless the writer's model, reading the message alone, finds it needs no plan; a failed triage plans.
   const triage = async (): Promise<boolean> => {
-    const r = await run(model, openLog(), triagePrompt(args.prompt), { role: 'triage' });
+    const r = await run(roles.triage, openLog(), triagePrompt(args.prompt), { role: 'triage' });
     return r.subtype !== 'success' || needsPlan(r.result);
   };
   // A thread that asked the owner a question goes on with their answer, framed as one.
@@ -836,7 +843,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       // writer starts: what to delegate, and to which model, is the stronger model's call (no DeepSeek run ever
       // delegated on its own).
       const split: Split | undefined = !spawnOn || policy.plan || policy.mode === 'read-only' ? undefined : { mode: spawnMode === 'worktree' ? 'parallel' : 'alone', writer: model.ref, workers: roles.workers.filter((w) => w.ref !== model.ref).map((w) => w.ref) };
-      say(`cedia: planning with ${roles.plan.via === 'claude-code' ? `claude-code:${roles.plan.model}@${roles.plan.effort}` : roles.plan.model.ref}\n`);
+      say(`cedia: planning with ${roles.plan.via === 'claude-code' ? `claude-code:${roles.plan.model}@${roles.plan.effort}` : `${roles.plan.model.ref}${roles.plan.effort ? `@${roles.plan.effort}` : ''}`}\n`);
       const p = await side('plan', roles.plan, planPrompt(task, split));
       if (p.ok && p.text.trim()) {
         task = withPlan(task, p.text.trim(), p.step.model);
