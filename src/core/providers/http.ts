@@ -85,28 +85,75 @@ export function classifyStreamError(type: string | undefined, message: string): 
 
 export type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
 
+// A request that sends nothing for this long, before its headers or between two chunks of its stream, is given up
+// and comes back as a retryable error, so the turn tries again. An OpenRouter stream once sent no first token for
+// 262 s and held the run until its time ran out (2026-10-23). Anthropic's pings and DeepSeek's keep-alive lines
+// count as something, so a long think does not trip it.
+export const STALL_MS = 120_000;
+
 export async function post(
   url: string,
   headers: Record<string, string>,
   body: unknown,
   signal: AbortSignal,
   fetcher: Fetcher = fetch,
+  stallMs = STALL_MS,
 ): Promise<{ ok: true; body: ReadableStream<Uint8Array> } | { ok: false; error: AttemptError }> {
+  const ctl = new AbortController();
+  const onAbort = () => ctl.abort(signal.reason);
+  if (signal.aborted) onAbort();
+  else signal.addEventListener('abort', onAbort, { once: true });
+  const stalled = new Error(`the provider sent nothing for ${Math.round(stallMs / 1000)} s`);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ctl.abort(stalled), stallMs);
+    // A stream the caller stopped reading after its last event must not keep the process alive.
+    (timer as { unref?: () => void }).unref?.();
+  };
+  const done = () => {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', onAbort);
+  };
+  arm();
   let res: Response;
   try {
     res = await fetcher(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'user-agent': USER_AGENT, ...headers },
       body: JSON.stringify(body),
-      signal,
+      signal: ctl.signal,
     });
   } catch (err) {
+    done();
     if (signal.aborted) throw err;
-    return { ok: false, error: networkError(err) };
+    return { ok: false, error: ctl.signal.reason === stalled ? { code: 'timeout', message: stalled.message } : networkError(err) };
   }
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
+    done();
     return { ok: false, error: classifyStatus(res.status, text, res.headers.get('retry-after')) };
   }
-  return { ok: true, body: res.body };
+  // Each chunk puts the clock back; a stall errors the stream, which the turn retries.
+  const reader = res.body.getReader();
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(c) {
+      arm();
+      try {
+        const { done: end, value } = await reader.read();
+        if (end) {
+          done();
+          c.close();
+        } else c.enqueue(value);
+      } catch (err) {
+        done();
+        c.error(ctl.signal.reason === stalled ? stalled : err);
+      }
+    },
+    cancel(reason) {
+      done();
+      return reader.cancel(reason);
+    },
+  });
+  return { ok: true, body: stream };
 }

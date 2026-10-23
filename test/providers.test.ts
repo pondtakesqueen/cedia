@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { anthropicBody, anthropicProvider, EFFORT_BETA, parseAnthropic } from '../src/core/providers/anthropic.ts';
 import { costUsd, deepseekOffPeak, FALLBACKS, resolveModel } from '../src/core/providers/catalog.ts';
 import { chatBody, chatProvider, chatUsage, parseChat } from '../src/core/providers/chat.ts';
-import { classifyStatus, isRetryable, USER_AGENT } from '../src/core/providers/http.ts';
+import { classifyStatus, isRetryable, post, USER_AGENT } from '../src/core/providers/http.ts';
 import { parseResponses, responsesBody, responsesProvider } from '../src/core/providers/responses.ts';
 import { readSse, streamFromString } from '../src/core/providers/sse.ts';
 import type { Message, StreamEvent, WireRequest } from '../src/core/types.ts';
@@ -251,6 +251,37 @@ describe('http', () => {
     expect(classifyStatus(429, '{"error":{"message":"Rate limit exceeded. Please try again later."}}', '27380').code).toBe('quota');
     expect(classifyStatus(429, 'slow down', '600').code).toBe('rate_limit');
     expect(isRetryable(classifyStatus(402, ''))).toBe(false);
+  });
+
+  test('a request that sends nothing for too long is given up as a retryable error, before or during its stream', async () => {
+    // A fetch that honours its signal, like the real one: it answers after `headersMs`, then sends `chunks`, then hangs.
+    const fake = (headersMs: number, chunks: string[]) => (_url: string, init: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        const sig = init.signal!;
+        const t = setTimeout(() => {
+          const body = new ReadableStream<Uint8Array>({
+            start(c) {
+              for (const x of chunks) c.enqueue(new TextEncoder().encode(x));
+              sig.addEventListener('abort', () => c.error(sig.reason), { once: true });
+            },
+          });
+          resolve(new Response(body, { status: 200 }));
+        }, headersMs);
+        sig.addEventListener('abort', () => (clearTimeout(t), reject(sig.reason)), { once: true });
+      });
+    const before = await post('u', {}, {}, new AbortController().signal, fake(1000, []), 50);
+    expect(before).toEqual({ ok: false, error: { code: 'timeout', message: 'the provider sent nothing for 0 s' } });
+    if (!before.ok) expect(isRetryable(before.error)).toBe(true);
+    const during = await post('u', {}, {}, new AbortController().signal, fake(0, ['data: a\n\n']), 50);
+    expect(during.ok).toBe(true);
+    const reader = (during as { body: ReadableStream<Uint8Array> }).body.getReader();
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: a\n\n');
+    await expect(reader.read()).rejects.toThrow('the provider sent nothing');
+    // The caller's own abort is not a stall: it throws as before.
+    const ac = new AbortController();
+    const p = post('u', {}, {}, ac.signal, fake(1000, []), 5000);
+    ac.abort(new Error('stop'));
+    await expect(p).rejects.toThrow('stop');
   });
 
   test('DeepSeek through OpenRouter: pinned to one zero-retention endpoint, its routing in every request body', () => {
