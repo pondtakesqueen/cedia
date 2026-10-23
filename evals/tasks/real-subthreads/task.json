@@ -19,6 +19,12 @@
         "old": "test.skipIf(!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin')",
         "new": "test.skipIf(Boolean(process.env.SANDBOX_RUNTIME) || (!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin'))",
         "why": "The agent's commands already run in the OS sandbox, which cannot open another inside it; verify runs outside it, where this test still runs."
+      },
+      {
+        "path": "src/core/safety/policy.ts",
+        "old": "  while (!existsSync(head)) {\n    const up = dirname(head);\n    if (up === head) return path;\n    tail.unshift(head.slice(up.length).replace(/^\\//, ''));\n    head = up;\n  }\n  return resolve(realpathSync(head), ...tail);\n}",
+        "new": "  for (;;) {\n    if (existsSync(head)) {\n      try {\n        return resolve(realpathSync(head), ...tail);\n      } catch {}\n    }\n    const up = dirname(head);\n    if (up === head) return path;\n    tail.unshift(head.slice(up.length).replace(/^\\//, ''));\n    head = up;\n  }\n}",
+        "why": "#80 on this older tree: under the macOS sandbox a stat of ~/.ssh gives EPERM, so the base's own policy tests failed before the agent changed anything, and agents 'fixed' real() unasked."
       }
     ]
   },

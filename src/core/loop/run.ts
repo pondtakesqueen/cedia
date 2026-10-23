@@ -17,7 +17,7 @@ import { evidence, ledgerEntries, matchCheck, verified } from '../trust/ledger.t
 import type { Verdict } from '../trust/classifier.ts';
 import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
-import { spawnNudge } from '../tools/spawn.ts';
+import { isSpawnNudge, spawnNudge } from '../tools/spawn.ts';
 import { ASK_TOOL, questionOf } from '../tools/ask.ts';
 import {
   addUsage,
@@ -299,7 +299,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   type Compaction = { of: EventId; ac: AbortController; settled: Promise<void>; outcome?: { block?: CompactionBlock } };
   const cmp: { now: Compaction | 'off' | undefined } = { now: opts.compact && model.compaction ? undefined : 'off' };
   const inFlight = () => (cmp.now && cmp.now !== 'off' ? cmp.now : undefined);
-  let spawnNudged = false;
+  let spawnNudged = log.events.some((e) => e.kind === 'reminder' && isSpawnNudge(e.text));
   // Soft checks were found, not declared: they never refuse a claim, so they never escalate either.
   const escalateTo = opts.softChecks ? undefined : escalationTarget(model, opts.effort ?? model.defaultEffort, opts.escalate);
   // Escalation: logged right after the gate's reminder, the user turn that carries it, so the change applies from

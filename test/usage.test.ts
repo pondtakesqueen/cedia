@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { formatUsage, usageReport } from '../src/core/session/usage.ts';
+import { dayOf, formatUsage, sinceOf, usageReport } from '../src/core/session/usage.ts';
+import { threadsDir, ThreadStore } from '../src/core/project/threads.ts';
 import type { SessionEvent, Usage } from '../src/core/types.ts';
 
 const BIN = join(import.meta.dir, '..', 'bin', 'cedia');
@@ -102,5 +103,69 @@ describe('cedia usage', () => {
     expect(p.exitCode).toBe(0);
     expect(JSON.parse(p.stdout.toString())).toMatchObject({ sessions: 1, requests: 3, handoffs: 1 });
     expect(Bun.spawnSync([BIN, 'usage', '--cwd', dir], { env: { ...process.env, CEDIA_HOME: join(dir, 'home') } }).exitCode).toBe(1);
+  });
+
+  test('splits the cost by local day, model, project and thread, and leaves out spend before --since', () => {
+    const haiku = 'anthropic/claude-haiku-5-5';
+    const deepseek = 'opencode-go/deepseek-v4.1-flash';
+    let n = 0;
+    const session = (model: string, day: number) => {
+      const when = (h: number) => new Date(2026, 9, day, h).toISOString();
+      const e = (body: Record<string, unknown>, h: number): SessionEvent => ({ id: `e${n++}`, at: when(h), ...body }) as unknown as SessionEvent;
+      return [
+        e({ kind: 'session', cwd: '/x', role: 'code', model, system: '', tools: [] }, 9),
+        e({ kind: 'request', model, toolsHash: 't', systemHash: 's', bodyHash: `b${n}`, headers: {} }, 9),
+        e({ kind: 'assistant', wire: 'anthropic', model, blocks: [{ type: 'text', text: 'x' }], stop: 'end_turn', usage: usage(0, 1000) }, 9),
+      ];
+    };
+    const sessions = [
+      { id: 'a', events: session(haiku, 20), project: 'p1', thread: 't-1', title: 'first' },
+      { id: 'b', events: session(haiku, 21), project: 'p1', thread: 't-1', title: 'first' },
+      { id: 'c', events: session(deepseek, 21), project: 'p2', thread: 't-2', title: 'second' },
+    ];
+    const r = usageReport(sessions);
+    expect(r.days.map((d) => d.day)).toEqual(['2026-10-20', '2026-10-21']);
+    expect(r.days.reduce((a, d) => a + d.costUsd, 0)).toBeCloseTo(r.costUsd, 10);
+    expect(r.models.map((m) => [m.model, m.requests])).toEqual(
+      r.models[0]!.model === haiku ? [[haiku, 2], [deepseek, 1]] : [[deepseek, 1], [haiku, 2]],
+    );
+    expect(r.projects.find((p) => p.project === 'p1')!.costUsd).toBeGreaterThan(0);
+    expect(r.threads.find((t) => t.thread === 't-1')).toMatchObject({ title: 'first', project: 'p1' });
+    // From the 21st: the 20th's reply is not billed, though its session was read.
+    const later = usageReport(sessions, { since: new Date(2026, 9, 21) });
+    expect(later.days.map((d) => d.day)).toEqual(['2026-10-21']);
+    expect(later.models.find((m) => m.model === haiku)!.requests).toBe(1);
+    expect(later.sessions).toBe(3);
+  });
+
+  test('--since takes a day or a number of days counting today', () => {
+    const now = new Date(2026, 9, 22, 15, 30);
+    expect(dayOf(sinceOf('7d', now))).toBe('2026-10-16');
+    expect(dayOf(sinceOf('1d', now))).toBe('2026-10-22');
+    expect(sinceOf('2026-10-01', now)).toEqual(new Date(2026, 9, 1));
+    expect(() => sinceOf('last week', now)).toThrow('--since');
+    expect(() => sinceOf('0d', now)).toThrow('--since');
+  });
+
+  test('--all reads every project and names each session\'s thread', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cedia-usage-all-'));
+    for (const [project, title] of [['p1', 'fix the build'], ['p2', 'write docs']] as const) {
+      const store = new ThreadStore(threadsDir(home, project));
+      const id = store.open(title);
+      store.append(id, { kind: 'session', sessionId: `s-${project}`, model: 'anthropic/claude-haiku-5-5', role: 'code', why: 'start' });
+      mkdirSync(join(home, 'sessions', project), { recursive: true });
+      writeFileSync(join(home, 'sessions', project, `s-${project}.jsonl`), events().map((e) => JSON.stringify(e)).join('\n'));
+    }
+    const env = { ...process.env, CEDIA_HOME: home };
+    const p = Bun.spawnSync([BIN, 'usage', '--all', '--since', '30d', '--json'], { env });
+    expect(p.exitCode).toBe(0);
+    const r = JSON.parse(p.stdout.toString());
+    expect(r.sessions).toBe(2);
+    expect(r.projects.map((x: { project: string }) => x.project).sort()).toEqual(['p1', 'p2']);
+    expect(r.threads.map((x: { title: string }) => x.title).sort()).toEqual(['fix the build', 'write docs']);
+    // A range with no session in it is still an answer.
+    const empty = Bun.spawnSync([BIN, 'usage', '--all', '--since', '2099-01-01', '--json'], { env });
+    expect(empty.exitCode).toBe(0);
+    expect(JSON.parse(empty.stdout.toString())).toMatchObject({ sessions: 0, costUsd: 0, days: [] });
   });
 });

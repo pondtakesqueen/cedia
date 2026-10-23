@@ -136,6 +136,17 @@ Re-mirrored `docs/claude-platform` (321 pages), read for what decides where and 
 - Mid-conversation tool changes (`inline-tools-2026-09-15`) add or define a tool in a system message with the cache intact: a resumed session could get `recall` or the thread tools without a new session. `build-with-claude/mid-conversation-system-messages.md`
 - Opus 5.5 rejects forced `tool_choice` and disabled thinking; Haiku 5.5 rejects sampling parameters and prefill. Thinking replayed after any change to the prefix is a 400 on accounts created from 2026-08-31, which cedia's append-only logs already avoid. `models/opus-5-5/whats-new-opus-5-5.md`, `models/haiku-5-5/whats-new-haiku-5-5.md`
 
+## Choosing a model per role (read 2026-10-23)
+
+Anthropic's "Choosing a model" and "Optimizing for cost and intelligence" pages, Artificial Analysis' per-effort runs of the Claude 5.x models, and cedia's own OpenRouter round. Paths are under `docs/claude-platform/`.
+
+- Effort before model: Anthropic says changing effort usually beats changing model. Opus 5.5 and Haiku 5.5 default to medium; Sonnet 5.5 and Fable 5.1 to high. `about-claude/models/choosing-a-model.md`
+- Sonnet 5.5 at medium is weak at agentic coding: 62.7% against 77.8% at high on Anthropic's internal set. On Artificial Analysis' FrontierCode (agentic changes in real repos) Sonnet medium scored 29% against Opus low's 43%, although the two are level on the overall index (41 and 42). `about-claude/models/optimizing-for-cost-and-intelligence.md`
+- FrontierCode by effort: Opus medium 57% is the top score, above Opus high and xhigh (54%) and max (52%). Haiku high (44%) and xhigh (45%) equal Sonnet high (44%) at about a tenth of the cost; Haiku low falls to 29%. Fable 5.1 costs the most and scored no better on coding.
+- An orchestrator that splits work to smaller models saved money in Anthropic's runs only for routine work with a few unusually long pieces, or work larger than one context window; otherwise one large model at low effort won. Advisors (a small model that asks a large one when stuck) added little, the small model rarely asked, and on coding they cost about 2.1x. This matches cedia's arm (b): the Opus plan did not cut Flash's turns before its first done claim (28-48 against 26-45 alone); the extra turns were the review's fix rounds. `about-claude/models/optimizing-for-cost-and-intelligence.md`
+- What the review bought: on every real-* run it caught a real defect Flash left (an unasked fail-open change to policy.ts `real()`, a handoff that lost the thread's task, a quota error that never reached the fallback). Review is worth its turns; planning is not, except for work that splits into independent parts (#84).
+- So: plan and review through Claude Code at Opus medium (`claude-code` alone), the writer on DeepSeek Flash, Haiku at high where a Claude writer is needed, and Sonnet nowhere by default.
+
 ## Not yet read in depth
 Claude Code, Codex and Grok Build feature pages (subagents, hooks, permissions, sandbox, checkpoints, plan mode, memory). Read the matching pages from all three when each milestone starts.
 

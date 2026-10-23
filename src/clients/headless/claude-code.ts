@@ -6,7 +6,7 @@
 // no MCP server (.mcp.json) and loads no custom commands; its file tools stay in the working directory. The login
 // is untouched (unlike --bare, which reads no keychain).
 
-export type ClaudeCodeStep = { prompt: string; model: string; cwd: string; allowed: string[]; signal?: AbortSignal };
+export type ClaudeCodeStep = { prompt: string; model: string; effort?: string; cwd: string; allowed: string[]; signal?: AbortSignal };
 export type ClaudeCodeResult = { ok: boolean; text: string; sessionId: string; costUsd?: number; error?: string };
 
 // Keys that would switch Claude Code from the subscription to API billing, and cedia's own settings.
@@ -14,7 +14,7 @@ const STRIPPED = /^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CEDIA_.*|OPENCODE_API
 
 export function claudeCodeArgs(step: ClaudeCodeStep): string[] {
   const tools = [...new Set(step.allowed.map((a) => a.replace(/\(.*$/, '')))];
-  return ['-p', step.prompt, '--output-format', 'json', '--model', step.model, '--tools', tools.join(','), '--permission-mode', 'dontAsk', '--no-session-persistence', '--restricted', '--strict-mcp-config', '--disable-slash-commands', '--allowedTools', ...step.allowed];
+  return ['-p', step.prompt, '--output-format', 'json', '--model', step.model, ...(step.effort ? ['--effort', step.effort] : []), '--tools', tools.join(','), '--permission-mode', 'dontAsk', '--no-session-persistence', '--restricted', '--strict-mcp-config', '--disable-slash-commands', '--allowedTools', ...step.allowed];
 }
 
 export async function runClaudeCode(step: ClaudeCodeStep, bin = process.env.CEDIA_CLAUDE_BIN ?? 'claude'): Promise<ClaudeCodeResult> {

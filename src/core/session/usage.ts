@@ -27,9 +27,41 @@ export type UsageReport = {
   handoffs: number;
   // Replies from a model cedia's catalog does not know: no price, so not in costUsd.
   unpriced: number;
+  // The same cost by local calendar day (oldest first), by model, by project and by thread (costliest first), for a
+  // client's usage page. A session read without its project or thread counts under none there.
+  days: { day: string; costUsd: number }[];
+  models: { model: string; costUsd: number; requests: number }[];
+  projects: { project: string; costUsd: number }[];
+  threads: { thread: string; title: string; project?: string; costUsd: number }[];
 };
 
-export type SessionInput = { id: string; events: SessionEvent[] };
+// `project` is the project's key (its directory under sessions/), `thread` and `title` the thread the session is
+// part of.
+export type SessionInput = { id: string; events: SessionEvent[]; project?: string; thread?: string; title?: string };
+
+export type UsageOptions = { top?: number; since?: Date };
+
+// The local calendar day of an ISO time, as YYYY-MM-DD.
+export const dayOf = (at: string | Date): string => {
+  const d = new Date(at);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+// `--since`: a day (YYYY-MM-DD, from its local midnight) or a number of days back (7d: from local midnight six days
+// ago, so today counts as one).
+export function sinceOf(text: string, now = new Date()): Date {
+  const days = /^(\d+)d$/.exec(text);
+  if (days) {
+    const n = Number(days[1]);
+    if (n < 1) throw new Error(`--since ${text}: count at least one day`);
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate() - (n - 1));
+  }
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!day) throw new Error(`--since ${text}: give a day (YYYY-MM-DD) or a number of days (7d)`);
+  return new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3]));
+}
+
+const add = <K>(map: Map<K, number>, key: K, n: number) => map.set(key, (map.get(key) ?? 0) + n);
 
 const modelOf = (ref: string): ModelSpec | undefined => {
   try {
@@ -41,7 +73,14 @@ const modelOf = (ref: string): ModelSpec | undefined => {
 
 const inputOf = (u: { uncached: number; cacheRead: number; cacheWrite: number }) => u.uncached + u.cacheRead + u.cacheWrite;
 
-export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
+// Spend before `since` is left out of the cost and its breakdowns; the context it built still counts as sent.
+export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): UsageReport {
+  const top = opts.top ?? 5;
+  const since = opts.since?.getTime() ?? -Infinity;
+  const byDay = new Map<string, number>();
+  const byModel = new Map<string, { costUsd: number; requests: number }>();
+  const byProject = new Map<string, number>();
+  const byThread = new Map<string, { title: string; project?: string; costUsd: number }>();
   const sent = new Map<string, number>();
   const largest: UsageReport['largest'] = [];
   const misses = new Map<string, { count: number; tokens: number }>();
@@ -56,6 +95,19 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
   let unpriced = 0;
 
   for (const s of sessions) {
+    // Each billed amount, once, in every breakdown.
+    const bill = (usd: number, at: string, model: string, request: boolean) => {
+      cost += usd;
+      add(byDay, dayOf(at), usd);
+      const m = byModel.get(model) ?? { costUsd: 0, requests: 0 };
+      byModel.set(model, { costUsd: m.costUsd + usd, requests: m.requests + (request ? 1 : 0) });
+      if (s.project) add(byProject, s.project, usd);
+      if (s.thread) {
+        const t = byThread.get(s.thread) ?? { title: s.title ?? s.thread, ...(s.project ? { project: s.project } : {}), costUsd: 0 };
+        byThread.set(s.thread, { ...t, costUsd: t.costUsd + usd });
+      }
+    };
+    const billed = (at: string) => new Date(at).getTime() >= since;
     // What the session's context holds so far, by source, and the tool results in it with the request count
     // they arrived at.
     const held = new Map<string, number>();
@@ -106,12 +158,12 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
           break;
         case 'assistant': {
           const m = modelOf(e.model);
-          if (!copy) {
+          if (!copy && billed(e.at)) {
             tokens.input += inputOf(e.usage);
             tokens.cacheRead += e.usage.cacheRead;
             tokens.output += e.usage.output;
             // Priced at the time it ran: off-peak prices depend on it.
-            if (m) cost += costUsd(m, e.usage, new Date(e.at));
+            if (m) bill(costUsd(m, e.usage, new Date(e.at)), e.at, m.ref, true);
             else unpriced++;
             if (m?.price.above && inputOf(e.usage) > m.price.above.tokens) overPriceLine++;
           }
@@ -130,19 +182,20 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
         }
         // A summary written for the next session (core/project/compact.ts): billed here, sent back only there.
         case 'compaction':
+          if (!billed(e.at)) break;
           tokens.input += inputOf(e.usage);
           tokens.cacheRead += e.usage.cacheRead;
           tokens.output += e.usage.output;
           if (model) {
             const usd = costUsd(model, e.usage, new Date(e.at));
-            cost += usd;
+            bill(usd, e.at, model.ref, false);
             compactUsd += usd;
           }
           break;
         case 'keepalive':
-          if (e.usage && model) {
+          if (e.usage && model && billed(e.at)) {
             const usd = costUsd(model, e.usage, new Date(e.at));
-            cost += usd;
+            bill(usd, e.at, model.ref, false);
             keepaliveUsd += usd;
           }
           break;
@@ -186,6 +239,13 @@ export function usageReport(sessions: SessionInput[], top = 5): UsageReport {
     maxEffort,
     handoffs,
     unpriced,
+    days: [...byDay].map(([day, costUsd]) => ({ day, costUsd })).sort((a, b) => a.day.localeCompare(b.day)),
+    models: [...byModel].map(([model, m]) => ({ model, ...m })).sort((a, b) => b.costUsd - a.costUsd),
+    projects: [...byProject].map(([project, costUsd]) => ({ project, costUsd })).sort((a, b) => b.costUsd - a.costUsd),
+    threads: [...byThread]
+      .map(([thread, t]) => ({ thread, ...t }))
+      .sort((a, b) => b.costUsd - a.costUsd)
+      .slice(0, top),
   };
 }
 

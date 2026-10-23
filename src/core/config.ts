@@ -97,7 +97,8 @@ export function checkSettings(value: unknown): Settings {
 }
 
 // How a plan or review role runs: in cedia on a catalog model, or through the user's own Claude Code CLI.
-export type RoleChoice = { via: 'cedia'; model: ModelSpec } | { via: 'claude-code'; model: string };
+export type RoleChoice = { via: 'cedia'; model: ModelSpec } | { via: 'claude-code'; model: string; effort: ClaudeCodeEffort };
+export type ClaudeCodeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export const cediaHome = () => process.env.CEDIA_HOME ?? join(homedir(), '.cedia');
 
@@ -277,8 +278,10 @@ export function loadHandoff(flag?: string): 'note' | 'compact' {
 }
 
 // Roles: flags > CEDIA_MODEL (code only) > user settings > defaults (code: deepseek; plan and review: off).
-// `claude-code` alone means opus for plan and sonnet for review. The writer always runs in cedia, where its
-// writes go through the policy, the sandbox and the done gate.
+// `claude-code[:<model>][@<effort>]`: alone it means opus at medium effort for both plan and review. Opus at medium
+// scored above Sonnet at every effort and above Opus at high or max on agentic repo work (Artificial Analysis'
+// FrontierCode, research/NOTES.md), and the step names its effort so Claude Code's own default does not decide it.
+// The writer always runs in cedia, where its writes go through the policy, the sandbox and the done gate.
 export function loadRoles(
   flags: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string; workers?: string } = {},
   env = process.env,
@@ -288,11 +291,13 @@ export function loadRoles(
   if (/^claude-code\b/.test(codeRef)) throw new Error('the code role runs in cedia, where its writes are checked; use claude-code for plan or review');
   const role = (ref: string | undefined, claudeModel: string): RoleChoice | undefined => {
     if (!ref || ref === 'none') return undefined;
-    const m = /^claude-code(?::(.+))?$/.exec(ref);
-    return m ? { via: 'claude-code', model: m[1] ?? claudeModel } : { via: 'cedia', model: resolveModel(ref) };
+    if (!/^claude-code\b/.test(ref)) return { via: 'cedia', model: resolveModel(ref) };
+    const m = /^claude-code(?::([^@]+))?(?:@(low|medium|high|xhigh|max))?$/.exec(ref);
+    if (!m) throw new Error(`a Claude Code role is claude-code[:<model>][@low|medium|high|xhigh|max]: ${ref}`);
+    return { via: 'claude-code', model: m[1] ?? claudeModel, effort: (m[2] as ClaudeCodeEffort | undefined) ?? 'medium' };
   };
   const plan = role(flags.plan ?? user.plan, 'opus');
-  const review = role(flags.review ?? user.review, 'sonnet');
+  const review = role(flags.review ?? user.review, 'opus');
   // Explore sub-threads: free and fast on the Go plan, and it keeps prompts without training on them.
   const swarm = resolveModel(flags.swarm ?? user.swarm ?? 'beam');
   // The advisor reads every turn, so it is off unless named: each turn of the writer costs one of its own.

@@ -28,6 +28,9 @@
     "CommandList": {
       "$ref": "#/definitions/CommandList"
     },
+    "UsageReport": {
+      "$ref": "#/definitions/UsageReport"
+    },
     "VersionInfo": {
       "$ref": "#/definitions/VersionInfo"
     }
@@ -206,7 +209,8 @@
         "models",
         "permissions",
         "commands",
-        "threads.fork"
+        "threads.fork",
+        "usage"
       ]
     },
     "Check": {
@@ -2938,6 +2942,242 @@
         "cacheRead",
         "cacheWrite",
         "output"
+      ],
+      "additionalProperties": false
+    },
+    "UsageReport": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "number"
+        },
+        "requests": {
+          "type": "number"
+        },
+        "costUsd": {
+          "type": "number"
+        },
+        "keepaliveUsd": {
+          "type": "number"
+        },
+        "compactUsd": {
+          "type": "number"
+        },
+        "tokens": {
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "number"
+            },
+            "cacheRead": {
+              "type": "number"
+            },
+            "output": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "input",
+            "cacheRead",
+            "output"
+          ],
+          "additionalProperties": false
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "chars": {
+                "type": "number"
+              },
+              "share": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "source",
+              "chars",
+              "share"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "largest": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "session": {
+                "type": "string"
+              },
+              "callId": {
+                "type": "string"
+              },
+              "tool": {
+                "type": "string"
+              },
+              "chars": {
+                "type": "number"
+              },
+              "resent": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "session",
+              "callId",
+              "tool",
+              "chars",
+              "resent"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "misses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "cause": {
+                "type": "string"
+              },
+              "count": {
+                "type": "number"
+              },
+              "tokens": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "cause",
+              "count",
+              "tokens"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "overPriceLine": {
+          "type": "number"
+        },
+        "maxEffort": {
+          "type": "number"
+        },
+        "handoffs": {
+          "type": "number"
+        },
+        "unpriced": {
+          "type": "number"
+        },
+        "days": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "day": {
+                "type": "string"
+              },
+              "costUsd": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "day",
+              "costUsd"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string"
+              },
+              "costUsd": {
+                "type": "number"
+              },
+              "requests": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "model",
+              "costUsd",
+              "requests"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "project": {
+                "type": "string"
+              },
+              "costUsd": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "project",
+              "costUsd"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "threads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "project": {
+                "type": "string"
+              },
+              "costUsd": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "thread",
+              "title",
+              "costUsd"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "sessions",
+        "requests",
+        "costUsd",
+        "keepaliveUsd",
+        "compactUsd",
+        "tokens",
+        "sources",
+        "largest",
+        "misses",
+        "overPriceLine",
+        "maxEffort",
+        "handoffs",
+        "unpriced",
+        "days",
+        "models",
+        "projects",
+        "threads"
       ],
       "additionalProperties": false
     },

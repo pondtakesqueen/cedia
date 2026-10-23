@@ -369,8 +369,8 @@ describe('cedia -p (offline, faux)', () => {
       expect(out).toMatchObject({
         subtype: 'success',
         result: 'fixed',
-        plan: { model: 'claude-code:opus', via: 'claude-code', sessionId: 'cc-1', costUsd: 0.5 },
-        review: { model: 'claude-code:sonnet', via: 'claude-code', verdict: 'changes', fixed: true },
+        plan: { model: 'claude-code:opus@medium', via: 'claude-code', sessionId: 'cc-1', costUsd: 0.5 },
+        review: { model: 'claude-code:opus@medium', via: 'claude-code', verdict: 'changes', fixed: true },
       });
       expect(out.costUsd).toBeLessThan(0.5); // the subscription's notional cost is not cedia's spend
       const planArgs = readFileSync(join(dir, 'args1'), 'utf8');
@@ -378,12 +378,12 @@ describe('cedia -p (offline, faux)', () => {
       // The repository under review runs no hook, MCP server or command through Claude Code.
       for (const flag of ['--restricted', '--strict-mcp-config', '--disable-slash-commands']) expect(planArgs).toContain(`${flag}\n`);
       expect(planArgs).toContain('--tools\nRead,Grep,Glob,Bash\n');
-      expect(planArgs).toContain('--model\nopus');
+      expect(planArgs).toContain('--model\nopus\n--effort\nmedium\n');
       expect(readFileSync(join(dir, 'args2'), 'utf8')).toContain('Bash(git diff:*)\nBash(git log:*)\nBash(git show:*)\nBash(git status:*)\nBash(test -s f.txt)');
       expect(readFileSync(join(dir, 'env1'), 'utf8')).not.toContain('ANTHROPIC_API_KEY');
       expect(readFileSync(join(dir, 'env1'), 'utf8')).not.toContain('CEDIA_');
       const writer = sessionsOf(r.home).find((l) => (l[0] as { role: string }).role === 'code')!;
-      expect(userTexts(writer)).toEqual([expect.stringContaining('<plan by="claude-code:opus">'), expect.stringContaining('<review>\nf.txt:1 needs a period.\n</review>')]);
+      expect(userTexts(writer)).toEqual([expect.stringContaining('<plan by="claude-code:opus@medium">'), expect.stringContaining('<review>\nf.txt:1 needs a period.\n</review>')]);
     });
 
     test('a failed plan step goes on without a plan', () => {
