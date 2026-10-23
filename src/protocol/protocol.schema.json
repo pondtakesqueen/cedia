@@ -31,6 +31,12 @@
     "UsageReport": {
       "$ref": "#/definitions/UsageReport"
     },
+    "Restored": {
+      "$ref": "#/definitions/Restored"
+    },
+    "RewindResult": {
+      "$ref": "#/definitions/RewindResult"
+    },
     "VersionInfo": {
       "$ref": "#/definitions/VersionInfo"
     }
@@ -210,7 +216,8 @@
         "permissions",
         "commands",
         "threads.fork",
-        "usage"
+        "usage",
+        "threads.restore-json"
       ]
     },
     "Check": {
@@ -911,6 +918,36 @@
         "down"
       ]
     },
+    "Restored": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "undo",
+            "redo"
+          ]
+        },
+        "restored": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "action",
+        "restored",
+        "skipped"
+      ],
+      "additionalProperties": false
+    },
     "ResultSubtype": {
       "type": "string",
       "enum": [
@@ -922,6 +959,51 @@
         "error_unverified_claim",
         "handoff",
         "asked"
+      ]
+    },
+    "RewindRefusal": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "force": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "RewindResult": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "run": {
+              "type": "string"
+            },
+            "restored": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "sessionId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "run",
+            "restored"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/definitions/RewindRefusal"
+        }
       ]
     },
     "RunFrom": {

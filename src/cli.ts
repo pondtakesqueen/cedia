@@ -13,7 +13,7 @@ import { memoryPath, MemoryStore } from './core/project/memory.ts';
 import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Schedule } from './core/project/schedules.ts';
 import { commandList, loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
-import { rewindThread, rewoundText, runLines } from './core/project/rewind.ts';
+import { rewindThread, rewoundText, runLines, type RewindResult } from './core/project/rewind.ts';
 import { forkThread } from './core/project/fork.ts';
 import { workspaceSnapshots } from './core/safety/snapshot.ts';
 import { lintSession } from './core/session/lint.ts';
@@ -96,11 +96,11 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                             no model ever sees it
        cedia threads archive|unarchive <id> hide a thread from the list, or bring it back
        cedia threads diff <id>              what changed since the thread's last turn that changed files started
-       cedia threads undo|redo <id> [--force]
+       cedia threads undo|redo <id> [--force] [--json]
                                             put the files that turn changed back (or forward again), from cedia's
                                             snapshots; a file changed since is left unless --force. Commands the turn
                                             ran are not undone. The thread is told at its next turn
-       cedia threads rewind <id> [<n>] [--force]
+       cedia threads rewind <id> [<n>] [--force] [--json]
                                             go back to just before the thread's run n (threads show numbers them),
                                             conversation and files together: the thread goes on from there, and
                                             every file a later run changed is put back. It refuses while the thread
@@ -389,6 +389,11 @@ function threads(argv: string[]): number {
       if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
       const r = restoreTurn(store, id, (cwd) => workspaceSnapshots(cwd, cediaHome()), cmd, { force: values.force ?? false });
       if ('error' in r) throw new Error(r.error);
+      // A client reads the files moved and the ones left; leaving some is not a failure there.
+      if (values.json) {
+        console.log(JSON.stringify(r));
+        return 0;
+      }
       console.log(restoredText(r));
       return r.skipped.length ? 1 : 0;
     }
@@ -400,6 +405,12 @@ function threads(argv: string[]): number {
         return 0;
       }
       const r = rewindThread(store, id, Number(rest[0]), { open: (cwd) => workspaceSnapshots(cwd, cediaHome()), sessionFile: (cwd, sid) => sessionPath(cwd, sid) }, { force: values.force ?? false });
+      // A refusal is the answer too: the client offers --force when it goes past it.
+      if (values.json) {
+        const out: RewindResult = 'error' in r ? r : { run: r.run.id, restored: r.restored, ...(r.sessionId ? { sessionId: r.sessionId } : {}) };
+        console.log(JSON.stringify(out));
+        return 'error' in r ? 1 : 0;
+      }
       if ('error' in r) throw new Error(r.error);
       console.log(rewoundText(r));
       return 0;
@@ -428,7 +439,7 @@ function threads(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] | redo <id> [--force] | rewind <id> [<n>] [--force] | fork <id> <n|run> [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
+  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run> [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
   return 2;
 }
 

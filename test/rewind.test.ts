@@ -87,13 +87,19 @@ describe('/rewind: conversation and files together (offline, faux)', () => {
     const refused = w.run([], ['threads', 'rewind', thread, '1']);
     expect(refused.code).toBe(1);
     expect(refused.err).toContain('b.txt changed since the run that last wrote it; nothing was rewound');
+    // A client reads the refusal as JSON, and that --force goes past it.
+    const json = w.run([], ['threads', 'rewind', thread, '1', '--json']);
+    expect(json.code).toBe(1);
+    expect(JSON.parse(json.out)).toMatchObject({ error: expect.stringContaining('b.txt changed since'), force: true });
+    expect(JSON.parse(w.run([], ['threads', 'rewind', thread, '5', '--json']).out).force).toBeUndefined();
     expect([w.read('a.txt'), w.read('b.txt')]).toEqual(['second\n', 'edited by the user\n']);
     expect(w.store.read(thread).runs).toHaveLength(2);
 
-    const r = w.run([], ['threads', 'rewind', thread, '1', '--force']);
+    const r = w.run([], ['threads', 'rewind', thread, '1', '--force', '--json']);
     expect(r.code).toBe(0);
-    expect(r.out).toContain('put back a.txt, b.txt');
-    expect(r.out).toContain('the next run starts a new session from the task');
+    const runId = w.store.events(thread).find((e) => e.kind === 'run')?.id;
+    // Back to before run 1: no session goes on.
+    expect(JSON.parse(r.out)).toEqual({ run: runId, restored: ['a.txt', 'b.txt'] });
     expect([w.read('a.txt'), w.read('b.txt')]).toEqual(['start\n', undefined]);
     const t = w.store.read(thread);
     expect(t.runs).toEqual([]);

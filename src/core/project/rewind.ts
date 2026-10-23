@@ -24,6 +24,10 @@ import type { Thread, ThreadEvent, ThreadStore } from './threads.ts';
 
 export type Run = Thread['runs'][number];
 export type Rewound = { run: Run; restored: string[]; sessionId?: string };
+// `force` marks a refusal that --force goes past: the thread is working, or a file to put back changed since.
+export type RewindRefusal = { error: string; force?: true };
+// What `threads rewind <id> <n> --json` prints: the run gone back to and the files put back, or the refusal.
+export type RewindResult = { run: string; restored: string[]; sessionId?: string } | RewindRefusal;
 
 // The turns since `run` began, in one working directory (a thread may run in several worktrees of a project).
 const since = (t: Thread, run: Run) => t.turns.filter((x) => x.runs > t.runs.indexOf(run));
@@ -70,11 +74,11 @@ export function rewindThread(
   n: number,
   deps: { open: (cwd: string) => Snapshots | undefined; sessionFile: (cwd: string, id: string) => string },
   opts: { force?: boolean } = {},
-): Rewound | { error: string } {
+): Rewound | RewindRefusal {
   const t = store.read(thread);
   const run = Number.isInteger(n) ? t.runs[n - 1] : undefined;
   if (!run) return { error: t.runs.length ? `thread ${thread} has runs 1 to ${t.runs.length}, not ${n}` : `thread ${thread} has no run to rewind to` };
-  if (t.running && !opts.force) return { error: `thread ${thread} is working: its last run has not ended. Stop it first, or --force if it was killed` };
+  if (t.running && !opts.force) return { error: `thread ${thread} is working: its last run has not ended. Stop it first, or --force if it was killed`, force: true };
   const plans: Plan[] = [];
   for (const cwd of [...new Set(since(t, run).map((x) => x.cwd))]) {
     const snapshots = deps.open(cwd);
@@ -84,7 +88,7 @@ export function rewindThread(
   }
   const name = (p: Plan, f: string) => (p.cwd === run.cwd ? f : join(p.cwd, f));
   const moved = plans.flatMap((p) => p.moved.map((f) => name(p, f)));
-  if (moved.length && !opts.force) return { error: `${list(moved)} changed since the run that last wrote ${moved.length === 1 ? 'it' : 'them'}; nothing was rewound. --force puts ${moved.length === 1 ? 'it' : 'them'} back too` };
+  if (moved.length && !opts.force) return { error: `${list(moved)} changed since the run that last wrote ${moved.length === 1 ? 'it' : 'them'}; nothing was rewound. --force puts ${moved.length === 1 ? 'it' : 'them'} back too`, force: true };
   // The conversation first: a session that cannot be copied leaves everything as it was.
   const sessionId = run.from ? crypto.randomUUID() : undefined;
   const path = sessionId && deps.sessionFile(run.cwd, sessionId);
