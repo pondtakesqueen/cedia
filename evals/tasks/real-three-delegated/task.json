@@ -26,6 +26,12 @@
         "old": "test(\"the gate suite names existing tasks once, with thresholds and a spend cap\"",
         "new": "test.skip(\"the gate suite names existing tasks once, with thresholds and a spend cap\"",
         "why": "The workspace has no git history, so the suite's real-repository task is unavailable there and loading the suite throws."
+      },
+      {
+        "path": "src/core/safety/policy.ts",
+        "old": "  while (!existsSync(head)) {\n    const up = dirname(head);\n    if (up === head) return path;\n    tail.unshift(head.slice(up.length).replace(/^\\//, ''));\n    head = up;\n  }\n  return resolve(realpathSync(head), ...tail);\n}",
+        "new": "  for (;;) {\n    if (existsSync(head)) {\n      try {\n        return resolve(realpathSync(head), ...tail);\n      } catch {}\n    }\n    const up = dirname(head);\n    if (up === head) return path;\n    tail.unshift(head.slice(up.length).replace(/^\\//, ''));\n    head = up;\n  }\n}",
+        "why": "#80 on this older tree: under the macOS sandbox a stat of ~/.ssh gives EPERM, so the base's own policy tests failed before the agent changed anything, and agents 'fixed' real() unasked."
       }
     ]
   },
