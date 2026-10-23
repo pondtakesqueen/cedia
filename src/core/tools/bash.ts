@@ -146,10 +146,20 @@ function drain(stream: ReadableStream<Uint8Array>) {
   return { done, stop };
 }
 
+// Most models keep searching with `grep -r` in bash even with the grep tool offered (Flash called it 4 times
+// against 25 recursive greps in a gate run), and on a large tree that reads build output and dependencies: 22 s
+// where rg took 0.16 s. A recursive grep that took a while says so in its result, so the next search uses the tool.
+const RECURSIVE_GREP = /(^|[|&;(\s])e?grep\s+([^|&;]*\s)?(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive|--dereference-recursive)(\s|$)/;
+export const SLOW_GREP_MS = 2000;
+export const slowGrepNote = (command: string, ms: number) =>
+  ms >= SLOW_GREP_MS && RECURSIVE_GREP.test(command)
+    ? `\n[this recursive grep took ${(ms / 1000).toFixed(1)} s: the grep tool skips what .gitignore excludes and is usually far faster]`
+    : '';
+
 export const bashTool: ToolSpec = {
   name: 'bash',
   description:
-    'Run a shell command with bash in the working directory and return its output and exit code. Use it to search, build and run tests. A command the permission policy denies is not run; the result says why.',
+    'Run a shell command with bash in the working directory and return its output and exit code. Use it to build, run tests and run commands; search file contents with the grep tool, not grep -r. A command the permission policy denies is not run; the result says why.',
   schema: {
     type: 'object',
     properties: {
@@ -167,6 +177,7 @@ export const bashTool: ToolSpec = {
     const timeout = Math.min(Number(input.timeout_ms ?? 120_000), 600_000);
     const script = ctx.wrap ? await ctx.wrap(command) : command;
     // Its own process group, so a timeout or an abort ends what the command started too, not only bash.
+    const started = Date.now();
     const proc = Bun.spawn(['bash', '-c', script], { cwd: ctx.cwd, env: scrubbedEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', detached: true });
     let stopped = '';
     const kill = (why: string) => () => {
@@ -191,7 +202,7 @@ export const bashTool: ToolSpec = {
     await Promise.race([Promise.all([out.done, err.done]), Bun.sleep(PIPE_GRACE_MS)]);
     const [o, e] = [out.stop(), err.stop()];
     const text = [o, e && `[stderr]\n${e}`].filter(Boolean).join('\n') || '(no output)';
-    const full = `${text}\n[exit ${code}${stopped ? `, ${stopped}` : ''}]`;
+    const full = `${text}\n[exit ${code}${stopped ? `, ${stopped}` : ''}]${slowGrepNote(command, Date.now() - started)}`;
     // A long output goes to a file whole, so the lines in the middle (often the failing test) are still there.
     const path = full.length > MAX_OUTPUT_CHARS ? ctx.spill?.(full) : undefined;
     if (path) return { text: preview(full, path), isError: code !== 0, exitCode: code, spillPath: path };

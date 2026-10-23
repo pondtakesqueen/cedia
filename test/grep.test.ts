@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { slowGrepNote } from '../src/core/tools/bash.ts';
 import { grepTool } from '../src/core/tools/grep.ts';
 
 function repo() {
@@ -42,5 +43,16 @@ describe('grep', () => {
     const r = await run(dir, { pattern: '^hit' });
     expect(r.text.split('\n')).toHaveLength(201);
     expect(r.text).toContain('[50 more lines: narrow the pattern, path or glob]');
+  });
+});
+
+describe('a slow recursive grep in bash', () => {
+  test('points to the grep tool, and only when it was recursive and slow', () => {
+    expect(slowGrepNote('grep -rn cloneState .', 22_000)).toContain('took 22.0 s: the grep tool');
+    expect(slowGrepNote('cd src && grep -Rl foo', 3000)).toContain('grep tool');
+    expect(slowGrepNote('grep --recursive foo src', 2500)).toContain('grep tool');
+    expect(slowGrepNote('grep -rn cloneState .', 300)).toBe('');
+    expect(slowGrepNote('grep -n foo src/a.ts', 5000)).toBe('');
+    expect(slowGrepNote('rg foo', 5000)).toBe('');
   });
 });
