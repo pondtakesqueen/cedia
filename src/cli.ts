@@ -71,6 +71,8 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                (settings profiles; built in: coordinator, which opens threads with open_thread).
                                A thread goes on with the profile it was opened with
       --swarm <ref>            the model explore sub-threads run on (default: roles.swarm in settings, beam)
+      --workers <ref,...>      models besides the code model that a part of a split plan may run on; the planner
+                               picks one per part by how hard it is (default: roles.workers in settings, none)
       --thread <id>            go on with a thread of this project instead of opening a new one
       --handoff-at <n|off>     hand off to a new session of the thread once the context reaches n tokens
                                (default: settings, then half the window, at most 150k)
@@ -172,6 +174,7 @@ export async function main(argv: string[]): Promise<number> {
       todo: { type: 'string' },
       profile: { type: 'string' },
       swarm: { type: 'string' },
+      workers: { type: 'string' },
       'handoff-at': { type: 'string' },
       handoff: { type: 'string' },
       review: { type: 'string' },
@@ -223,6 +226,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.todo ? { todo: values.todo } : {}),
     ...(values.profile ? { profile: values.profile } : {}),
     ...(values.swarm ? { swarm: values.swarm } : {}),
+    ...(values.workers ? { workers: values.workers } : {}),
     ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
     ...(values.handoff ? { handoff: values.handoff } : {}),
     ...(values.review ? { review: values.review } : {}),

@@ -270,11 +270,13 @@ describe('settings', () => {
 
       // Roles: flags > CEDIA_MODEL (code) > user settings > defaults; claude-code only for plan and review.
       const beam = resolveModel('beam');
-      expect(loadRoles({}, {})).toEqual({ code: flash, swarm: beam });
-      writeFileSync(join(home, 'settings.json'), JSON.stringify({ roles: { plan: 'claude-code', code: 'anthropic/claude-haiku-5-5', review: 'sonnet', swarm: 'deepseek' } }));
-      expect(loadRoles({}, {})).toEqual({ plan: { via: 'claude-code', model: 'opus', effort: 'medium' }, code: resolveModel('anthropic/claude-haiku-5-5'), review: { via: 'cedia', model: resolveModel('sonnet') }, swarm: flash });
+      expect(loadRoles({}, {})).toEqual({ code: flash, swarm: beam, workers: [] });
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ roles: { plan: 'claude-code', code: 'anthropic/claude-haiku-5-5', review: 'sonnet', swarm: 'deepseek', workers: 'haiku, deepseek,haiku' } }));
+      expect(loadRoles({}, {})).toEqual({ plan: { via: 'claude-code', model: 'opus', effort: 'medium' }, code: resolveModel('anthropic/claude-haiku-5-5'), review: { via: 'cedia', model: resolveModel('sonnet') }, swarm: flash, workers: [resolveModel('haiku'), flash] });
+      expect(loadRoles({ workers: 'none' }, {}).workers).toEqual([]);
+      expect(() => loadRoles({ workers: 'claude-code:sonnet' }, {})).toThrow('workers write');
       expect(loadRoles({}, { CEDIA_MODEL: 'beam' }).code.ref).toBe('opencode-go/beam-free');
-      expect(loadRoles({ code: 'deepseek', plan: 'none', review: 'claude-code:fable', swarm: 'beam' }, { CEDIA_MODEL: 'beam' })).toEqual({ code: flash, review: { via: 'claude-code', model: 'fable', effort: 'medium' }, swarm: beam });
+      expect(loadRoles({ code: 'deepseek', plan: 'none', review: 'claude-code:fable', swarm: 'beam' }, { CEDIA_MODEL: 'beam' })).toEqual({ code: flash, review: { via: 'claude-code', model: 'fable', effort: 'medium' }, swarm: beam, workers: [resolveModel('haiku'), flash] });
       expect(loadRoles({ plan: 'claude-code@high', review: 'claude-code' }, {})).toMatchObject({ plan: { via: 'claude-code', model: 'opus', effort: 'high' }, review: { via: 'claude-code', model: 'opus', effort: 'medium' } });
       expect(loadRoles({ review: 'claude-code:sonnet@xhigh' }, {}).review).toEqual({ via: 'claude-code', model: 'sonnet', effort: 'xhigh' });
       expect(() => loadRoles({ review: 'claude-code:opus@huge' }, {})).toThrow('claude-code[:<model>][@low|medium|high|xhigh|max]');

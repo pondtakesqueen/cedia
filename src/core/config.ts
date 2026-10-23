@@ -21,7 +21,7 @@ export type Settings = {
   fallback?: Record<string, string>;
   // The model for each role: an alias or ref, `claude-code[:<model>]` for plan and review, or "none". User
   // settings only: a repo must not pick what the user pays for.
-  roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string };
+  roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string; workers?: string };
   // Whether writer sessions get the spawn tool for sub-threads (default true), and "worktree" to run each work
   // sub-thread in a git worktree of its own, several at once. User settings only.
   spawn?: boolean | 'worktree';
@@ -65,7 +65,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   privacy: 'any',
   context: 'any',
   fallback: 'any',
-  roles: ['plan', 'code', 'review', 'swarm', 'advisor', 'classifier'],
+  roles: ['plan', 'code', 'review', 'swarm', 'advisor', 'classifier', 'workers'],
   spawn: 'any',
   lsp: 'any',
   ask: 'any',
@@ -283,9 +283,9 @@ export function loadHandoff(flag?: string): 'note' | 'compact' {
 // FrontierCode, research/NOTES.md), and the step names its effort so Claude Code's own default does not decide it.
 // The writer always runs in cedia, where its writes go through the policy, the sandbox and the done gate.
 export function loadRoles(
-  flags: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string } = {},
+  flags: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string; workers?: string } = {},
   env = process.env,
-): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice; swarm: ModelSpec; advisor?: ModelSpec; classifier?: ModelSpec } {
+): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice; swarm: ModelSpec; advisor?: ModelSpec; classifier?: ModelSpec; workers: ModelSpec[] } {
   const user = readSettings(join(cediaHome(), 'settings.json')).roles ?? {};
   const codeRef = flags.code ?? env.CEDIA_MODEL ?? user.code ?? 'deepseek';
   if (/^claude-code\b/.test(codeRef)) throw new Error('the code role runs in cedia, where its writes are checked; use claude-code for plan or review');
@@ -308,7 +308,11 @@ export function loadRoles(
   const classifierRef = flags.classifier ?? user.classifier;
   if (classifierRef && /^claude-code\b/.test(classifierRef)) throw new Error('the classifier runs in cedia, one reply a command; claude-code is for plan or review');
   const classifier = classifierRef && classifierRef !== 'none' && classifierRef !== 'off' ? resolveModel(classifierRef) : undefined;
-  return { code: resolveModel(codeRef), ...(plan ? { plan } : {}), ...(review ? { review } : {}), swarm, ...(advisor ? { advisor } : {}), ...(classifier ? { classifier } : {}) };
+  // The other models a part of a split plan may run on (core/roles.ts), comma-separated; the code model always may.
+  const workersRef = flags.workers ?? user.workers ?? '';
+  if (/claude-code/.test(workersRef)) throw new Error('workers write, so they run in cedia; claude-code is for plan or review');
+  const workers = workersRef === 'none' ? [] : [...new Set(workersRef.split(',').map((r) => r.trim()).filter(Boolean))].map(resolveModel);
+  return { code: resolveModel(codeRef), ...(plan ? { plan } : {}), ...(review ? { review } : {}), swarm, ...(advisor ? { advisor } : {}), ...(classifier ? { classifier } : {}), workers };
 }
 
 // Declared checks for the done gate. Declaring a check grants nothing, so a repo may declare its own.
