@@ -2,6 +2,8 @@ cedia adapts code from the following sources:
 
 - harness2 (Apache-2.0) — budget ledger identity (R rollouts + P sessions per task) adapted into evals/run.ts. Executor, benchmark, and recursion code were not copied.
 
+- ponytail (MIT) — the idea of its "ladder" (no code, then existing code, the standard library, an installed dependency, one line, and only then the smallest new code, with a test for risky logic), restated in cedia's own words in DEEPSEEK_PROMPT (src/core/providers/catalog.ts). Its text was not copied.
+
 Claude Code (no license) — read only for understanding; no code copied.
 
 Earlier versions of this repository (the pi package, removed in stage 0) also adapted code from pstack-claude (MIT), Grok Build (Apache-2.0), Codex (Apache-2.0) and oh-my-pi (MIT). That code is no longer in the tree; see git history.
