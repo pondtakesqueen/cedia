@@ -142,6 +142,12 @@ function expand(words: string[]): string[][] {
           i++;
           break;
         }
+        // env -S splits its value into a command line of its own.
+        const split = /^(-S|--split-string)(=.*)?$/.exec(argv[i]!);
+        if (w === 'env' && split) {
+          const line = split[2] ? split[2].slice(1) : argv[i + 1];
+          if (line !== undefined) return simpleCommands([line, ...argv.slice(i + (split[2] ? 1 : 2))].join(' ')) ?? [argv.slice(i)];
+        }
         i += wrapper.value?.includes(argv[i]!) ? 2 : 1;
       }
       i += wrapper.positional ?? 0;
@@ -151,8 +157,21 @@ function expand(words: string[]): string[][] {
   const [cmd, ...args] = rest;
   if (!cmd) return [];
   if (/^(ba|z|da|k)?sh$/.test(cmd)) {
-    const c = args.indexOf('-c');
-    if (c >= 0 && args[c + 1] !== undefined) return simpleCommands(args[c + 1]!) ?? [rest];
+    // -c may share a word with other flags (`bash -lc`, `sh -ec`); the command is the next operand.
+    const c = args.findIndex((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a));
+    const line = c < 0 ? undefined : args.slice(c + 1).find((a) => !/^[-+]/.test(a));
+    if (line !== undefined) return simpleCommands(line) ?? [rest];
+  }
+  // find runs each -exec, -execdir, -ok and -okdir body as a command of its own, up to `;` or `+`.
+  if (cmd === 'find') {
+    const bodies: string[][] = [];
+    for (let k = 0; k < args.length; k++) {
+      if (!/^-(exec|execdir|ok|okdir)$/.test(args[k]!)) continue;
+      const end = args.findIndex((a, n) => n > k && (a === ';' || a === '+'));
+      bodies.push(args.slice(k + 1, end < 0 ? args.length : end));
+      k = end < 0 ? args.length : end;
+    }
+    return [rest, ...bodies.flatMap((b) => expand(b))];
   }
   if (cmd === 'eval') return simpleCommands(args.join(' ')) ?? [rest];
   return [rest];

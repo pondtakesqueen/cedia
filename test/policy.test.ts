@@ -89,6 +89,27 @@ describe('deny list', () => {
     ['git update-ref -d refs/heads/x', 'drop-refs'],
     ['git filter-branch --tree-filter "rm x" HEAD', 'drop-refs'],
     ['git filter-repo --path secret --invert-paths', 'drop-refs'],
+    // Forms that hide the command: find's leading options and -exec bodies, git aliases, shells with
+    // combined flags, env -S.
+    ['find -L / -delete', 'rm-outside'],
+    ['find -H -L / -name x -delete', 'rm-outside'],
+    ['find -s / -delete', 'rm-outside'],
+    ['find -f / -delete', 'rm-outside'],
+    ['find -x -f .. -delete', 'rm-outside'],
+    ['find . -exec rm -rf / \\;', 'rm-outside'],
+    ['find src -execdir rm -rf ~ +', 'rm-outside'],
+    ['find . -name x -exec sh -c "git push -f" \\;', 'force-push'],
+    ['git -c alias.p=push p -f', 'force-push'],
+    ['git -c Alias.P=push P --force', 'force-push'],
+    ['git -c alias.p="push --force" p', 'force-push'],
+    ['git -c alias.p="!git push -f" p', 'force-push'],
+    ['git -c alias.r="reset --hard" r', 'reset-hard'],
+    ['git --config-env=alias.p=CMD p', 'force-push'],
+    ['bash -lc "git push -f"', 'force-push'],
+    ['bash -e -c "rm -rf /"', 'rm-outside'],
+    ['sh -ec "rm -rf /etc"', 'rm-outside'],
+    ['env -S "rm -rf /"', 'rm-outside'],
+    ['env --split-string="git reset --hard"', 'reset-hard'],
   ];
   for (const [command, name] of denied)
     test(`denies ${command}`, () => {
@@ -97,7 +118,7 @@ describe('deny list', () => {
       expect(d.rule).toBe(`deny-list:${name}`);
     });
 
-  const allowed = ['git push origin feature', 'git push -u origin feature', 'git reset --soft HEAD~1', 'git clean -n', 'rm -rf node_modules dist', 'rm -rf ./*', 'rm -r src/old', 'find . -name "*.tmp" -delete', 'rm /tmp/x.txt', 'npm test', 'bun run build', 'kubectl get pods', 'gh pr view 3', 'git stash', 'git stash pop', 'git stash list', 'git branch -d merged', 'git branch new', 'git reflog', 'git update-ref refs/heads/x HEAD'];
+  const allowed = ['git push origin feature', 'git push -u origin feature', 'git reset --soft HEAD~1', 'git clean -n', 'rm -rf node_modules dist', 'rm -rf ./*', 'rm -r src/old', 'find . -name "*.tmp" -delete', 'rm /tmp/x.txt', 'npm test', 'bun run build', 'kubectl get pods', 'gh pr view 3', 'git stash', 'git stash pop', 'git stash list', 'git branch -d merged', 'git branch new', 'git reflog', 'git update-ref refs/heads/x HEAD', 'find -L . -name "*.tmp" -delete', 'find . -name "*.o" -exec rm -f {} +', 'find src -exec grep -l x {} \\;', 'git -c alias.st=status st', 'git -c core.pager=cat log', 'bash -lc "bun test"', 'env -S "bun test"'];
   for (const command of allowed) test(`allows ${command}`, () => expect(bash(WS, command).decision).toBe('allow'));
 
   test('allow rules and modes cannot lift it', () => {

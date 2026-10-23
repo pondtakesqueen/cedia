@@ -244,12 +244,12 @@ export function denyListed(argv: string[], cwd: string): Hit | undefined {
   const [cmd, ...args] = argv;
   if (!cmd) return undefined;
   const name = cmd.split('/').pop()!;
-  if (name === 'git') return gitHit(args);
+  if (name === 'git') return gitHit(args, cwd);
   if (name === 'rm') return rmHit(args, cwd);
   if (name === 'security' && args.some((a) => KEYCHAIN_READS.includes(a)))
     return { name: 'secret-path', reason: `security ${args.join(' ')} reads the Keychain, where cedia's API keys live; ask the user to run it` };
   if (name === 'find' && args.some((a) => a === '-delete' || a === '-exec' || a === '-execdir')) {
-    const starts = args.slice(0, Math.max(0, args.findIndex((a) => a.startsWith('-')))).filter(Boolean);
+    const starts = findStarts(args);
     if ((starts.length ? starts : ['.']).some((p) => !resolvable(p) || !insideWorkspace(p, cwd)))
       return { name: 'rm-outside', reason: 'find -delete or -exec outside the working directory' };
   }
@@ -258,14 +258,44 @@ export function denyListed(argv: string[], cwd: string): Hit | undefined {
   return undefined;
 }
 
+// The paths find starts from: the words after its leading options (-H -L -P, and BSD's -E -X -d -s -x and
+// -f <path>) up to the first expression word.
+function findStarts(args: string[]): string[] {
+  const starts: string[] = [];
+  let i = 0;
+  for (; i < args.length && /^-[HLPEXdsxf]+$/.test(args[i]!); i++) if (args[i]!.endsWith('f') && args[i + 1] !== undefined) starts.push(args[++i]!);
+  for (; i < args.length && !/^[-(!]/.test(args[i]!); i++) starts.push(args[i]!);
+  return starts.filter(Boolean);
+}
+
 // macOS `security` subcommands that print a password or key, export them, or take commands from stdin (-i).
 const KEYCHAIN_READS = ['find-generic-password', 'find-internet-password', 'find-key', 'dump-keychain', 'export', 'export-item', '-i', 'interactive'];
 
-function gitHit(args: string[]): Hit | undefined {
-  // Skip global options such as -C <dir> and -c k=v to reach the subcommand.
+function gitHit(args: string[], cwd: string, depth = 0): Hit | undefined {
+  // Skip global options such as -C <dir> and -c k=v to reach the subcommand, keeping the aliases -c defines.
+  const aliases = new Map<string, string>();
   let i = 0;
-  while (i < args.length && args[i]!.startsWith('-')) i += ['-C', '-c', '--git-dir', '--work-tree', '--namespace'].includes(args[i]!) ? 2 : 1;
+  while (i < args.length && args[i]!.startsWith('-')) {
+    const hidden = /^--config-env=alias\.([^=]+)=/i.exec(args[i]!);
+    if (hidden) aliases.set(hidden[1]!.toLowerCase(), '');
+    const alias = args[i] === '-c' ? /^alias\.([^=]+)=(.*)$/is.exec(args[i + 1] ?? '') : null;
+    if (alias) aliases.set(alias[1]!.toLowerCase(), alias[2]!);
+    i += ['-C', '-c', '--git-dir', '--work-tree', '--namespace'].includes(args[i]!) ? 2 : 1;
+  }
   const [subcommand, ...rest] = args.slice(i);
+  const alias = subcommand === undefined ? undefined : aliases.get(subcommand.toLowerCase());
+  if (alias === '') return { name: 'force-push', reason: `git ${subcommand} is an alias set from a variable, which cannot be read before it runs; ask the user` };
+  if (alias !== undefined && depth < 5) {
+    // `!` runs the rest as a shell command; otherwise the alias stands for the words it names.
+    if (alias.startsWith('!')) {
+      for (const argv of simpleCommands([alias.slice(1), ...rest].join(' ')) ?? [['git', ...rest]]) {
+        const hit = denyListed(argv, cwd);
+        if (hit) return hit;
+      }
+      return undefined;
+    }
+    return gitHit([...args.slice(0, i), ...(simpleCommands(alias)?.[0] ?? [alias]), ...rest], cwd, depth + 1);
+  }
   if (subcommand === 'push') {
     const force = rest.some((a) => /^--(force|force-with-lease|mirror|delete|prune)(=|$)/.test(a)) || shortFlag(rest, 'f') || shortFlag(rest, 'd');
     const refspec = rest.some((a) => !a.startsWith('-') && /^[+:]/.test(a));
