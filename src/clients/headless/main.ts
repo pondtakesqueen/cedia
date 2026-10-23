@@ -21,6 +21,7 @@ import { spawnNudgeAt, spawnPool, spawnReport, spawnTool, subtaskPrompt, type Sp
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { todoTool } from '../../core/tools/todo.ts';
+import { BROWSER_TOOL, browserStub, browserTool } from '../../core/tools/browser.ts';
 import { openThreadTool } from '../../core/tools/open.ts';
 import { scheduleTool } from '../../core/tools/schedule.ts';
 import { ScheduleStore, schedulesPath } from '../../core/project/schedules.ts';
@@ -83,6 +84,9 @@ export type HeadlessArgs = {
   ask?: string;
   // "on" gives the writer the todo tool, whose list a client draws as the thread's progress (core/tools/todo.ts).
   todo?: string;
+  // A Chromium's DevTools endpoint (core/tools/browser.ts): the writer gets the browser tool on its page. "off" or
+  // none: no browser.
+  browser?: string;
   // A named set of defaults under the flags (core/profiles.ts); a thread goes on with the profile it was opened with.
   profile?: string;
   // "fallback" or "wait:<minutes>": what a spent quota does.
@@ -320,6 +324,14 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const webAccess = (mode: 'read-only' | 'workspace') => ({ anyHost: (!sandbox.on && mode === 'workspace') || fetchRules.includes('*'), allowedDomains: [...sandboxSettings.allowedDomains, ...fetchRules.filter((d) => d !== '*')] });
   const webFetch = webFetchTool(webAccess(policy.mode));
   const webFetchRead = webFetchTool(webAccess('read-only'));
+  // The browser opens what web_fetch reaches, widened by its own rules (`browser`, `browser(<domain>)`), plus the
+  // local preview (core/tools/browser.ts).
+  const browserRules = policy.allow.flatMap((r) => {
+    const m = /^browser(?:\((.*)\))?$/.exec(r.trim());
+    return m ? [m[1]?.trim() || '*'] : [];
+  });
+  const browserAccess = { anyHost: webAccess(policy.mode).anyHost || browserRules.includes('*'), allowedDomains: [...webAccess(policy.mode).allowedDomains, ...browserRules.filter((d) => d !== '*')] };
+  const browser = args.browser && args.browser !== 'off' ? browserTool(args.browser, browserAccess) : undefined;
   // Started inside the run's try below, so they are closed however it ends.
   let mcp: McpServers | undefined;
   const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}) });
@@ -403,7 +415,9 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // server is gone keeps the tool, and a call to it says the server is not there.
     const mcpTools = [...(mcp?.tools ?? []), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map(mcpStub)];
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
-    const extra = [...(spawnOn ? [spawnHere] : []), ...((askOn || policy.plan) && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened)] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpTools];
+    // A resumed session that had the browser keeps the tool when this run has none, and a call says so.
+    const browserTools = browser ? [browser.tool] : header?.tools.some((d) => d.name === BROWSER_TOOL) ? [browserStub] : [];
+    const extra = [...(spawnOn ? [spawnHere] : []), ...((askOn || policy.plan) && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened)] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...browserTools, ...mcpTools];
     // The advisor and the classifier answer in one reply, with no tools, in a session of their own.
     const helper = opts.role === 'advisor' || opts.role === 'classifier';
     const tools = helper ? [] : reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
@@ -957,6 +971,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   } finally {
     await diagnoser?.close();
     await mcp?.close();
+    await browser?.close();
     await sandbox.close();
     process.off('SIGINT', onSignal);
     process.off('SIGTERM', onSignal);

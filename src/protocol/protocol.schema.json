@@ -217,6 +217,7 @@
         "commands",
         "threads.fork",
         "usage",
+        "browser",
         "threads.restore-json"
       ]
     },
