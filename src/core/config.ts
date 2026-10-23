@@ -232,35 +232,38 @@ export const loadProfiles = (): Record<string, unknown> => readSettings(join(ced
 // readOnly and timeoutSec. A bad entry is an error, like any bad setting.
 export function loadMcp(env = process.env): Record<string, McpServerConfig> {
   const raw = readSettings(join(cediaHome(), 'settings.json')).mcpServers ?? {};
-  const expand = (v: string) => v.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, k: string) => env[k] ?? '');
-  const strings = (v: unknown, what: string): Record<string, string> | undefined => {
-    if (v === undefined) return undefined;
-    if (!isObject(v) || Object.values(v).some((x) => typeof x !== 'string')) throw new Error(`${what} must map names to strings`);
-    return Object.fromEntries(Object.entries(v as Record<string, string>).map(([k, x]) => [k, expand(x)]));
+  return Object.fromEntries(Object.entries(raw).map(([name, v]) => [name, checkMcpServer(name, v, env)]));
+}
+
+// One entry of mcpServers, checked, with `${VAR}` in its env values and headers read from `env`.
+export function checkMcpServer(name: string, v: unknown, env: Record<string, string | undefined> = process.env): McpServerConfig {
+  const expand = (s: string) => s.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, k: string) => env[k] ?? '');
+  const strings = (x: unknown, what: string): Record<string, string> | undefined => {
+    if (x === undefined) return undefined;
+    if (!isObject(x) || Object.values(x).some((y) => typeof y !== 'string')) throw new Error(`${what} must map names to strings`);
+    return Object.fromEntries(Object.entries(x as Record<string, string>).map(([k, y]) => [k, expand(y)]));
   };
-  const out: Record<string, McpServerConfig> = {};
-  for (const [name, v] of Object.entries(raw)) {
-    const at = `mcpServers.${name}`;
-    if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) throw new Error(`${at}: a server name is 1 to 32 letters, digits, _ or -`);
-    if (!isObject(v)) throw new Error(`${at} must be an object`);
-    const known = ['command', 'args', 'env', 'cwd', 'url', 'headers', 'readOnly', 'timeoutSec'];
-    const unknown = Object.keys(v).find((k) => !known.includes(k));
-    if (unknown) throw new Error(`${at}: unknown key "${unknown}" (known: ${known.join(', ')})`);
-    if (v.readOnly !== undefined && typeof v.readOnly !== 'boolean') throw new Error(`${at}.readOnly must be true or false`);
-    if (v.timeoutSec !== undefined && (typeof v.timeoutSec !== 'number' || !(v.timeoutSec > 0))) throw new Error(`${at}.timeoutSec must be a positive number`);
-    const common = { ...(v.readOnly !== undefined ? { readOnly: v.readOnly as boolean } : {}), ...(v.timeoutSec !== undefined ? { timeoutSec: v.timeoutSec as number } : {}) };
-    if (typeof v.command === 'string' && v.url === undefined) {
-      if (v.args !== undefined && (!Array.isArray(v.args) || v.args.some((a) => typeof a !== 'string'))) throw new Error(`${at}.args must be a list of strings`);
-      if (v.cwd !== undefined && typeof v.cwd !== 'string') throw new Error(`${at}.cwd must be a string`);
-      const e = strings(v.env, `${at}.env`);
-      out[name] = { command: v.command, ...(v.args ? { args: v.args as string[] } : {}), ...(e ? { env: e } : {}), ...(v.cwd ? { cwd: v.cwd as string } : {}), ...common };
-    } else if (typeof v.url === 'string' && v.command === undefined) {
-      if (!/^https?:\/\//.test(v.url)) throw new Error(`${at}.url must be http(s)`);
-      const h = strings(v.headers, `${at}.headers`);
-      out[name] = { url: v.url, ...(h ? { headers: h } : {}), ...common };
-    } else throw new Error(`${at} needs either a command or a url`);
+  const at = `mcpServers.${name}`;
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) throw new Error(`${at}: a server name is 1 to 32 letters, digits, _ or -`);
+  if (!isObject(v)) throw new Error(`${at} must be an object`);
+  const known = ['command', 'args', 'env', 'cwd', 'url', 'headers', 'readOnly', 'timeoutSec'];
+  const unknown = Object.keys(v).find((k) => !known.includes(k));
+  if (unknown) throw new Error(`${at}: unknown key "${unknown}" (known: ${known.join(', ')})`);
+  if (v.readOnly !== undefined && typeof v.readOnly !== 'boolean') throw new Error(`${at}.readOnly must be true or false`);
+  if (v.timeoutSec !== undefined && (typeof v.timeoutSec !== 'number' || !(v.timeoutSec > 0))) throw new Error(`${at}.timeoutSec must be a positive number`);
+  const common = { ...(v.readOnly !== undefined ? { readOnly: v.readOnly as boolean } : {}), ...(v.timeoutSec !== undefined ? { timeoutSec: v.timeoutSec as number } : {}) };
+  if (typeof v.command === 'string' && v.url === undefined) {
+    if (v.args !== undefined && (!Array.isArray(v.args) || v.args.some((a) => typeof a !== 'string'))) throw new Error(`${at}.args must be a list of strings`);
+    if (v.cwd !== undefined && typeof v.cwd !== 'string') throw new Error(`${at}.cwd must be a string`);
+    const e = strings(v.env, `${at}.env`);
+    return { command: v.command, ...(v.args ? { args: v.args as string[] } : {}), ...(e ? { env: e } : {}), ...(v.cwd ? { cwd: v.cwd as string } : {}), ...common };
   }
-  return out;
+  if (typeof v.url === 'string' && v.command === undefined) {
+    if (!/^https?:\/\//.test(v.url)) throw new Error(`${at}.url must be http(s)`);
+    const h = strings(v.headers, `${at}.headers`);
+    return { url: v.url, ...(h ? { headers: h } : {}), ...common };
+  }
+  throw new Error(`${at} needs either a command or a url`);
 }
 
 // When a writer session hands off: flag > user settings > half the window, capped (core/project/handoff.ts).
