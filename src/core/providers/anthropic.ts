@@ -1,4 +1,5 @@
-import type { AssistantBlock, CompactionBlock, JsonObject, Message, Provider, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
+import { imageBase64 } from '../images.ts';
+import type { AssistantBlock, CompactionBlock, ImageRef, JsonObject, Message, Provider, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
 import { Assembler } from './assemble.ts';
 import { authHeaders, classifyStreamError, post, type Fetcher } from './http.ts';
 import { readSse } from './sse.ts';
@@ -21,6 +22,8 @@ function assistantContent(blocks: AssistantBlock[], sameWire: boolean): JsonObje
     return [{ type: 'tool_use', id: b.id, name: b.name, input: b.input }];
   });
 }
+
+const imageBlock = (ref: ImageRef): JsonObject => ({ type: 'image', source: { type: 'base64', media_type: ref.mime, data: imageBase64(ref) } });
 
 // Per-message effort: a role "system" message with no content changes the level from the latest user turn with
 // new input on, and leaves everything before it (and so the cached prefix) as it was.
@@ -45,7 +48,14 @@ export function anthropicMessages(messages: Message[], midConversationSystem: bo
         m.parts.map((p) =>
           p.type === 'text'
             ? { type: 'text', text: p.text }
-            : { type: 'tool_result', tool_use_id: p.callId, content: p.text, ...(p.isError ? { is_error: true } : {}) },
+            : p.type === 'image'
+              ? imageBlock(p.image)
+              : {
+                  type: 'tool_result',
+                  tool_use_id: p.callId,
+                  content: p.images?.length ? [...(p.text ? [{ type: 'text', text: p.text }] : []), ...p.images.map(imageBlock)] : p.text,
+                  ...(p.isError ? { is_error: true } : {}),
+                },
         ),
       );
   }

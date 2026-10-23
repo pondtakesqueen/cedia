@@ -39,6 +39,27 @@ describe('cedia -p (offline, faux)', () => {
     expect(log.events.map((e) => e.kind)).toContain('tool_result');
   });
 
+  test('--image shows the writer the image with the prompt, and a bad one stops the run', () => {
+    const png = new Uint8Array(64);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+    new DataView(png.buffer).setUint32(16, 300);
+    new DataView(png.buffer).setUint32(20, 200);
+    const pic = join(mkdtempSync(join(tmpdir(), 'cedia-pic-')), 'pic.png');
+    writeFileSync(pic, png);
+    const r = cedia([reply('a red square')], ['-p', 'what is this?', '--image', pic]);
+    expect(r.code).toBe(0);
+    const sessions = join(r.home, 'sessions');
+    const [project] = readdirSync(sessions);
+    const [file] = readdirSync(join(sessions, project!));
+    const user = SessionLog.load(join(sessions, project!, file!)).events.find((e) => e.kind === 'user') as Extract<SessionEvent, { kind: 'user' }>;
+    expect(user.images).toEqual([expect.objectContaining({ mime: 'image/png', width: 300, height: 200, name: pic })]);
+    expect(user.text).toContain(`open it with your read tool to look: ${pic}`);
+    expect(readdirSync(join(r.home, 'blobs'))).toEqual([user.images![0]!.sha256]);
+    const bad = cedia([reply('x')], ['-p', 'x', '--image', join(r.dir, 'script.json')]);
+    expect(bad.code).not.toBe(0);
+    expect(bad.err).toContain('not a PNG, JPEG, GIF or WebP image');
+  });
+
   test('auto is read-only without the sandbox; --permission workspace lets a command write', () => {
     const script = [call('c1', 'echo hi > out.txt'), reply('done')];
     const ro = cedia(script, ['-p', 'write it', '--output-format', 'json', '--sandbox', 'off']);

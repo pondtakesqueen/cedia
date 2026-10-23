@@ -85,6 +85,7 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --handoff <note|compact> how a session hands off: the model writes a note, or the provider summarizes the
                                older turns and the newest are kept (Claude API models only; default: settings, note)
       --check <command>        declared check for the done gate, e.g. 'bun test'; repeatable
+      --image <file>           show the model this image (PNG, JPEG, GIF, WebP) with the prompt; repeatable
       --sandbox <s>            auto | on | off: OS sandbox for bash (default: $CEDIA_SANDBOX, settings, auto)
       --allow-domain <host>    let sandboxed commands reach this host; repeatable
       --no-session-file        keep the session log in memory only
@@ -192,6 +193,7 @@ export async function main(argv: string[]): Promise<number> {
       classifier: { type: 'string' },
       plan: { type: 'string' },
       check: { type: 'string', multiple: true },
+      image: { type: 'string', multiple: true },
       sandbox: { type: 'string' },
       'allow-domain': { type: 'string', multiple: true },
       'no-session-file': { type: 'boolean' },
@@ -246,6 +248,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.classifier ? { classifier: values.classifier } : {}),
     ...(values.plan ? { plan: values.plan } : {}),
     ...(values.check ? { checks: values.check } : {}),
+    ...(values.image ? { images: values.image } : {}),
     ...(values.sandbox ? { sandbox: values.sandbox } : {}),
     ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),
   };
