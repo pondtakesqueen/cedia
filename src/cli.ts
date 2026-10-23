@@ -53,6 +53,9 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                it reads the change and answers met, not met (the writer goes on with what is
                                missing, at most 3 more times) or impossible. Exit 1 unless met
       --goal-judge <ref>       the judge's model (default: the writer's, in a fresh read-only session)
+      --goal-mode <light|full> full: the judge's model first writes acceptance criteria that go with the task and that
+                               the judge answers one by one, and a strategist proposes a change of approach when the
+                               same criteria stay unmet two rounds in a row (default light)
       --advisor <ref|none>     the advisor role: a model that reads each of the writer's turns and may leave it a
                                note before the next (default: settings roles.advisor, none). One reply a turn
       --classifier <ref|none>  the classifier role: a model that reads each command no allow rule names before it
@@ -180,6 +183,7 @@ export async function main(argv: string[]): Promise<number> {
       review: { type: 'string' },
       goal: { type: 'string' },
       'goal-judge': { type: 'string' },
+      'goal-mode': { type: 'string' },
       advisor: { type: 'string' },
       classifier: { type: 'string' },
       plan: { type: 'string' },
@@ -232,6 +236,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.review ? { review: values.review } : {}),
     ...(values.goal ? { goal: values.goal } : {}),
     ...(values['goal-judge'] ? { goalJudge: values['goal-judge'] } : {}),
+    ...(values['goal-mode'] ? { goalMode: values['goal-mode'] } : {}),
     ...(values.advisor ? { advisor: values.advisor } : {}),
     ...(values.classifier ? { classifier: values.classifier } : {}),
     ...(values.plan ? { plan: values.plan } : {}),
