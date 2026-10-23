@@ -175,10 +175,11 @@ Taken from the DeepSeek harness (`packages/core/agent-loop/README.md`, "KV Cache
 4. Cancelled tool calls get synthetic results appended; history is never cut.
 5. Roles change only when a subagent starts. The main session never switches model; each subagent owns its cache.
 6. A session waiting on a long tool (a work sub-thread, a slow check) keeps its prefix cached: on Anthropic, while tools run past 4 minutes after a request was sent, the same body goes again with `max_tokens: 0` and no stream every 4 minutes, which refreshes the 5-minute cache at the cache-read price instead of writing the whole context again on the next request. Each refresh is a `keepalive` event with its usage, counted in the session's cost.
+7. Between prompts the owner may think for longer than 5 minutes, so in the TUI the writer's breakpoints carry `ttl: "1h"` on the Anthropic wire (`--cache-ttl 5m|1h`; `-p` defaults to 5m, plan, review and sub-threads always do). An hour's write costs 2× input against 1.25×, so it pays once one pause in about eight prompts runs past 5 minutes, at Opus 5.5's prices a whole rewrite of a 40k context ($0.20) against about $0.02 a prompt. With 1h the refresh while tools run comes every 55 minutes. `Usage.cacheWrite1h` is the part of `cacheWrite` written for an hour, billed at 2× input.
 
 Per provider: Anthropic uses automatic `cache_control` plus a breakpoint at the end of tools and system; OpenCode Go requests carry a stable `x-opencode-session` and cedia's own User-Agent; Responses requests carry `prompt_cache_key`. Each `request` event records model, effort, tools hash, system hash, body hash, TTL and header names, so a miss can be traced to what changed.
 
-`Usage` keeps disjoint `uncached / cacheRead / cacheWrite / output` fields. Mapping per wire:
+`Usage` keeps disjoint `uncached / cacheRead / cacheWrite / output` fields (`cacheWrite1h` is part of `cacheWrite`). Mapping per wire:
 
 | Wire | cacheRead | cacheWrite | uncached |
 |---|---|---|---|

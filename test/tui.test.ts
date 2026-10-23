@@ -365,3 +365,20 @@ describe('the TUI (offline, faux)', () => {
     expect(callLine('x', { a: 1 })).toBe('x {"a":1}');
   });
 });
+
+test('the TUI caches the writer for an hour unless told otherwise', async () => {
+  const seen: Parameters<typeof runHeadless>[0][] = [];
+  const fake = (async (a: Parameters<typeof runHeadless>[0]) => {
+    seen.push(a);
+    throw new Error('stop here');
+  }) as unknown as typeof runHeadless;
+  for (const more of [{}, { cacheTtl: '5m' }]) {
+    const term = new FakeTerminal();
+    const a = new CediaTui({ cwd: dir, model: 'faux', ...more }, term, fake, () => {});
+    a.start();
+    term.input('hi');
+    term.input('\r');
+    await a.idle();
+  }
+  expect(seen.map((a) => a.cacheTtl)).toEqual(['1h', '5m']);
+});

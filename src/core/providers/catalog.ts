@@ -237,5 +237,6 @@ export function priceFor(model: ModelSpec, usage: Usage, at: Date): Price {
 
 export function costUsd(model: ModelSpec, usage: Usage, at = new Date()): number {
   const pr = priceFor(model, usage, at);
-  return (usage.uncached * pr.input + usage.cacheRead * pr.cacheRead + usage.cacheWrite * pr.cacheWrite + usage.output * pr.output) / 1_000_000;
+  const hour = usage.cacheWrite1h ?? 0;
+  return (usage.uncached * pr.input + usage.cacheRead * pr.cacheRead + (usage.cacheWrite - hour) * pr.cacheWrite + hour * 2 * pr.input + usage.output * pr.output) / 1_000_000;
 }

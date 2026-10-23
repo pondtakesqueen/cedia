@@ -63,6 +63,8 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --spawn <on|off|worktree>
                                let the writer hand self-contained work to sub-threads (default: settings, on);
                                worktree runs each work sub-thread in a git worktree of its own, several at once
+      --cache-ttl <5m|1h>      how long the writer's cached prompt lasts on Claude API models between requests.
+                               Default 5m for -p, 1h in the TUI (writes cost 2x input instead of 1.25x)
       --lsp <on|off>           after each edit, add the file's errors from a language server when one is installed
                                (typescript-language-server, pyright-langserver, gopls; more in settings "lsp"). Default on
       --ask <on|off>           give the writer ask_user, to end the run with one question for you when only you can
@@ -177,6 +179,7 @@ export async function main(argv: string[]): Promise<number> {
       thread: { type: 'string' },
       spawn: { type: 'string' },
       lsp: { type: 'string' },
+      'cache-ttl': { type: 'string' },
       ask: { type: 'string' },
       todo: { type: 'string' },
       browser: { type: 'string' },
@@ -232,6 +235,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.thread ? { thread: values.thread } : {}),
     ...(values.spawn ? { spawn: values.spawn } : {}),
     ...(values.lsp ? { lsp: values.lsp } : {}),
+    ...(values['cache-ttl'] ? { cacheTtl: values['cache-ttl'] } : {}),
     ...(values.ask ? { ask: values.ask } : {}),
     ...(values.todo ? { todo: values.todo } : {}),
     ...(values.browser ? { browser: values.browser } : {}),
