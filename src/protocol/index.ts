@@ -9,8 +9,11 @@ export type { SessionEvent } from '../core/types.ts';
 export type { ThreadEvent } from '../core/project/threads.ts';
 export type { Schedule, ScheduleEvent } from '../core/project/schedules.ts';
 export type { ModelEntry, ModelList } from '../core/providers/models.ts';
+export type { UsageReport } from '../core/session/usage.ts';
 export type { PermissionEntry, PermissionList } from '../core/safety/policy.ts';
 export type { CommandEntry, CommandList } from '../core/skills/skills.ts';
+export type { Restored } from '../core/project/undo.ts';
+export type { RewindResult } from '../core/project/rewind.ts';
 export type { Capability, VersionInfo } from './version.ts';
 
 export type CoreMessage = { type: 'event'; event: SessionEvent } | { type: 'stream'; event: StreamEvent } | HeadlessResult;

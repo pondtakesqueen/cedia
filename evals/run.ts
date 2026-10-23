@@ -248,10 +248,13 @@ function exec(bin: string, args: string[], cwd: string, timeoutMs: number, env?:
 }
 
 // A run the provider ended, not the agent: it failed before the model answered, or a spent plan or balance stopped
-// it part way (Go's weekly limit ended runs 35 s in, which then read as task failures). Left out and run again.
+// it part way (Go's weekly limit ended runs 35 s in, which then read as task failures), or a rate limit or outage
+// outlasted cedia's retries (OpenRouter's "temporarily rate-limited upstream" 429 ended a run 8 minutes in). Left
+// out and run again. An error_during_execution's text is the provider's error when the provider ended the run.
 export function providerFailed(subtype: string | undefined, inputTokens: number, text: string): boolean {
-  return subtype === "error_during_execution" && (inputTokens === 0 || isQuotaText(text));
+  return subtype === "error_during_execution" && (inputTokens === 0 || isQuotaText(text) || TRANSIENT.test(text.toLowerCase()));
 }
+const TRANSIENT = /rate.?limit|overloaded|temporarily unavailable|"code":\s*(429|5\d\d)\b|\bhttp (429|5\d\d)\b/;
 
 export async function runTask(task: Task, harness: string, model: string | null, run = 1): Promise<Result> {
   const make = HARNESSES[harness];

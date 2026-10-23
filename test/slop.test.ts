@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { detectChecks } from '../src/core/config.ts';
@@ -68,6 +68,18 @@ describe('findSlop', () => {
       'type-escape src/a.ts',
       'type-escape src/a.ts',
       'type-escape src/a.ts',
+    ]);
+  });
+
+  test("a detector's own patterns, in regex literals and strings, are not the shortcuts they name", () => {
+    const own = readFileSync(join(import.meta.dir, '../src/core/trust/slop.ts'), 'utf8').split('\n');
+    expect(rules([change('src/core/trust/slop.ts', own)])).toEqual([]);
+    expect(rules([change('src/a.ts', ["const SKIP = /\\.(skip|only)\\s*\\(/;", "const re = /catch\\s*\\{\\s*\\}/;", "const note = 'add // @ts-ignore';"])])).toEqual([]);
+    // The real ones still count: a suppression is a comment, a skip and a swallowed error are code.
+    expect(rules([change('a.test.ts', ["test.skip('x', () => {}); // see /re/"]), change('src/b.ts', ['f(); // @ts-ignore', "try { g('}') } catch {}"])])).toEqual([
+      'test-skipped a.test.ts',
+      'suppression src/b.ts',
+      'swallowed-error src/b.ts',
     ]);
   });
 });

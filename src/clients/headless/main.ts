@@ -17,7 +17,7 @@ import { mcpStub, startMcp, type McpServers } from '../../core/mcp/tools.ts';
 import { webFetchTool } from '../../core/tools/web.ts';
 import { runTurn } from '../../core/project/undo.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
-import { spawnNudgeAt, spawnPool, spawnTool, subtaskPrompt, type SpawnKind, type SpawnOutcome, type Spawner } from '../../core/tools/spawn.ts';
+import { spawnNudgeAt, spawnPool, spawnReport, spawnTool, subtaskPrompt, type SpawnKind, type SpawnOutcome, type Spawner } from '../../core/tools/spawn.ts';
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { todoTool } from '../../core/tools/todo.ts';
@@ -25,7 +25,7 @@ import { openThreadTool } from '../../core/tools/open.ts';
 import { scheduleTool } from '../../core/tools/schedule.ts';
 import { ScheduleStore, schedulesPath } from '../../core/project/schedules.ts';
 import { resolveProfile, withProfile } from '../../core/profiles.ts';
-import { planPrompt, withPlan } from '../../core/roles.ts';
+import { planParts, planPrompt, withParts, withPlan, type Part, type Split } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { lspServers, openDiagnoser } from '../../core/lsp/diagnose.ts';
 import { bashTool, scrubbedEnv } from '../../core/tools/bash.ts';
@@ -74,6 +74,8 @@ export type HeadlessArgs = {
   handoff?: string;
   // The model explore sub-threads run on, and whether writer sessions may spawn sub-threads at all.
   swarm?: string;
+  // Models besides the code model that a part of a split plan may run on (comma-separated refs).
+  workers?: string;
   spawn?: string;
   // Language servers for diagnostics after edits: on (the default) or off.
   lsp?: string;
@@ -187,7 +189,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const profile = profileName ? { name: profileName, ...resolveProfile(profileName, loadProfiles()) } : undefined;
   const args = profile ? withProfile(given, profile) : given;
   const say = args.note ?? ((text: string) => void process.stderr.write(text));
-  const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}), ...(args.advisor ? { advisor: args.advisor } : {}), ...(args.classifier ? { classifier: args.classifier } : {}) });
+  const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}), ...(args.advisor ? { advisor: args.advisor } : {}), ...(args.classifier ? { classifier: args.classifier } : {}), ...(args.workers ? { workers: args.workers } : {}) });
   const spawnMode = loadSpawn(args.spawn);
   const spawnOn = spawnMode !== 'off';
   const lspSetting = loadLsp(args.lsp);
@@ -363,6 +365,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   // hands off like the writer, and a session it handed off to gets recall over the sub-thread's earlier sessions.
   type RunOpts = {
     continues?: { sessionId: string; changed: string[] };
+    // What the parts of a split plan changed before the writer started.
+    inherited?: string[];
     note?: string;
     role?: 'plan' | 'review' | 'explore' | 'goal' | 'advisor' | 'classifier';
     child?: { thread?: string; handoff?: boolean; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots; wrap: (command: string) => Promise<string> } };
@@ -426,6 +430,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         ...(diagnoser && !reviewer && !place ? { diagnose: diagnoser.diagnose } : {}),
         ...(place ? { snapshots: place.snapshots } : snapshots && !reviewer ? { snapshots } : {}),
         ...(continues ? { continues } : {}),
+        ...(opts.inherited?.length ? { inherited: opts.inherited } : {}),
         ...(opts.role ? { role: opts.role } : {}),
         ...(child ? (child.thread ? { thread: child.thread } : {}) : threadId ? { thread: threadId } : {}),
         ...(handoffAt !== undefined && (writing ? handoffs < MAX_HANDOFFS : child?.handoff) ? { handoffAt, ...(handoffVia === 'compact' && m.compaction ? { compact: compactPlan(handoffAt) } : {}) } : {}),
@@ -468,13 +473,13 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   // A plan or review step, in cedia or through the user's own Claude Code.
   const side = async (role: 'plan' | 'review', choice: RoleChoice, prompt: string): Promise<{ ok: boolean; text: string; step: Step }> => {
     if (choice.via === 'claude-code') {
-      const step: Step = { model: `claude-code:${choice.model}`, via: 'claude-code', sessionId: '' };
+      const step: Step = { model: `claude-code:${choice.model}@${choice.effort}`, via: 'claude-code', sessionId: '' };
       if (privacy === 'zdr') {
         say(`cedia: privacy is zdr, so the ${role} step does not go to Claude Code\n`);
         return { ok: false, text: '', step };
       }
       const allowed = ['Read', 'Grep', 'Glob', ...(role === 'review' ? GIT_READS : []), ...checks.map((c) => `Bash(${c})`)];
-      const r = await runClaudeCode({ prompt, model: choice.model, cwd: args.cwd, allowed, signal: ac.signal });
+      const r = await runClaudeCode({ prompt, model: choice.model, effort: choice.effort, cwd: args.cwd, allowed, signal: ac.signal });
       if (!r.ok) say(`cedia: the ${role} step in Claude Code failed: ${r.error}\n`);
       return { ok: r.ok, text: r.text, step: { ...step, sessionId: r.sessionId, ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}) } };
     }
@@ -559,10 +564,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   };
   // One sub-thread run to its end, in `wt` when it has one; its changes are not applied yet.
   type Ran = { wt?: Worktree; sub?: string; m: ModelSpec; r: HeadlessResult };
-  const runSub = async (brief: string, kind: SpawnKind, wt: Worktree | undefined): Promise<Ran> => {
+  const runSub = async (brief: string, kind: SpawnKind, wt: Worktree | undefined, on?: ModelSpec): Promise<Ran> => {
     subthreads++;
     spawned[kind]++;
-    let m = kind === 'explore' ? explorer : writer.model;
+    let m = on ?? (kind === 'explore' ? explorer : writer.model);
     let sub: string | undefined;
     let place: NonNullable<RunOpts['child']>['place'];
     try {
@@ -710,6 +715,37 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const spawn = spawnTool(spawner, undefined, { worktrees: spawnMode === 'worktree', pool });
   // A resumed session keeps the spawn tool it was opened with, worktrees or not, so its tool list stays the same.
   const spawnOther = spawnTool(spawner, undefined, { worktrees: spawnMode !== 'worktree', pool });
+  // The parts of a split plan, before the writer starts (core/roles.ts): each a work sub-thread from its brief, on
+  // the model the planner picked, all at once in worktrees of their own or else one after another in place. What
+  // they changed comes back like a sub-thread's changes; the writer's done gate wants a check after it.
+  const delegate = async (planned: Part[]): Promise<{ reports: string[]; changed: string[] }> => {
+    const allowed = new Map([model, ...roles.workers].map((m) => [m.ref, m]));
+    const on = (p: Part) => {
+      if (!p.model) return model;
+      let m: ModelSpec | undefined;
+      try {
+        m = allowed.get(resolveModel(p.model).ref);
+      } catch {}
+      if (!m) say(`cedia: the plan put a part on ${p.model}, which is not one of the workers; it runs on ${model.ref}\n`);
+      return m ?? model;
+    };
+    const take = planned.slice(0, Math.max(0, pool.total - pool.started));
+    pool.started += take.length;
+    // Outside a turn nothing else writes the parent's files, and the parts land one at a time.
+    const ctx = { signal: ac.signal, write: <T>(fn: () => Promise<T> | T) => Promise.resolve(fn()) };
+    const outcomes: SpawnOutcome[] = [];
+    const wts = spawnMode === 'worktree' ? take.map(() => openWt()) : [];
+    const failed = wts.find((w): w is { error: string } => 'error' in w);
+    if (wts.length && !failed) {
+      const settled = await Promise.allSettled(take.map((p, i) => runSub(p.brief, 'work', wts[i] as Worktree, on(p))));
+      for (const r of settled) if (r.status === 'fulfilled') outcomes.push(await land(r.value, ctx));
+    } else {
+      for (const w of wts) if (!('error' in w)) w.close();
+      if (failed) say(`cedia: no worktree for the plan's parts (${failed.error}); they run in place, one after another\n`);
+      for (const p of take) if (!ac.signal.aborted) outcomes.push(await land(await runSub(p.brief, 'work', undefined, on(p)), { signal: ac.signal }));
+    }
+    return { reports: outcomes.map((o) => spawnReport('work', o)), changed: [...new Set(outcomes.flatMap((o) => o.worktree?.applied ?? o.changed))] };
+  };
   // Runs the writer and follows its handoffs: each note opens a new session of the thread on the same model,
   // which starts from the task (and the fix it was on, if any) and the note.
   // `lead` goes before the prompt in this session only, not in what a handoff carries.
@@ -744,10 +780,23 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     }
     // Plan: a stronger model reads the repo and writes the plan the writer gets with the task.
     let plan: Step | undefined;
+    // What the plan's parts changed before the writer started.
+    let inherited: string[] = [];
     if (roles.plan) {
-      const p = await side('plan', roles.plan, planPrompt(task));
+      // With spawn on, the planner may split the work into parts that cedia hands to work sub-threads before the
+      // writer starts: what to delegate, and to which model, is the stronger model's call (no DeepSeek run ever
+      // delegated on its own).
+      const split: Split | undefined = !spawnOn || policy.plan || policy.mode === 'read-only' ? undefined : { mode: spawnMode === 'worktree' ? 'parallel' : 'alone', writer: model.ref, workers: roles.workers.filter((w) => w.ref !== model.ref).map((w) => w.ref) };
+      const p = await side('plan', roles.plan, planPrompt(task, split));
       if (p.ok && p.text.trim()) {
         task = withPlan(task, p.text.trim(), p.step.model);
+        const planned = split ? planParts(p.text) : [];
+        if (planned.length) {
+          say(`cedia: the plan splits off ${planned.length} parts; each goes to a work sub-thread first\n`);
+          const done = await delegate(planned);
+          if (done.reports.length) task = withParts(task, done.reports);
+          inherited = done.changed;
+        }
         plan = p.step;
       } else say('cedia: going on without a plan\n');
     }
@@ -773,11 +822,11 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       const before = resumed?.runs.at(-1)?.permission;
       const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
       const lead = before && before !== permission ? `<permission>\n${modeNote(policy.mode, policy.unlock ?? [], policy.plan ? { ask: !!header?.tools.some((d) => d.name === 'ask_user') } : undefined)}\n</permission>` : undefined;
-      result = await write(model, log, task, {}, lead);
+      result = await write(model, log, task, inherited.length ? { inherited } : {}, lead);
     } else {
       const log = openLog();
       record(log, model, resumed ? 'resume' : 'start');
-      result = await write(model, log, task, resumed ? { note: resumeNote(resumed) } : {});
+      result = await write(model, log, task, { ...(resumed ? { note: resumeNote(resumed) } : {}), ...(inherited.length ? { inherited } : {}) });
     }
     // A spent quota does not end the task: a new session on the fallback model picks it up (a session never
     // switches model, so its cache stays valid). Nor does a history the provider refuses: a new session on the

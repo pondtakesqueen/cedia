@@ -128,7 +128,9 @@ export const CATALOG: ModelSpec[] = [
   // of their own, so a session left to its routing moved between them and read 24.5% from cache (hard-pool,
   // 2026-10-22). It is pinned to Cloudflare's: on OpenRouter's list of zero-retention endpoints, not quantized
   // to fp4, and 91.8% cache hits on the same task ($0.10/$0.60 per 1M, cache read $0.003, from the endpoint list).
-  // No fallback to another endpoint: one that is down fails the request, and the quota fallback takes over.
+  // DeepInfra's fp8 endpoint is second, also zero-retention and cheaper ($0.098/$0.294, 95.7% cache hits on
+  // hard-pool): OpenRouter goes to it only when Cloudflare refuses a request, which a 429 from Cloudflare's shared
+  // upstream pool did part way through a split-plan run (2026-10-23). No endpoint outside the two.
   {
     ref: 'openrouter/deepseek-v4.1-flash',
     id: 'deepseek/deepseek-v4.1-flash-1017',
@@ -138,7 +140,7 @@ export const CATALOG: ModelSpec[] = [
     maxOutput: 32_000,
     price: p(0.1, 0.6, 0.003),
     dataPolicy: 'zdr',
-    body: { provider: { order: ['cloudflare'], allow_fallbacks: false, zdr: true, data_collection: 'deny' } },
+    body: { provider: { order: ['cloudflare', 'deepinfra/fp8'], allow_fallbacks: false, zdr: true, data_collection: 'deny' } },
     prompt: DEEPSEEK_PROMPT,
     caps: chatCaps,
   },

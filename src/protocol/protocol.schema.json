@@ -28,6 +28,15 @@
     "CommandList": {
       "$ref": "#/definitions/CommandList"
     },
+    "UsageReport": {
+      "$ref": "#/definitions/UsageReport"
+    },
+    "Restored": {
+      "$ref": "#/definitions/Restored"
+    },
+    "RewindResult": {
+      "$ref": "#/definitions/RewindResult"
+    },
     "VersionInfo": {
       "$ref": "#/definitions/VersionInfo"
     }
@@ -206,7 +215,9 @@
         "models",
         "permissions",
         "commands",
-        "threads.fork"
+        "threads.fork",
+        "usage",
+        "threads.restore-json"
       ]
     },
     "Check": {
@@ -781,6 +792,15 @@
         },
         "effort": {
           "type": "boolean"
+        },
+        "effortLevels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Effort"
+          }
+        },
+        "defaultEffort": {
+          "$ref": "#/definitions/Effort"
         }
       },
       "required": [
@@ -898,6 +918,36 @@
         "down"
       ]
     },
+    "Restored": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "undo",
+            "redo"
+          ]
+        },
+        "restored": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "action",
+        "restored",
+        "skipped"
+      ],
+      "additionalProperties": false
+    },
     "ResultSubtype": {
       "type": "string",
       "enum": [
@@ -909,6 +959,51 @@
         "error_unverified_claim",
         "handoff",
         "asked"
+      ]
+    },
+    "RewindRefusal": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "force": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "RewindResult": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "run": {
+              "type": "string"
+            },
+            "restored": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "sessionId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "run",
+            "restored"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/definitions/RewindRefusal"
+        }
       ]
     },
     "RunFrom": {
@@ -2938,6 +3033,242 @@
         "cacheRead",
         "cacheWrite",
         "output"
+      ],
+      "additionalProperties": false
+    },
+    "UsageReport": {
+      "type": "object",
+      "properties": {
+        "sessions": {
+          "type": "number"
+        },
+        "requests": {
+          "type": "number"
+        },
+        "costUsd": {
+          "type": "number"
+        },
+        "keepaliveUsd": {
+          "type": "number"
+        },
+        "compactUsd": {
+          "type": "number"
+        },
+        "tokens": {
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "number"
+            },
+            "cacheRead": {
+              "type": "number"
+            },
+            "output": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "input",
+            "cacheRead",
+            "output"
+          ],
+          "additionalProperties": false
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "chars": {
+                "type": "number"
+              },
+              "share": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "source",
+              "chars",
+              "share"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "largest": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "session": {
+                "type": "string"
+              },
+              "callId": {
+                "type": "string"
+              },
+              "tool": {
+                "type": "string"
+              },
+              "chars": {
+                "type": "number"
+              },
+              "resent": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "session",
+              "callId",
+              "tool",
+              "chars",
+              "resent"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "misses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "cause": {
+                "type": "string"
+              },
+              "count": {
+                "type": "number"
+              },
+              "tokens": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "cause",
+              "count",
+              "tokens"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "overPriceLine": {
+          "type": "number"
+        },
+        "maxEffort": {
+          "type": "number"
+        },
+        "handoffs": {
+          "type": "number"
+        },
+        "unpriced": {
+          "type": "number"
+        },
+        "days": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "day": {
+                "type": "string"
+              },
+              "costUsd": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "day",
+              "costUsd"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "model": {
+                "type": "string"
+              },
+              "costUsd": {
+                "type": "number"
+              },
+              "requests": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "model",
+              "costUsd",
+              "requests"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "project": {
+                "type": "string"
+              },
+              "costUsd": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "project",
+              "costUsd"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "threads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "project": {
+                "type": "string"
+              },
+              "costUsd": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "thread",
+              "title",
+              "costUsd"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "sessions",
+        "requests",
+        "costUsd",
+        "keepaliveUsd",
+        "compactUsd",
+        "tokens",
+        "sources",
+        "largest",
+        "misses",
+        "overPriceLine",
+        "maxEffort",
+        "handoffs",
+        "unpriced",
+        "days",
+        "models",
+        "projects",
+        "threads"
       ],
       "additionalProperties": false
     },

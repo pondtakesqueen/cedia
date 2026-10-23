@@ -71,8 +71,14 @@ describe('/undo and /redo of the last turn (offline, faux)', () => {
     expect(undo.out).toContain('left keep.txt: changed since the turn');
     expect(w.read('keep.txt')).toBe('edited by the user\n');
     expect(w.store.read(thread).pending[0]!.text).toContain('keep.txt changed after your turn, so it was left as it is');
+    // A client reads the same as JSON, and leaving a file is not a failure there.
+    const json = w.run([], ['threads', 'undo', thread, '--json']);
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.out)).toEqual({ action: 'undo', restored: [], skipped: ['keep.txt'] });
     expect(w.run([], ['threads', 'undo', thread, '--force']).code).toBe(0);
     expect(w.read('keep.txt')).toBe('old\n');
+    expect(JSON.parse(w.run([], ['threads', 'redo', thread, '--json']).out)).toEqual({ action: 'redo', restored: ['added.txt', 'keep.txt'], skipped: [] });
+    expect(w.run([], ['threads', 'undo', thread, '--force']).code).toBe(0);
 
     // The thread's next turn: its diff shows that turn's change only, and undo takes back that turn only.
     const second = w.run([call('c2', 'echo two > second.txt'), reply('done')], ['-m', 'faux', '-p', 'one more', '--thread', thread, '--permission', 'workspace', '--sandbox', 'off']);
