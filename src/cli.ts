@@ -27,8 +27,8 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia --version [--json]             the version; --json adds the protocol hash and capabilities
 
   -m, --model <ref>            the code role: model alias or ref (default: $CEDIA_MODEL, roles.code in settings, deepseek)
-      --plan <ref>             the plan role: a model, claude-code[:<model>] to plan in your own Claude Code
-                               (default opus there), or none (default: roles.plan in settings, none)
+      --plan <ref>             the plan role: a model[@<effort>] (medium by default), claude-code[:<model>] to plan
+                               in your own Claude Code (default opus there), or none (default: roles.plan, none)
       --output-format <f>      text | json | stream-json (default text)
       --max-turns <n>          stop after n model calls (default 200)
       --max-budget-usd <x>     stop once spend reaches x

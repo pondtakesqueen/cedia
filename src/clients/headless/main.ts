@@ -383,6 +383,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // What the parts of a split plan changed before the writer started.
     inherited?: string[];
     note?: string;
+    // A plan or review step's own effort, over the writer's.
+    effort?: Effort;
     role?: 'plan' | 'review' | 'explore' | 'goal' | 'advisor' | 'classifier';
     child?: { thread?: string; handoff?: boolean; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots; wrap: (command: string) => Promise<string> } };
     // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
@@ -468,7 +470,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         ...(quotaWaitMs !== undefined && !helper
           ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), say(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
           : {}),
-        ...(helper ? (m.defaultEffort ? { effort: 'low' as Effort } : {}) : args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
+        ...(helper ? (m.defaultEffort ? { effort: 'low' as Effort } : {}) : (opts.effort ?? args.effort ?? m.defaultEffort) ? { effort: opts.effort ?? args.effort ?? m.defaultEffort } : {}),
         ...(escalate && !reviewer ? { escalate } : {}),
         ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - usedTurns } : {}),
         // One reply a turn, and one more if that came back empty.
@@ -501,7 +503,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       return { ok: r.ok, text: r.text, step: { ...step, sessionId: r.sessionId, ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}) } };
     }
     const log = openLog();
-    const r = await run(choice.model, log, prompt, { role });
+    const r = await run(choice.model, log, prompt, { role, ...(choice.effort ? { effort: choice.effort } : {}) });
     if (r.subtype !== 'success') say(`cedia: the ${role} step on ${choice.model.ref} ended with ${r.subtype}\n`);
     return { ok: r.subtype === 'success', text: r.result, step: { model: choice.model.ref, via: 'cedia', sessionId: log.id, costUsd: r.costUsd } };
   };

@@ -8,7 +8,7 @@ import { defaultHandoffAt } from './project/handoff.ts';
 import { FALLBACKS, resolveModel } from './providers/catalog.ts';
 import { secretPaths } from './safety/secrets.ts';
 import { checkHooks, type Hooks } from './hooks.ts';
-import type { ModelSpec, PrivacyLevel } from './types.ts';
+import { EFFORTS, type Effort, type ModelSpec, type PrivacyLevel } from './types.ts';
 
 export type Settings = {
   permissions?: { mode?: PermissionSetting; allow?: string[]; deny?: string[]; unlock?: Guard[] };
@@ -97,7 +97,7 @@ export function checkSettings(value: unknown): Settings {
 }
 
 // How a plan or review role runs: in cedia on a catalog model, or through the user's own Claude Code CLI.
-export type RoleChoice = { via: 'cedia'; model: ModelSpec } | { via: 'claude-code'; model: string; effort: ClaudeCodeEffort };
+export type RoleChoice = { via: 'cedia'; model: ModelSpec; effort?: Effort } | { via: 'claude-code'; model: string; effort: ClaudeCodeEffort };
 export type ClaudeCodeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export const cediaHome = () => process.env.CEDIA_HOME ?? join(homedir(), '.cedia');
@@ -291,7 +291,16 @@ export function loadRoles(
   if (/^claude-code\b/.test(codeRef)) throw new Error('the code role runs in cedia, where its writes are checked; use claude-code for plan or review');
   const role = (ref: string | undefined, claudeModel: string): RoleChoice | undefined => {
     if (!ref || ref === 'none') return undefined;
-    if (!/^claude-code\b/.test(ref)) return { via: 'cedia', model: resolveModel(ref) };
+    if (!/^claude-code\b/.test(ref)) {
+      // `<ref>[@<effort>]`. Without one, a model that takes effort plans and reviews at medium (or lower, when its own
+      // default is), as in Claude Code: at the API's own default, Opus 5.5 spent 76% of a plan's cost and 62% of a
+      // review's on output (2026-10-23).
+      const [, base, at] = /^(.*?)(?:@(low|medium|high|xhigh|max))?$/.exec(ref)!;
+      const model = resolveModel(base!);
+      const own = model.defaultEffort;
+      const effort = (at as Effort | undefined) ?? (model.caps.effortLevels.includes('medium') && !(own && EFFORTS.indexOf(own) < EFFORTS.indexOf('medium')) ? 'medium' : own);
+      return { via: 'cedia', model, ...(effort ? { effort } : {}) };
+    }
     const m = /^claude-code(?::([^@]+))?(?:@(low|medium|high|xhigh|max))?$/.exec(ref);
     if (!m) throw new Error(`a Claude Code role is claude-code[:<model>][@low|medium|high|xhigh|max]: ${ref}`);
     return { via: 'claude-code', model: m[1] ?? claudeModel, effort: (m[2] as ClaudeCodeEffort | undefined) ?? 'medium' };
