@@ -394,6 +394,26 @@ describe('cedia -p (offline, faux)', () => {
       expect(userTexts(offAll.find((l) => (l[0] as { role: string }).role === 'plan')!)[0]).not.toContain('<part files=');
     });
 
+    test('a review cut off by a stop is reported as interrupted, not as no verdict', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cedia-slow-claude-'));
+      const bin = join(dir, 'claude');
+      writeFileSync(bin, `#!/bin/sh\ntouch ${dir}/started\nexec sleep 30\n`, { mode: 0o755 });
+      writeFileSync(join(dir, 'script.json'), JSON.stringify(writes));
+      const proc = Bun.spawn([BIN, '-m', 'faux', '--cwd', dir, ...base, '--review', 'claude-code'], {
+        env: { ...process.env, CEDIA_FAUX_SCRIPT: join(dir, 'script.json'), CEDIA_HOME: join(dir, 'home'), CEDIA_CLAUDE_BIN: bin },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      for (let i = 0; i < 200 && !existsSync(join(dir, 'started')); i++) await Bun.sleep(25);
+      expect(existsSync(join(dir, 'started'))).toBe(true);
+      proc.kill('SIGTERM');
+      const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+      expect(JSON.parse(out).review).toMatchObject({ model: 'claude-code:opus@medium', verdict: 'interrupted', fixed: false });
+      expect(err).toContain('was interrupted before it gave a verdict');
+      expect(err).not.toContain('gave no verdict');
+      expect(err).not.toContain('step in Claude Code failed');
+    });
+
     test('claude-code plans and reviews in your own Claude Code, read-only and without API keys', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cedia-fake-claude-'));
       const bin = join(dir, 'claude');

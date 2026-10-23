@@ -228,7 +228,8 @@ export type HeadlessResult = {
   peakContext?: number;
   // The plan the writer was given, and the review of its change (see core/trust/review.ts).
   plan?: Step;
-  review?: Step & { verdict: 'approve' | 'changes' | 'unclear'; fixed: boolean };
+  // verdict 'interrupted': the run was stopped (a signal, a timeout's SIGTERM) before the review answered.
+  review?: Step & { verdict: 'approve' | 'changes' | 'unclear' | 'interrupted'; fixed: boolean };
   // Goal mode (core/trust/goal.ts): the condition, the last judge's verdict, and each judgement. Full mode adds the
   // planner's criteria, which each round left unmet, and the strategist's proposal when one ran.
   goal?: {
