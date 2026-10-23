@@ -273,10 +273,11 @@ export function loadHandoffAt(model: ModelSpec, flag?: string): number | undefin
   return n;
 }
 
-// How a session hands off: flag > user settings > note. Compaction applies only where the model takes it; the
-// client falls back to the note elsewhere.
+// How a session hands off: flag > user settings > compact. Compaction applies only where the model takes it (the
+// Claude API models); the client falls back to the note elsewhere. On the long three-changes runs it cost 31% less
+// than the note and took 14% less time, 3 of 3 passing either way (evals/results/README.md).
 export function loadHandoff(flag?: string): 'note' | 'compact' {
-  const raw = flag ?? readSettings(join(cediaHome(), 'settings.json')).handoff ?? 'note';
+  const raw = flag ?? readSettings(join(cediaHome(), 'settings.json')).handoff ?? 'compact';
   if (raw !== 'note' && raw !== 'compact') throw new Error(`handoff must be note or compact: ${raw}`);
   return raw;
 }

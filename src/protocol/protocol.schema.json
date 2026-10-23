@@ -219,7 +219,8 @@
         "usage",
         "browser",
         "threads.restore-json",
-        "images"
+        "images",
+        "cache-ttl"
       ]
     },
     "Check": {

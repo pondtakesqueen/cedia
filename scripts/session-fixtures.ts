@@ -40,7 +40,7 @@ export const SCENARIOS: Scenario[] = [
     what: 'a long session hands off to a second session of the same thread, which recalls and verifies',
     prompt: 'make f.txt say good',
     script: [bash('c1', 'echo good > f.txt && seq 1 6000'), reply('Wrote f.txt. Next: run the check.'), bash('c2', 'grep -q good f.txt'), reply('done')],
-    args: [...ws, '--check', 'grep -q good f.txt', '--handoff-at', '2000'],
+    args: [...ws, '--check', 'grep -q good f.txt', '--handoff-at', '2000', '--handoff', 'note'],
   },
   {
     name: 'subthread',
