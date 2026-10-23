@@ -88,11 +88,16 @@ const go = (id: string, wire: ModelSpec['wire'], price: ModelSpec['price'], extr
 
 // DeepSeek V4.1 Flash's own lines. Against Claude Code on hard-pool (2026-10-22) it took 12 to 14 turns to
 // Claude's 5: it wrote test files of its own and then fixed them, ran the tests five times in a loop to look for
-// flakiness, and spent a call on each ls, cat and grep. Each rule says why, in cedia's own words.
+// flakiness, and spent a call on each ls, cat and grep. On hard-csv-stream and hard-memo-async (2026-10-23) it
+// took 6 to 16 turns to Claude's 3 to 5: 1 to 8 of them after the tests first passed, on fuzz, timing and mutation
+// scripts of its own that found nothing (one ran 156 s and the run timed out before reporting), and it built a
+// new class up over five edits where Claude wrote it in one. Each rule says why, in cedia's own words.
 const DEEPSEEK_PROMPT = `For this model in particular:
 - Do not create test files of your own. When the task needs a new case, add it to the test file that already covers that code, in the same edit as the fix. A new file is one more thing to run, read and fix.
 - Run a check once after your last change. A pass is the evidence; running it again in a loop to look for flakiness proves nothing new and costs a turn each time.
-- Put independent shell steps in one bash call (\`ls src && cat package.json && grep -n foo src/a.ts\`) instead of one call each.`;
+- Put independent shell steps in one bash call (\`ls src && cat package.json && grep -n foo src/a.ts\`) instead of one call each.
+- Once the checks pass after your last change, report. Do not write fuzz, timing or mutation scripts of your own to test the change further: they ran for minutes and changed nothing in every run that tried, and a run that is still checking when its time runs out reports nothing.
+- Make the changes a file needs in as few edits as you can: write a new function whole in one edit rather than building it up over several.`;
 
 const deepseekFlashPrice = { ...p(0.3, 1.2, 0.006), offPeak: { ...p(0.15, 0.6, 0.003), isOffPeak: deepseekOffPeak } };
 const haikuPrice = { ...p(0.1, 0.5, 0.01, 0.125), above: { tokens: 100_000, price: p(0.5, 2.5, 0.05, 0.625) } };
