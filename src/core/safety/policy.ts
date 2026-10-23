@@ -75,7 +75,7 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
     const tool = spec.name === 'write' ? 'edit' : spec.name;
     const hit = policy.protect.paths.find((p) => {
       const rule = `edit(${p})`;
-      return commands ? writesDenied(rule, command!, commands, cwd) : matches(rule, tool, commands, path, cwd, 'any');
+      return commands ? commandWrites(p, command!, commands, cwd) : matches(rule, tool, commands, path, cwd, 'any');
     });
     if (hit !== undefined) return deny('protected-test', `${hit}: ${policy.protect.reason}`);
   }
@@ -135,6 +135,20 @@ function writesDenied(rule: string, command: string, commands: string[][], cwd: 
     const full = resolve(cwd, expandHome(w));
     return re.test(w) || re.test(full) || re.test(relative(cwd, full));
   });
+}
+
+// Narrower than writesDenied, since protected tests are read all the time: a command changes a protected file
+// when the file is the target of a redirection, or a word of one of its simple commands that may write (`sed -i`,
+// `cp`). `cat memo.test.ts && bun test` only reads it, though `bun test` may write elsewhere.
+function commandWrites(file: string, command: string, commands: string[][], cwd: string): boolean {
+  const re = glob(file);
+  const hit = (w: string) => {
+    const full = resolve(cwd, expandHome(w));
+    return re.test(w) || re.test(full) || re.test(relative(cwd, full));
+  };
+  const targets = [...command.matchAll(/>>?\|?\s*([^\s;|&<>()]+)/g)].map((t) => t[1]!.replace(/^['"]|['"]$/g, ''));
+  if (targets.some(hit)) return true;
+  return commands.some((argv) => !checkReadOnly(argv.join(' ')).ok && argv.slice(1).filter((w) => !w.startsWith('-')).some(hit));
 }
 
 function glob(pattern: string): RegExp {
