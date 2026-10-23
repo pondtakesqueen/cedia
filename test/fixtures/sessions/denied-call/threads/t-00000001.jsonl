@@ -1,4 +1,4 @@
-{"at":"2026-10-23T17:06:12.751Z","kind":"open","title":"publish the package","task":"publish the package"}
-{"at":"2026-10-23T17:06:12.768Z","kind":"run","id":"r-6ae5fab7","prompt":"publish the package","cwd":"/fixture/repo","tree":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","permission":"workspace"}
-{"at":"2026-10-23T17:06:12.771Z","run":"r-6ae5fab7","kind":"session","sessionId":"ede704c5-84aa-43dd-92a7-f4ac15716e99","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/ede704c5-84aa-43dd-92a7-f4ac15716e99.jsonl"}
-{"at":"2026-10-23T17:06:12.798Z","run":"r-6ae5fab7","kind":"state","state":"done","result":"Publishing is on the deny list, so I left it for you."}
+{"at":"2026-10-23T19:08:04.363Z","kind":"open","title":"publish the package","task":"publish the package"}
+{"at":"2026-10-23T19:08:04.384Z","kind":"run","id":"r-17703f26","prompt":"publish the package","cwd":"/fixture/repo","tree":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","permission":"workspace"}
+{"at":"2026-10-23T19:08:04.388Z","run":"r-17703f26","kind":"session","sessionId":"6359750c-8773-4338-958e-1eb5da1ec2e2","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/6359750c-8773-4338-958e-1eb5da1ec2e2.jsonl"}
+{"at":"2026-10-23T19:08:04.416Z","run":"r-17703f26","kind":"state","state":"done","result":"Publishing is on the deny list, so I left it for you."}

@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { inert } from '../trust/frame.ts';
 import type { RunPermission } from '../safety/policy.ts';
@@ -49,7 +49,9 @@ type ThreadBody =
   // (core/project/rewind.ts), except what is not the conversation's (messages, ratings, archiving).
   | { kind: 'rewind'; run: string }
   // Hidden from lists, still readable. A sub-thread that finishes its task archives itself.
-  | { kind: 'archived'; archived: boolean };
+  | { kind: 'archived'; archived: boolean }
+  // The person renamed the thread: the latest one is its title.
+  | { kind: 'title'; title: string };
 export type ForkOf = { thread: string; run: string };
 export type RunFrom = { sessionId: string; path: string; events: number; model: string };
 // `run`: the run that wrote it, on what a run writes (core/project/rewind.ts).
@@ -156,6 +158,19 @@ export class ThreadStore {
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }
 
+  rename(id: string, title: string, now = new Date()): string {
+    if (!this.has(id)) throw new Error(`no thread ${id} in this project`);
+    const named = titleOf(title);
+    if (!named) throw new Error('a title cannot be empty');
+    this.append(id, { kind: 'title', title: named }, now);
+    return named;
+  }
+
+  // The thread's file, gone: only for deleting it (core/project/delete.ts), which also takes its sessions.
+  remove(id: string): void {
+    rmSync(this.path(id), { force: true });
+  }
+
   send(to: string, from: string, text: string, now = new Date()): string {
     if (!this.has(to)) throw new Error(`no thread ${to} in this project`);
     const id = crypto.randomUUID();
@@ -225,6 +240,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     else if (e.kind === 'question') t.question = { sessionId: e.sessionId, question: e.question, ...(e.options ? { options: e.options } : {}), at: e.at };
     else if (e.kind === 'rate') t.ratings.push({ rating: e.rating, ...(e.sessionId ? { sessionId: e.sessionId } : {}), ...(e.note ? { note: e.note } : {}), at: e.at });
     else if (e.kind === 'archived') t.archived = e.archived;
+    else if (e.kind === 'title') t.title = e.title;
     else if (e.kind === 'turn') t.turns.push({ ...(t.lastTurn = { cwd: e.cwd, before: e.before, after: e.after, sessions: e.sessions, at: e.at }), runs: t.runs.length });
     else if (e.kind === 'run') {
       t.runs.push(e);
@@ -246,7 +262,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
 }
 
 // What not to fold after each rewind: the events from the run it went back to up to the rewind itself, except
-// messages, unsends, ratings and archiving, which are not the conversation's. A message delivered only to a
+// messages, unsends, ratings, archiving and renaming, which are not the conversation's. A message delivered only to a
 // session that was dropped is then waiting again, so the session the thread goes on in gets it. A rewind to a run
 // that is not there (one an earlier rewind dropped) changes nothing.
 // What a dropped run writes later (a run still going when the rewind came) is dropped too, by its `run` tag.
@@ -254,7 +270,7 @@ function rewound(events: ThreadEvent[]): { live: ThreadEvent[]; dropped: ThreadE
   let live: ThreadEvent[] = [];
   const dropped: ThreadEvent[] = [];
   const droppedRuns = new Set<string>();
-  const keep = (x: ThreadEvent) => x.kind === 'message' || x.kind === 'unsend' || x.kind === 'rate' || x.kind === 'archived';
+  const keep = (x: ThreadEvent) => x.kind === 'message' || x.kind === 'unsend' || x.kind === 'rate' || x.kind === 'archived' || x.kind === 'title';
   for (const e of events) {
     if (e.kind !== 'rewind') {
       if (e.run && droppedRuns.has(e.run) && !keep(e)) dropped.push(e);
