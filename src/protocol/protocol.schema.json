@@ -40,6 +40,12 @@
     "DeleteResult": {
       "$ref": "#/definitions/DeleteResult"
     },
+    "McpList": {
+      "$ref": "#/definitions/McpList"
+    },
+    "McpCheck": {
+      "$ref": "#/definitions/McpCheck"
+    },
     "VersionInfo": {
       "$ref": "#/definitions/VersionInfo"
     }
@@ -228,7 +234,8 @@
         "images",
         "cache-ttl",
         "threads.rename",
-        "threads.delete"
+        "threads.delete",
+        "mcp.manage"
       ]
     },
     "Check": {
@@ -923,6 +930,130 @@
     "JsonObject": {
       "type": "object",
       "additionalProperties": {}
+    },
+    "McpCheck": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "ok": {
+              "type": "boolean",
+              "const": true
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "name",
+            "ok",
+            "tools"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "ok": {
+              "type": "boolean",
+              "const": false
+            },
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "ok",
+            "error"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "McpEntry": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "timeoutSec": {
+          "type": "number"
+        },
+        "error": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "McpList": {
+      "type": "object",
+      "properties": {
+        "servers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/McpEntry"
+          }
+        }
+      },
+      "required": [
+        "servers"
+      ],
+      "additionalProperties": false
     },
     "ModelEntry": {
       "type": "object",

@@ -14,6 +14,7 @@ import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Sch
 import { commandList, loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
 import { rewindThread, rewoundText, runLines, type RewindResult } from './core/project/rewind.ts';
+import { addMcp, checkMcp, listMcp, removeMcp } from './core/mcp/manage.ts';
 import { deleteThread } from './core/project/delete.ts';
 import { forkThread } from './core/project/fork.ts';
 import { workspaceSnapshots } from './core/safety/snapshot.ts';
@@ -143,6 +144,12 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia models [--json]                the models a session may use, which of them have a key here, and the
                                             one the code role takes now (marked *)
        cedia permissions [--json]           the permission modes a run may take (--permission) and the default
+       cedia mcp [list] [--json]            the MCP servers in ~/.cedia/settings.json (env and header names only)
+       cedia mcp check <name> [--json]      start one as a run would and list its tools
+       cedia mcp add <name> (--command <cmd> [--arg <a>]... [--env K=V]... | --url <url> [--header K=V]...)
+                     [--read-only] [--timeout <sec>]
+                                            add a server, or replace the one of that name
+       cedia mcp remove <name>              take a server out
        cedia commands [--json] [--cwd <dir>]
                                             what a client offers for /: each skill here; a prompt that starts with
                                             /<skill> asks the writer to load it first
@@ -165,6 +172,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'commands') return commands(argv.slice(1));
   if (argv[0] === 'permissions') return permissions(argv.slice(1));
   if (argv[0] === 'models') return models(argv.slice(1));
+  if (argv[0] === 'mcp') return mcp(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
   const { values, positionals } = parseArgs({
     args: argv,
@@ -528,6 +536,74 @@ function models(argv: string[]): number {
   }
   console.log(parsed.values.json ? JSON.stringify(list) : [...list.models.map((m) => modelLine(m, m.ref === list.default)), ...list.modes.map((m) => `     ${m.name.padEnd(48)} ${m.label}`)].join('\n'));
   return 0;
+}
+
+async function mcp(argv: string[]): Promise<number> {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: {
+        json: { type: 'boolean' },
+        command: { type: 'string' },
+        arg: { type: 'string', multiple: true },
+        env: { type: 'string', multiple: true },
+        url: { type: 'string' },
+        header: { type: 'string', multiple: true },
+        'read-only': { type: 'boolean' },
+        timeout: { type: 'string' },
+      },
+    });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const { values, positionals } = parsed;
+  const [cmd = 'list', name, ...rest] = positionals;
+  const pairs = (list: string[] | undefined, what: string) => {
+    if (!list?.length) return undefined;
+    return Object.fromEntries(
+      list.map((p) => {
+        const at = p.indexOf('=');
+        if (at < 1) throw new Error(`--${what} takes NAME=value: ${p}`);
+        return [p.slice(0, at), p.slice(at + 1)];
+      }),
+    );
+  };
+  try {
+    if (cmd === 'list' && !name) {
+      const list = listMcp();
+      if (values.json) console.log(JSON.stringify(list));
+      else console.log(list.servers.length ? list.servers.map((s) => `${s.name}  ${s.url ?? [s.command, ...(s.args ?? [])].join(' ')}${s.readOnly ? '  (read only)' : ''}${s.error ? `\n    ${s.error}` : ''}`).join('\n') : 'no MCP servers in ~/.cedia/settings.json');
+      return 0;
+    }
+    if (cmd === 'check' && name && !rest.length) {
+      const r = await checkMcp(name);
+      if (values.json) console.log(JSON.stringify(r));
+      else console.log(r.ok ? `${name}: ${r.tools.length} tool${r.tools.length === 1 ? '' : 's'}${r.tools.map((t) => `\n  ${t.name}${t.description ? `  ${t.description}` : ''}`).join('')}` : `${name}: ${r.error}`);
+      return r.ok ? 0 : 1;
+    }
+    if (cmd === 'add' && name && !rest.length) {
+      if (!values.command === !values.url) throw new Error('mcp add takes --command or --url');
+      const common = { ...(values['read-only'] ? { readOnly: true } : {}), ...(values.timeout !== undefined ? { timeoutSec: Number(values.timeout) } : {}) };
+      const env = pairs(values.env, 'env');
+      const headers = pairs(values.header, 'header');
+      addMcp(name, values.command ? { command: values.command, ...(values.arg?.length ? { args: values.arg } : {}), ...(env ? { env } : {}), ...common } : { url: values.url!, ...(headers ? { headers } : {}), ...common });
+      console.log(`added MCP server ${name}`);
+      return 0;
+    }
+    if (cmd === 'remove' && name && !rest.length) {
+      removeMcp(name);
+      console.log(`removed MCP server ${name}`);
+      return 0;
+    }
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 1;
+  }
+  console.error('usage: cedia mcp [list [--json] | check <name> [--json] | add <name> (--command <cmd> [--arg <a>]... [--env K=V]... | --url <url> [--header K=V]...) [--read-only] [--timeout <sec>] | remove <name>]');
+  return 2;
 }
 
 function permissions(argv: string[]): number {

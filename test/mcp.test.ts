@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadMcp } from '../src/core/config.ts';
+import { addMcp, checkMcp, listMcp, removeMcp } from '../src/core/mcp/manage.ts';
 import { startMcp } from '../src/core/mcp/tools.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 import { SessionLog } from '../src/core/session/log.ts';
@@ -174,5 +175,38 @@ describe('MCP', () => {
     expect(resultOf(run('--permission', 'workspace'))).toContain('echo: from the model');
     expect(resultOf(run('--permission', 'read-only'))).toContain('read-only');
     expect(resultOf(run('--permission', 'read-only', '--allow', 'mcp__fake__echo'))).toContain('echo: from the model');
+  });
+
+  test('cedia mcp: add, list without secrets, check by starting it, and remove, leaving the other settings as they were', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cedia-mcp-manage-'));
+    const saved = process.env.CEDIA_HOME;
+    process.env.CEDIA_HOME = home;
+    try {
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ desktop: { theme: 'cedian Dark' }, todo: true }));
+      addMcp('fake', { ...server, env: { FAKE_TOKEN: 'secret' }, readOnly: true });
+      addMcp('web', { url: 'https://example.com/mcp', headers: { Authorization: 'Bearer token' } });
+      expect(() => addMcp('bad', { url: 'ftp://x' })).toThrow('must be http(s)');
+      expect(listMcp()).toEqual({
+        servers: [
+          { name: 'fake', command: server.command, args: server.args, env: ['FAKE_TOKEN'], readOnly: true },
+          { name: 'web', url: 'https://example.com/mcp', headers: ['Authorization'] },
+        ],
+      });
+      expect(JSON.stringify(listMcp())).not.toContain('secret');
+      const check = await checkMcp('fake');
+      expect(check.ok && check.tools.map((t) => t.name)).toEqual(['crash', 'echo', 'env', 'fail', 'picture', 'slow']);
+      expect(check.ok && check.tools.find((t) => t.name === 'echo')).toEqual({ name: 'echo', description: 'Echo the text back' });
+      expect(await checkMcp('nope')).toMatchObject({ ok: false, error: expect.stringContaining('no MCP server nope') });
+      removeMcp('web');
+      expect(() => removeMcp('web')).toThrow('no MCP server web');
+      const written = JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8'));
+      expect(written).toEqual({ desktop: { theme: 'cedian Dark' }, todo: true, mcpServers: { fake: { ...server, env: { FAKE_TOKEN: 'secret' }, readOnly: true } } });
+      // An entry cedia would refuse is listed with why, so a client can show it and offer to remove it.
+      writeFileSync(join(home, 'settings.json'), JSON.stringify({ mcpServers: { odd: { command: 'x', shell: true } } }));
+      expect(listMcp().servers).toEqual([{ name: 'odd', command: 'x', error: expect.stringContaining('unknown key "shell"') }]);
+      expect(await checkMcp('odd')).toMatchObject({ ok: false });
+    } finally {
+      process.env.CEDIA_HOME = saved;
+    }
   });
 });
