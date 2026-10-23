@@ -468,13 +468,13 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   // A plan or review step, in cedia or through the user's own Claude Code.
   const side = async (role: 'plan' | 'review', choice: RoleChoice, prompt: string): Promise<{ ok: boolean; text: string; step: Step }> => {
     if (choice.via === 'claude-code') {
-      const step: Step = { model: `claude-code:${choice.model}`, via: 'claude-code', sessionId: '' };
+      const step: Step = { model: `claude-code:${choice.model}@${choice.effort}`, via: 'claude-code', sessionId: '' };
       if (privacy === 'zdr') {
         say(`cedia: privacy is zdr, so the ${role} step does not go to Claude Code\n`);
         return { ok: false, text: '', step };
       }
       const allowed = ['Read', 'Grep', 'Glob', ...(role === 'review' ? GIT_READS : []), ...checks.map((c) => `Bash(${c})`)];
-      const r = await runClaudeCode({ prompt, model: choice.model, cwd: args.cwd, allowed, signal: ac.signal });
+      const r = await runClaudeCode({ prompt, model: choice.model, effort: choice.effort, cwd: args.cwd, allowed, signal: ac.signal });
       if (!r.ok) say(`cedia: the ${role} step in Claude Code failed: ${r.error}\n`);
       return { ok: r.ok, text: r.text, step: { ...step, sessionId: r.sessionId, ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}) } };
     }
