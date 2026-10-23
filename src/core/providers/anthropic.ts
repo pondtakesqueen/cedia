@@ -52,8 +52,19 @@ export function anthropicMessages(messages: Message[], midConversationSystem: bo
   return out;
 }
 
+// The breakpoint on the newest block: the next request reads everything up to it from cache, since a breakpoint's
+// own marker is not part of the prefix it caches.
+function withTailBreakpoint(messages: JsonObject[], ttl: JsonObject): JsonObject[] {
+  const i = messages.findLastIndex((m) => Array.isArray(m.content) && m.content.length > 0);
+  if (i < 0) return messages;
+  const content = [...(messages[i]!.content as JsonObject[])];
+  content[content.length - 1] = { ...content.at(-1)!, cache_control: { type: 'ephemeral', ...ttl } };
+  return messages.map((m, j) => (j === i ? { ...m, content } : m));
+}
+
 export function anthropicBody(req: WireRequest): JsonObject {
   const ttl = req.ttl === '1h' ? { ttl: '1h' } : {};
+  const messages = anthropicMessages(req.messages, req.model.caps.midConversationSystem);
   const tools = req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.schema }));
   return {
     model: req.model.id,
@@ -62,8 +73,8 @@ export function anthropicBody(req: WireRequest): JsonObject {
     // Explicit breakpoint at the end of the static prefix, automatic caching for the growing tail.
     system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral', ...ttl } }],
     ...(tools.length ? { tools } : {}),
-    messages: anthropicMessages(req.messages, req.model.caps.midConversationSystem),
-    cache_control: { type: 'ephemeral', ...ttl },
+    messages: req.model.cacheTail ? withTailBreakpoint(messages, ttl) : messages,
+    ...(req.model.cacheTail ? {} : { cache_control: { type: 'ephemeral', ...ttl } }),
     ...(req.effort ? { output_config: { effort: req.effort } } : {}),
     ...(req.model.speed ? { speed: req.model.speed } : {}),
     ...(req.compaction ? { compaction: { type: 'summarize', instructions: req.compaction.instructions } } : {}),

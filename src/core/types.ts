@@ -127,8 +127,11 @@ export type ModelSpec = {
   headers?: Record<string, string>;
   sessionHeader?: string; // e.g. x-opencode-session
   cacheKeyField?: 'prompt_cache_key';
-  // Fields every request body carries as they are (chat wire), e.g. OpenRouter's provider routing.
+  // Fields every request body carries as they are, e.g. OpenRouter's provider routing.
   body?: JsonObject;
+  // Anthropic wire: the last block of the newest message carries the moving cache breakpoint, for a route that
+  // does not move the top-level one forward (Bedrock through OpenRouter).
+  cacheTail?: boolean;
   // Lines for this model after cedia's base prompt (core/prompts.ts systemFor): where a model family's habits
   // cost turns that the base prompt's rules do not stop. Fixed per model, so a session's prefix stays the same.
   prompt?: string;

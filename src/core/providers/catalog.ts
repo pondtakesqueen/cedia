@@ -148,8 +148,9 @@ export const CATALOG: ModelSpec[] = [
   },
   // Haiku 5.5 through OpenRouter's Messages endpoint, so a run on it takes the same wire as on the Claude API or Go
   // and the harnesses can be compared on one model. OpenRouter's zero-retention endpoints for it are Google Vertex
-  // and Amazon Bedrock (Anthropic's own is not on that list, 2026-10-23), so it is pinned to those two. A probe of
-  // the endpoint read a 9.7k-token system prompt back from cache on the second request.
+  // and Amazon Bedrock (Anthropic's own is not on that list, 2026-10-23). Probed on a growing conversation
+  // (2026-10-23): Vertex missed about one request in four at 2-3k tokens and rewrote the whole prefix; Bedrock never
+  // missed but did not move the top-level breakpoint past the system prompt, so it carries one on the newest block.
   {
     ref: 'openrouter/claude-haiku-5-5',
     id: 'anthropic/claude-haiku-5.5',
@@ -160,7 +161,8 @@ export const CATALOG: ModelSpec[] = [
     defaultEffort: 'low',
     price: haikuPrice,
     dataPolicy: 'zdr',
-    body: { provider: { order: ['google-vertex/global', 'amazon-bedrock'], allow_fallbacks: false, zdr: true, data_collection: 'deny' } },
+    body: { provider: { order: ['amazon-bedrock'], allow_fallbacks: false, zdr: true, data_collection: 'deny' } },
+    cacheTail: true,
     caps: claudeCaps,
   },
 ];

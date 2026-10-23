@@ -270,8 +270,16 @@ describe('http', () => {
     expect(or.price).toEqual(resolveModel('anthropic/claude-haiku-5-5').price);
     const api = resolveModel('anthropic/claude-haiku-5-5');
     const b = anthropicBody({ ...req('haiku'), model: or }) as any;
-    expect(b).toMatchObject({ model: 'anthropic/claude-haiku-5.5', cache_control: { type: 'ephemeral' }, provider: { order: ['google-vertex/global', 'amazon-bedrock'], allow_fallbacks: false, zdr: true } });
-    expect(b.system).toEqual((anthropicBody({ ...req('haiku'), model: api }) as any).system);
+    expect(b).toMatchObject({ model: 'anthropic/claude-haiku-5.5', provider: { order: ['amazon-bedrock'], allow_fallbacks: false, zdr: true } });
+    const plain = anthropicBody({ ...req('haiku'), model: api }) as any;
+    expect(b.system).toEqual(plain.system);
+    // The moving breakpoint is on the newest block instead of the top level; every other byte is the same.
+    expect(b.cache_control).toBeUndefined();
+    expect(plain.cache_control).toEqual({ type: 'ephemeral' });
+    const marked = b.messages.flatMap((m: any) => m.content).filter((c: any) => c.cache_control);
+    expect(marked).toEqual([b.messages.at(-1).content.at(-1)]);
+    const strip = (ms: any[]) => JSON.stringify(ms).replaceAll(',"cache_control":{"type":"ephemeral"}', '');
+    expect(strip(b.messages)).toBe(JSON.stringify(plain.messages));
     expect((anthropicBody({ ...req('haiku'), model: api }) as any).provider).toBeUndefined();
   });
 
