@@ -3,7 +3,7 @@
 import { ALIASES, CATALOG, FAUX_MODEL } from './catalog.ts';
 import { authKey } from './http.ts';
 import type { Keychain } from './keychain.ts';
-import type { ModelSpec } from '../types.ts';
+import type { Effort, ModelSpec } from '../types.ts';
 
 type Env = Record<string, string | undefined>;
 
@@ -16,6 +16,10 @@ export type ModelEntry = {
   reason?: string; // why it is not available
   contextWindow: number;
   effort: boolean; // takes --effort
+  // The levels --effort may name for it, lowest first, and the one a run starts at without the flag (absent when
+  // it takes none, or when it has no level of its own and the provider picks).
+  effortLevels?: Effort[];
+  defaultEffort?: Effort;
 };
 
 export type ModelList = { default: string; models: ModelEntry[] };
@@ -52,6 +56,8 @@ export function modelEntry(m: ModelSpec, env: Env, keychain: Keychain | undefine
     ...(available ? {} : { reason: `${names} is not set${keychain ? ' or in the Keychain' : ''}` }),
     contextWindow: m.caps.contextWindow,
     effort: m.caps.effortLevels.length > 0,
+    ...(m.caps.effortLevels.length ? { effortLevels: m.caps.effortLevels } : {}),
+    ...(m.caps.effortLevels.length && m.defaultEffort ? { defaultEffort: m.defaultEffort } : {}),
   };
 }
 

@@ -785,6 +785,15 @@
         },
         "effort": {
           "type": "boolean"
+        },
+        "effortLevels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Effort"
+          }
+        },
+        "defaultEffort": {
+          "$ref": "#/definitions/Effort"
         }
       },
       "required": [

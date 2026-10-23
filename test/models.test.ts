@@ -24,6 +24,10 @@ describe('modelList', () => {
     const opus = byRef(l, 'anthropic/claude-opus-5-5');
     expect(opus).toMatchObject({ alias: 'opus', label: 'Claude Opus 5.5', provider: 'anthropic', available: false, effort: true });
     expect(opus?.reason).toBe('ANTHROPIC_API_KEY (or CEDIA_ANTHROPIC_API_KEY) is not set');
+    // A picker offers the levels the model takes and marks where a run starts without one.
+    expect(opus).toMatchObject({ effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium' });
+    expect(byRef(l, 'anthropic/claude-haiku-5-5')?.defaultEffort).toBe('low');
+    expect(byRef(l, 'opencode-go/grok-4.7')?.effortLevels).toEqual(['low', 'medium', 'high', 'xhigh']);
     expect(byRef(l, 'anthropic/claude-opus-5-5-fast')?.label).toBe('Claude Opus 5.5 (fast)');
     expect(byRef(l, 'anthropic/claude-haiku-5-5')?.alias).toBeUndefined();
   });
