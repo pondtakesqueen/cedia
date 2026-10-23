@@ -9,7 +9,11 @@ describe("evals runner", () => {
     const limit = '{"type":"error","error":{"type":"GoUsageLimitError","message":"Go usage limit exceeded"},"metadata":{"limitName":"weekly"}}';
     expect(providerFailed("error_during_execution", 0, "fetch failed")).toBe(true);
     expect(providerFailed("error_during_execution", 52_000, limit)).toBe(true);
+    const upstream = '{"error":{"message":"Provider returned error","code":429,"metadata":{"raw":"deepseek/deepseek-v4.1-flash-1017 is temporarily rate-limited upstream","provider_name":"Cloudflare"}}}';
+    expect(providerFailed("error_during_execution", 410_000, upstream)).toBe(true);
+    expect(providerFailed("error_during_execution", 410_000, "HTTP 503")).toBe(true);
     expect(providerFailed("error_during_execution", 52_000, "bun test failed: 3 tests")).toBe(false);
+    expect(providerFailed("error_during_execution", 52_000, "faux/scripted ended its turn twice without a reply")).toBe(false);
     expect(providerFailed("success", 52_000, "I hit no usage limit")).toBe(false);
     expect(providerFailed("error_unverified_claim", 0, "")).toBe(false);
   });
