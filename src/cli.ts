@@ -15,6 +15,8 @@ import { commandList, loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
 import { rewindThread, rewoundText, runLines, type RewindResult } from './core/project/rewind.ts';
 import { addMcp, checkMcp, listMcp, removeMcp } from './core/mcp/manage.ts';
+import { commitFiles, currentBranch, headCommit, prPlan, pushAndOpenPr, threadChanges, type CommitDraft, type Committed, type PrOpened } from './core/project/commit.ts';
+import { draftCommitMessage } from './core/project/draft.ts';
 import { deleteThread } from './core/project/delete.ts';
 import { forkThread } from './core/project/fork.ts';
 import { workspaceSnapshots } from './core/safety/snapshot.ts';
@@ -150,6 +152,13 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                      [--read-only] [--timeout <sec>]
                                             add a server, or replace the one of that name
        cedia mcp remove <name>              take a server out
+       cedia commit --thread <id> [--cwd <dir>] [--model <ref>] [--json]
+                                            draft a message for the files the thread changed; commits nothing
+       cedia commit --thread <id> --message <m> [--file <f>]... [--json]
+                                            commit those files (all of them without --file), nothing else
+       cedia pr [--check] [--cwd <dir>] [--json]
+                                            push the branch and open its pull request through gh (never the
+                                            default branch); --check only says where it would go
        cedia commands [--json] [--cwd <dir>]
                                             what a client offers for /: each skill here; a prompt that starts with
                                             /<skill> asks the writer to load it first
@@ -173,6 +182,8 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'permissions') return permissions(argv.slice(1));
   if (argv[0] === 'models') return models(argv.slice(1));
   if (argv[0] === 'mcp') return mcp(argv.slice(1));
+  if (argv[0] === 'commit') return commit(argv.slice(1));
+  if (argv[0] === 'pr') return pr(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
   const { values, positionals } = parseArgs({
     args: argv,
@@ -604,6 +615,85 @@ async function mcp(argv: string[]): Promise<number> {
   }
   console.error('usage: cedia mcp [list [--json] | check <name> [--json] | add <name> (--command <cmd> [--arg <a>]... [--env K=V]... | --url <url> [--header K=V]...) [--read-only] [--timeout <sec>] | remove <name>]');
   return 2;
+}
+
+// `cedia commit`: what the TUI's /commit does, for a client that shows the files and the message and asks before
+// anything commits. Without --message it drafts one (the thread's writer model, else --model, else the code role's)
+// and commits nothing; with it, it commits the files given (each one the thread changed), or all of them.
+async function commit(argv: string[]): Promise<number> {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { thread: { type: 'string' }, cwd: { type: 'string' }, message: { type: 'string' }, file: { type: 'string', multiple: true }, model: { type: 'string' }, json: { type: 'boolean' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const { values } = parsed;
+  if (!values.thread) {
+    console.error('usage: cedia commit --thread <id> [--cwd <dir>] [--model <ref>] [--message <m> [--file <f>]...] [--json]');
+    return 2;
+  }
+  const fail = (error: string) => {
+    if (values.json) console.log(JSON.stringify({ error } satisfies CommitDraft));
+    else console.error(`cedia: ${error}`);
+    return 1;
+  };
+  const cwd = resolve(values.cwd ?? process.cwd());
+  const store = new ThreadStore(threadsDir(cediaHome(), projectKey(cwd)));
+  if (!store.has(values.thread)) return fail(`no thread ${values.thread} in this project`);
+  const snaps = workspaceSnapshots(cwd, cediaHome());
+  if (!snaps) return fail('no snapshots for this directory, so cedia cannot tell which files the thread changed');
+  const files = threadChanges(store, values.thread, cwd, snaps);
+  if (!files.length) return fail('nothing this thread changed differs from HEAD');
+  try {
+    if (values.message === undefined) {
+      const writer = store.read(values.thread).sessions.filter((s) => !s.rewound).at(-1)?.model;
+      const { message } = await draftCommitMessage({ cwd, model: values.model ?? writer ?? loadRoles({}).code.ref, files });
+      if (!message) return fail('the message came back empty: write one with --message');
+      const branch = currentBranch(cwd);
+      const draft: CommitDraft = { files, message, ...(branch ? { branch } : {}) };
+      console.log(values.json ? JSON.stringify(draft) : [`would commit ${files.join(', ')}${branch ? ` on ${branch}` : ''}:`, '', message].join('\n'));
+      return 0;
+    }
+    const message = values.message.trim();
+    if (!message) return fail('the message is empty');
+    const chosen = values.file?.length ? [...new Set(values.file)] : files;
+    const others = chosen.filter((f) => !files.includes(f));
+    if (others.length) return fail(`${others.join(', ')}: not changed by this thread, or no different from HEAD`);
+    const r = commitFiles(cwd, chosen, message);
+    if (!r.ok) return fail(`git commit failed: ${r.out}`);
+    const done: Committed = { commit: headCommit(cwd) ?? '', subject: message.split('\n')[0]!, files: chosen };
+    console.log(values.json ? JSON.stringify(done) : r.out.split('\n')[0] ?? 'committed');
+    return 0;
+  } catch (e) {
+    return fail((e as Error).message);
+  }
+}
+
+// `cedia pr`: what the TUI's /pr does once the user said yes. --check says where it would go, or why it cannot,
+// without pushing, so a client asks with the branch and the base in view.
+async function pr(argv: string[]): Promise<number> {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { cwd: { type: 'string' }, check: { type: 'boolean' }, json: { type: 'boolean' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const { values } = parsed;
+  const cwd = resolve(values.cwd ?? process.cwd());
+  const plan = prPlan(cwd);
+  if (values.check) {
+    console.log(values.json ? JSON.stringify(plan) : plan.blocked ?? `would push ${plan.branch} and open a pull request${plan.base ? ` into ${plan.base}` : ''}`);
+    return plan.blocked ? 1 : 0;
+  }
+  const r = await pushAndOpenPr(cwd);
+  const url = r.out.match(/https?:\/\/\S+/g)?.at(-1);
+  const opened: PrOpened = r.ok ? { branch: plan.branch!, ...(plan.base ? { base: plan.base } : {}), ...(url ? { url } : {}), out: r.out } : { error: r.out };
+  if (values.json) console.log(JSON.stringify(opened));
+  else if (r.ok) console.log(r.out);
+  else console.error(`cedia: ${r.out}`);
+  return r.ok ? 0 : 1;
 }
 
 function permissions(argv: string[]): number {

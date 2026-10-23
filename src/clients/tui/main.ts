@@ -1,7 +1,8 @@
 import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, Text, TUI, matchesKey, truncateToWidth, type Component, type MarkdownTheme, type Terminal } from '@mariozechner/pi-tui';
 import { readFileSync } from 'node:fs';
 import { cediaHome, isMode, loadPolicy, loadPrivacy, loadRoles, MODES } from '../../core/config.ts';
-import { COMMIT_SYSTEM, commitFiles, commitMessage, commitPatch, commitPrompt, currentBranch, defaultBranch, prBlocked, pullRequest, pushAndOpenPr, recentSubjects, threadChanges } from '../../core/project/commit.ts';
+import { commitFiles, currentBranch, defaultBranch, prBlocked, pullRequest, pushAndOpenPr, threadChanges } from '../../core/project/commit.ts';
+import { draftCommitMessage } from '../../core/project/draft.ts';
 import { runPrompt } from '../../core/loop/run.ts';
 import { resolveModel } from '../../core/providers/catalog.ts';
 import { providerFor } from '../../core/providers/index.ts';
@@ -573,25 +574,19 @@ export class CediaTui {
     }
   }
 
-  // The message comes from the next turn's model, in a session of its own with no tools, logged like any other.
-  private async draftMessage(prompt: string, signal: AbortSignal): Promise<string> {
-    const model = resolveModel(this.writer());
-    const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
-    const id = crypto.randomUUID();
-    const log = SessionLog.create({ id, path: sessionPath(this.args.cwd, id) });
-    const r = await runPrompt({ log, provider: providerFor(model, { fauxScript }), model, tools: [], system: COMMIT_SYSTEM, cwd: this.args.cwd, role: 'commit', privacy: loadPrivacy(this.args.cwd, this.args.privacy), maxTurns: 2, signal }, prompt);
-    this.spent += r.costUsd;
-    if (r.subtype !== 'success') throw new Error(`the commit message could not be written (${r.subtype}): write one with /commit <message>`);
-    return commitMessage(r.result);
-  }
-
   private async commit(own: string, signal: AbortSignal) {
     if (!this.thread) return this.say(dim('no thread yet: nothing to commit'));
     const snaps = workspaceSnapshots(this.args.cwd, cediaHome());
     if (!snaps) return this.say(red('no snapshots for this directory, so cedia cannot tell which files the thread changed'));
     const files = threadChanges(this.store, this.thread, this.args.cwd, snaps);
     if (!files.length) return this.say(dim('nothing this thread changed differs from HEAD'));
-    const message = own.trim() || (await this.draftMessage(commitPrompt(commitPatch(this.args.cwd, files), files, recentSubjects(this.args.cwd)), signal));
+    let message = own.trim();
+    if (!message) {
+      // The next turn's model writes it.
+      const drafted = await draftCommitMessage({ cwd: this.args.cwd, model: this.writer(), files, ...(this.args.privacy ? { privacy: this.args.privacy } : {}), signal });
+      this.spent += drafted.costUsd;
+      message = drafted.message;
+    }
     if (!message) return this.say(red('the message came back empty: write one with /commit <message>'));
     this.say([bold(`commit ${files.length} file${files.length === 1 ? '' : 's'}: ${files.join(', ')}`), '', message, '', yellow('commit this? y to commit; n, or anything else you type, cancels')].join('\n'));
     this.pending = {
