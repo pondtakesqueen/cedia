@@ -148,8 +148,11 @@ function commandWrites(file: string, command: string, commands: string[][], cwd:
   };
   const targets = [...command.matchAll(/>>?\|?\s*([^\s;|&<>()]+)/g)].map((t) => t[1]!.replace(/^['"]|['"]$/g, ''));
   if (targets.some(hit)) return true;
-  return commands.some((argv) => !checkReadOnly(argv.join(' ')).ok && argv.slice(1).filter((w) => !w.startsWith('-')).some(hit));
+  return commands.some((argv) => !checkReadOnly(argv.map(quoted).join(' ')).ok && argv.slice(1).filter((w) => !w.startsWith('-')).some(hit));
 }
+
+// A word put back into a command line as it was meant: `grep "a\|b" f` is one grep, not a pipe into b.
+const quoted = (w: string) => (/^[\w@%+=:,./-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`);
 
 function glob(pattern: string): RegExp {
   return new RegExp(`^${pattern.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);

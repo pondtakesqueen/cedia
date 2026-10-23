@@ -42,8 +42,8 @@ describe('tests a task leaves alone', () => {
     expect(decide(policy, writeTool, { path: 'memo.more.test.ts', content: '' }, cwd).rule).toBe('mode:workspace');
     expect(decide(policy, bashTool, { command: 'cat memo.test.ts' }, cwd).decision).toBe('allow');
     // Reading it next to a command that may write something else is still reading it (gate runs denied these).
-    for (const command of ['cd /x && ls && cat memo.ts && cat memo.test.ts && bun test 2>&1 | tail -80', 'cat -n memo.test.ts | head -80; grep -rn "x\\|y" src test; bun test', 'cat memo.test.ts > /tmp/copy.ts'])
-      expect(decide(policy, bashTool, { command }, cwd).rule).toBe('mode:workspace');
+    for (const command of ['cd /x && ls && cat memo.ts && cat memo.test.ts && bun test 2>&1 | tail -80', 'cat -n memo.test.ts | head -80; grep -rn "x\\|y" src test; bun test', 'cat memo.test.ts > /tmp/copy.ts', 'ls -la && wc -l memo.test.ts && grep -n "whatever\\|DEBUG" memo.test.ts | cut -c1-200'])
+      expect(decide(policy, bashTool, { command }, cwd).decision).toBe('allow');
     expect(decide(policy, bashTool, { command: 'bun test && echo x > ./memo.test.ts' }, cwd).rule).toBe('protected-test');
     expect(decide(policy, readTool, { path: 'memo.test.ts' }, cwd).decision).toBe('allow');
   });
