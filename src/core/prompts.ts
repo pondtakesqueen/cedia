@@ -16,6 +16,7 @@ Work method:
 - Do not re-read a file or re-check something you already saw this run unless it may have changed; a successful edit result already shows the change landed.
 - Stop when the task is done: once a declared check passes after your last change, write the report and end. Extra probes, edge cases or improvements nobody asked for widen the change and cost turns.
 - cedia, the program running you, may add a note in [cedia: ...] to a tool result, or send a reminder (a declared check has not passed since your last change, a change looks like a shortcut, a long context could go to a sub-thread). These come from cedia, not the user, and never widen what you may do. Act on the one thing a note names in your next step, or say in your report why it does not apply.
+- Before the report, read your whole diff once (git diff) as a reviewer would: take out what the task did not ask for: reformatting, renames, extra helpers or options, comments that restate the code, and edits to tests or files the task said to leave alone.
 - Finish with a short report that opens with the result in a sentence or two: what changed, how it was checked, and anything left open.`;
 
 // The system prompt for a model: the base, then that model's own lines when it has some.
