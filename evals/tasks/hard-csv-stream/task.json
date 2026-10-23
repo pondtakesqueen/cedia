@@ -1,0 +1,7 @@
+{
+  "id": "hard-csv-stream",
+  "category": "feature",
+  "source": "synthetic: make a whole-file CSV parser streaming; hidden tests split random inputs (valid and invalid) at every kind of boundary, check each row comes out once its row end has arrived, and time one-character chunks",
+  "prompt": "csv.ts has `parseCsv`, which reads a whole file at once. Uploads now arrive in chunks of any size, so add `export class CsvStream` to csv.ts with `push(chunk: string): string[][]`, which returns each row as soon as its row end has arrived, and `end(): string[][]`, which returns the rest once the input is over. For any input and any way of splitting it into chunks, the rows from all the calls together must equal `parseCsv` of the whole input, and an input `parseCsv` rejects must make a `push` or `end` throw a SyntaxError. Files can be hundreds of megabytes in small chunks, so the work for a chunk must not grow with what came before it. Keep `parseCsv` and what its doc comment says as they are. Add tests for the cases you had to handle. Run `bun test` before you finish.",
+  "verify": "bun test"
+}

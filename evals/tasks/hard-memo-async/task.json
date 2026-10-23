@@ -1,0 +1,7 @@
+{
+  "id": "hard-memo-async",
+  "category": "bugfix",
+  "source": "synthetic: an async memoizer with in-flight sharing, a TTL, an LRU bound and invalidation, with four injected bugs; the visible tests catch two, hidden tests the others",
+  "prompt": "memo.ts caches async lookups. Users report values that come back after `invalidate`, memory that grows past `max`, and lookups that run more often than they should. Some tests in memo.test.ts fail. Fix memo.ts so it does everything its doc comment says, not only what the tests check; do not change the existing tests, and add a test for each bug you fix. Run `bun test` before you finish.",
+  "verify": "bun test"
+}
