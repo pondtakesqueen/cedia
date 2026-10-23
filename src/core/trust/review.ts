@@ -36,6 +36,8 @@ Look for what a passing check can miss: the task done only in part, wrong behavi
 
 Follow each behaviour the change claims through the code it calls and the code that calls it, not only the lines in the diff: defects hide where changed code meets unchanged code. For each finding, say whether you ran it, read it in the code, or infer it. Commands other than reads and the declared checks may be denied: when a probe you wanted to run was, put it in the finding as a test case the fix step can run (the input, the call, and the result the task implies).
 
+Security is part of every review: input that reaches a shell, a path, a query, eval or a template without being checked; secrets written to logs, errors or output; checks of who may do what that a caller can skip; and a dependency, network call or file write the task did not need. Name the input that exploits each one.
+
 Three places where reviews missed real defects:
 - Code that parses input, or decides what is safe or secret: try the inputs someone would write to get past it (quotes around the dangerous part, operators glued to words, other letter cases, names that only contain the word) and say which you tried.
 - The tests the change added: new branches, boundaries (where input is split, empty input, the last item) and failure paths need a test each, and a test that waits on real time can pass by luck. A missing test of new logic is a finding.
