@@ -67,6 +67,9 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                (default: settings ask, off)
       --todo <on|off>          give the writer a todo list, kept in the thread as its progress (default: settings
                                todo, off)
+      --browser <endpoint>     give the writer the browser tool on a Chromium you started, by its DevTools endpoint
+                               (http://host:port, or ws://host:port/devtools/page/<id> for one page); it opens the
+                               hosts web_fetch may reach and loopback, widened by allow rules browser(<domain>)
       --profile <name>         a named set of defaults under these flags: model, permission, tools, instructions
                                (settings profiles; built in: coordinator, which opens threads with open_thread).
                                A thread goes on with the profile it was opened with
@@ -172,6 +175,7 @@ export async function main(argv: string[]): Promise<number> {
       lsp: { type: 'string' },
       ask: { type: 'string' },
       todo: { type: 'string' },
+      browser: { type: 'string' },
       profile: { type: 'string' },
       swarm: { type: 'string' },
       workers: { type: 'string' },
@@ -224,6 +228,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.lsp ? { lsp: values.lsp } : {}),
     ...(values.ask ? { ask: values.ask } : {}),
     ...(values.todo ? { todo: values.todo } : {}),
+    ...(values.browser ? { browser: values.browser } : {}),
     ...(values.profile ? { profile: values.profile } : {}),
     ...(values.swarm ? { swarm: values.swarm } : {}),
     ...(values.workers ? { workers: values.workers } : {}),
