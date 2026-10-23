@@ -264,6 +264,17 @@ describe('http', () => {
     expect(FALLBACKS[or.ref]).toBe('anthropic/claude-haiku-5-5');
   });
 
+  test('Haiku through OpenRouter: the Messages wire with its cache breakpoints, pinned to zero-retention endpoints', () => {
+    const or = resolveModel('haiku-or');
+    expect(or).toMatchObject({ ref: 'openrouter/claude-haiku-5-5', id: 'anthropic/claude-haiku-5.5', wire: 'anthropic-messages', url: 'https://openrouter.ai/api/v1/messages', dataPolicy: 'zdr', defaultEffort: 'low' });
+    expect(or.price).toEqual(resolveModel('anthropic/claude-haiku-5-5').price);
+    const api = resolveModel('anthropic/claude-haiku-5-5');
+    const b = anthropicBody({ ...req('haiku'), model: or }) as any;
+    expect(b).toMatchObject({ model: 'anthropic/claude-haiku-5.5', cache_control: { type: 'ephemeral' }, provider: { order: ['google-vertex/global', 'amazon-bedrock'], allow_fallbacks: false, zdr: true } });
+    expect(b.system).toEqual((anthropicBody({ ...req('haiku'), model: api }) as any).system);
+    expect((anthropicBody({ ...req('haiku'), model: api }) as any).provider).toBeUndefined();
+  });
+
   test("DeepSeek's own API counts as training on prompts; the quota fallback is Haiku on the Claude API", () => {
     const api = resolveModel('deepseek-api');
     expect(api).toMatchObject({ id: 'deepseek-v4.1-flash', url: 'https://api.deepseek.com/chat/completions', dataPolicy: 'trains', auth: { env: 'DEEPSEEK_API_KEY' } });

@@ -67,6 +67,7 @@ export function anthropicBody(req: WireRequest): JsonObject {
     ...(req.effort ? { output_config: { effort: req.effort } } : {}),
     ...(req.model.speed ? { speed: req.model.speed } : {}),
     ...(req.compaction ? { compaction: { type: 'summarize', instructions: req.compaction.instructions } } : {}),
+    ...(req.model.body ?? {}),
   };
 }
 
