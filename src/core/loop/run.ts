@@ -6,6 +6,7 @@ import { cacheMissesOf } from '../context/cache.ts';
 import { contextSize, HANDOFF_NO_TOOLS, HANDOFF_PROMPT } from '../project/handoff.ts';
 import { COMPACT_INSTRUCTIONS, compactionCut, compactPlan, firstReply } from '../project/compact.ts';
 import { hash } from '../hash.ts';
+import { MAX_IMAGES_PER_SESSION, type ImageRef } from '../images.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
 import { hookName, runHook, type Hooks } from '../hooks.ts';
@@ -55,6 +56,8 @@ export type RunOptions = {
   system: string;
   // Per-session facts (cwd, date) go in the first user turn, never in the cached system prompt.
   preamble?: string;
+  // Shown to the model with the prompt (core/images.ts).
+  images?: ImageRef[];
   cwd: string;
   // Defaults to read-only: nothing writes unless the caller opts in.
   permission?: Policy;
@@ -406,7 +409,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
   if (opts.preamble && !log.events.some((e) => e.kind === 'user')) log.append({ kind: 'reminder', as: 'user', text: opts.preamble });
   runStart = log.events.length;
-  log.append({ kind: 'user', text: prompt });
+  // Images the owner attached go with the prompt, within the session's limit.
+  const images = (opts.images ?? []).slice(0, Math.max(0, MAX_IMAGES_PER_SESSION - imagesShown(log.events)));
+  log.append({ kind: 'user', text: prompt, ...(images.length ? { images } : {}) });
 
   while (true) {
     if (signal.aborted) return finish('interrupted', 'aborted');
@@ -777,10 +782,22 @@ async function runTools(
     const command = jobs.find((j) => j.callId === callId && j.spec.name === 'bash')?.input.command;
     const near = typeof command === 'string' && (status === 'completed' || status === 'failed') ? nearCheck(command, opts.checks ?? [], opts.cwd) : undefined;
     if (near) output.text += `\n${nearCheckNote(near)}`;
+    if (output.images?.length) {
+      const room = Math.max(0, MAX_IMAGES_PER_SESSION - imagesShown(log.events));
+      if (output.images.length > room) {
+        output.text += `\n[cedia: ${output.images.length - room} image(s) not shown: a session shows at most ${MAX_IMAGES_PER_SESSION}. Crop or combine what you need to see, or ask the user to look.]`;
+        output.images = output.images.slice(0, room);
+      }
+      if (!output.images.length) delete output.images;
+    }
     const r = redact ? redactSecrets(output.text) : { text: output.text, count: 0 };
     log.append({ kind: 'tool_result', callId, status, output: r.count ? { ...output, text: r.text, redacted: r.count } : output });
   }
 }
+
+// Images the session has shown the model so far, in prompts and tool results.
+export const imagesShown = (events: SessionEvent[]) =>
+  events.reduce((n, e) => n + (e.kind === 'user' ? (e.images?.length ?? 0) : e.kind === 'tool_result' ? (e.output.images?.length ?? 0) : 0), 0);
 
 // A command that holds a declared check but is not just it (`bun test 2>&1 | tail`, `bun test; echo`) does not
 // count for the done gate, which cannot see the check's own exit code there. Saying so in that call's result, when

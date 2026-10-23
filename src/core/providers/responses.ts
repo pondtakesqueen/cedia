@@ -1,3 +1,4 @@
+import { imageNote, withImageNotes } from '../images.ts';
 import type { JsonObject, Provider, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
 import { Assembler } from './assemble.ts';
 import { authHeaders, classifyStreamError, post, type Fetcher } from './http.ts';
@@ -12,8 +13,8 @@ export function responsesInput(req: WireRequest): JsonObject[] {
     if (m.role === 'system') out.push({ role: 'developer', content: m.text });
     else if (m.role === 'user') {
       for (const p of m.parts) {
-        if (p.type === 'tool_result') out.push({ type: 'function_call_output', call_id: p.callId, output: p.text });
-        else out.push({ role: 'user', content: [{ type: 'input_text', text: p.text }] });
+        if (p.type === 'tool_result') out.push({ type: 'function_call_output', call_id: p.callId, output: withImageNotes(p.text, p.images) });
+        else out.push({ role: 'user', content: [{ type: 'input_text', text: p.type === 'image' ? imageNote(p.image) : p.text }] });
       }
     } else {
       for (const b of m.blocks) {

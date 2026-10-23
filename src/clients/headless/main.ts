@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { historyRejected, runPrompt } from '../../core/loop/run.ts';
 import { modeNote, preamble, systemFor } from '../../core/prompts.ts';
 import { resolveModel } from '../../core/providers/catalog.ts';
@@ -8,6 +8,7 @@ import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, type RoleChoice } from '../../core/config.ts';
+import { attachedNote, storeImage, type ImageRef } from '../../core/images.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
@@ -97,6 +98,8 @@ export type HeadlessArgs = {
   advisor?: string;
   classifier?: string;
   checks?: string[];
+  // Image files shown to the writer with the prompt (core/images.ts).
+  images?: string[];
   sandbox?: string;
   allowDomains?: string[];
   // For a client that owns the terminal (the TUI): where cedia's own notes go instead of stderr, and a stop.
@@ -383,6 +386,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // What the parts of a split plan changed before the writer started.
     inherited?: string[];
     note?: string;
+    images?: ImageRef[];
     role?: 'plan' | 'review' | 'explore' | 'goal' | 'advisor' | 'classifier';
     child?: { thread?: string; handoff?: boolean; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots; wrap: (command: string) => Promise<string> } };
     // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
@@ -434,6 +438,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         system: opts.role === 'advisor' ? ADVISOR_SYSTEM : opts.role === 'classifier' ? CLASSIFIER_SYSTEM : systemFor(m),
         ...(helper ? {} : { preamble: reviewer ? reviewPreamble : opts.note ? `${place?.preamble ?? basePreamble}\n\n${opts.note}` : (place?.preamble ?? basePreamble) }),
         cwd: place?.cwd ?? args.cwd,
+        ...(opts.images?.length ? { images: opts.images } : {}),
         // They may also run the declared checks, to see what fails instead of only reading.
         // The run's own allow rules are the writer's: one such as bash(git *) would let a reviewer write.
         permission: reviewer ? { ...policy, mode: 'read-only', allow: checks.map((c) => `bash(${c})`) } : policy,
@@ -507,6 +512,14 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   };
   // A thread that asked the owner a question goes on with their answer, framed as one.
   let task = resumed?.question ? answerPrompt(resumed.question.question, args.prompt) : (skillCommand(args.prompt, skills) ?? args.prompt);
+  // The owner's images: the writer is shown them, and the task names their files so plan and review can open them.
+  const images = (args.images ?? []).map((path) => {
+    const full = resolve(args.cwd, path);
+    const ref = storeImage(readFileSync(full), path);
+    if ('error' in ref) throw new Error(`--image ${path}: ${ref.error}`);
+    return ref;
+  });
+  if (images.length) task = `${task}\n\n${attachedNote(args.images!.map((p) => resolve(args.cwd, p)))}`;
   // The advisor: one session for the run, which reads each of the writer's turns and answers OK or a note. A
   // failed advisor (its quota, an error) is left out for the rest of the run; the writer goes on without it.
   const adv = { log: undefined as SessionLog | undefined, turns: 0, notes: 0, costUsd: 0, off: false };
@@ -777,7 +790,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       writer = { model: m, log: openLog() };
       record(writer.log, m, 'handoff');
       const carry = prompt === task ? task : `${task}\n\n${prompt}`;
-      r = await run(m, writer.log, carry, successor(from, r));
+      r = await run(m, writer.log, carry, { ...successor(from, r), ...(opts.images ? { images: opts.images } : {}) });
     }
     return r;
   };
@@ -852,11 +865,11 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       const before = resumed?.runs.at(-1)?.permission;
       const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
       const lead = before && before !== permission ? `<permission>\n${modeNote(policy.mode, policy.unlock ?? [], policy.plan ? { ask: !!header?.tools.some((d) => d.name === 'ask_user') } : undefined)}\n</permission>` : undefined;
-      result = await write(model, log, task, inherited.length ? { inherited } : {}, lead);
+      result = await write(model, log, task, { ...(inherited.length ? { inherited } : {}), ...(images.length ? { images } : {}) }, lead);
     } else {
       const log = openLog();
       record(log, model, resumed ? 'resume' : 'start');
-      result = await write(model, log, task, { ...(resumed ? { note: resumeNote(resumed) } : {}), ...(inherited.length ? { inherited } : {}) });
+      result = await write(model, log, task, { ...(resumed ? { note: resumeNote(resumed) } : {}), ...(inherited.length ? { inherited } : {}), ...(images.length ? { images } : {}) });
     }
     // A spent quota does not end the task: a new session on the fallback model picks it up (a session never
     // switches model, so its cache stays valid). Nor does a history the provider refuses: a new session on the

@@ -1,5 +1,9 @@
 // Data shapes for the core. SPEC.md "Core shapes" is the source of truth; change both together.
 
+import type { ImageRef } from './images.ts';
+
+export type { ImageRef };
+
 export type JsonObject = { [key: string]: unknown };
 
 export type EventId = string & { readonly brand: 'EventId' };
@@ -28,7 +32,8 @@ export type CompactionBlock = { type: 'compaction'; text: string; opaque: string
 
 export type EffectStatus = 'completed' | 'failed' | 'denied' | 'not_started' | 'interrupted_safe' | 'interrupted_unknown';
 // `redacted` counts secrets cedia replaced before the output was logged and sent.
-export type ToolOutput = { text: string; isError: boolean; exitCode?: number; spillPath?: string; images?: string[]; redacted?: number };
+// `images`: what the model is shown besides the text (core/images.ts), on models that read images.
+export type ToolOutput = { text: string; isError: boolean; exitCode?: number; spillPath?: string; images?: ImageRef[]; redacted?: number };
 // no-training: models that train on prompts run only in repos marked public. zdr: only zero-data-retention models.
 export type PrivacyLevel = 'no-training' | 'zdr';
 export type ToolEffect = 'read' | 'write_workspace' | 'exec' | 'network';
@@ -45,7 +50,7 @@ export type TurnEndReason = 'completed' | 'aborted' | 'error' | 'max_tokens' | '
 
 type EventBody =
   | { kind: 'session'; cwd: string; role: string; model: string; system: string; tools: ToolDef[]; parentSession?: string; thread?: string }
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; images?: ImageRef[] }
   | {
       kind: 'request';
       model: string;
@@ -95,7 +100,8 @@ export type NewEvent = EventBody;
 // Wire-neutral conversation the context builder produces and each adapter translates.
 export type UserPart =
   | { type: 'text'; text: string }
-  | { type: 'tool_result'; callId: string; text: string; isError: boolean };
+  | { type: 'image'; image: ImageRef }
+  | { type: 'tool_result'; callId: string; text: string; isError: boolean; images?: ImageRef[] };
 export type Message =
   | { role: 'user'; parts: UserPart[] }
   | { role: 'assistant'; wire: Wire; blocks: AssistantBlock[] }
