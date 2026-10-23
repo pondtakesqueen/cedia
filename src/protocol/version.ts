@@ -33,7 +33,8 @@ export type Capability =
   | 'usage' // cedia usage --json (UsageReport) with the cost by day, model, project and thread, --since and --all
   | 'browser' // --browser <endpoint>: the browser tool on a Chromium the client started, by its DevTools endpoint
   | 'threads.restore-json' // cedia threads undo|redo <id> --json (Restored) and rewind <id> <n> --json (RewindResult)
-  | 'images'; // -p --image <file>: images shown to the writer with the prompt, and read opens image files
+  | 'images' // -p --image <file>: images shown to the writer with the prompt, and read opens image files
+  | 'cache-ttl'; // --cache-ttl 5m|1h: how long the writer's cached prompt lasts on the Anthropic wire
 
 export type VersionInfo = { name: 'cedia'; version: string; protocol: string; capabilities: Capability[] };
 
@@ -41,7 +42,7 @@ export type VersionInfo = { name: 'cedia'; version: string; protocol: string; ca
 export const PROTOCOL = hash(schemaText as unknown as string);
 
 export function versionInfo(): VersionInfo {
-  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask', 'todo', 'profiles', 'open_thread', 'schedules', 'worktree.newest-wins', 'spawn.best-of-n', 'models', 'permissions', 'commands', 'threads.fork', 'usage', 'threads.restore-json', 'images', 'browser'];
+  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask', 'todo', 'profiles', 'open_thread', 'schedules', 'worktree.newest-wins', 'spawn.best-of-n', 'models', 'permissions', 'commands', 'threads.fork', 'usage', 'threads.restore-json', 'images', 'browser', 'cache-ttl'];
   if (processKeychain()) capabilities.push('keychain');
   return { name: 'cedia', version: VERSION, protocol: PROTOCOL, capabilities };
 }
