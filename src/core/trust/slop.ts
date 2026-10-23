@@ -16,22 +16,34 @@ const ASSERTION = /\b(expect|assert\w*|should)\b|\b(it|test|describe)\s*\(/;
 // The code of a line without its comments, strings and regex literals, for rules about code that prose may
 // name: "the rule matches: any key" in a comment, or a detector's own pattern, is not a type escape.
 export function codeOf(line: string): string {
-  if (/^\s*(\/\/|\/?\*)/.test(line)) return '';
-  return line
-    .replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, '""')
-    .replace(/(^|[=(,:;!&|?{}[\]]\s*)\/(?![/*])(?:\\.|\[(?:\\.|[^\]])*\]|[^/\\[])+\/[a-z]*/g, '$1/re/')
-    .replace(/\/\/.*$|\/\*.*?(\*\/|$)/g, '');
+  if (COMMENT_LINE.test(line)) return '';
+  return withoutRegex(line.replace(STRING, '""')).replace(/\/\/.*$|\/\*.*?(\*\/|$)/g, '');
 }
 
-const ADDED: { rule: SlopRule; re: RegExp; files?: RegExp; code?: boolean }[] = [
-  { rule: 'test-skipped', re: /\.(skip|only|todo)\s*\(|\bx(it|describe|test)\s*\(|@pytest\.mark\.(skip|xfail)|\bt\.Skip\(|#\[ignore\]|@(Disabled|Ignore)\b/ },
-  { rule: 'suppression', re: /@ts-(ignore|nocheck|expect-error)|eslint-disable|biome-ignore|#\s*type:\s*ignore|#\s*noqa|\/\/\s*nolint|#!?\[allow\(|@SuppressWarnings/ },
+const COMMENT_LINE = /^\s*(\/\/|\/?\*)/;
+const STRING = /(["'`])(?:\\.|(?!\1)[^\\])*\1/g;
+const withoutRegex = (line: string) => line.replace(/(^|[=(,:;!&|?{}[\]]\s*)\/(?![/*])(?:\\.|\[(?:\\.|[^\]])*\]|[^/\\[])+\/[a-z]*/g, '$1/re/');
+
+// What part of a line each rule reads. A detector's own pattern sits in a regex literal or a string, and prose
+// that names a shortcut sits in a comment; the shortcut itself is code, except where it lives elsewhere.
+const SCAN = {
+  // a suppression is a comment
+  comments: (line: string) => withoutRegex(line.replace(STRING, '""')),
+  // a stub's "not implemented" is a string
+  strings: (line: string) => (COMMENT_LINE.test(line) ? '' : withoutRegex(line)),
+  code: codeOf,
+};
+
+const ADDED: { rule: SlopRule; re: RegExp; files?: RegExp; scan: keyof typeof SCAN }[] = [
+  { rule: 'test-skipped', re: /\.(skip|only|todo)\s*\(|\bx(it|describe|test)\s*\(|@pytest\.mark\.(skip|xfail)|\bt\.Skip\(|#\[ignore\]|@(Disabled|Ignore)\b/, scan: 'code' },
+  { rule: 'suppression', re: /@ts-(ignore|nocheck|expect-error)|eslint-disable|biome-ignore|#\s*type:\s*ignore|#\s*noqa|\/\/\s*nolint|#!?\[allow\(|@SuppressWarnings/, scan: 'comments' },
   {
     rule: 'swallowed-error',
     re: /catch\s*(\([^)]*\))?\s*\{\s*\}|except(\s+[\w.]+(\s+as\s+\w+)?)?\s*:\s*pass\b|\.catch\(\s*\(\s*\w*\s*\)\s*=>\s*(\{\s*\}|undefined|null)\s*\)/,
+    scan: 'code',
   },
-  { rule: 'type-escape', re: /\bas any\b|:\s*any\b(?![\w$])|<any>/, files: /\.[cm]?tsx?$/, code: true },
-  { rule: 'stub', re: /not implemented|NotImplementedError|unimplemented!\(|todo!\(/i },
+  { rule: 'type-escape', re: /\bas any\b|:\s*any\b(?![\w$])|<any>/, files: /\.[cm]?tsx?$/, scan: 'code' },
+  { rule: 'stub', re: /not implemented|NotImplementedError|unimplemented!\(|todo!\(/i, scan: 'strings' },
 ];
 
 export function findSlop(changes: FileChange[]): SlopFinding[] {
@@ -48,8 +60,8 @@ export function findSlop(changes: FileChange[]): SlopFinding[] {
     }
     if (PROSE.test(c.path)) continue;
     for (const line of c.added)
-      for (const { rule, re, files, code } of ADDED)
-        if ((!files || files.test(c.path)) && re.test(code ? codeOf(line) : line)) out.push({ rule, path: c.path, line: line.trim().slice(0, 120) });
+      for (const { rule, re, files, scan } of ADDED)
+        if ((!files || files.test(c.path)) && re.test(SCAN[scan](line))) out.push({ rule, path: c.path, line: line.trim().slice(0, 120) });
   }
   return out;
 }
