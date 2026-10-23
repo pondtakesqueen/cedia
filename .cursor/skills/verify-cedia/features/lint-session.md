@@ -10,7 +10,7 @@
 ## How to get to it (user POV)
 
 - Finish a `cedia -p` run.
-- Find the log at `$CEDIA_HOME/sessions/<project-slug>/<session-id>.jsonl`. The slug is the work directory path with the leading slash removed and other separators turned into `-`.
+- Find the log at `$CEDIA_HOME/sessions/<project-slug>/<session-id>.jsonl`. The slug drops one leading slash from the project directory and turns every run of characters outside letters, digits, `.`, `_`, and `-` into a single `-`. Inside a git repository the project directory is the main worktree, so a subdirectory and a linked worktree share that slug. Outside git the project directory is the working directory. The verify work directory is not a git checkout, so its slug is that path.
 - Run `cedia lint-session <file.jsonl>`.
 
 ## Driving it with control-cedia
@@ -44,3 +44,4 @@ mapfile -t logs < "$CEDIA_VERIFY_EVIDENCE/session-path.stdout"
 - A path that does not exist makes `lint-session` throw a Bun stack from `SessionLog.load` and exit 1. Observed 2026-10-21 with a missing jsonl path. The command does not print the usage line in that case.
 - Findings, when they exist, use `<file>:<line>: <rule>: <message>` on stdout and the process exits 1. A clean log is empty output, not a success sentence.
 - Lint reads the file you pass. It does not look up `CEDIA_HOME` for you.
+- A prompt started in a subdirectory of a git repo files its log under the main worktree's slug. Observed 2026-10-23. The working directory was `<repo>/main/nested` and the session directory name ended in `repo-check-main`.
