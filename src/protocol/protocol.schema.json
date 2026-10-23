@@ -37,6 +37,9 @@
     "RewindResult": {
       "$ref": "#/definitions/RewindResult"
     },
+    "DeleteResult": {
+      "$ref": "#/definitions/DeleteResult"
+    },
     "VersionInfo": {
       "$ref": "#/definitions/VersionInfo"
     }
@@ -79,6 +82,9 @@
             },
             "redacted": {
               "type": "boolean"
+            },
+            "ms": {
+              "type": "number"
             }
           },
           "required": [
@@ -220,7 +226,9 @@
         "browser",
         "threads.restore-json",
         "images",
-        "cache-ttl"
+        "cache-ttl",
+        "threads.rename",
+        "threads.delete"
       ]
     },
     "Check": {
@@ -420,6 +428,47 @@
         },
         {
           "$ref": "#/definitions/HeadlessResult"
+        }
+      ]
+    },
+    "Deleted": {
+      "type": "object",
+      "properties": {
+        "threads": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "threads",
+        "sessions"
+      ],
+      "additionalProperties": false
+    },
+    "DeleteResult": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Deleted"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -1568,6 +1617,9 @@
             },
             "usage": {
               "$ref": "#/definitions/Usage"
+            },
+            "costUsd": {
+              "type": "number"
             },
             "id": {
               "$ref": "#/definitions/EventId"
@@ -3005,6 +3057,30 @@
             "archived",
             "at",
             "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "title"
+            },
+            "title": {
+              "type": "string"
+            },
+            "at": {
+              "type": "string"
+            },
+            "run": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "kind",
+            "title"
           ]
         }
       ]

@@ -492,10 +492,10 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     if (!got.ok) throw new Error('unreachable');
 
     const turnFrom = log.events.length;
-    log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: got.blocks, stop: got.stop, usage: got.usage });
+    const turnCost = costUsd(model, got.usage, now());
+    log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: got.blocks, stop: got.stop, usage: got.usage, costUsd: turnCost });
     usage = addUsage(usage, got.usage);
     peakContext = Math.max(peakContext, contextSize(got.usage));
-    const turnCost = costUsd(model, got.usage, now());
     cost += turnCost;
     if (opts.meter) opts.meter.usd += turnCost;
     const text = got.blocks.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');

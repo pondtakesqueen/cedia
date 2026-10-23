@@ -14,6 +14,7 @@ import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Sch
 import { commandList, loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
 import { rewindThread, rewoundText, runLines, type RewindResult } from './core/project/rewind.ts';
+import { deleteThread } from './core/project/delete.ts';
 import { forkThread } from './core/project/fork.ts';
 import { workspaceSnapshots } from './core/safety/snapshot.ts';
 import { lintSession } from './core/session/lint.ts';
@@ -110,6 +111,10 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                             rate an answer (default: the thread's latest) for picking eval cases;
                                             no model ever sees it
        cedia threads archive|unarchive <id> hide a thread from the list, or bring it back
+       cedia threads rename <id> <title>    give a thread a title of your own
+       cedia threads delete <id> [--force] [--json]
+                                            delete a thread for good: its file, its sub-threads and their session
+                                            logs (refused while it runs unless --force; worktrees are kept)
        cedia threads diff <id>              what changed since the thread's last turn that changed files started
        cedia threads undo|redo <id> [--force] [--json]
                                             put the files that turn changed back (or forward again), from cedia's
@@ -404,6 +409,21 @@ function threads(argv: string[]): number {
       console.log(`${cmd}d ${id}`);
       return 0;
     }
+    if (cmd === 'rename' && id && rest.length) {
+      const title = store.rename(id, rest.join(' '));
+      console.log(`renamed ${id}: ${title}`);
+      return 0;
+    }
+    if (cmd === 'delete' && id && !rest.length) {
+      const r = deleteThread(store, id, { force: values.force ?? false });
+      if (values.json) {
+        console.log(JSON.stringify(r));
+        return 'error' in r ? 1 : 0;
+      }
+      if ('error' in r) throw new Error(r.error);
+      console.log(`deleted ${r.threads.join(', ')} and ${r.sessions.length} session log${r.sessions.length === 1 ? '' : 's'}`);
+      return 0;
+    }
     if (cmd === 'send' && id && rest.length) {
       const mid = store.send(id, 'user', rest.join(' '));
       console.log(`sent to ${id} as ${mid}`);
@@ -468,7 +488,7 @@ function threads(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run> [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id>] [--cwd <dir>]');
+  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run> [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id> | rename <id> <title> | delete <id> [--force] [--json]] [--cwd <dir>]');
   return 2;
 }
 

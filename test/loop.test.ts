@@ -104,6 +104,15 @@ describe('long bash output', () => {
 });
 
 describe('loop', () => {
+  test('each reply logs its own cost, and they add up to the run\'s', async () => {
+    const { log, opts } = setup([{ blocks: [toolUse('c1', 'read', { path: 'a.txt' })] }, { blocks: [text('it says alpha')] }]);
+    const res = await runPrompt(opts, 'what is in a.txt');
+    const costs = of(log.events, 'assistant').map((e) => e.costUsd);
+    expect(costs).toHaveLength(2);
+    for (const c of costs) expect(c).toBeGreaterThan(0);
+    expect(costs.reduce((a, c) => a! + c!, 0)).toBeCloseTo(res.costUsd, 12);
+  });
+
   test('runs a tool and answers; log order is request, attempt, assistant, permission, intent, result', async () => {
     const { log, opts } = setup([{ blocks: [toolUse('c1', 'read', { path: 'a.txt' })] }, { blocks: [text('it says alpha')] }]);
     const res = await runPrompt(opts, 'what is in a.txt');

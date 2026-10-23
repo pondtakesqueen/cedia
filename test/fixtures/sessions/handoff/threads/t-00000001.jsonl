@@ -1,7 +1,7 @@
-{"at":"2026-10-23T17:06:12.930Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
-{"at":"2026-10-23T17:06:12.954Z","kind":"run","id":"r-acd15f8a","prompt":"make f.txt say good","cwd":"/fixture/repo","tree":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","permission":"workspace"}
-{"at":"2026-10-23T17:06:12.959Z","run":"r-acd15f8a","kind":"session","sessionId":"1ddb0d60-a344-410a-97c8-a9bf3fd9632c","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/1ddb0d60-a344-410a-97c8-a9bf3fd9632c.jsonl"}
-{"at":"2026-10-23T17:06:13.013Z","run":"r-acd15f8a","kind":"handoff","sessionId":"1ddb0d60-a344-410a-97c8-a9bf3fd9632c","note":"Wrote f.txt. Next: run the check."}
-{"at":"2026-10-23T17:06:13.017Z","run":"r-acd15f8a","kind":"session","sessionId":"282f5d54-daac-40c5-a249-d0244e37555e","model":"faux/scripted","role":"code","why":"handoff","path":"/fixture/home/sessions/fixture-repo/282f5d54-daac-40c5-a249-d0244e37555e.jsonl"}
-{"at":"2026-10-23T17:06:13.040Z","run":"r-acd15f8a","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["1ddb0d60-a344-410a-97c8-a9bf3fd9632c","282f5d54-daac-40c5-a249-d0244e37555e"]}
-{"at":"2026-10-23T17:06:13.040Z","run":"r-acd15f8a","kind":"state","state":"done","result":"done"}
+{"at":"2026-10-23T19:08:04.677Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
+{"at":"2026-10-23T19:08:04.698Z","kind":"run","id":"r-1d876641","prompt":"make f.txt say good","cwd":"/fixture/repo","tree":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","permission":"workspace"}
+{"at":"2026-10-23T19:08:04.778Z","run":"r-1d876641","kind":"session","sessionId":"09157bcc-60e2-4390-9c52-abafd95ef662","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/09157bcc-60e2-4390-9c52-abafd95ef662.jsonl"}
+{"at":"2026-10-23T19:08:04.838Z","run":"r-1d876641","kind":"handoff","sessionId":"09157bcc-60e2-4390-9c52-abafd95ef662","note":"Wrote f.txt. Next: run the check."}
+{"at":"2026-10-23T19:08:04.842Z","run":"r-1d876641","kind":"session","sessionId":"aba70540-a826-4801-87a3-f802c1f7564e","model":"faux/scripted","role":"code","why":"handoff","path":"/fixture/home/sessions/fixture-repo/aba70540-a826-4801-87a3-f802c1f7564e.jsonl"}
+{"at":"2026-10-23T19:08:04.877Z","run":"r-1d876641","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["09157bcc-60e2-4390-9c52-abafd95ef662","aba70540-a826-4801-87a3-f802c1f7564e"]}
+{"at":"2026-10-23T19:08:04.877Z","run":"r-1d876641","kind":"state","state":"done","result":"done"}
