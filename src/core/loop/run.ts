@@ -127,7 +127,8 @@ export type RunOptions = {
   quotaWaitMs?: number;
   onQuotaWait?: (ms: number) => void;
   // While tools run longer than this after a request was sent, its body is sent again with no output every this
-  // often, so the cached prefix outlives the provider's cache lifetime (default 4 minutes, under Anthropic's 5).
+  // often, so the cached prefix outlives the provider's cache lifetime (default 4 minutes, under Anthropic's 5;
+  // 55 with ttl 1h).
   keepAliveMs?: number;
   now?: () => Date;
 };
@@ -136,6 +137,7 @@ export type RunOptions = {
 // long evals every parent that waited over 5 minutes on a work sub-thread wrote its whole context to the cache
 // again on its next request: at Opus 5.5's prices about $0.75 for a 150k parent, against $0.03 for a refresh.
 export const KEEP_ALIVE_MS = 4 * 60_000;
+export const KEEP_ALIVE_1H_MS = 55 * 60_000;
 
 // Refreshes the request's cached prefix while tools run, from `sentAt` + `every` and every `every` after, until
 // stop() (which waits for one in flight, so its event lands before the next request). A provider without
@@ -525,7 +527,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       }
       const toolStart = performance.now();
       const before = log.events.length;
-      const warm = keepWarm(provider, req, request.id, sentAt, opts.keepAliveMs ?? KEEP_ALIVE_MS, log, signal, (u) => {
+      const warm = keepWarm(provider, req, request.id, sentAt, opts.keepAliveMs ?? (opts.ttl === '1h' ? KEEP_ALIVE_1H_MS : KEEP_ALIVE_MS), log, signal, (u) => {
         usage = addUsage(usage, u);
         const c = costUsd(model, u, now());
         cost += c;

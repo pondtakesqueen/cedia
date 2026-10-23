@@ -100,6 +100,9 @@ export type HeadlessArgs = {
   checks?: string[];
   // Image files shown to the writer with the prompt (core/images.ts).
   images?: string[];
+  // How long the writer's cached prefix lasts on the Anthropic wire: 5m (the API's default) or 1h, for a client
+  // where the owner may think for longer between prompts (the TUI). Plan, review and sub-threads stay at 5m.
+  cacheTtl?: string;
   sandbox?: string;
   allowDomains?: string[];
   // For a client that owns the terminal (the TUI): where cedia's own notes go instead of stderr, and a stop.
@@ -204,6 +207,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const lspSetting = loadLsp(args.lsp);
   const askOn = loadAsk(args.ask);
   const todoOn = loadTodo(args.todo);
+  const cacheTtl = args.cacheTtl ?? '5m';
+  if (cacheTtl !== '5m' && cacheTtl !== '1h') throw new Error(`--cache-ttl must be 5m or 1h, not ${cacheTtl}`);
   const model = roles.code;
   const declared = loadChecks(args.cwd, args.checks);
   const checks = declared.length ? declared : detectChecks(args.cwd);
@@ -439,6 +444,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         ...(helper ? {} : { preamble: reviewer ? reviewPreamble : opts.note ? `${place?.preamble ?? basePreamble}\n\n${opts.note}` : (place?.preamble ?? basePreamble) }),
         cwd: place?.cwd ?? args.cwd,
         ...(opts.images?.length ? { images: opts.images } : {}),
+        ...(writing && cacheTtl === '1h' && m.wire === 'anthropic-messages' ? { ttl: '1h' as const } : {}),
         // They may also run the declared checks, to see what fails instead of only reading.
         // The run's own allow rules are the writer's: one such as bash(git *) would let a reviewer write.
         permission: reviewer ? { ...policy, mode: 'read-only', allow: checks.map((c) => `bash(${c})`) } : policy,

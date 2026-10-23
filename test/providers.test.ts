@@ -153,6 +153,27 @@ describe('request bodies', () => {
     expect(f.messages[1].content.map((c: any) => c.type)).toEqual(['tool_use']);
   });
 
+  test('anthropic: a 1h cache marks both breakpoints, and an hour-long write is billed at twice the input price', async () => {
+    const b = anthropicBody({ ...req('opus'), ttl: '1h' }) as any;
+    expect(b.system[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
+    expect(b.cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
+    const sse = [
+      { type: 'message_start', message: { usage: { input_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 1000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 1000 }, output_tokens: 1 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'hi' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } },
+      { type: 'message_stop' },
+    ].map((d) => `event: ${d.type}\ndata: ${JSON.stringify(d)}\n\n`).join('');
+    const usage = done(await all(parseAnthropic(streamFromString(sse, 50))))!.usage;
+    expect(usage).toMatchObject({ uncached: 3, cacheWrite: 1000, cacheWrite1h: 1000, output: 2 });
+    const opus = resolveModel('opus');
+    const hour = costUsd(opus, { uncached: 0, cacheRead: 0, cacheWrite: 1_000_000, cacheWrite1h: 1_000_000, output: 0 });
+    const five = costUsd(opus, { uncached: 0, cacheRead: 0, cacheWrite: 1_000_000, output: 0 });
+    expect(hour).toBeCloseTo(2 * opus.price.input);
+    expect(five).toBeCloseTo(opus.price.cacheWrite);
+  });
+
   test('anthropic: a per-message effort change is an empty system message, sent with its beta header', () => {
     const raised: Message[] = [...history, { role: 'effort', effort: 'high' }];
     const b = anthropicBody(req('opus', raised)) as any;

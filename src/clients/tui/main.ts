@@ -279,7 +279,8 @@ export class CediaTui {
     const { goal: _, ...args } = this.args;
     try {
       const result = await this.run(
-        { ...args, ...(this.goal ? { goal: this.goal } : {}), prompt, outputFormat: 'stream-json', ...(this.model ? { model: this.model } : {}), ...(this.thread ? { thread: this.thread } : {}), note: (t) => this.say(yellow(t.trimEnd())), signal },
+        // The owner may think for minutes between prompts here, so the writer's prefix is cached for an hour.
+        { ...args, cacheTtl: args.cacheTtl ?? '1h', ...(this.goal ? { goal: this.goal } : {}), prompt, outputFormat: 'stream-json', ...(this.model ? { model: this.model } : {}), ...(this.thread ? { thread: this.thread } : {}), note: (t) => this.say(yellow(t.trimEnd())), signal },
         out,
       );
       this.done(result);

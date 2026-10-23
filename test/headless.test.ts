@@ -60,6 +60,11 @@ describe('cedia -p (offline, faux)', () => {
     expect(bad.err).toContain('not a PNG, JPEG, GIF or WebP image');
   });
 
+  test('--cache-ttl takes 5m or 1h', () => {
+    expect(cedia([reply('ok')], ['-p', 'x', '--cache-ttl', '1h']).code).toBe(0);
+    expect(cedia([reply('ok')], ['-p', 'x', '--cache-ttl', '2h']).err).toContain('--cache-ttl must be 5m or 1h');
+  });
+
   test('auto is read-only without the sandbox; --permission workspace lets a command write', () => {
     const script = [call('c1', 'echo hi > out.txt'), reply('done')];
     const ro = cedia(script, ['-p', 'write it', '--output-format', 'json', '--sandbox', 'off']);

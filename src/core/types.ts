@@ -12,8 +12,9 @@ export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 // Lowest first.
 export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
-// Disjoint counts: total input = uncached + cacheRead + cacheWrite.
-export type Usage = { uncached: number; cacheRead: number; cacheWrite: number; output: number; reasoning?: number };
+// Disjoint counts: total input = uncached + cacheRead + cacheWrite. cacheWrite1h is the part of cacheWrite written
+// to last an hour, which Anthropic bills at twice the input price rather than 1.25 times.
+export type Usage = { uncached: number; cacheRead: number; cacheWrite: number; cacheWrite1h?: number; output: number; reasoning?: number };
 export const ZERO_USAGE: Usage = { uncached: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
 
 // 'compaction': the reply to a compaction request, which holds the summary block and nothing else.
@@ -278,6 +279,7 @@ export function addUsage(a: Usage, b: Usage): Usage {
     uncached: a.uncached + b.uncached,
     cacheRead: a.cacheRead + b.cacheRead,
     cacheWrite: a.cacheWrite + b.cacheWrite,
+    cacheWrite1h: (a.cacheWrite1h ?? 0) + (b.cacheWrite1h ?? 0) || undefined,
     output: a.output + b.output,
     reasoning: (a.reasoning ?? 0) + (b.reasoning ?? 0) || undefined,
   };

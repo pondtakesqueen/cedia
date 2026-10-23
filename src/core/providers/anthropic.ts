@@ -129,6 +129,8 @@ export async function* parseAnthropic(body: ReadableStream<Uint8Array>): AsyncGe
     if (n('input_tokens') !== undefined) usage.uncached = n('input_tokens')!;
     if (n('cache_read_input_tokens') !== undefined) usage.cacheRead = n('cache_read_input_tokens')!;
     if (n('cache_creation_input_tokens') !== undefined) usage.cacheWrite = n('cache_creation_input_tokens')!;
+    const hour = (u.cache_creation as Record<string, number | undefined> | undefined)?.ephemeral_1h_input_tokens;
+    if (hour) usage.cacheWrite1h = hour;
     if (n('output_tokens') !== undefined) usage.output = n('output_tokens')!;
     // A compaction call reports zero at the top level and its real usage per iteration.
     if (Array.isArray(u.iterations) && u.iterations.length) {
@@ -225,8 +227,9 @@ export function anthropicProvider(fetcher?: Fetcher): Provider {
       const res = await post(req.model.url, p.headers(req), { ...p.body(req), max_tokens: 0, stream: false }, signal, fetcher);
       if (!res.ok) return res;
       try {
-        const u = ((await new Response(res.body).json()) as { usage?: Record<string, number | undefined> }).usage ?? {};
-        return { ok: true, usage: { uncached: u.input_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0, output: u.output_tokens ?? 0 } };
+        const u = ((await new Response(res.body).json()) as { usage?: Record<string, any> }).usage ?? {};
+        const hour = u.cache_creation?.ephemeral_1h_input_tokens;
+        return { ok: true, usage: { uncached: u.input_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0, ...(hour ? { cacheWrite1h: hour } : {}), output: u.output_tokens ?? 0 } };
       } catch (e) {
         return { ok: false, error: { code: 'network', message: `keep-alive response: ${(e as Error).message}` } };
       }
