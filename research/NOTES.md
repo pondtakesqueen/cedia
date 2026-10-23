@@ -192,3 +192,20 @@ Routing, probed the same day: OpenRouter's zero-retention endpoints for Haiku 5.
 ## Blind review of the same-model runs (2026-10-23)
 
 Pass rate cannot separate cedia from Claude Code on the hard tasks (every run passed the hidden tests), so the 20 Haiku 5.5 runs above (cedia, and Claude Code at `--effort low`) were paired by task and run, and Opus at medium effort in Claude Code (read-only) judged each pair's diffs blind: correctness beyond the tests, quality, scope and tests added, 1 to 10 each, and a winner. Each pair was judged twice with the sides swapped; a win counts only when both orders agree. Result: cedia 3 wins, Claude Code 3, ties 4. Mean scores, cedia against Claude Code: correctness 7.75 / 8.00, quality 7.40 / 7.80, scope 9.00 / 8.95, tests 5.65 / 6.15, overall 7.45 / 7.72. On one model the quality of the work is at parity within the noise of ten pairs, with Claude Code a little ahead on the tests it adds. The judge's findings were real defects the hidden tests missed on both sides: cedia's memoizer counted a call settling as a use for recency (hard-memo-async), Claude Code's pool left its abort listener on a shared signal (hard-pool) and its shell splitter misread `FOO="a b" rm` (hard-shell-split). Diffs were recovered from cedia's shadow snapshots and by replaying Claude Code's transcripts; a first pass whose replay dropped some of Claude Code's added tests was discarded. Since then `evals/run.ts` keeps each run's diff in its result.
+
+## The owner's workflow, Opus 5.5 with Haiku 5.5: cedia against Claude Code (2026-10-23)
+
+Six tasks (the five hard tasks above and hard-injection), on the Anthropic API for cedia and the owner's subscription for Claude Code (`claude -p --model opus`, `CLAUDE_CODE_SUBAGENT_MODEL=haiku`). Claude Code never spawned a subagent, so in practice Opus wrote every change there. Every arm passed every run with no false done, and none followed the injected instructions.
+
+| arm | runs | API $ per pass | time | turns | cache hit | blind review (cedia : CC : tie) | overall cedia / CC |
+|---|---|---|---|---|---|---|---|
+| cedia, Opus plan and review on the API, Haiku writer | 12 | 0.185 | 118 s | 12.9 | 79.5% | 2 : 9 : 1 | 7.73 / 7.85 |
+| same, plan and review pinned at medium | 6 | 0.194 | 102 s | 13.3 | 78.0% | 1 : 4 : 1 | 7.12 / 7.60 |
+| cedia, plan and review in Claude Code (`--plan claude-code --review claude-code`), Haiku writer | 6 | 0.0068 | 131 s | 7.2 (writer) | 85.4% (writer) | 1 : 2 : 3 | 7.46 / 7.42 |
+| Claude Code, Opus | 12 | (0.253 notional) | 64 s | 4.8 | 90.6% | | |
+
+- On the API, Opus was 97% of cedia's bill, and output was most of each step: 76% of the plan's cost and 62% of the review's. Pinning those steps at medium changed nothing (3.2k output tokens per step either way): medium is already Opus 5.5's API default. So no change shipped.
+- With plan and review in the owner's own Claude Code, the quality of the work matched Claude Code's and the API spend fell 28 times, to Haiku's alone. It took twice Claude Code's time.
+- With Opus writing in Claude Code and Haiku writing in cedia, Claude Code won most pairs: a plan and a review by Opus do not make up for the writer. On one model (above) the two harnesses were at parity.
+- Where the judge found cedia's work weaker, across every round: the tests it adds (Claude Code covered each chunk boundary and wrote tests that do not depend on time), and edge cases in security-relevant parsers (`rm>/dev/null`, `"$(rm …)"` inside double quotes in hard-shell-split). Where Claude Code's was weaker: twice on hard-redact-bugs its rule stopped redacting camelCase names such as `secretKey`.
+- Haiku sent the edit tool's fields at the top level 16 times and a broken `edits` string 4 times; cedia's input repair fixed each without a turn.
