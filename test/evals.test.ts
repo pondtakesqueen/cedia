@@ -145,6 +145,11 @@ describe("evals runner", () => {
       expect(r).toMatchObject({ passed: true, claimedDone: true, falseDone: false, refusedClaim: false, infraError: false, reported: { subtype: "success" } });
       expect(r.ledger.map((l) => l.kind)).toEqual(["rollout", "session"]);
       expect(r.tampered).toBeUndefined();
+      // The run's changes against the task's files, with paths relative to the workspace.
+      expect(r.diff).toContain("--- a/f.txt");
+      expect(r.diff).toContain("+++ b/f.txt");
+      expect(r.diff).toContain("-bad\n+good");
+      expect(r.diff).not.toContain(tmpdir());
       // The largest context one reply saw comes back, the measure handoff and sub-threads are meant to keep down.
       expect(r.reported.peakContext).toBeGreaterThan(0);
 
@@ -152,6 +157,8 @@ describe("evals runner", () => {
       writeFileSync(script, JSON.stringify([call("c1", "echo pass > t.test.ts"), { blocks: [{ type: "text", text: "fixed" }] }]));
       const cheat = await runTask({ id: "t2", category: "c", prompt: "x", setup: { "t.test.ts": "fail\n" }, verify: "grep -q pass t.test.ts" }, "cedia", "faux");
       expect(cheat).toMatchObject({ passed: false, tampered: ["t.test.ts"] });
+      // The diff is taken before the task's tests go back, so it shows the edit.
+      expect(cheat.diff).toContain("+pass");
     } finally {
       delete process.env.CEDIA_FAUX_SCRIPT;
       delete process.env.CEDIA_SANDBOX;

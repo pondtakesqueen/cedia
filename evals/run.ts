@@ -94,7 +94,19 @@ export type Result = {
   falseDone: boolean;
   // Test files from the task that the agent changed; they are restored before verify.
   tampered?: string[];
+  // What the run changed against the task's files, as `diff -ruN` gives it (cut at MAX_DIFF), for a review of the
+  // work beyond pass and fail.
+  diff?: string;
 };
+
+export const MAX_DIFF = 100_000;
+
+// The run's changes against the task's starting files: everything but dependencies and git's own files.
+export function workDiff(base: string, cwd: string): string {
+  const d = spawnSync("diff", ["-ruN", "--exclude=node_modules", "--exclude=.git", base, cwd], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const text = (d.stdout ?? "").replaceAll(base + "/", "a/").replaceAll(cwd + "/", "b/");
+  return text.length > MAX_DIFF ? `${text.slice(0, MAX_DIFF)}\n[diff cut at ${MAX_DIFF} characters]\n` : text;
+}
 
 type Invocation = { bin: string; args: string[]; env?: Record<string, string> };
 
@@ -261,12 +273,15 @@ export async function runTask(task: Task, harness: string, model: string | null,
   if (!make) throw new Error(`unknown harness: ${harness}`);
   if (task.unavailable) throw new Error(`${task.id}: ${task.unavailable}`);
   const cwd = mkdtempSync(join(tmpdir(), `cedia-eval-${task.id}-`));
+  // The starting files again, outside the workspace, to diff the run's changes against.
+  const base = mkdtempSync(join(tmpdir(), `cedia-eval-base-${task.id}-`));
   try {
-    for (const [path, content] of Object.entries(task.setup ?? {})) {
-      const full = join(cwd, path);
-      mkdirSync(dirname(full), { recursive: true });
-      writeFileSync(full, content);
-    }
+    for (const dir of [cwd, base])
+      for (const [path, content] of Object.entries(task.setup ?? {})) {
+        const full = join(dir, path);
+        mkdirSync(dirname(full), { recursive: true });
+        writeFileSync(full, content);
+      }
     for (const path of task.executable ?? []) chmodSync(join(cwd, path), 0o755);
     // A repo task runs this repository's own code, so it borrows the installed dependencies.
     if (task.repo && existsSync(join(REPO_ROOT, "node_modules"))) symlinkSync(join(REPO_ROOT, "node_modules"), join(cwd, "node_modules"));
@@ -284,6 +299,8 @@ export async function runTask(task: Task, harness: string, model: string | null,
     // cedia's success only means the run ended normally; a run that reports it could not finish is not a claim.
     const claimedDone = harness === "cedia" && parsed ? reported.subtype === "success" && claimsDone(text) : claimsDone(text);
     const infraError = providerFailed(reported.subtype, reported.tokens?.input ?? 0, text);
+    // Before verify puts the task's tests back and lays the hidden ones down.
+    const diff = workDiff(base, cwd);
 
     // Tests that came with the task are put back before verify, so editing them cannot pass the task.
     const tampered: string[] = [];
@@ -341,9 +358,11 @@ export async function runTask(task: Task, harness: string, model: string | null,
       passed,
       falseDone: claimedDone && !passed,
       ...(tampered.length ? { tampered } : {}),
+      ...(diff ? { diff } : {}),
     };
   } finally {
     rmSync(cwd, { recursive: true, force: true });
+    rmSync(base, { recursive: true, force: true });
   }
 }
 
