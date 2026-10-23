@@ -5,7 +5,7 @@ description: Use when proving cedia, the headless Bun CLI coding harness, by lau
 
 # Verify cedia
 
-cedia is a headless CLI. A user runs `bin/cedia` from this repo. This checkout has no TUI. `src/clients` contains `headless/` only. `SPEC.md` schedules the TUI for stage 3.
+cedia is a CLI. A user runs `bin/cedia` from this repo. With no prompt, when stdin and stdout are both terminals, `src/cli.ts` starts the TUI in `src/clients/tui/main.ts`. This skill drives headless runs. A run with no prompt and no terminal prints usage and exits 2.
 
 Drive cedia with `.cursor/skills/verify-cedia/scripts/control-cedia`. The script finds the repo from its own path. Each launch creates an empty work directory and an empty `CEDIA_HOME` under `/tmp/cedia-verify-<id>`. Two launches can run side by side because the ids differ. Never point a run at `~/.cedia`.
 
@@ -25,7 +25,7 @@ eval "$(.cursor/skills/verify-cedia/scripts/control-cedia launch)"
 
 Ready means both of these, checked by launch itself.
 
-- `bin/cedia -h` exits 0 and its first line is `usage: cedia -p "<prompt>" [options]   (prompt may also come on stdin)`.
+- `bin/cedia -h` exits 0 and its first line is `usage: cedia [options]                 the TUI, at a terminal: each prompt is a turn of one thread`.
 - `cedia threads` against the empty home prints `no threads in this project` and exits 0.
 
 Launch writes `launch.help.txt` and `launch.threads.txt` under `$CEDIA_VERIFY_EVIDENCE`, then prints `export` assignments. `eval` of that output exports them for later commands.

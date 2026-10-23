@@ -37,7 +37,7 @@ tid=$(sed -n 's/^cedia thread: \(t-[0-9a-f]\{8\}\).*/\1/p' "$CEDIA_VERIFY_EVIDEN
 
 - **List.** Run `control-cedia run --name thread-list -- threads`. Exit code `0`. Stdout contains the id, `done`, and `build the API`.
 - **Show.** Run `control-cedia run --name thread-show -- threads show "$tid"`. Exit code `0`. Stdout contains the id, `done`, the task, `faux/scripted`, and `result:` then `A done`.
-- **Send.** Run `control-cedia run --name thread-send -- threads send "$tid" "also log every request"`. Exit code `0`. Stdout is `sent to <id>`. Show the thread again. Stdout contains `(not seen yet)` and `also log every request`.
+- **Send.** Run `control-cedia run --name thread-send -- threads send "$tid" "also log every request"`. Exit code `0`. Stdout is `sent to <id> as <uuid>`. Show the thread again. Stdout contains `(not seen yet)` and `also log every request`.
 - **Archive.** Run `control-cedia run --name thread-archive -- threads archive "$tid"`. Exit code `0`. Stdout is `archived <id>`. A following `threads` list does not contain that id. When no other thread is open, the list prints `no threads in this project`.
 - **List archived.** Run `control-cedia run --name thread-all -- threads list --all`. Exit code `0`. Stdout contains `(archived)` and the id.
 - **Unarchive.** Run `control-cedia run --name thread-unarchive -- threads unarchive "$tid"`. Exit code `0`. Stdout is `unarchived <id>`. The default list shows the id again.

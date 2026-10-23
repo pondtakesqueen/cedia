@@ -4,7 +4,7 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd "$script_dir/../../../.." && pwd)
 bin="$repo/bin/cedia"
-usage_line='usage: cedia -p "<prompt>" [options]   (prompt may also come on stdin)'
+usage_line='usage: cedia [options]                 the TUI, at a terminal: each prompt is a turn of one thread'
 
 die() {
   printf '%s\n' "$*" >&2
