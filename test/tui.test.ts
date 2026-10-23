@@ -78,13 +78,16 @@ describe('the TUI (offline, faux)', () => {
     t.script([call('c1', 'echo new > keep.txt'), reply('I changed **keep.txt**.')]);
     t.type('change keep.txt');
     expect(t.a.statusLine()).toContain('working');
+    expect(plain(t.a.activity.text)).toMatch(/ (starting|recording the working tree|waiting for the model|running bash|writing).* · [\d.]+s/);
     await t.a.idle();
+    expect(t.a.activity.text).toBe('');
     const first = t.shown();
     expect(first).toContain('› change keep.txt');
     expect(first).toContain('● bash echo new > keep.txt');
     expect(first).toContain('changed keep.txt');
     expect(first).toContain('I changed keep.txt.');
     expect(first).toMatch(/done · 2 turns · \$/);
+    expect(first).toMatch(/done · 2 turns · \$[\d.]+ · [\d.]+s · /);
     expect(first).toContain('cedia receipt: changed keep.txt');
     const thread = t.a.thread!;
     expect(thread).toMatch(/^t-/);

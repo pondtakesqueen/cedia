@@ -8,6 +8,10 @@ import { projectSlug as slugOf } from '../session/log.ts';
 // GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE all point at cedia's copy, and user/system config is ignored.
 export type Snapshots = {
   take(): string | undefined;
+  // Records the working tree into the store without blocking, so the next take only adds what changed since: a
+  // client calls it when it opens, since a large repository's first take can run past SLOW_MS and turn snapshots
+  // off for that run.
+  warm?(): Promise<void>;
   diff(from: string, to: string): string[];
   patch(from: string, to: string, opts?: { context?: number }): string;
   restore(tree: string): void;
@@ -92,6 +96,10 @@ export function openSnapshots(cwd: string, gitDir: string, exclude: string[] = [
       } catch {
         return undefined;
       }
+    },
+    async warm() {
+      const p = Bun.spawn(['git', ...config, 'add', '-A', '--ignore-errors', '.'], { cwd: root, env, stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+      await p.exited;
     },
     diff(from, to) {
       if (from === to) return [];

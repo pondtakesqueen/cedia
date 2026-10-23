@@ -27,7 +27,7 @@ import { openThreadTool } from '../../core/tools/open.ts';
 import { scheduleTool } from '../../core/tools/schedule.ts';
 import { ScheduleStore, schedulesPath } from '../../core/project/schedules.ts';
 import { resolveProfile, withProfile } from '../../core/profiles.ts';
-import { planParts, planPrompt, withParts, withPlan, type Part, type Split } from '../../core/roles.ts';
+import { needsPlan, planParts, planPrompt, TRIAGE_SYSTEM, triagePrompt, withParts, withPlan, type Part, type Split } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { lspServers, openDiagnoser } from '../../core/lsp/diagnose.ts';
 import { bashTool, scrubbedEnv } from '../../core/tools/bash.ts';
@@ -103,6 +103,9 @@ export type HeadlessArgs = {
   // How long the writer's cached prefix lasts on the Anthropic wire: 5m (the API's default) or 1h, for a client
   // where the owner may think for longer between prompts (the TUI). Plan, review and sub-threads stay at 5m.
   cacheTtl?: string;
+  // auto (default): the writer's model first says whether the message is work a plan helps (a greeting or a
+  // question is not); always: every prompt is planned; never: none is.
+  planWhen?: string;
   sandbox?: string;
   allowDomains?: string[];
   // For a client that owns the terminal (the TUI): where cedia's own notes go instead of stderr, and a stop.
@@ -207,6 +210,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const lspSetting = loadLsp(args.lsp);
   const askOn = loadAsk(args.ask);
   const todoOn = loadTodo(args.todo);
+  const planWhen = args.planWhen ?? 'auto';
+  if (planWhen !== 'auto' && planWhen !== 'always' && planWhen !== 'never') throw new Error(`--plan-when must be auto, always or never, not ${planWhen}`);
   const cacheTtl = args.cacheTtl ?? '5m';
   if (cacheTtl !== '5m' && cacheTtl !== '1h') throw new Error(`--cache-ttl must be 5m or 1h, not ${cacheTtl}`);
   const model = roles.code;
@@ -392,7 +397,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     inherited?: string[];
     note?: string;
     images?: ImageRef[];
-    role?: 'plan' | 'review' | 'explore' | 'goal' | 'advisor' | 'classifier';
+    role?: 'plan' | 'review' | 'explore' | 'goal' | 'advisor' | 'classifier' | 'triage';
     child?: { thread?: string; handoff?: boolean; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots; wrap: (command: string) => Promise<string> } };
     // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
     seed?: { from: SessionLog; compaction: NonNullable<HeadlessResult['compaction']> };
@@ -428,7 +433,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const browserTools = browser ? [browser.tool] : header?.tools.some((d) => d.name === BROWSER_TOOL) ? [browserStub] : [];
     const extra = [...(spawnOn ? [spawnHere] : []), ...((askOn || policy.plan) && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened)] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...browserTools, ...mcpTools];
     // The advisor and the classifier answer in one reply, with no tools, in a session of their own.
-    const helper = opts.role === 'advisor' || opts.role === 'classifier';
+    const helper = opts.role === 'advisor' || opts.role === 'classifier' || opts.role === 'triage';
     const tools = helper ? [] : reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
     // A work sub-thread in a worktree works there: its own directory, environment line and snapshots.
     const place = child?.place;
@@ -440,7 +445,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         model: m,
         // Plan and review get no write tools, and their policy is read-only whatever the run's mode.
         tools,
-        system: opts.role === 'advisor' ? ADVISOR_SYSTEM : opts.role === 'classifier' ? CLASSIFIER_SYSTEM : systemFor(m),
+        system: opts.role === 'advisor' ? ADVISOR_SYSTEM : opts.role === 'classifier' ? CLASSIFIER_SYSTEM : opts.role === 'triage' ? TRIAGE_SYSTEM : systemFor(m),
         ...(helper ? {} : { preamble: reviewer ? reviewPreamble : opts.note ? `${place?.preamble ?? basePreamble}\n\n${opts.note}` : (place?.preamble ?? basePreamble) }),
         cwd: place?.cwd ?? args.cwd,
         ...(opts.images?.length ? { images: opts.images } : {}),
@@ -515,6 +520,11 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const r = await run(choice.model, log, prompt, { role });
     if (r.subtype !== 'success') say(`cedia: the ${role} step on ${choice.model.ref} ended with ${r.subtype}\n`);
     return { ok: r.subtype === 'success', text: r.result, step: { model: choice.model.ref, via: 'cedia', sessionId: log.id, costUsd: r.costUsd } };
+  };
+  // True unless the writer's model, reading the message alone, finds it needs no plan; a failed triage plans.
+  const triage = async (): Promise<boolean> => {
+    const r = await run(model, openLog(), triagePrompt(args.prompt), { role: 'triage' });
+    return r.subtype !== 'success' || needsPlan(r.result);
   };
   // A thread that asked the owner a question goes on with their answer, framed as one.
   let task = resumed?.question ? answerPrompt(resumed.question.question, args.prompt) : (skillCommand(args.prompt, skills) ?? args.prompt);
@@ -818,11 +828,15 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     let plan: Step | undefined;
     // What the plan's parts changed before the writer started.
     let inherited: string[] = [];
-    if (roles.plan) {
+    // Triage (core/roles.ts): the writer's model says first whether the message is work a plan helps.
+    const wantsPlan = planWhen === 'never' ? false : roles.plan && planWhen === 'auto' && !resumed?.question ? await triage() : true;
+    if (roles.plan && !wantsPlan) say('cedia: no plan for this one\n');
+    if (roles.plan && wantsPlan) {
       // With spawn on, the planner may split the work into parts that cedia hands to work sub-threads before the
       // writer starts: what to delegate, and to which model, is the stronger model's call (no DeepSeek run ever
       // delegated on its own).
       const split: Split | undefined = !spawnOn || policy.plan || policy.mode === 'read-only' ? undefined : { mode: spawnMode === 'worktree' ? 'parallel' : 'alone', writer: model.ref, workers: roles.workers.filter((w) => w.ref !== model.ref).map((w) => w.ref) };
+      say(`cedia: planning with ${roles.plan.via === 'claude-code' ? `claude-code:${roles.plan.model}@${roles.plan.effort}` : roles.plan.model.ref}\n`);
       const p = await side('plan', roles.plan, planPrompt(task, split));
       if (p.ok && p.text.trim()) {
         task = withPlan(task, p.text.trim(), p.step.model);
