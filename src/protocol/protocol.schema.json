@@ -79,6 +79,9 @@
             },
             "redacted": {
               "type": "boolean"
+            },
+            "ms": {
+              "type": "number"
             }
           },
           "required": [
@@ -1548,6 +1551,9 @@
             },
             "usage": {
               "$ref": "#/definitions/Usage"
+            },
+            "costUsd": {
+              "type": "number"
             },
             "id": {
               "$ref": "#/definitions/EventId"

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Assembler } from '../src/core/providers/assemble.ts';
 import { anthropicBody, anthropicProvider, EFFORT_BETA, parseAnthropic } from '../src/core/providers/anthropic.ts';
 import { costUsd, deepseekOffPeak, FALLBACKS, resolveModel } from '../src/core/providers/catalog.ts';
 import { chatBody, chatProvider, chatUsage, parseChat } from '../src/core/providers/chat.ts';
@@ -30,13 +31,30 @@ describe('sse reader', () => {
   });
 });
 
+describe('assembler', () => {
+  test('a thinking block carries how long it took, from its first delta to its end', async () => {
+    const a = new Assembler();
+    a.thinking('0', 'Look at a.');
+    await Bun.sleep(40);
+    a.thinking('0', ' Then b.');
+    a.end('0');
+    await Bun.sleep(40);
+    const [b] = a.finish();
+    expect(b).toMatchObject({ type: 'thinking', text: 'Look at a. Then b.' });
+    const ms = (b as { ms: number }).ms;
+    expect(ms).toBeGreaterThanOrEqual(35);
+    expect(ms).toBeLessThan(80);
+    expect(b).not.toHaveProperty('from');
+  });
+});
+
 describe('anthropic messages', () => {
   test('thinking with signature, text, two tool calls, usage', async () => {
     const evs = await all(parseAnthropic(fixture('anthropic-tools.sse')));
     const d = done(evs)!;
     expect(d.stop).toBe('tool_use');
     expect(d.blocks).toEqual([
-      { type: 'thinking', text: 'Check the file.', opaque: 'sig-abc' },
+      { type: 'thinking', text: 'Check the file.', opaque: 'sig-abc', ms: expect.any(Number) },
       { type: 'text', text: 'Reading both.' },
       { type: 'tool_use', id: 'toolu_1', name: 'read', input: { path: 'a.txt' } },
       { type: 'tool_use', id: 'toolu_2', name: 'read', input: { path: 'b.txt' } },
@@ -63,7 +81,7 @@ describe('chat completions', () => {
     const d = done(await all(parseChat(fixture('chat-tools.sse'))))!;
     expect(d.stop).toBe('tool_use');
     expect(d.blocks).toEqual([
-      { type: 'thinking', text: 'Need two files.' },
+      { type: 'thinking', text: 'Need two files.', ms: expect.any(Number) },
       { type: 'text', text: 'Reading.' },
       { type: 'tool_use', id: 'call_a', name: 'read', input: { path: 'a.txt' } },
       { type: 'tool_use', id: 'call_b', name: 'read', input: { path: 'b.txt' } },

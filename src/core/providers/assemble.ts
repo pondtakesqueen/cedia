@@ -2,7 +2,7 @@ import type { AssistantBlock, JsonObject, StreamEvent } from '../types.ts';
 
 type Open =
   | { type: 'text'; text: string; sig?: string }
-  | { type: 'thinking'; text: string; opaque?: string; redacted?: boolean }
+  | { type: 'thinking'; text: string; opaque?: string; redacted?: boolean; ms?: number; from?: number }
   | { type: 'tool_use'; id: string; callId?: string; name: string; args: string };
 
 // Collects wire deltas into AssistantBlocks and the matching StreamEvents.
@@ -37,7 +37,7 @@ export class Assembler {
   thinking(key: string, delta: string, opts: { redacted?: boolean } = {}) {
     let i = this.byKey.get(key);
     if (i === undefined)
-      i = this.open(key, { type: 'thinking', text: '', ...(opts.redacted ? { redacted: true } : {}) }, { type: 'thinking_start', index: this.blocks.length });
+      i = this.open(key, { type: 'thinking', text: '', from: performance.now(), ...(opts.redacted ? { redacted: true } : {}) }, { type: 'thinking_start', index: this.blocks.length });
     const b = this.blocks[i]!;
     if (b.type !== 'thinking' || !delta) return;
     b.text += delta;
@@ -85,7 +85,9 @@ export class Assembler {
     const i = this.byKey.get(key);
     if (i === undefined || this.closed.has(i)) return;
     this.closed.add(i);
-    const t = this.blocks[i]!.type;
+    const b = this.blocks[i]!;
+    if (b.type === 'thinking') b.ms = thought(b);
+    const t = b.type;
     this.events.push({ type: t === 'text' ? 'text_end' : t === 'thinking' ? 'thinking_end' : 'toolcall_end', index: i });
   }
 
@@ -101,7 +103,10 @@ export class Assembler {
   finish(truncated = false): AssistantBlock[] {
     return this.blocks.flatMap((b, i): AssistantBlock[] => {
       if (b.type === 'text') return b.text || b.sig ? [b] : [];
-      if (b.type === 'thinking') return [b];
+      if (b.type === 'thinking') {
+        const { from: _, ...block } = b;
+        return [{ ...block, ms: b.ms ?? thought(b) }];
+      }
       const isLast = i === this.blocks.length - 1;
       const { input, error } = parseArgs(b.args);
       const inputError = truncated && isLast ? 'tool call was cut off by the output limit' : error;
@@ -109,6 +114,9 @@ export class Assembler {
     });
   }
 }
+
+// Whole milliseconds since a thinking block opened.
+const thought = (b: { from?: number }) => (b.from === undefined ? 0 : Math.round(performance.now() - b.from));
 
 export function parseArgs(args: string): { input: JsonObject; error?: string } {
   if (!args.trim()) return { input: {} };

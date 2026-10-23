@@ -23,7 +23,8 @@ export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'a
 // Opaque fields carry each wire's reasoning payload so it replays byte for byte to the same wire.
 export type AssistantBlock =
   | { type: 'text'; text: string; sig?: string }
-  | { type: 'thinking'; text: string; opaque?: string; redacted?: boolean }
+  // ms: how long the model spent on it, from its first delta to its end, for a client to show.
+  | { type: 'thinking'; text: string; opaque?: string; redacted?: boolean; ms?: number }
   | { type: 'tool_use'; id: string; callId?: string; name: string; input: JsonObject; inputError?: string }
   | CompactionBlock;
 
@@ -64,7 +65,8 @@ type EventBody =
     }
   // ttftMs: until the provider starts streaming; ms: the whole attempt.
   | { kind: 'attempt'; requestId: EventId; n: number; error?: AttemptError; ttftMs?: number; ms?: number }
-  | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage }
+  // costUsd: what this reply cost at the model's price when it ran, so a client can show a run's spend as it grows.
+  | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; costUsd?: number }
   // The request's body sent again with no output while a tool runs long, so its cached prefix does not expire
   // (core/loop/run.ts). Nothing reaches the model's context; it is logged for its cost.
   | { kind: 'keepalive'; requestId: EventId; usage?: Usage; error?: AttemptError; ms: number }
