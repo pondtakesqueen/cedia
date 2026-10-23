@@ -264,6 +264,25 @@ describe('http', () => {
     expect(FALLBACKS[or.ref]).toBe('anthropic/claude-haiku-5-5');
   });
 
+  test('Haiku through OpenRouter: the Messages wire with its cache breakpoints, pinned to zero-retention endpoints', () => {
+    const or = resolveModel('haiku-or');
+    expect(or).toMatchObject({ ref: 'openrouter/claude-haiku-5-5', id: 'anthropic/claude-haiku-5.5', wire: 'anthropic-messages', url: 'https://openrouter.ai/api/v1/messages', dataPolicy: 'zdr', defaultEffort: 'low' });
+    expect(or.price).toEqual(resolveModel('anthropic/claude-haiku-5-5').price);
+    const api = resolveModel('anthropic/claude-haiku-5-5');
+    const b = anthropicBody({ ...req('haiku'), model: or }) as any;
+    expect(b).toMatchObject({ model: 'anthropic/claude-haiku-5.5', provider: { order: ['amazon-bedrock'], allow_fallbacks: false, zdr: true } });
+    const plain = anthropicBody({ ...req('haiku'), model: api }) as any;
+    expect(b.system).toEqual(plain.system);
+    // The moving breakpoint is on the newest block instead of the top level; every other byte is the same.
+    expect(b.cache_control).toBeUndefined();
+    expect(plain.cache_control).toEqual({ type: 'ephemeral' });
+    const marked = b.messages.flatMap((m: any) => m.content).filter((c: any) => c.cache_control);
+    expect(marked).toEqual([b.messages.at(-1).content.at(-1)]);
+    const strip = (ms: any[]) => JSON.stringify(ms).replaceAll(',"cache_control":{"type":"ephemeral"}', '');
+    expect(strip(b.messages)).toBe(JSON.stringify(plain.messages));
+    expect((anthropicBody({ ...req('haiku'), model: api }) as any).provider).toBeUndefined();
+  });
+
   test("DeepSeek's own API counts as training on prompts; the quota fallback is Haiku on the Claude API", () => {
     const api = resolveModel('deepseek-api');
     expect(api).toMatchObject({ id: 'deepseek-v4.1-flash', url: 'https://api.deepseek.com/chat/completions', dataPolicy: 'trains', auth: { env: 'DEEPSEEK_API_KEY' } });

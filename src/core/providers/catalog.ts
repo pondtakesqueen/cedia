@@ -12,6 +12,8 @@ const GO_AUTH = { env: 'OPENCODE_API_KEY', scheme: 'bearer' } as const;
 const DEEPSEEK = 'https://api.deepseek.com/chat/completions';
 const DEEPSEEK_AUTH = { env: 'DEEPSEEK_API_KEY', scheme: 'bearer' } as const;
 const OPENROUTER = 'https://openrouter.ai/api/v1/chat/completions';
+// OpenRouter's Anthropic Messages endpoint: the same body as the Claude API, cache_control and usage fields included.
+const OPENROUTER_MESSAGES = 'https://openrouter.ai/api/v1/messages';
 const OPENROUTER_AUTH = { env: 'OPENROUTER_API_KEY', scheme: 'bearer' } as const;
 
 const claudeCaps: ModelCapabilities = {
@@ -144,6 +146,25 @@ export const CATALOG: ModelSpec[] = [
     prompt: DEEPSEEK_PROMPT,
     caps: chatCaps,
   },
+  // Haiku 5.5 through OpenRouter's Messages endpoint, so a run on it takes the same wire as on the Claude API or Go
+  // and the harnesses can be compared on one model. OpenRouter's zero-retention endpoints for it are Google Vertex
+  // and Amazon Bedrock (Anthropic's own is not on that list, 2026-10-23). Probed on a growing conversation
+  // (2026-10-23): Vertex missed about one request in four at 2-3k tokens and rewrote the whole prefix; Bedrock never
+  // missed but did not move the top-level breakpoint past the system prompt, so it carries one on the newest block.
+  {
+    ref: 'openrouter/claude-haiku-5-5',
+    id: 'anthropic/claude-haiku-5.5',
+    wire: 'anthropic-messages',
+    url: OPENROUTER_MESSAGES,
+    auth: OPENROUTER_AUTH,
+    maxOutput: 64_000,
+    defaultEffort: 'low',
+    price: haikuPrice,
+    dataPolicy: 'zdr',
+    body: { provider: { order: ['amazon-bedrock'], allow_fallbacks: false, zdr: true, data_collection: 'deny' } },
+    cacheTail: true,
+    caps: claudeCaps,
+  },
 ];
 
 export const FAUX_MODEL: ModelSpec = {
@@ -172,6 +193,7 @@ export const ALIASES: Record<string, string> = {
   deepseek: 'opencode-go/deepseek-v4.1-flash',
   'deepseek-api': 'deepseek/deepseek-v4.1-flash',
   'deepseek-or': 'openrouter/deepseek-v4.1-flash',
+  'haiku-or': 'openrouter/claude-haiku-5-5',
   'deepseek-pro': 'opencode-go/deepseek-v4-pro',
   beam: 'opencode-go/beam-free',
   muse: 'opencode-go/muse-spark-1.3-contributor',
