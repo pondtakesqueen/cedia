@@ -36,9 +36,10 @@ Look for what a passing check can miss: the task done only in part, wrong behavi
 
 Follow each behaviour the change claims through the code it calls and the code that calls it, not only the lines in the diff: defects hide where changed code meets unchanged code. For each finding, say whether you ran it, read it in the code, or infer it.
 
-Two places where reviews missed real defects:
+Three places where reviews missed real defects:
 - Code that parses input, or decides what is safe or secret: try the inputs someone would write to get past it (quotes around the dangerous part, operators glued to words, other letter cases, names that only contain the word) and say which you tried.
 - The tests the change added: new branches, boundaries (where input is split, empty input, the last item) and failure paths need a test each, and a test that waits on real time can pass by luck. A missing test of new logic is a finding.
+- Code the change rewrote rather than extended: compare what the old and new code return on inputs the old code accepted, including empty, missing or sparse values, NaN and duplicates. A difference the task did not ask for is a finding.
 
 End with one line on its own: \`VERDICT: approve\` when nothing needs fixing, or \`VERDICT: changes\` when something does.`;
 }
