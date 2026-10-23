@@ -625,6 +625,12 @@
                   },
                   "costUsd": {
                     "type": "number"
+                  },
+                  "unmet": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
                   }
                 },
                 "required": [
@@ -636,6 +642,66 @@
                 ],
                 "additionalProperties": false
               }
+            },
+            "plan": {
+              "type": "object",
+              "properties": {
+                "criteria": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "text"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "sessionId": {
+                  "type": "string"
+                },
+                "costUsd": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "criteria",
+                "sessionId",
+                "costUsd"
+              ],
+              "additionalProperties": false
+            },
+            "strategy": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "sessionId": {
+                  "type": "string"
+                },
+                "costUsd": {
+                  "type": "number"
+                },
+                "round": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "text",
+                "sessionId",
+                "costUsd",
+                "round"
+              ],
+              "additionalProperties": false
             }
           },
           "required": [

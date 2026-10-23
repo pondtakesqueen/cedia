@@ -41,7 +41,7 @@ import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
 import { ADVISOR_SYSTEM, adviceOf, advicePrompt, adviceReminder, turnDigest } from '../../core/trust/advisor.ts';
 import { callText, CLASSIFIER_SYSTEM, classifyPrompt, MAX_INPUT, namedFiles, verdictOf, type Verdict } from '../../core/trust/classifier.ts';
 import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
-import { goalContinuePrompt, goalPrompt, MAX_GOAL_ROUNDS, parseGoal, type GoalRound } from '../../core/trust/goal.ts';
+import { goalContinuePrompt, goalPlanPrompt, goalPrompt, judgeWithPlan, MAX_GOAL_ROUNDS, parseCriteria, parseGoal, strategistPrompt, withCriteria, type GoalRound } from '../../core/trust/goal.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type JsonObject, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
 import { runClaudeCode } from './claude-code.ts';
 import { encode } from '../../protocol/index.ts';
@@ -102,6 +102,8 @@ export type HeadlessArgs = {
   // model ref; default the writer's model, in a fresh read-only session).
   goal?: string;
   goalJudge?: string;
+  // light (default): the judge alone; full: a planner's acceptance criteria first and a strategist on a stall.
+  goalMode?: string;
 };
 
 // Every run that changed files or ran checks ends with a receipt built from the ledger. A check another thread ran
@@ -248,6 +250,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   try {
     handoffAt = loadHandoffAt(model, args.handoffAt);
     goalJudge = args.goal ? (args.goalJudge ? resolveModel(args.goalJudge) : model) : undefined;
+    if (args.goalMode !== undefined && args.goalMode !== 'light' && args.goalMode !== 'full') throw new Error(`goal-mode must be light or full: ${args.goalMode}`);
   } catch (e) {
     await sandbox.close();
     throw e;
@@ -800,6 +803,19 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         plan = p.step;
       } else say('cedia: going on without a plan\n');
     }
+    // Full goal mode: the judge's model first turns the condition into acceptance criteria, which go with the task.
+    let goalPlan: NonNullable<HeadlessResult['goal']>['plan'];
+    if (args.goal && goalJudge && args.goalMode === 'full') {
+      const log = openLog();
+      if (store && threadId) store.append(threadId, { kind: 'session', sessionId: log.id, model: goalJudge.ref, role: 'goal', why: 'start', ...(log.path ? { path: log.path } : {}) });
+      const r = await run(goalJudge, log, goalPlanPrompt(args.goal, task), { role: 'goal' });
+      const criteria = r.subtype === 'success' ? parseCriteria(r.result) : [];
+      if (criteria.length) {
+        goalPlan = { criteria, sessionId: log.id, costUsd: r.costUsd };
+        task = withCriteria(task, criteria, goalJudge.ref);
+        say(`cedia goal: ${criteria.length} acceptance criteria from ${goalJudge.ref}\n`);
+      } else say('cedia goal: the planner gave no criteria; the judge holds the work to the goal alone\n');
+    }
     // A resumed thread goes on in its last session when the model is the same (its cache may still be warm) and
     // the provider still takes that session's history, otherwise in a new session that starts from where the
     // thread stopped.
@@ -876,20 +892,41 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     let goal: HeadlessResult['goal'];
     if (args.goal && goalJudge) {
       const rounds: GoalRound[] = [];
+      let strategy: NonNullable<HeadlessResult['goal']>['strategy'];
       while (result.subtype === 'success' && !ac.signal.aborted) {
         const log = openLog();
         if (store && threadId) store.append(threadId, { kind: 'session', sessionId: log.id, model: goalJudge.ref, role: 'goal', why: 'start', ...(log.path ? { path: log.path } : {}) });
+        // With criteria, the judge is told which held last round, so it rechecks those only where the change since
+        // touched them.
+        const prev = rounds.at(-1)?.unmet;
+        const held = goalPlan && prev ? goalPlan.criteria.map((c) => c.id).filter((id) => !prev.includes(id)) : undefined;
+        const plan = goalPlan ? { criteria: goalPlan.criteria, ...(held?.length ? { held } : {}) } : undefined;
         // The receipt of the whole run so far: a later round's own pass changed only part of it.
-        const r = await run(goalJudge, log, goalPrompt(args.goal, args.prompt, result.result, combine(parts, result, children).evidence, changesPatch()), { role: 'goal' });
-        const judged = r.subtype === 'success' ? parseGoal(r.result) : undefined;
-        rounds.push({ verdict: judged?.verdict ?? 'not_met', reason: judged?.reason ?? `the judge's session ended with ${r.subtype}`, judge: goalJudge.ref, sessionId: log.id, costUsd: r.costUsd });
+        const r = await run(goalJudge, log, goalPrompt(args.goal, args.prompt, result.result, combine(parts, result, children).evidence, changesPatch(), plan), { role: 'goal' });
+        const judged: { verdict: GoalRound['verdict']; reason: string; unmet?: string[] } | undefined = r.subtype === 'success' ? (goalPlan ? judgeWithPlan(r.result, goalPlan.criteria) : parseGoal(r.result)) : undefined;
+        const unmet = judged?.unmet ? { unmet: judged.unmet } : {};
+        rounds.push({ verdict: judged?.verdict ?? 'not_met', reason: judged?.reason ?? `the judge's session ended with ${r.subtype}`, judge: goalJudge.ref, sessionId: log.id, costUsd: r.costUsd, ...unmet });
         // A judge that could not finish says nothing about the work, so the writer is not sent back on it.
         if (!judged || judged.verdict !== 'not_met' || rounds.length > MAX_GOAL_ROUNDS) break;
+        // Full mode: the same criteria unmet two rounds in a row is a stall, and a strategist proposes one change
+        // of approach, once a run.
+        const [a, b] = rounds.slice(-2).map((x) => x.unmet?.join(',') ?? '');
+        let proposal: string | undefined;
+        if (goalPlan && !strategy && rounds.length >= 2 && a && a === b) {
+          const slog = openLog();
+          if (store && threadId) store.append(threadId, { kind: 'session', sessionId: slog.id, model: goalJudge.ref, role: 'goal', why: 'start', ...(slog.path ? { path: slog.path } : {}) });
+          const s = await run(goalJudge, slog, strategistPrompt(args.goal, goalPlan.criteria, rounds.map((x) => x.reason)), { role: 'goal' });
+          if (s.subtype === 'success' && s.result.trim()) {
+            proposal = s.result.trim();
+            strategy = { text: proposal, sessionId: slog.id, costUsd: s.costUsd, round: rounds.length };
+            say(`cedia goal: ${b} unmet two rounds in a row; a strategist proposes a change of approach\n`);
+          }
+        }
         say(`cedia goal: not met yet (round ${rounds.length}); the writer goes on with what the judge found missing\n`);
-        result = await recover(await write(writer.model, writer.log, goalContinuePrompt(args.goal, goalJudge.ref, judged.reason)));
+        result = await recover(await write(writer.model, writer.log, goalContinuePrompt(args.goal, goalJudge.ref, judged.reason, proposal)));
       }
       const last = rounds.at(-1);
-      goal = { condition: args.goal, verdict: last?.verdict ?? 'not_met', rounds };
+      goal = { condition: args.goal, verdict: last?.verdict ?? 'not_met', rounds, ...(goalPlan ? { plan: goalPlan } : {}), ...(strategy ? { strategy } : {}) };
     }
     const sessions = [...new Set(writerRuns.map((w) => w.log.id))];
     const classified = cls.calls ? { model: roles.classifier!.ref, via: 'cedia' as const, sessionId: cls.last ?? '', costUsd: cls.costUsd, calls: cls.calls, blocked: cls.blocked } : undefined;
