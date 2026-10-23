@@ -11,6 +11,8 @@ const GO = 'https://opencode.ai/inference/go';
 const GO_AUTH = { env: 'OPENCODE_API_KEY', scheme: 'bearer' } as const;
 const DEEPSEEK = 'https://api.deepseek.com/chat/completions';
 const DEEPSEEK_AUTH = { env: 'DEEPSEEK_API_KEY', scheme: 'bearer' } as const;
+const OPENROUTER = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_AUTH = { env: 'OPENROUTER_API_KEY', scheme: 'bearer' } as const;
 
 const claudeCaps: ModelCapabilities = {
   reasoning: 'anthropic-thinking',
@@ -113,6 +115,23 @@ export const CATALOG: ModelSpec[] = [
     dataPolicy: 'trains',
     caps: chatCaps,
   },
+  // The same model through OpenRouter, paid per token. OpenRouter serves it from about 30 endpoints with caches
+  // of their own, so a session left to its routing moved between them and read 24.5% from cache (hard-pool,
+  // 2026-10-22). It is pinned to Cloudflare's: on OpenRouter's list of zero-retention endpoints, not quantized
+  // to fp4, and 91.8% cache hits on the same task ($0.10/$0.60 per 1M, cache read $0.003, from the endpoint list).
+  // No fallback to another endpoint: one that is down fails the request, and the quota fallback takes over.
+  {
+    ref: 'openrouter/deepseek-v4.1-flash',
+    id: 'deepseek/deepseek-v4.1-flash-1017',
+    wire: 'chat-completions',
+    url: OPENROUTER,
+    auth: OPENROUTER_AUTH,
+    maxOutput: 32_000,
+    price: p(0.1, 0.6, 0.003),
+    dataPolicy: 'zdr',
+    body: { provider: { order: ['cloudflare'], allow_fallbacks: false, zdr: true, data_collection: 'deny' } },
+    caps: chatCaps,
+  },
 ];
 
 export const FAUX_MODEL: ModelSpec = {
@@ -140,6 +159,7 @@ export const ALIASES: Record<string, string> = {
   haiku: 'opencode-go/claude-haiku-5-5',
   deepseek: 'opencode-go/deepseek-v4.1-flash',
   'deepseek-api': 'deepseek/deepseek-v4.1-flash',
+  'deepseek-or': 'openrouter/deepseek-v4.1-flash',
   'deepseek-pro': 'opencode-go/deepseek-v4-pro',
   beam: 'opencode-go/beam-free',
   muse: 'opencode-go/muse-spark-1.3-contributor',
@@ -151,6 +171,7 @@ export const ALIASES: Record<string, string> = {
 // and kept from training: Haiku 5.5 on the Claude API passed as many hard evals as Go's DeepSeek Flash for less.
 export const FALLBACKS: Record<string, string> = {
   'opencode-go/deepseek-v4.1-flash': 'anthropic/claude-haiku-5-5',
+  'openrouter/deepseek-v4.1-flash': 'anthropic/claude-haiku-5-5',
 };
 
 export function resolveModel(ref: string): ModelSpec {
