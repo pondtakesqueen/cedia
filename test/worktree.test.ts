@@ -317,7 +317,7 @@ describe('--spawn worktree (offline, faux)', () => {
     const out = cedia(
       r.work,
       [reply(plan), ...child('alpha-task', 'echo good > one.txt', 'alpha done'), ...child('beta-task', 'echo good > two.txt', 'beta done'), call('p1', 'true'), reply('both in')],
-      ['-p', 'make both files', '--spawn', 'worktree', '--plan', 'faux/fallback'],
+      ['-p', 'make both files', '--spawn', 'worktree', '--plan', 'faux/fallback', '--plan-when', 'always'],
     );
     const result = out.result();
     expect(result).toMatchObject({ subtype: 'success', result: 'both in', subthreads: 2, spawned: { work: 2 } });
@@ -454,4 +454,14 @@ describe('--spawn worktree in the OS sandbox', () => {
     expect(readFileSync(join(r.work, 'one.txt'), 'utf8')).toBe('good\n');
     expect(report(out.result(), r.work, 's1')).toContain('Applied to your files: one.txt');
   });
+});
+
+test('warm records the tree in the background, and take afterwards gives the same tree', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cedia-warm-'));
+  for (let i = 0; i < 50; i++) writeFileSync(join(dir, `f${i}.txt`), `file ${i}\n`);
+  const stores = mkdtempSync(join(tmpdir(), 'cedia-warm-stores-'));
+  const snaps = openSnapshots(dir, join(stores, 'a'))!;
+  await snaps.warm!();
+  const other = openSnapshots(dir, join(stores, 'b'))!;
+  expect(snaps.take()).toBe(other.take()!);
 });

@@ -8,7 +8,7 @@ import { defaultHandoffAt } from './project/handoff.ts';
 import { FALLBACKS, resolveModel } from './providers/catalog.ts';
 import { secretPaths } from './safety/secrets.ts';
 import { checkHooks, type Hooks } from './hooks.ts';
-import type { ModelSpec, PrivacyLevel } from './types.ts';
+import type { Effort, ModelSpec, PrivacyLevel } from './types.ts';
 
 export type Settings = {
   permissions?: { mode?: PermissionSetting; allow?: string[]; deny?: string[]; unlock?: Guard[] };
@@ -19,9 +19,12 @@ export type Settings = {
   context?: string | string[];
   // Model (alias or ref) -> the model to continue on when its quota runs out, or "none". User settings only.
   fallback?: Record<string, string>;
-  // The model for each role: an alias or ref, `claude-code[:<model>]` for plan and review, or "none". User
-  // settings only: a repo must not pick what the user pays for.
-  roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string; workers?: string };
+  // The model for each role: an alias or ref (with `@<effort>` for plan and review), `claude-code[:<model>][@<effort>]`
+  // for plan and review, or "none". triage is the model that says whether a message needs the planner (default:
+  // the code model). User settings only: a repo must not pick what the user pays for.
+  roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string; workers?: string; triage?: string };
+  // With a plan role, when a prompt is planned: auto (the triage model decides), always or never.
+  planWhen?: string;
   // Whether writer sessions get the spawn tool for sub-threads (default true), and "worktree" to run each work
   // sub-thread in a git worktree of its own, several at once. User settings only.
   spawn?: boolean | 'worktree';
@@ -65,7 +68,8 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   privacy: 'any',
   context: 'any',
   fallback: 'any',
-  roles: ['plan', 'code', 'review', 'swarm', 'advisor', 'classifier', 'workers'],
+  roles: ['plan', 'code', 'review', 'swarm', 'advisor', 'classifier', 'workers', 'triage'],
+  planWhen: 'any',
   spawn: 'any',
   lsp: 'any',
   ask: 'any',
@@ -97,7 +101,7 @@ export function checkSettings(value: unknown): Settings {
 }
 
 // How a plan or review role runs: in cedia on a catalog model, or through the user's own Claude Code CLI.
-export type RoleChoice = { via: 'cedia'; model: ModelSpec } | { via: 'claude-code'; model: string; effort: ClaudeCodeEffort };
+export type RoleChoice = { via: 'cedia'; model: ModelSpec; effort?: Effort } | { via: 'claude-code'; model: string; effort: ClaudeCodeEffort };
 export type ClaudeCodeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export const cediaHome = () => process.env.CEDIA_HOME ?? join(homedir(), '.cedia');
@@ -284,15 +288,23 @@ export function loadHandoff(flag?: string): 'note' | 'compact' {
 // FrontierCode, research/NOTES.md), and the step names its effort so Claude Code's own default does not decide it.
 // The writer always runs in cedia, where its writes go through the policy, the sandbox and the done gate.
 export function loadRoles(
-  flags: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string; workers?: string } = {},
+  flags: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string; workers?: string; triage?: string } = {},
   env = process.env,
-): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice; swarm: ModelSpec; advisor?: ModelSpec; classifier?: ModelSpec; workers: ModelSpec[] } {
+): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice; swarm: ModelSpec; advisor?: ModelSpec; classifier?: ModelSpec; workers: ModelSpec[]; triage: ModelSpec } {
   const user = readSettings(join(cediaHome(), 'settings.json')).roles ?? {};
   const codeRef = flags.code ?? env.CEDIA_MODEL ?? user.code ?? 'deepseek';
   if (/^claude-code\b/.test(codeRef)) throw new Error('the code role runs in cedia, where its writes are checked; use claude-code for plan or review');
   const role = (ref: string | undefined, claudeModel: string): RoleChoice | undefined => {
     if (!ref || ref === 'none') return undefined;
-    if (!/^claude-code\b/.test(ref)) return { via: 'cedia', model: resolveModel(ref) };
+    if (!/^claude-code\b/.test(ref)) {
+      // `<ref>@<effort>`: the step runs at that effort, whatever the writer's.
+      const at = /^(.+?)@(low|medium|high|xhigh|max)$/.exec(ref);
+      const model = resolveModel(at ? at[1]! : ref);
+      if (!at) return { via: 'cedia', model };
+      const effort = at[2] as Effort;
+      if (!model.caps.effortLevels.includes(effort)) throw new Error(`${model.ref} takes no effort ${effort}${model.caps.effortLevels.length ? ` (it takes ${model.caps.effortLevels.join(', ')})` : ''}`);
+      return { via: 'cedia', model, effort };
+    }
     const m = /^claude-code(?::([^@]+))?(?:@(low|medium|high|xhigh|max))?$/.exec(ref);
     if (!m) throw new Error(`a Claude Code role is claude-code[:<model>][@low|medium|high|xhigh|max]: ${ref}`);
     return { via: 'claude-code', model: m[1] ?? claudeModel, effort: (m[2] as ClaudeCodeEffort | undefined) ?? 'medium' };
@@ -313,7 +325,44 @@ export function loadRoles(
   const workersRef = flags.workers ?? user.workers ?? '';
   if (/claude-code/.test(workersRef)) throw new Error('workers write, so they run in cedia; claude-code is for plan or review');
   const workers = workersRef === 'none' ? [] : [...new Set(workersRef.split(',').map((r) => r.trim()).filter(Boolean))].map(resolveModel);
-  return { code: resolveModel(codeRef), ...(plan ? { plan } : {}), ...(review ? { review } : {}), swarm, ...(advisor ? { advisor } : {}), ...(classifier ? { classifier } : {}), workers };
+  const code = resolveModel(codeRef);
+  const triageRef = flags.triage ?? user.triage;
+  if (triageRef && /^claude-code\b/.test(triageRef)) throw new Error('triage runs in cedia, one short reply a prompt; claude-code is for plan or review');
+  const triage = triageRef ? resolveModel(triageRef) : code;
+  return { code, triage, ...(plan ? { plan } : {}), ...(review ? { review } : {}), swarm, ...(advisor ? { advisor } : {}), ...(classifier ? { classifier } : {}), workers };
+}
+
+// Modes a model picker offers beside the models, picked as `-m auto` or `-m oplan`. Both keep the writer the user's
+// code role, since a writer that changed from prompt to prompt would lose the cache each time; they choose the
+// steps around it. auto: the triage model decides per prompt whether the planner runs, with plan and review from
+// settings, or the user's Claude Code (opus at medium) where none is set. oplan: the roles and efforts as set,
+// planned every prompt.
+export type Mode = 'auto' | 'oplan';
+export const MODES: { name: Mode; label: string }[] = [
+  { name: 'auto', label: 'Auto: plans and reviews code changes, answers the rest straight away' },
+  { name: 'oplan', label: 'Oplan: your roles and efforts from settings, planned every prompt' },
+];
+export const isMode = (ref: string | undefined): ref is Mode => ref === 'auto' || ref === 'oplan';
+
+// The flags a mode adds under the run's own: the run's flags still win.
+export function modeFlags(mode: Mode, flags: { plan?: string; review?: string; planWhen?: string }): { plan?: string; review?: string; planWhen: string } {
+  const set = loadRoles({});
+  if (mode === 'oplan') {
+    if (!flags.plan && !set.plan) throw new Error('oplan plans with roles.plan from ~/.cedia/settings.json, and none is set');
+    return { planWhen: flags.planWhen ?? 'always' };
+  }
+  return {
+    ...(!flags.plan && !set.plan ? { plan: 'claude-code' } : {}),
+    ...(!flags.review && !set.review ? { review: 'claude-code' } : {}),
+    planWhen: flags.planWhen ?? 'auto',
+  };
+}
+
+// When a prompt with a plan role is planned: the flag, else the user's settings, else auto.
+export function loadPlanWhen(flag?: string): 'auto' | 'always' | 'never' {
+  const v = flag ?? readSettings(join(cediaHome(), 'settings.json')).planWhen ?? 'auto';
+  if (v !== 'auto' && v !== 'always' && v !== 'never') throw new Error(`${flag !== undefined ? '--plan-when' : '"planWhen"'} must be auto, always or never, not ${v}`);
+  return v;
 }
 
 // Declared checks for the done gate. Declaring a check grants nothing, so a repo may declare its own.

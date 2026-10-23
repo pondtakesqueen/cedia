@@ -1,6 +1,6 @@
-{"at":"2026-10-23T18:44:28.580Z","kind":"open","title":"make f.txt say good or great","task":"make f.txt say good or great"}
-{"at":"2026-10-23T18:44:28.601Z","kind":"run","id":"r-54f50f8c","prompt":"make f.txt say good or great","cwd":"/fixture/repo","tree":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","permission":"workspace"}
-{"at":"2026-10-23T18:44:28.605Z","run":"r-54f50f8c","kind":"session","sessionId":"cbb53ef4-8328-428c-8660-1acd8a03356a","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/cbb53ef4-8328-428c-8660-1acd8a03356a.jsonl"}
-{"at":"2026-10-23T18:44:28.662Z","run":"r-54f50f8c","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["cbb53ef4-8328-428c-8660-1acd8a03356a"]}
-{"at":"2026-10-23T18:44:28.662Z","run":"r-54f50f8c","kind":"question","sessionId":"cbb53ef4-8328-428c-8660-1acd8a03356a","question":"Should f.txt say good or great? The task allows both; I wrote good.","options":["good","great"]}
-{"at":"2026-10-23T18:44:28.662Z","run":"r-54f50f8c","kind":"state","state":"asking","result":"Should f.txt say good or great? The task allows both; I wrote good."}
+{"at":"2026-10-23T19:08:05.586Z","kind":"open","title":"make f.txt say good or great","task":"make f.txt say good or great"}
+{"at":"2026-10-23T19:08:05.607Z","kind":"run","id":"r-425d209a","prompt":"make f.txt say good or great","cwd":"/fixture/repo","tree":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","permission":"workspace"}
+{"at":"2026-10-23T19:08:05.701Z","run":"r-425d209a","kind":"session","sessionId":"16fc4edf-6742-4af6-9926-e0d9d7c6fc6c","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/16fc4edf-6742-4af6-9926-e0d9d7c6fc6c.jsonl"}
+{"at":"2026-10-23T19:08:05.753Z","run":"r-425d209a","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["16fc4edf-6742-4af6-9926-e0d9d7c6fc6c"]}
+{"at":"2026-10-23T19:08:05.753Z","run":"r-425d209a","kind":"question","sessionId":"16fc4edf-6742-4af6-9926-e0d9d7c6fc6c","question":"Should f.txt say good or great? The task allows both; I wrote good.","options":["good","great"]}
+{"at":"2026-10-23T19:08:05.753Z","run":"r-425d209a","kind":"state","state":"asking","result":"Should f.txt say good or great? The task allows both; I wrote good."}

@@ -294,7 +294,7 @@ describe('cedia -p (offline, faux)', () => {
       const result = JSON.parse(r.out);
       expect(result).toMatchObject({ subtype: 'success', numTurns: 5, result: 'done', review: { model: 'faux/fallback', verdict: 'approve', fixed: false } });
       const review = logs(r.home).find((l) => head(l).role === 'review')!;
-      expect(head(review).tools.map((t) => t.name)).toEqual(['read', 'bash', 'web_fetch']);
+      expect(head(review).tools.map((t) => t.name)).toEqual(['read', 'grep', 'bash', 'web_fetch']);
       // Read-only, but it may run the declared check to test what it suspects.
       expect(review.find((e) => e.kind === 'permission')).toMatchObject({ decision: 'allow', rule: 'allow:bash(test -s f.txt)' });
       const prompt = review.find((e): e is Extract<SessionEvent, { kind: 'user' }> => e.kind === 'user')!.text;
@@ -335,18 +335,36 @@ describe('cedia -p (offline, faux)', () => {
     };
 
     test('a cedia planner reads only, and the writer gets its plan with the task', () => {
-      const r = cedia([call('p1', 'cat f.txt'), reply('1. Write good to f.txt.\n2. Run test -s f.txt.'), ...writes], [...base, '--plan', 'faux/fallback']);
+      const r = cedia([call('p1', 'cat f.txt'), reply('1. Write good to f.txt.\n2. Run test -s f.txt.'), ...writes], [...base, '--plan', 'faux/fallback', '--plan-when', 'always']);
       const result = JSON.parse(r.out);
       expect(result).toMatchObject({ subtype: 'success', plan: { model: 'faux/fallback', via: 'cedia' } });
       const all = sessionsOf(r.home);
       const planner = all.find((l) => (l[0] as { role: string }).role === 'plan')!;
-      expect((planner[0] as Extract<SessionEvent, { kind: 'session' }>).tools.map((t) => t.name)).toEqual(['read', 'bash', 'web_fetch']);
+      expect((planner[0] as Extract<SessionEvent, { kind: 'session' }>).tools.map((t) => t.name)).toEqual(['read', 'grep', 'bash', 'web_fetch']);
       const writer = all.find((l) => (l[0] as { role: string }).role === 'code')!;
       expect(userTexts(writer)[0]).toContain('<plan by="faux/fallback">\n1. Write good to f.txt.\n2. Run test -s f.txt.\n</plan>');
     });
 
+    test('the writer\'s model says first whether a plan helps: a greeting skips the planner, a task gets it', () => {
+      const skip = cedia([reply('DIRECT'), reply('hello')], ['-p', 'hi', '--output-format', 'json', '--sandbox', 'off', '--plan', 'faux/fallback']);
+      expect(JSON.parse(skip.out)).toMatchObject({ subtype: 'success', result: 'hello' });
+      expect(JSON.parse(skip.out).plan).toBeUndefined();
+      expect(skip.err).toContain('no plan for this one');
+      const roles = sessionsOf(skip.home).map((l) => (l[0] as { role: string }).role).sort();
+      expect(roles).toEqual(['code', 'triage']);
+      const triage = sessionsOf(skip.home).find((l) => (l[0] as { role: string }).role === 'triage')!;
+      expect((triage[0] as Extract<SessionEvent, { kind: 'session' }>).tools).toEqual([]);
+      expect(userTexts(triage)[0]).toBe('<message>\nhi\n</message>');
+
+      const plan = cedia([reply('PLAN'), reply('1. Write good to f.txt.'), ...writes], [...base, '--plan', 'faux/fallback']);
+      expect(JSON.parse(plan.out)).toMatchObject({ subtype: 'success', plan: { model: 'faux/fallback' } });
+      expect(cedia([reply('x')], [...base, '--plan-when', 'sometimes']).err).toContain('--plan-when must be auto, always or never');
+      const never = cedia(writes, [...base, '--plan', 'faux/fallback', '--plan-when', 'never']);
+      expect(JSON.parse(never.out).plan).toBeUndefined();
+    });
+
     test("a plan's parts go to work sub-threads before the writer, on the model the planner picked", () => {
-      const args = ['-p', 'write a and b, then f', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -d .', '--plan', 'faux/fallback', '--workers', 'faux/fallback'];
+      const args = ['-p', 'write a and b, then f', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -d .', '--plan', 'faux/fallback', '--plan-when', 'always', '--workers', 'faux/fallback'];
       const plan = 'f last.\n<part files="a.txt">Write a to a.txt.</part>\n<part files="b.txt" model="faux/fallback">Write b to b.txt.</part>';
       const part = (file: string, id: string) => [call(`${id}1`, `echo ${file} > ${file}.txt`), call(`${id}2`, 'test -d .'), reply(`${file} done`)];
       const r = cedia([reply(plan), ...part('a', 'a'), ...part('b', 'b'), call('w1', 'echo f > f.txt'), call('w2', 'test -d .'), reply('done')], [...args, '--spawn', 'on']);
@@ -387,7 +405,7 @@ describe('cedia -p (offline, faux)', () => {
         `#!/bin/sh\nn=$(($(cat ${dir}/n 2>/dev/null || echo 0) + 1)); echo $n > ${dir}/n\nprintf '%s\\n' "$@" > ${dir}/args$n; env > ${dir}/env$n\ncat ${dir}/$n\n`,
         { mode: 0o755 },
       );
-      const r = cedia([...writes, call('c3', 'echo good. > f.txt'), call('c4', 'test -s f.txt'), reply('fixed')], [...base, '--plan', 'claude-code', '--review', 'claude-code'], undefined, {
+      const r = cedia([...writes, call('c3', 'echo good. > f.txt'), call('c4', 'test -s f.txt'), reply('fixed')], [...base, '--plan', 'claude-code', '--plan-when', 'always', '--review', 'claude-code'], undefined, {
         CEDIA_CLAUDE_BIN: bin,
         ANTHROPIC_API_KEY: 'sk-ant-should-not-pass',
       });

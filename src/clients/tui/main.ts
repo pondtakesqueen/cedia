@@ -1,6 +1,6 @@
 import { CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, Text, TUI, matchesKey, truncateToWidth, type Component, type MarkdownTheme, type Terminal } from '@mariozechner/pi-tui';
 import { readFileSync } from 'node:fs';
-import { cediaHome, loadPolicy, loadPrivacy, loadRoles } from '../../core/config.ts';
+import { cediaHome, isMode, loadPolicy, loadPrivacy, loadRoles, MODES } from '../../core/config.ts';
 import { COMMIT_SYSTEM, commitFiles, commitMessage, commitPatch, commitPrompt, currentBranch, defaultBranch, prBlocked, pullRequest, pushAndOpenPr, recentSubjects, threadChanges } from '../../core/project/commit.ts';
 import { runPrompt } from '../../core/loop/run.ts';
 import { resolveModel } from '../../core/providers/catalog.ts';
@@ -57,6 +57,8 @@ export const COMMANDS: { name: string; description: string }[] = [
   { name: 'commit', description: "commit the files this thread changed, with a message a model writes and you confirm ('/commit <message>' writes your own)" },
   { name: 'pr', description: 'push this branch and open a pull request through gh (never from the default branch); asks first' },
   { name: 'review', description: "a model reviews the uncommitted changes ('/review <n>' a pull request, through gh); findings come with evidence" },
+  { name: 'plan', description: 'send this prompt to the planner first, whatever triage would say: /plan <prompt>' },
+  { name: 'quick', description: 'send this prompt straight to the writer, with no plan: /quick <prompt>' },
   { name: 'new', description: 'start a new thread' },
   { name: 'thread', description: 'go on with a thread of this project: /thread <id>, or list them' },
   { name: 'model', description: 'the model the next turn runs on: /model <ref>' },
@@ -83,6 +85,20 @@ export function callLine(tool: string, input: JsonObject): string {
 const colorPatch = (patch: string) =>
   patch.split('\n').map((l) => (l.startsWith('+++') || l.startsWith('---') ? bold(l) : l.startsWith('+') ? green(l) : l.startsWith('-') ? red(l) : l.startsWith('@@') ? cyan(l) : l));
 
+const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+// The owner's prompts stand out from the run on a band of their own.
+const band = (s: string) => `\x1b[48;5;236m${s}\x1b[49m`;
+
+// What a turn is doing now, above the editor while it runs: the step, the time since the prompt, and while text
+// streams its rate. Empty, and so no line at all, between turns.
+class ActivityLine implements Component {
+  text = '';
+  render(width: number): string[] {
+    return this.text ? [truncateToWidth(this.text, width)] : [];
+  }
+  invalidate() {}
+}
+
 // One line under the editor, cut to the terminal's width.
 class StatusLine implements Component {
   text = '';
@@ -99,6 +115,17 @@ export class CediaTui {
   readonly tui: TUI;
   readonly chat = new Container();
   readonly status = new StatusLine();
+  readonly activity = new ActivityLine();
+  // The turn in progress: its step, when it started, and the text streamed so far in the current block.
+  private step = '';
+  private startedAt = 0;
+  private stream: { at: number; chars: number } | undefined;
+  private ticker: ReturnType<typeof setInterval> | undefined;
+  private frame = 0;
+  // The last reply's output rate, from the run's own timing.
+  private rate = 0;
+  // The first snapshot of the working tree, taken in the background when the TUI opens.
+  private warming: Promise<void> | undefined;
   readonly editor: Editor;
   thread: string | undefined;
   model: string | undefined;
@@ -131,6 +158,7 @@ export class CediaTui {
     this.editor.onSubmit = (text) => this.submit(text);
     this.editor.setAutocompleteProvider(new CombinedAutocompleteProvider(COMMANDS, args.cwd));
     this.tui.addChild(this.chat);
+    this.tui.addChild(this.activity);
     this.tui.addChild(this.editor);
     this.tui.addChild(this.status);
     this.tui.setFocus(this.editor);
@@ -139,12 +167,17 @@ export class CediaTui {
 
   start() {
     this.say(dim(`cedia in ${this.args.cwd}. /help for commands; Esc or Ctrl+C stops a turn.`));
+    this.warming = workspaceSnapshots(this.args.cwd, cediaHome())
+      ?.warm?.()
+      .catch(() => {})
+      .finally(() => (this.warming = undefined));
     this.refreshStatus(true);
     this.tui.start();
   }
 
   stop() {
     this.running?.stop.abort();
+    this.tick(false);
     this.tui.stop();
   }
 
@@ -185,15 +218,21 @@ export class CediaTui {
     this.tui.requestRender();
   }
 
+  // The writer's model: the one picked, or the code role when a mode or nothing is.
+  private writer(): string {
+    return this.model && !isMode(this.model) ? this.model : loadRoles({}).code.ref;
+  }
+
   statusLine(): string {
     return [
-      this.model ?? loadRoles({}).code.ref,
+      isMode(this.model) ? `${this.model} · ${this.writer()}` : this.writer(),
       this.args.permission ?? 'auto',
       this.git,
       this.thread ?? 'new thread',
       this.goal ? 'goal' : '',
       this.context ? `ctx ${Math.round(this.context / 1000)}k` : '',
       this.spent ? `$${this.spent.toFixed(4)}` : '',
+      this.rate ? `${Math.round(this.rate)} tok/s` : '',
       this.running ? 'working' : '',
     ]
       .filter(Boolean)
@@ -233,7 +272,7 @@ export class CediaTui {
     this.tui.requestRender();
   }
 
-  submit(raw: string) {
+  submit(raw: string, planWhen?: 'always' | 'never'): void {
     const text = raw.trim();
     if (!text) return;
     this.editor.addToHistory(text);
@@ -251,9 +290,14 @@ export class CediaTui {
       this.say(yellow('a turn is running: wait for it, or stop it with Esc'));
       return;
     }
-    this.chat.addChild(new Text(bold(`› ${text}`), 0, 1));
+    this.chat.addChild(new Text('', 0, 0));
+    this.chat.addChild(new Text(bold(`› ${text}`), 1, 0, band));
+    this.chat.addChild(new Text('', 0, 0));
     const stop = new AbortController();
-    const done = this.turn(text, stop.signal).finally(() => {
+    this.setStep('starting');
+    this.tick(true);
+    const done = this.turn(text, stop.signal, planWhen).finally(() => {
+      this.tick(false);
       this.running = undefined;
       this.refreshStatus(true);
     });
@@ -261,7 +305,7 @@ export class CediaTui {
     this.refreshStatus();
   }
 
-  private async turn(prompt: string, signal: AbortSignal) {
+  private async turn(prompt: string, signal: AbortSignal, planWhen?: 'always' | 'never') {
     let buffer = '';
     const out = (chunk: string) => {
       buffer += chunk;
@@ -277,16 +321,57 @@ export class CediaTui {
       }
     };
     const { goal: _, ...args } = this.args;
+    if (this.warming) {
+      this.setStep('recording the working tree for /undo (first time here)');
+      await this.warming;
+    }
     try {
       const result = await this.run(
         // The owner may think for minutes between prompts here, so the writer's prefix is cached for an hour.
-        { ...args, cacheTtl: args.cacheTtl ?? '1h', ...(this.goal ? { goal: this.goal } : {}), prompt, outputFormat: 'stream-json', ...(this.model ? { model: this.model } : {}), ...(this.thread ? { thread: this.thread } : {}), note: (t) => this.say(yellow(t.trimEnd())), signal },
+        { ...args, cacheTtl: args.cacheTtl ?? '1h', ...(planWhen ? { planWhen } : {}), ...(this.goal ? { goal: this.goal } : {}), prompt, outputFormat: 'stream-json', ...(this.model ? { model: this.model } : {}), ...(this.thread ? { thread: this.thread } : {}), note: (t) => this.onNote(t), signal },
         out,
       );
       this.done(result);
     } catch (e) {
       this.say(red(`cedia: ${(e as Error).message}`));
     }
+  }
+
+  // The step a turn is on, shown with the time since the prompt.
+  private setStep(step: string) {
+    this.step = step;
+    if (step === 'starting') this.startedAt = performance.now();
+    this.stream = undefined;
+    this.drawActivity();
+  }
+
+  private tick(on: boolean) {
+    clearInterval(this.ticker);
+    this.ticker = on ? setInterval(() => this.drawActivity(), 100) : undefined;
+    if (!on) {
+      this.activity.text = '';
+      this.tui.requestRender();
+    }
+  }
+
+  private drawActivity() {
+    if (!this.ticker && this.step !== 'starting') return;
+    const secs = (performance.now() - this.startedAt) / 1000;
+    const s = this.stream;
+    const streamSecs = s ? (performance.now() - s.at) / 1000 : 0;
+    // About four characters a token: a live estimate, replaced by the run's own count when it ends.
+    const rate = s && streamSecs > 0.3 ? ` · ~${Math.round(s.chars / 4 / streamSecs)} tok/s` : '';
+    this.frame = (this.frame + 1) % SPINNER.length;
+    this.activity.text = `${cyan(SPINNER[this.frame]!)} ${this.step} ${dim(`· ${secs.toFixed(secs < 10 ? 1 : 0)}s${rate} · esc to stop`)}`;
+    this.tui.requestRender();
+  }
+
+  // cedia's own notes: shown, and the ones that name a step move the activity line on.
+  private onNote(text: string) {
+    const t = text.trimEnd();
+    const planning = /^cedia: planning with (.+)$/.exec(t);
+    if (planning) return this.setStep(`planning with ${planning[1]}`);
+    this.say(yellow(t));
   }
 
   private onMessage(m: CoreMessage) {
@@ -296,11 +381,14 @@ export class CediaTui {
         this.live = { md: new Markdown('', 0, 0, MARKDOWN), text: '' };
         this.chat.addChild(this.live.md);
         this.streamed = true;
+        this.setStep('writing');
+        this.stream = { at: performance.now(), chars: 0 };
       } else if (e.type === 'text_delta' && this.live) {
         this.live.text += e.delta;
+        if (this.stream) this.stream.chars += e.delta.length;
         this.live.md.setText(printable(this.live.text));
       } else if (e.type === 'text_end') this.live = undefined;
-      else if (e.type === 'thinking_start') this.say(dim('thinking…'));
+      else if (e.type === 'thinking_start') this.setStep('thinking');
       this.tui.requestRender();
       return;
     }
@@ -311,6 +399,7 @@ export class CediaTui {
     switch (e.kind) {
       case 'request':
         this.streamed = false;
+        this.setStep('waiting for the model');
         break;
       case 'assistant': {
         // A reply that did not stream (a scripted model, a retry) is drawn whole.
@@ -319,9 +408,12 @@ export class CediaTui {
         this.context = u.uncached + u.cacheRead + u.cacheWrite + u.output;
         break;
       }
-      case 'tool_intent':
-        this.say(cyan(`● ${callLine(e.tool, e.input)}`));
+      case 'tool_intent': {
+        const line = callLine(e.tool, e.input);
+        this.say(`${cyan('●')} ${bold(e.tool)}${line.slice(e.tool.length)}`);
+        this.setStep(`running ${e.tool}`);
         break;
+      }
       case 'permission':
         if (e.decision === 'deny') this.say(red(`✗ ${e.tool} denied by ${e.rule}${e.reason ? `: ${e.reason}` : ''}`));
         break;
@@ -343,7 +435,17 @@ export class CediaTui {
   private done(r: HeadlessResult) {
     this.thread = r.thread ?? this.thread;
     this.spent += r.costUsd;
-    const parts = [r.subtype === 'success' ? 'done' : r.subtype, `${r.numTurns} turn${r.numTurns === 1 ? '' : 's'}`, `$${r.costUsd.toFixed(4)}`, `cache ${Math.round(r.cacheHitRatio * 100)}%`];
+    if (r.timing?.outputTokPerSec) this.rate = r.timing.outputTokPerSec;
+    const wall = (performance.now() - this.startedAt) / 1000;
+    const parts = [
+      r.subtype === 'success' ? 'done' : r.subtype,
+      `${r.numTurns} turn${r.numTurns === 1 ? '' : 's'}`,
+      `$${r.costUsd.toFixed(4)}`,
+      `${wall.toFixed(1)}s`,
+      ...(r.timing?.outputTokPerSec ? [`${Math.round(r.timing.outputTokPerSec)} tok/s`] : []),
+      ...(r.timing?.ttftMs && r.numTurns ? [`first token ${(r.timing.ttftMs / r.numTurns / 1000).toFixed(1)}s`] : []),
+      `cache ${Math.round(r.cacheHitRatio * 100)}%`,
+    ];
     this.say(dim(parts.join(' · ')));
     if (r.evidence) this.say(dim(receipt(r.evidence, r.thread)));
     if (r.goal) {
@@ -356,7 +458,7 @@ export class CediaTui {
     if (r.question) this.say(yellow([printable(r.question.question), ...(r.question.options ?? []).map((o, i) => `  ${i + 1}. ${printable(o)}`), 'your next message is the answer'].join('\n')));
   }
 
-  command(line: string) {
+  command(line: string): void {
     const [name = '', ...rest] = line.trim().split(/\s+/);
     try {
       switch (name) {
@@ -382,6 +484,12 @@ export class CediaTui {
           return this.pr();
         case 'review':
           return void this.busy((signal) => this.review(rest[0], signal));
+        case 'plan':
+        case 'quick': {
+          const prompt = line.trim().slice(name.length).trim();
+          if (!prompt) return this.say(dim(`/${name} <prompt>`));
+          return this.submit(prompt, name === 'plan' ? 'always' : 'never');
+        }
         case 'new':
           this.thread = undefined;
           this.context = 0;
@@ -410,8 +518,11 @@ export class CediaTui {
           }
           break;
         case 'model':
-          if (!rest[0]) this.say(dim(`the next turn runs on ${this.model ?? loadRoles({}).code.ref}`));
-          else {
+          if (!rest[0]) this.say(dim(`the next turn runs on ${this.model ?? loadRoles({}).code.ref}; /model auto or /model oplan pick the steps around your writer`));
+          else if (isMode(rest[0])) {
+            this.model = rest[0];
+            this.say(dim(MODES.find((m) => m.name === rest[0])!.label));
+          } else {
             this.model = loadRoles({ code: rest[0] }).code.ref;
             this.say(dim(`the next turn runs on ${this.model}; a thread whose last session used another model goes on in a new session`));
           }
@@ -464,7 +575,7 @@ export class CediaTui {
 
   // The message comes from the next turn's model, in a session of its own with no tools, logged like any other.
   private async draftMessage(prompt: string, signal: AbortSignal): Promise<string> {
-    const model = resolveModel(this.model ?? loadRoles({}).code.ref);
+    const model = resolveModel(this.writer());
     const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
     const id = crypto.randomUUID();
     const log = SessionLog.create({ id, path: sessionPath(this.args.cwd, id) });
@@ -509,8 +620,8 @@ export class CediaTui {
       subject = { kind: 'changes', untracked: w.untracked };
       patch = w.patch;
     }
-    const roles = loadRoles(this.model ? { code: this.model } : {});
-    const model = roles.review?.via === 'cedia' ? roles.review.model : resolveModel(this.model ?? roles.code.ref);
+    const roles = loadRoles(this.model && !isMode(this.model) ? { code: this.model } : {});
+    const model = roles.review?.via === 'cedia' ? roles.review.model : resolveModel(this.writer());
     this.say(dim(`reviewing ${subject.kind === 'pr' ? `pull request #${subject.number}` : 'the uncommitted changes'} with ${model.ref}…`));
     const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
     const id = crypto.randomUUID();

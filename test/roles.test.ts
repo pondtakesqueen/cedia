@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { planParts, planPrompt, withParts, withPlan, type Split } from '../src/core/roles.ts';
+import { needsPlan, planParts, planPrompt, withParts, withPlan, type Split } from '../src/core/roles.ts';
 
 const part = (files: string, brief: string, model?: string) => `<part files="${files}"${model ? ` model="${model}"` : ''}>${brief}</part>`;
 const alone: Split = { mode: 'alone', writer: 'opencode-go/deepseek-v4.1-flash', workers: [] };
@@ -52,4 +52,14 @@ t
     expect(both.endsWith('<subthread kind="work">A done</subthread>\n\n<subthread kind="work">B done</subthread>')).toBe(true);
     expect(withParts('t', ['r'])).toContain('1 part of the plan was already done before you started, each by a sub-thread from its brief; its report follows');
   });
+});
+
+test('triage plans unless the answer starts with DIRECT', () => {
+  expect(needsPlan('DIRECT')).toBe(false);
+  expect(needsPlan('  direct.')).toBe(false);
+  expect(needsPlan('**DIRECT**')).toBe(false);
+  expect(needsPlan('PLAN')).toBe(true);
+  expect(needsPlan('')).toBe(true);
+  expect(needsPlan('I think this is direct')).toBe(true);
+  expect(needsPlan('directly: PLAN')).toBe(true);
 });
