@@ -621,6 +621,9 @@
             "fixed": {
               "type": "boolean"
             },
+            "fixMs": {
+              "type": "number"
+            },
             "model": {
               "type": "string"
             },
@@ -635,6 +638,9 @@
               "type": "string"
             },
             "costUsd": {
+              "type": "number"
+            },
+            "ms": {
               "type": "number"
             }
           },
@@ -795,6 +801,9 @@
             },
             "costUsd": {
               "type": "number"
+            },
+            "ms": {
+              "type": "number"
             }
           },
           "required": [
@@ -829,6 +838,9 @@
               "type": "string"
             },
             "costUsd": {
+              "type": "number"
+            },
+            "ms": {
               "type": "number"
             }
           },
@@ -2491,6 +2503,9 @@
           "type": "string"
         },
         "costUsd": {
+          "type": "number"
+        },
+        "ms": {
           "type": "number"
         }
       },
