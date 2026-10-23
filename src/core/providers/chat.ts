@@ -1,3 +1,4 @@
+import { imageNote, withImageNotes } from '../images.ts';
 import type { AssistantBlock, JsonObject, Message, Provider, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
 import { Assembler } from './assemble.ts';
 import { authHeaders, classifyStreamError, post, type Fetcher } from './http.ts';
@@ -40,8 +41,8 @@ export function chatMessages(req: WireRequest): JsonObject[] {
     } else {
       const texts: string[] = [];
       for (const p of m.parts) {
-        if (p.type === 'tool_result') out.push({ role: 'tool', tool_call_id: p.callId, content: p.text });
-        else texts.push(p.text);
+        if (p.type === 'tool_result') out.push({ role: 'tool', tool_call_id: p.callId, content: withImageNotes(p.text, p.images) });
+        else texts.push(p.type === 'image' ? imageNote(p.image) : p.text);
       }
       if (texts.length) out.push({ role: 'user', content: texts.join('\n\n') });
     }

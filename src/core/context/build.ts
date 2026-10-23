@@ -8,13 +8,15 @@ export function buildMessages(events: SessionEvent[]): Message[] {
     const last = out.at(-1);
     if (last?.role === 'user') {
       // Anthropic wants tool results before any text in a user message.
-      if (part.type === 'tool_result' && last.parts.some((p) => p.type === 'text')) out.push({ role: 'user', parts: [part] });
+      if (part.type === 'tool_result' && last.parts.some((p) => p.type !== 'tool_result')) out.push({ role: 'user', parts: [part] });
       else last.parts.push(part);
     } else out.push({ role: 'user', parts: [part] });
   };
   for (const e of events) {
     switch (e.kind) {
       case 'user':
+        // Images go before the text that asks about them, as the vision docs advise.
+        for (const image of e.images ?? []) pushUser({ type: 'image', image });
         pushUser({ type: 'text', text: e.text });
         break;
       case 'summary':
@@ -25,7 +27,7 @@ export function buildMessages(events: SessionEvent[]): Message[] {
         if (e.blocks.length) out.push({ role: 'assistant', wire: e.wire, blocks: e.blocks });
         break;
       case 'tool_result':
-        pushUser({ type: 'tool_result', callId: e.callId, text: e.output.text, isError: e.output.isError });
+        pushUser({ type: 'tool_result', callId: e.callId, text: e.output.text, isError: e.output.isError, ...(e.output.images?.length ? { images: e.output.images } : {}) });
         break;
       case 'reminder':
         if (e.as === 'system') out.push({ role: 'system', text: e.text });

@@ -218,7 +218,8 @@
         "threads.fork",
         "usage",
         "browser",
-        "threads.restore-json"
+        "threads.restore-json",
+        "images"
       ]
     },
     "Check": {
@@ -829,6 +830,46 @@
       ],
       "additionalProperties": false
     },
+    "ImageMime": {
+      "type": "string",
+      "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp"
+      ]
+    },
+    "ImageRef": {
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "type": "string"
+        },
+        "mime": {
+          "$ref": "#/definitions/ImageMime"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        },
+        "bytes": {
+          "type": "number"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha256",
+        "mime",
+        "width",
+        "height",
+        "bytes"
+      ],
+      "additionalProperties": false
+    },
     "JsonObject": {
       "type": "object",
       "additionalProperties": {}
@@ -1335,6 +1376,12 @@
             },
             "text": {
               "type": "string"
+            },
+            "images": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ImageRef"
+              }
             },
             "id": {
               "$ref": "#/definitions/EventId"
@@ -3050,7 +3097,7 @@
         "images": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/ImageRef"
           }
         },
         "redacted": {
