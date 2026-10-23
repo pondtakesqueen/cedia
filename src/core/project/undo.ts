@@ -15,6 +15,7 @@ import type { ThreadStore } from './threads.ts';
 export type TurnChange = { sessionId: string; cwd: string; before: string; after: string };
 
 // What an undo or redo did: the files it put back, and the ones it left because they changed since.
+// `threads undo|redo <id> --json` prints it.
 export type Restored = { action: 'undo' | 'redo'; restored: string[]; skipped: string[] };
 
 // Puts the files the turn changed to `target`. A file already there is left out; one that no longer matches
