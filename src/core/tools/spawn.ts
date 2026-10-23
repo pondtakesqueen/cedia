@@ -143,8 +143,11 @@ Write the task as a complete brief: the goal, the paths and facts it needs, and 
 export const SPAWN_NUDGE_MAX = 30_000;
 export const spawnNudgeAt = (handoffAt: number) => Math.min(Math.round(handoffAt / 3), SPAWN_NUDGE_MAX);
 
-export const spawnNudge = (tokens: number) =>
-  `Your context is about ${Math.round(tokens / 1000)}k tokens, and every later turn re-sends all of it. From here, hand reading you will not need word for word to the spawn tool: kind "explore" for a question that takes several files to answer (how a flow works, where something is defined, every caller of a function), several in one turn when they are independent. Its report comes back with paths and line numbers; read yourself only the parts of files you are about to edit.`;
+export const spawnNudge = (tokens: number) => `Your context is about ${Math.round(tokens / 1000)}k tokens, ${SPAWN_NUDGE_REST}`;
+// A later run of the same session (the fix round after a review, the next prompt of a thread) finds the reminder in
+// the log and does not give it again.
+export const isSpawnNudge = (text: string) => text.endsWith(SPAWN_NUDGE_REST);
+const SPAWN_NUDGE_REST = `and every later turn re-sends all of it. From here, hand reading you will not need word for word to the spawn tool: kind "explore" for a question that takes several files to answer (how a flow works, where something is defined, every caller of a function), several in one turn when they are independent. Its report comes back with paths and line numbers; read yourself only the parts of files you are about to edit.`;
 
 export const subtaskPrompt = (task: string, parent: string | undefined, kind: SpawnKind, worktree?: string) =>
   `You are a sub-thread${parent ? ` of thread ${parent}` : ''}: another session handed you this task and will see only your final message. Do this task and nothing else.${kind === 'explore' ? ' You can read and run read-only commands, not edit.' : ''}${worktree ? ` You work in a git worktree of your own at ${worktree}, a copy of the other session's working tree: your changes are applied to its files when you finish. Do not commit. Other sub-threads may be doing other parts of the work at the same time: a check that fails only on a part outside your task is not yours to fix, so say so in your report.` : ''}

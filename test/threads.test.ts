@@ -226,6 +226,15 @@ describe('handoff in the loop', () => {
     expect(lintSession(log.events)).toEqual([]);
   });
 
+  test('a later run of the same session, such as the fix round after a review, is not reminded again', async () => {
+    const tools = [...CORE_TOOLS, spawner, bigTool];
+    const { log } = await run([tool('c1', 'big', {}), tool('c2', 'big', {}), reply('done')], { spawnNudgeAt: 2000, tools });
+    expect(nudges(log)).toHaveLength(1);
+    const permission = { mode: 'workspace' as const, allow: [], deny: [] };
+    await runPrompt({ log, provider: fauxProvider([tool('c3', 'big', {}), reply('fixed')]), model, tools, system: 'sys', cwd: tmp(), permission, spawnNudgeAt: 2000 }, 'the review asks for changes');
+    expect(nudges(log)).toHaveLength(1);
+  });
+
   test('no spawn reminder without the tool, below the mark, or once the session has spawned', async () => {
     const without = await run([tool('c1', 'big', {}), reply('done')], { spawnNudgeAt: 2000 });
     expect(nudges(without.log)).toHaveLength(0);
