@@ -394,6 +394,15 @@ describe('cedia -p (offline, faux)', () => {
       const modelOf = (brief: string) => (subs.find((l) => userTexts(l)[0]!.includes(`<task>\n${brief}\n</task>`))![0] as { model: string }).model;
       expect(subs.length).toBe(2);
       expect([modelOf('Write a to a.txt.'), modelOf('Write b to b.txt.')]).toEqual(['faux/scripted', 'faux/fallback']);
+      // A part is not held to the run's checks, which cover the whole task: one that reports without running them
+      // gets no done-gate reminder. The writer after the parts still is.
+      const unchecked = cedia([reply(plan), call('a1', 'echo a > a.txt'), reply('a done'), call('b1', 'echo b > b.txt'), reply('b done'), call('w1', 'echo f > f.txt'), reply('done'), call('w2', 'test -d .'), reply('done')], [...args, '--spawn', 'on']);
+      expect(JSON.parse(unchecked.out)).toMatchObject({ subtype: 'success', subthreads: 2 });
+      const parts = sessionsOf(unchecked.home).filter((l) => userTexts(l)[0]?.startsWith('You are a sub-thread'));
+      expect(parts.length).toBe(2);
+      for (const l of parts) expect(l.some((e) => e.kind === 'reminder' && e.text.includes('no record of a declared check'))).toBe(false);
+      const after = sessionsOf(unchecked.home).find((l) => (l[0] as { role: string }).role === 'code' && !userTexts(l)[0]?.startsWith('You are a sub-thread'))!;
+      expect(after.some((e) => e.kind === 'reminder' && e.text.includes('no record of a declared check'))).toBe(true);
       // The writer starts after them, with the plan and their reports, and never spawned.
       const writer = all.find((l) => (l[0] as { role: string }).role === 'code' && !userTexts(l)[0]?.startsWith('You are a sub-thread'))!;
       const first = userTexts(writer)[0]!;

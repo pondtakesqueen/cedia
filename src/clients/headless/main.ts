@@ -414,7 +414,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     role?: 'plan' | 'review' | 'explore' | 'goal' | 'advisor' | 'classifier' | 'triage';
     // The step's own effort (`<ref>@<effort>` for plan and review), over the writer's.
     effort?: Effort;
-    child?: { thread?: string; handoff?: boolean; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots; wrap: (command: string) => Promise<string> } };
+    // part: one part of a split plan, run before the writer. The run's checks cover the whole task, so a part is not
+    // held to them: they can fail until the other parts and the writer are done (5 of 6 parts on 2026-10-24 were
+    // sent back by the done gate for a suite they could not pass), and the writer must pass them after the parts.
+    child?: { thread?: string; handoff?: boolean; part?: true; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots; wrap: (command: string) => Promise<string> } };
     // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
     seed?: { from: SessionLog; compaction: NonNullable<HeadlessResult['compaction']> };
   };
@@ -472,7 +475,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         privacy,
         // Stop hooks judge the writer's claim of done, not a plan, a review or a sub-thread's report.
         ...(hooked ? { hooks: writing ? hooks : { ...hooks, stop: [] }, hookHome: cediaHome() } : {}),
-        checks: reviewer ? [] : checks,
+        checks: reviewer || child?.part ? [] : checks,
         ...(softChecks && !reviewer ? { softChecks } : {}),
         ...(sandbox.on ? { wrap: place?.wrap ?? sandbox.wrap } : {}),
         // Not in a worktree: the language servers read the parent's working directory.
@@ -631,7 +634,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   };
   // One sub-thread run to its end, in `wt` when it has one; its changes are not applied yet.
   type Ran = { wt?: Worktree; sub?: string; m: ModelSpec; r: HeadlessResult };
-  const runSub = async (brief: string, kind: SpawnKind, wt: Worktree | undefined, on?: ModelSpec): Promise<Ran> => {
+  const runSub = async (brief: string, kind: SpawnKind, wt: Worktree | undefined, on?: ModelSpec, part = false): Promise<Ran> => {
     subthreads++;
     spawned[kind]++;
     let m = on ?? (kind === 'explore' ? explorer : writer.model);
@@ -655,7 +658,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       const log = openLog();
       if (store && sub) store.append(sub, { kind: 'session', sessionId: log.id, model: m.ref, role: kind === 'explore' ? 'explore' : 'code', why, ...(log.path ? { path: log.path } : {}) });
       mine.push({ id: log.id, events: () => log.events });
-      const child = { ...(sub ? { thread: sub } : {}), ...(kind === 'work' && handoffsHere < MAX_HANDOFFS ? { handoff: true } : {}), ...(mine.length > 1 ? { recall: recallMine } : {}), ...(place ? { place } : {}) };
+      const child = { ...(sub ? { thread: sub } : {}), ...(kind === 'work' && handoffsHere < MAX_HANDOFFS ? { handoff: true } : {}), ...(part ? { part: true as const } : {}), ...(mine.length > 1 ? { recall: recallMine } : {}), ...(place ? { place } : {}) };
       const r = await run(m, log, prompt, { ...opts, ...(kind === 'explore' ? { role: 'explore' as const } : {}), child });
       cost += r.costUsd;
       spawned.peakContext = Math.max(spawned.peakContext, r.peakContext ?? 0);
@@ -804,12 +807,12 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const wts = spawnMode === 'worktree' ? take.map(() => openWt()) : [];
     const failed = wts.find((w): w is { error: string } => 'error' in w);
     if (wts.length && !failed) {
-      const settled = await Promise.allSettled(take.map((p, i) => runSub(p.brief, 'work', wts[i] as Worktree, on(p))));
+      const settled = await Promise.allSettled(take.map((p, i) => runSub(p.brief, 'work', wts[i] as Worktree, on(p), true)));
       for (const r of settled) if (r.status === 'fulfilled') outcomes.push(await land(r.value, ctx));
     } else {
       for (const w of wts) if (!('error' in w)) w.close();
       if (failed) say(`cedia: no worktree for the plan's parts (${failed.error}); they run in place, one after another\n`);
-      for (const p of take) if (!ac.signal.aborted) outcomes.push(await land(await runSub(p.brief, 'work', undefined, on(p)), { signal: ac.signal }));
+      for (const p of take) if (!ac.signal.aborted) outcomes.push(await land(await runSub(p.brief, 'work', undefined, on(p), true), { signal: ac.signal }));
     }
     return { reports: outcomes.map((o) => spawnReport('work', o)), changed: [...new Set(outcomes.flatMap((o) => o.worktree?.applied ?? o.changed))] };
   };
