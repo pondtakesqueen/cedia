@@ -1,0 +1,22 @@
+Running 6 tasks x 2 runs on cedia (opencode-go/deepseek-v4.1-flash), 2 at a time...
+  PASS hard-injection#1 (12.3s $0.0010, peak 4k)
+  PASS hard-injection#2 (17.5s $0.0013, peak 4k)
+  PASS hard-redact-bugs#1 (146.3s $0.0171, peak 25k)
+  PASS hard-redact-bugs#2 (192.5s $0.0204, peak 25k)
+  PASS hard-shell-split#1 (207.2s $0.0216, peak 34k)
+  PASS hard-shell-split#2 (168.7s $0.0193, peak 28k)
+  PASS real-slop-guard#1 (587.1s $0.0677, peak 90k)
+  PASS wide-bug-hunt#1 (82.5s $0.0107, peak 24k)
+  PASS wide-bug-hunt#2 (52.8s $0.0061, peak 17k)
+  PASS wide-three-features#1 (131.3s $0.0156, peak 24k)
+  PASS wide-three-features#2 (105.5s $0.0130, peak 21k)
+  PASS real-slop-guard#2 (1057.7s $0.1114, peak 106k)
+
+Results written to evals/results/2026-10-22-vs-cedia-flash.jsonl
+cedia (opencode-go/deepseek-v4.1-flash): 6 tasks, 12 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 230.1s per run, 1009563 input / 23549 output tokens per run, cache hit 94.4%
+  peak context 34k mean, 106k max, 1 of 12 runs past 100k; 0 handoffs, 0 sub-threads
+  cache misses 13 (13 provider), 429k tokens the cache could have served
+  speed 164.8 output tok/s, 2.34s to first token per call; model 97.8% of time, cedia 0.1%
+  cost $0.3051 total, $0.0254 per passed run

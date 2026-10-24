@@ -2,6 +2,10 @@
 
 Guidance for coding agents working in this repository. `CLAUDE.md` points here.
 
+
+
+Start every reply with "Pond" , No exception.
+
 ## What this is
 
 cedia is a personal coding harness written from scratch in TypeScript on Bun. `SPEC.md` holds every settled decision and the stage order; read it before changing scope. `docs/ROADMAP.md` says what comes next.

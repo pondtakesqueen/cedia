@@ -261,7 +261,7 @@ describe('the TUI (offline, faux)', () => {
     const sessions = join(process.env.CEDIA_HOME!, 'sessions');
     const logs = Bun.spawnSync(['sh', '-c', `cat ${sessions}/*/*.jsonl`]).stdout.toString().trim().split('\n').map((l) => JSON.parse(l));
     const review = logs.find((e) => e.kind === 'session' && e.role === 'review');
-    expect(review.tools.map((t: { name: string }) => t.name)).toEqual(['read', 'grep', 'bash']);
+    expect(review.tools.map((t: { name: string }) => t.name)).toEqual(['read', 'grep', 'bash', 'sleep', 'ToolSearch', 'Monitor']);
     const asked = logs.find((e) => e.kind === 'user' && String(e.text).startsWith('Review the uncommitted'));
     expect(asked.text).toContain('Files not yet tracked, not in the diff, read them: "new.txt".');
     expect(asked.text).toContain('+two');

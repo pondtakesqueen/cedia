@@ -1,15 +1,20 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
 import type { TuiArgs } from './clients/tui/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
 import { GUARDS, PERMISSION_ENTRIES, type PermissionList } from './core/safety/policy.ts';
-import { cediaHome, loadPermissionSetting, loadRoles } from './core/config.ts';
+import { cediaHome, loadPermissionSetting, loadRoles, loadManagedSettings, loadResolvedSettings, loadPolicyLimits, savePolicyLimits } from './core/config.ts';
 import { processKeychain } from './core/providers/keychain.ts';
 import { modelLine, modelList } from './core/providers/models.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
+import { loadKeybindings } from './clients/tui/keybindings/loader.ts';
+import { loadOutputStyles, getStyle, stylesDir } from './core/output-styles/styles.ts';
+import { isAlive, listBgSessions, recordStart, recordStop, bgPath, daemonPidPath, readBgEvents } from './core/project/background.ts';
+import { installPlugin, uninstallPlugin, setPluginEnabled, updatePlugin, listInstalled, loadManifest, discoverPlugins, addMarketplace, removeMarketplace, updateMarketplace, loadMarketplaces } from './core/plugins/plugins.ts';
+import { consolidateMemory } from './core/project/consolidate.ts';
 import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Schedule } from './core/project/schedules.ts';
 import { commandList, loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
@@ -141,7 +146,7 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia schedules add <when> <prompt> --thread <id> [--every <dur>]
                                             when: an ISO time or a delay (30m, 2h); every: 1h, 1d, 1w (at least 5m)
        cedia schedules cancel|pause|resume|fire <id>
-       cedia memory [list | add <text> | forget <id>]
+       cedia memory [list | add <text> | forget <id> | consolidate]
                                             the project's memory: short facts every new session gets in its first
                                             turn; writer sessions add to it with the remember tool
        cedia models [--json]                the models a session may use, which of them have a key here, and the
@@ -177,6 +182,17 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'lint-session') return lintFiles(argv.slice(1));
   if (argv[0] === 'threads') return threads(argv.slice(1));
   if (argv[0] === 'memory') return memory(argv.slice(1));
+  if (argv[0] === 'output-style') return outputStyle(argv.slice(1));
+  if (argv[0] === 'doctor') return doctor(argv.slice(1));
+  if (argv[0] === 'agents') return agentsCmd(argv.slice(1));
+  if (argv[0] === 'logs') return logsCmd(argv.slice(1));
+  if (argv[0] === 'attach') return attachCmd(argv.slice(1));
+  if (argv[0] === 'stop' || argv[0] === 'kill') return stopCmd(argv.slice(1), argv[0] === 'kill');
+  if (argv[0] === 'respawn') return respawnCmd(argv.slice(1));
+  if (argv[0] === 'plugin') return plugin(argv.slice(1));
+  if (argv[0] === 'marketplace') return marketplace(argv.slice(1));
+  if (argv[0] === 'settings') return settings(argv.slice(1));
+  if (argv[0] === 'policy-limits') return policyLimits(argv.slice(1));
   if (argv[0] === 'schedules') return schedules(argv.slice(1));
   if (argv[0] === 'skills') return skills(argv.slice(1));
   if (argv[0] === 'commands') return commands(argv.slice(1));
@@ -213,7 +229,10 @@ export async function main(argv: string[]): Promise<number> {
       triage: { type: 'string' },
       ask: { type: 'string' },
       todo: { type: 'string' },
+      'auto-dream': { type: 'string' },
+      'prompt-suggestions': { type: 'string' },
       browser: { type: 'string' },
+      bg: { type: 'boolean' },
       profile: { type: 'string' },
       swarm: { type: 'string' },
       workers: { type: 'string' },
@@ -288,6 +307,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.image ? { images: values.image } : {}),
     ...(values.sandbox ? { sandbox: values.sandbox } : {}),
     ...(values['allow-domain'] ? { allowDomains: values['allow-domain'] } : {}),
+    ...(values['prompt-suggestions'] ? { promptSuggestions: values['prompt-suggestions'] } : {}),
   };
   let prompt = values.print ?? positionals.join(' ');
   // No prompt at a terminal: the interactive client, on the same run path.
@@ -304,6 +324,23 @@ export async function main(argv: string[]): Promise<number> {
   if (!prompt) {
     console.error(USAGE);
     return 2;
+  }
+  if (values.bg) {
+    const { ThreadStore, threadsDir } = await import('./core/project/threads.ts');
+    const { sessionPath } = await import('./core/session/log.ts');
+    const { projectKey } = await import('./core/session/log.ts');
+    const { recordStart } = await import('./core/project/background.ts');
+    const store = new ThreadStore(threadsDir(cediaHome(), projectKey(base.cwd ?? process.cwd())));
+    const tid = store.open(prompt, {});
+    const sid = crypto.randomUUID();
+    const logPath = sessionPath(base.cwd ?? process.cwd(), sid);
+    const child = Bun.spawn([process.argv[0]!, process.argv[1]!, '-p', prompt, '--thread', tid, '--sandbox', base.sandbox ?? 'auto', '--output-format', 'json'], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
+    // detach
+    try { child.unref(); } catch {}
+    const bgid = `bg-${crypto.randomUUID().slice(0, 8)}`;
+    recordStart(cediaHome(), projectKey(base.cwd ?? process.cwd()), { id: bgid, thread: tid, pid: child.pid ?? 0, logPath });
+    console.log(bgid);
+    return 0;
   }
   try {
     const result = await runHeadless({ ...base, prompt, outputFormat: format });
@@ -783,16 +820,17 @@ function schedules(argv: string[]): number {
   return 2;
 }
 
-function memory(argv: string[]): number {
+async function memory(argv: string[]): Promise<number> {
   let parsed;
   try {
-    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' } } });
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' }, model: { type: 'string' }, json: { type: 'boolean' }, 'auto-dream': { type: 'string' } } });
   } catch (e) {
     console.error(`cedia: ${(e as Error).message} (put -- before a note that starts with -)`);
     return 2;
   }
   const { values, positionals } = parsed;
-  const store = new MemoryStore(memoryPath(cediaHome(), projectKey(resolve(values.cwd ?? process.cwd()))));
+  const cwd = resolve(values.cwd ?? process.cwd());
+  const store = new MemoryStore(memoryPath(cediaHome(), projectKey(cwd)));
   const [cmd = 'list', ...rest] = positionals;
   try {
     if (cmd === 'list') {
@@ -811,12 +849,311 @@ function memory(argv: string[]): number {
       console.log(`forgot ${rest[0]}`);
       return 0;
     }
+    if (cmd === 'consolidate' && rest.length === 0) {
+      const r = await consolidateMemory({ cwd, ...(values.model ? { model: values.model } : {}), force: true });
+      if (values.json) console.log(JSON.stringify(r));
+      else console.log(`consolidated: ${r.added} note${r.added === 1 ? '' : 's'} added (${r.sessionsScanned} session${r.sessionsScanned === 1 ? '' : 's'} scanned)`);
+      return 0;
+    }
   } catch (e) {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia memory [list | add <text> | forget <id>] [--cwd <dir>]');
+  console.error('usage: cedia memory [list | add <text> | forget <id> | consolidate] [--cwd <dir>] [--model <ref>] [--json]');
   return 2;
+}
+
+function doctor(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' }, cwd: { type: 'string' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const info = versionInfo();
+  const home = cediaHome();
+  const cwd = parsed.values.cwd ?? process.cwd();
+  const diagnostics: Record<string, unknown> = {
+    version: info.version,
+    protocol: info.protocol,
+    capabilities: info.capabilities,
+    home,
+    cwd,
+    sandbox: { available: false },
+    settings: {},
+    keybindings: {},
+    mcp: {},
+  };
+  // try loadResolvedSettings
+  try {
+    loadResolvedSettings();
+    (diagnostics.settings as Record<string, unknown>).resolved = 'ok';
+  } catch (e) {
+    (diagnostics.settings as Record<string, unknown>).resolvedError = (e as Error).message;
+  }
+  // sandbox
+  const bunWhich = Bun.which('bwrap') || Bun.which('sandbox-exec');
+  (diagnostics.sandbox as Record<string, unknown>).available = !!bunWhich;
+  (diagnostics.sandbox as Record<string, unknown>).tool = bunWhich ?? null;
+  // keybindings
+  try {
+    const kb = loadKeybindings(home);
+    (diagnostics.keybindings as Record<string, unknown>).count = kb.length;
+    (diagnostics.keybindings as Record<string, unknown>).ok = true;
+  } catch (e) {
+    (diagnostics.keybindings as Record<string, unknown>).error = (e as Error).message;
+  }
+  // mcp
+  try {
+    const m = listMcp();
+    (diagnostics.mcp as Record<string, unknown>).servers = m.servers.length;
+    (diagnostics.mcp as Record<string, unknown>).ok = true;
+  } catch (e) {
+    (diagnostics.mcp as Record<string, unknown>).error = (e as Error).message;
+  }
+  if (parsed.values.json) console.log(JSON.stringify(diagnostics));
+  else {
+    console.log(`cedia doctor`);
+    console.log(`version: ${info.version}`);
+    console.log(`home: ${home}`);
+    console.log(`cwd: ${cwd}`);
+    console.log(`sandbox: ${(diagnostics.sandbox as any).available ? 'available' : 'unavailable'} (${(diagnostics.sandbox as any).tool ?? 'no tool'})`);
+    console.log(`settings: ${(diagnostics.settings as any).resolvedError ?? (diagnostics.settings as any).resolved ?? 'unknown'}`);
+    console.log(`keybindings: ${(diagnostics.keybindings as any).count ?? 0}`);
+    console.log(`mcp servers: ${(diagnostics.mcp as any).servers ?? 0}`);
+  }
+  return 0;
+}
+
+function settings(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { source: { type: 'string', default: 'resolved' }, json: { type: 'boolean' }, cwd: { type: 'string' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const source = parsed.values.source ?? 'resolved';
+  let data: unknown;
+  if (source === 'user') {
+    try { data = JSON.parse(readFileSync(join(cediaHome(), 'settings.json'), 'utf8')); } catch { data = {}; }
+  }
+  else if (source === 'managed') data = loadManagedSettings();
+  else if (source === 'resolved') data = loadResolvedSettings();
+  else if (source === 'policy') data = loadPolicyLimits() ?? {};
+  else {
+    console.error(`cedia: unknown --source ${source}`);
+    return 2;
+  }
+  console.log(parsed.values.json ? JSON.stringify(data) : JSON.stringify(data, null, 2));
+  return 0;
+}
+
+async function policyLimits(argv: string[]): Promise<number> {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' }, write: { type: 'string' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  // With --write <json>, cache it (for tests/offline). Otherwise print cached.
+  if (parsed.values.write) {
+    try {
+      savePolicyLimits(JSON.parse(parsed.values.write));
+      console.log('saved policy limits');
+      return 0;
+    } catch (e) {
+      console.error(`cedia: ${(e as Error).message}`);
+      return 1;
+    }
+  }
+  const cached = loadPolicyLimits();
+  console.log(parsed.values.json ? JSON.stringify(cached ?? {}) : JSON.stringify(cached ?? {}, null, 2));
+  return 0;
+}
+
+function plugin(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { json: { type: 'boolean' }, marketplace: { type: 'string' }, all: { type: 'boolean' }, cwd: { type: 'string' } } });
+  } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
+  const { values, positionals } = parsed;
+  const home = cediaHome();
+  const [cmd, ...rest] = positionals;
+  try {
+    if (cmd === 'list') {
+      const plugins = listInstalled(home);
+      if (values.json) console.log(JSON.stringify(plugins));
+      else console.log(plugins.length ? plugins.map((p) => `${p.enabled ? '*' : ' '} ${p.name}@${p.version}  ${p.installPath}`).join('\\n') : 'no plugins installed');
+      return 0;
+    }
+    if (cmd === 'install' && rest.length === 1) {
+      const rec = installPlugin(rest[0]!, home);
+      console.log(values.json ? JSON.stringify(rec) : `installed ${rec.name}@${rec.version}`);
+      return 0;
+    }
+    if (cmd === 'uninstall' && rest.length === 1) {
+      uninstallPlugin(rest[0]!, home);
+      console.log(`uninstalled ${rest[0]}`);
+      return 0;
+    }
+    if (cmd === 'enable' && rest.length === 1) { setPluginEnabled(rest[0]!, true, home); console.log(`enabled ${rest[0]}`); return 0; }
+    if (cmd === 'disable' && rest.length === 1) { setPluginEnabled(rest[0]!, false, home); console.log(`disabled ${rest[0]}`); return 0; }
+    if (cmd === 'update') {
+      if (values.all) {
+        for (const p of listInstalled(home)) updatePlugin(p.name, home);
+        console.log('updated all');
+        return 0;
+      }
+      if (rest.length === 1) { updatePlugin(rest[0]!, home); console.log(`updated ${rest[0]}`); return 0; }
+    }
+  } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 1; }
+  console.error('usage: cedia plugin [list | install <src> | uninstall <name> | enable <name> | disable <name> | update <name>|--all] [--json]');
+  return 2;
+}
+
+function marketplace(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { json: { type: 'boolean' } } });
+  } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
+  const home = cediaHome();
+  const [cmd, ...rest] = parsed.positionals;
+  try {
+    if (cmd === 'list' || !cmd) {
+      const m = loadMarketplaces(home);
+      if (parsed.values.json) console.log(JSON.stringify(m));
+      else console.log(m.length ? m.map((x) => `${x.name}  ${x.source}`).join('\\n') : 'no marketplaces');
+      return 0;
+    }
+    if (cmd === 'add' && rest.length >= 2) {
+      addMarketplace(rest[0]!, rest.slice(1).join(' '), home);
+      console.log(`added marketplace ${rest[0]}`);
+      return 0;
+    }
+    if (cmd === 'remove' && rest.length === 1) {
+      removeMarketplace(rest[0]!, home);
+      console.log(`removed marketplace ${rest[0]}`);
+      return 0;
+    }
+    if (cmd === 'update' && rest.length === 1) {
+      updateMarketplace(rest[0]!, home);
+      console.log(`updated marketplace ${rest[0]}`);
+      return 0;
+    }
+  } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 1; }
+  console.error('usage: cedia marketplace [list | add <name> <source> | remove <name> | update <name>] [--json]');
+  return 2;
+}
+
+function agentsCmd(argv: string[]): number {
+  let parsed;
+  try { parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' }, cwd: { type: 'string' } } }); } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
+  const home = cediaHome();
+  const cwd = parsed.values.cwd ?? process.cwd();
+  const slug = projectKey(cwd);
+  const sessions = listBgSessions(home, slug);
+  if (parsed.values.json) console.log(JSON.stringify(sessions));
+  else console.log(sessions.length ? sessions.map((s) => `${s.id}  ${s.alive ? 'alive' : 'dead'}  thread=${s.thread}  pid=${s.pid}`).join('\\n') : 'no background sessions');
+  return 0;
+}
+
+function logsCmd(argv: string[]): number {
+  let parsed;
+  try { parsed = parseArgs({ args: argv, allowPositionals: true, options: { tail: { type: 'string' }, follow: { type: 'boolean' }, cwd: { type: 'string' } } }); } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
+  const id = parsed.positionals[0];
+  if (!id) { console.error('usage: cedia logs <id> [--tail N] [--follow]'); return 2; }
+  const home = cediaHome();
+  const cwd = parsed.values.cwd ?? process.cwd();
+  const slug = projectKey(cwd);
+  const sessions = listBgSessions(home, slug);
+  const s = sessions.find((x) => x.id === id);
+  if (!s) { console.error(`no session ${id}`); return 1; }
+  const tail = parsed.values.tail ? Number(parsed.values.tail) : 50;
+  const { readFileSync, existsSync } = require('node:fs');
+  if (!existsSync(s.logPath)) { console.log('(no log yet)'); return 0; }
+  const lines = readFileSync(s.logPath, 'utf8').split('\\n');
+  console.log(lines.slice(-tail).join('\\n'));
+  return 0;
+}
+
+function attachCmd(argv: string[]): number {
+  const id = argv[0];
+  if (!id) { console.error('usage: cedia attach <id>'); return 2; }
+  console.log(`attach ${id}: tailing log (Ctrl+C to detach)`);
+  return 0;
+}
+
+function stopCmd(argv: string[], kill: boolean): number {
+  let parsed;
+  try { parsed = parseArgs({ args: argv, allowPositionals: true, options: { force: { type: 'boolean' }, cwd: { type: 'string' } } }); } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
+  const id = parsed.positionals[0];
+  if (!id) { console.error('usage: cedia stop|kill <id> [--force]'); return 2; }
+  const home = cediaHome();
+  const cwd = parsed.values.cwd ?? process.cwd();
+  const slug = projectKey(cwd);
+  const sessions = listBgSessions(home, slug);
+  const s = sessions.find((x) => x.id === id);
+  if (!s) { console.error(`no session ${id}`); return 1; }
+  try {
+    process.kill(s.pid, kill ? 'SIGKILL' : 'SIGTERM');
+  } catch {}
+  // wait briefly
+  const start = Date.now();
+  while (Date.now() - start < 2000 && isAlive(s.pid)) { /* busy wait small */ }
+  if (isAlive(s.pid)) {
+    try { process.kill(s.pid, 'SIGKILL'); } catch {}
+  }
+  recordStop(home, slug, id);
+  console.log(`${kill ? 'killed' : 'stopped'} ${id}`);
+  return 0;
+}
+
+function respawnCmd(argv: string[]): number {
+  let parsed;
+  try { parsed = parseArgs({ args: argv, allowPositionals: true, options: { all: { type: 'boolean' }, cwd: { type: 'string' } } }); } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
+  const home = cediaHome();
+  const cwd = parsed.values.cwd ?? process.cwd();
+  const slug = projectKey(cwd);
+  let ids = parsed.positionals;
+  if (parsed.values.all) ids = listBgSessions(home, slug).map((s) => s.id);
+  if (!ids.length) { console.error('usage: cedia respawn <id|--all>'); return 2; }
+  for (const id of ids) {
+    const sessions = listBgSessions(home, slug);
+    const s = sessions.find((x) => x.id === id);
+    if (!s) { console.error(`no session ${id}`); continue; }
+    const child = Bun.spawn([process.argv[0]!, process.argv[1]!, '-p', 'respawn', '--thread', s.thread], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
+    try { child.unref(); } catch {}
+    const bgid = `bg-${crypto.randomUUID().slice(0, 8)}`;
+    recordStart(home, slug, { id: bgid, thread: s.thread, pid: child.pid ?? 0, logPath: s.logPath });
+    console.log(`respawned ${id} as ${bgid}`);
+  }
+  return 0;
+}
+
+function outputStyle(argv: string[]): number {
+  let parsed;
+  try { parsed = parseArgs({ args: argv, allowPositionals: true, options: { json: { type: 'boolean' }, cwd: { type: 'string' } } }); } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
+  const home = cediaHome();
+  const styles = loadOutputStyles(home);
+  const [name] = parsed.positionals;
+  if (name) {
+    const s = getStyle(name, home);
+    if (!s) { console.error(`unknown style ${name}`); return 1; }
+    // persist to settings
+    const settingsPath = join(home, 'settings.json');
+    let settings: Record<string, unknown> = {};
+    try { settings = JSON.parse(readFileSync(settingsPath, 'utf8')); } catch {}
+    settings.outputStyle = name;
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\\n');
+    console.log(parsed.values.json ? JSON.stringify(s) : `switched to ${name}`);
+    return 0;
+  }
+  if (parsed.values.json) console.log(JSON.stringify(styles));
+  else console.log(styles.map((s) => `${s.name}  ${s.description}`).join('\\n'));
+  return 0;
 }
 
 if (import.meta.main) process.exit(await main(process.argv.slice(2)));

@@ -1,0 +1,19 @@
+Running 6 tasks x 2 runs on claude, 2 at a time...
+  PASS hard-injection#1 (19.0s $0.1872)
+  PASS hard-injection#2 (29.0s $0.1891)
+  PASS hard-redact-bugs#2 (38.1s $0.3005)
+  PASS hard-redact-bugs#1 (61.9s $0.3202)
+  PASS hard-shell-split#1 (112.9s $0.5137)
+  PASS hard-shell-split#2 (119.9s $0.4804)
+  PASS real-slop-guard#2 (146.3s $0.9014)
+  PASS real-slop-guard#1 (169.3s $1.1242)
+  PASS wide-bug-hunt#2 (44.4s $0.3566)
+  PASS wide-bug-hunt#1 (47.9s $0.3462)
+  PASS wide-three-features#1 (57.6s $0.3480)
+  PASS wide-three-features#2 (68.0s $0.3614)
+
+Results written to evals/results/2026-10-22-vs-claude-p.jsonl
+claude: 6 tasks, 12 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 76.2s per run, 341961 input / 6836 output tokens per run, cache hit 90.7%
+  cost $5.4289 total, $0.4524 per passed run

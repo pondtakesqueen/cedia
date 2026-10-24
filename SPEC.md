@@ -283,3 +283,10 @@ Each stage ends with something usable, and every done-criterion has a test or a 
 ## Licenses
 
 cedia itself is proprietary (`LICENSE`, all rights reserved; `package.json` says `UNLICENSED`). The GitHub repo is public for free CI minutes, which makes the source visible, not licensed. Only take in third-party code whose license allows a closed-source project: MIT, BSD, Apache-2.0 and the like, never GPL/AGPL. Keep `NOTICE` for adapted Apache-2.0 or MIT code. Never copy from `anthropics/claude-code` (no license) or leaked sources, and never port cedia-rs code.
+
+
+## Tier 1 and Tier 2 status
+
+Tier 1: COMPLETE (with documented deferrals: microcompact client-side rejected; server-side context_management deferred; MDM plist/HKLM/HKCU + remote fetch/polling deferred).
+
+Tier 2: Sleep, NotebookEdit, ToolSearch, Monitor, output styles, prompt suggestions implemented. Voice/buddy/computer-use remain deferred.

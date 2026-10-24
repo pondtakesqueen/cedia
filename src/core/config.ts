@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { McpServerConfig } from './mcp/client.ts';
@@ -57,6 +57,12 @@ export type Settings = {
   desktop?: Record<string, unknown>;
   // The user's hooks (core/hooks.ts). User settings only: a repo must not run code outside the sandbox.
   hooks?: Hooks;
+  // AutoDream: consolidate project memory between sessions (default off). User settings only.
+  autoDream?: boolean;
+  // Output style name (default/explanatory/learning or user style).
+  outputStyle?: string;
+  // Prompt suggestions: predict next user prompt after each turn (default off).
+  promptSuggestions?: boolean;
 };
 
 // Every key cedia knows, with the keys allowed inside the objects it reads. A key that is not here is a typo or a
@@ -81,6 +87,9 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   mcpServers: 'any',
   desktop: 'any',
   hooks: 'any',
+  autoDream: 'any',
+  outputStyle: 'any',
+  promptSuggestions: 'any',
 };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -223,6 +232,18 @@ export function loadAsk(flag?: string): boolean {
 export function loadTodo(flag?: string): boolean {
   if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--todo must be on or off: ${flag}`);
   return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).todo ?? false);
+}
+
+// autoDream: flag > user settings > off.
+export function loadAutoDream(flag?: string): boolean {
+  if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--auto-dream must be on or off: ${flag}`);
+  return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).autoDream ?? false);
+}
+
+// promptSuggestions: flag > user settings > off.
+export function loadPromptSuggestions(flag?: string): boolean {
+  if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--prompt-suggestions must be on or off: ${flag}`);
+  return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).promptSuggestions ?? false);
 }
 
 // The user's profiles as written, for core/profiles.ts to check.
@@ -408,4 +429,87 @@ export function loadSandbox(flags: { mode?: string; allowDomains?: string[] } = 
 // Hooks come from the user's settings only; a repo's .cedia/settings.json may name them but they are never read.
 export function loadHooks(): Hooks {
   return readSettings(join(cediaHome(), 'settings.json')).hooks ?? {};
+}
+
+// Managed settings tier (org/MDM). Read from a managed directory (file-based; MDM/plist is platform-specific
+// and not implemented here). Default off for local dev: the directory usually does not exist.
+export const managedDir = () => process.env.CEDIA_MANAGED_DIR ?? (process.platform === 'darwin' ? '/Library/Application Support/Cedia' : '/etc/cedia');
+
+function mergeArrays(a?: unknown[], b?: unknown[]): unknown[] | undefined {
+  if (!a && !b) return undefined;
+  return [...new Set([...(a ?? []), ...(b ?? [])])];
+}
+
+// Shallow merge of two settings objects: objects merged one level, arrays unioned+deduped, scalars: managed (b) wins.
+export function mergeSettings(base: Settings, over: Settings): Settings {
+  const out: Settings = { ...base } as Settings;
+  for (const [k, v] of Object.entries(over)) {
+    const cur = (out as Record<string, unknown>)[k];
+    if (Array.isArray(v) && Array.isArray(cur)) {
+      (out as Record<string, unknown>)[k] = mergeArrays(cur, v);
+    } else if (v && typeof v === 'object' && !Array.isArray(v) && cur && typeof cur === 'object' && !Array.isArray(cur)) {
+      // Recurse one level so nested arrays (permissions.deny) union instead of replacing.
+      const merged: Record<string, unknown> = { ...(cur as object) };
+      for (const [ik, iv] of Object.entries(v as object)) {
+        const icur = merged[ik];
+        if (Array.isArray(iv) && Array.isArray(icur)) merged[ik] = mergeArrays(icur, iv);
+        else merged[ik] = iv;
+      }
+      (out as Record<string, unknown>)[k] = merged;
+    } else {
+      (out as Record<string, unknown>)[k] = v;
+    }
+  }
+  return out;
+}
+
+export function loadManagedSettings(): Settings {
+  const dir = managedDir();
+  const files: string[] = [];
+  const main = join(dir, 'managed-settings.json');
+  if (existsSync(main)) files.push(main);
+  const d = join(dir, 'managed-settings.d');
+  if (existsSync(d)) {
+    try {
+      for (const f of readdirSync(d).filter((x) => x.endsWith('.json')).sort()) files.push(join(d, f));
+    } catch {
+      // ignore
+    }
+  }
+  let merged: Settings = {};
+  for (const f of files) {
+    try {
+      merged = mergeSettings(merged, readSettings(f));
+    } catch {
+      // skip bad file
+    }
+  }
+  return merged;
+}
+
+export function loadResolvedSettings(): Settings {
+  const user = readSettings(join(cediaHome(), 'settings.json'));
+  const managed = loadManagedSettings();
+  return mergeSettings(user, managed);
+}
+
+// Policy limits cache (~/.cedia/policy-limits.json). Eligibility is determined by the caller (API key or
+// enterprise/team subscription); this only reads/writes the cache.
+export type PolicyLimits = Record<string, unknown>;
+export function policyLimitsPath(home = cediaHome()): string {
+  return join(home, 'policy-limits.json');
+}
+export function loadPolicyLimits(home = cediaHome()): PolicyLimits | null {
+  const p = policyLimitsPath(home);
+  if (!existsSync(p)) return null;
+  try {
+    return JSON.parse(readFileSync(p, 'utf8')) as PolicyLimits;
+  } catch {
+    return null;
+  }
+}
+export function savePolicyLimits(limits: PolicyLimits, home = cediaHome()): void {
+  const { writeFileSync, mkdirSync } = require('node:fs');
+  mkdirSync(home, { recursive: true });
+  writeFileSync(policyLimitsPath(home), JSON.stringify(limits, null, 2) + '\n');
 }

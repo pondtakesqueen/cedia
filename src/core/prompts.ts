@@ -46,7 +46,7 @@ export function modeNote(mode: PermissionMode, unlock: Guard[], plan?: { ask: bo
 // Per-session facts go in the first user turn, never in the cached system prompt.
 export function preamble(
   cwd: string,
-  opts: { mode?: PermissionMode; plan?: { ask: boolean }; unlock?: Guard[]; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] }; context?: string; instructions?: string; memory?: string; skills?: string; profile?: { name: string; instructions: string } } = {},
+  opts: { mode?: PermissionMode; plan?: { ask: boolean }; unlock?: Guard[]; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] }; context?: string; instructions?: string; memory?: string; skills?: string; profile?: { name: string; instructions: string }; outputStyle?: string } = {},
   now = new Date(),
 ): string {
   const lines = [`working directory: ${cwd}`, `date: ${now.toISOString().slice(0, 10)}`, `platform: ${process.platform}`, `permission: ${modeNote(opts.mode ?? 'read-only', opts.unlock ?? [], opts.plan)}`];
@@ -67,7 +67,8 @@ export function preamble(
   const kept = opts.memory?.trim() ? `\n${opts.memory.trim()}` : '';
   // The skills the session can load (core/skills/skills.ts), already framed.
   const skills = opts.skills?.trim() ? `\n${opts.skills.trim()}` : '';
+  const style = opts.outputStyle?.trim() ? `\n<output_style>\n${opts.outputStyle.trim()}\n</output_style>` : '';
   // The run's profile (core/profiles.ts): the role the session plays, from the user's settings or cedia's own.
   const role = opts.profile?.instructions.trim() ? `\n<profile name="${opts.profile.name}">\n${opts.profile.instructions.trim()}\n</profile>` : '';
-  return `${env}${user}${role}${repo}${kept}${skills}`;
+  return `${env}${user}${role}${repo}${kept}${skills}${style}`;
 }

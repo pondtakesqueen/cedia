@@ -7,13 +7,14 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
 import { attachedNote, storeImage, type ImageRef } from '../../core/images.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
 import { memoryBlock, memoryPath, MemoryStore, rememberTool } from '../../core/project/memory.ts';
 import { loadSkills, skillCommand, skillsBlock, skillTool } from '../../core/skills/skills.ts';
+import { getStyle, loadOutputStyleSetting } from '../../core/output-styles/styles.ts';
 import { mcpStub, startMcp, type McpServers } from '../../core/mcp/tools.ts';
 import { webFetchTool } from '../../core/tools/web.ts';
 import { runTurn } from '../../core/project/undo.ts';
@@ -120,6 +121,7 @@ export type HeadlessArgs = {
   goalJudge?: string;
   // light (default): the judge alone; full: a planner's acceptance criteria first and a strategist on a stall.
   goalMode?: string;
+  promptSuggestions?: string;
 };
 
 // Every run that changed files or ran checks ends with a receipt built from the ledger. A check another thread ran
@@ -217,6 +219,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const lspSetting = loadLsp(args.lsp);
   const askOn = loadAsk(args.ask);
   const todoOn = loadTodo(args.todo);
+  const promptSuggestionsOn = loadPromptSuggestions(args.promptSuggestions);
   const planWhen = loadPlanWhen(args.planWhen);
   const cacheTtl = args.cacheTtl ?? '5m';
   if (cacheTtl !== '5m' && cacheTtl !== '1h') throw new Error(`--cache-ttl must be 5m or 1h, not ${cacheTtl}`);
@@ -335,6 +338,9 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       return '';
     }
   })();
+  const styleName = loadOutputStyleSetting(cediaHome());
+  const style = getStyle(styleName, cediaHome());
+  const styleModifier = style?.promptModifier ?? '';
   const remember = store ? rememberTool(memory, threadId ?? 'cedia') : undefined;
   const skills = loadSkills(args.cwd, cediaHome());
   const skillList = skillsBlock(skills);
@@ -361,7 +367,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const browser = args.browser && args.browser !== 'off' ? browserTool(args.browser, browserAccess) : undefined;
   // Started inside the run's try below, so they are closed however it ends.
   let mcp: McpServers | undefined;
-  const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}) });
+  const reviewPreamble = preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}), ...(styleModifier ? { outputStyle: styleModifier } : {}) });
   // Where each writer session of this run started in its log, for the change the run made.
   const writerRuns: { log: SessionLog; from: number }[] = [];
   // The change the run made: the first snapshot (taken before the first write) to the last, across its sessions.
@@ -380,7 +386,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const trees = turnTrees();
     if (store && threadId && trees) store.append(threadId, { run: runId, kind: 'turn', cwd: args.cwd, ...trees, sessions: [...new Set(writerRuns.map((w) => w.log.id))] });
   };
-  const basePreamble = preamble(args.cwd, { mode: policy.mode, ...(policy.plan ? { plan: { ask: !!(store && threadId) } } : {}), unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}), ...(profile?.instructions ? { profile: { name: profile.name, instructions: profile.instructions } } : {}) });
+  const basePreamble = preamble(args.cwd, { mode: policy.mode, ...(policy.plan ? { plan: { ask: !!(store && threadId) } } : {}), unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(instructions ? { instructions } : {}), ...(remembered ? { memory: remembered } : {}), ...(skillList ? { skills: skillList } : {}), ...(styleModifier ? { outputStyle: styleModifier } : {}), ...(profile?.instructions ? { profile: { name: profile.name, instructions: profile.instructions } } : {}) });
 
   const ac = new AbortController();
   const onSignal = () => ac.abort();
@@ -1031,7 +1037,17 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       if (result.review) say(`cedia review: ${result.review.model} ${result.review.verdict === 'changes' ? 'asked for changes, sent back to the writer once' : result.review.verdict === 'approve' ? 'approved' : result.review.verdict === 'interrupted' ? 'was interrupted' : 'gave no verdict'}\n`);
       if (threadId) say(`cedia thread: ${threadId}${handoffs ? ` (${handoffs} handoff${handoffs === 1 ? '' : 's'})` : ''}; go on with --thread ${threadId}\n`);
     }
-    else out(encode(result));
+    if (args.outputFormat !== 'text') out(encode(result));
+    if (promptSuggestionsOn) {
+      try {
+        const { generateSuggestion } = await import('../../core/suggestions/prompt-suggestion.ts');
+        const sug = await generateSuggestion({ cwd: args.cwd, lastResult: result.result });
+        if (sug) {
+          if (args.outputFormat === 'stream-json') out(encode({ type: 'prompt_suggestion', suggestion: sug.text } as any));
+          else say(`cedia suggestion: ${sug.text}\\n`);
+        }
+      } catch {}
+    }
     return result;
   } catch (e) {
     recordTurn();

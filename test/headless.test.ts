@@ -294,7 +294,7 @@ describe('cedia -p (offline, faux)', () => {
       const result = JSON.parse(r.out);
       expect(result).toMatchObject({ subtype: 'success', numTurns: 5, result: 'done', review: { model: 'faux/fallback', verdict: 'approve', fixed: false } });
       const review = logs(r.home).find((l) => head(l).role === 'review')!;
-      expect(head(review).tools.map((t) => t.name)).toEqual(['read', 'grep', 'bash', 'web_fetch']);
+      expect(head(review).tools.map((t) => t.name)).toEqual(['read', 'grep', 'bash', 'sleep', 'ToolSearch', 'Monitor', 'web_fetch']);
       // Read-only, but it may run the declared check to test what it suspects.
       expect(review.find((e) => e.kind === 'permission')).toMatchObject({ decision: 'allow', rule: 'allow:bash(test -s f.txt)' });
       const prompt = review.find((e): e is Extract<SessionEvent, { kind: 'user' }> => e.kind === 'user')!.text;
@@ -341,7 +341,7 @@ describe('cedia -p (offline, faux)', () => {
       expect(result.plan.apiMs).toBeGreaterThanOrEqual(0);
       const all = sessionsOf(r.home);
       const planner = all.find((l) => (l[0] as { role: string }).role === 'plan')!;
-      expect((planner[0] as Extract<SessionEvent, { kind: 'session' }>).tools.map((t) => t.name)).toEqual(['read', 'grep', 'bash', 'web_fetch']);
+      expect((planner[0] as Extract<SessionEvent, { kind: 'session' }>).tools.map((t) => t.name)).toEqual(['read', 'grep', 'bash', 'sleep', 'ToolSearch', 'Monitor', 'web_fetch']);
       const writer = all.find((l) => (l[0] as { role: string }).role === 'code')!;
       expect(userTexts(writer)[0]).toContain('<plan by="faux/fallback">\n1. Write good to f.txt.\n2. Run test -s f.txt.\n</plan>');
     });
