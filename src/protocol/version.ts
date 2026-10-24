@@ -30,6 +30,7 @@ export type Capability =
   | 'permissions' // cedia permissions --json (PermissionList), --permission plan, and `permission` on each run event
   | 'commands' // cedia commands --json (CommandList), and a prompt starting /<skill> loads that skill
   | 'threads.fork' // cedia threads fork <id> <n|run>: edit and resend; the new thread's open event has forkOf
+  | 'threads.side' // cedia threads fork <id> end --side: a side chat, forked at the thread's end; its open event has side
   | 'usage' // cedia usage --json (UsageReport) with the cost by day, model, project and thread, --since and --all
   | 'browser' // --browser <endpoint>: the browser tool on a Chromium the client started, by its DevTools endpoint
   | 'threads.restore-json' // cedia threads undo|redo <id> --json (Restored) and rewind <id> <n> --json (RewindResult)
@@ -47,7 +48,7 @@ export type VersionInfo = { name: 'cedia'; version: string; protocol: string; ca
 export const PROTOCOL = hash(schemaText as unknown as string);
 
 export function versionInfo(): VersionInfo {
-  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask', 'todo', 'profiles', 'open_thread', 'schedules', 'worktree.newest-wins', 'spawn.best-of-n', 'models', 'permissions', 'commands', 'threads.fork', 'usage', 'threads.restore-json', 'images', 'browser', 'cache-ttl', 'threads.rename', 'threads.delete', 'mcp.manage', 'commit', 'pr'];
+  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask', 'todo', 'profiles', 'open_thread', 'schedules', 'worktree.newest-wins', 'spawn.best-of-n', 'models', 'permissions', 'commands', 'threads.fork', 'usage', 'threads.restore-json', 'images', 'browser', 'cache-ttl', 'threads.rename', 'threads.delete', 'mcp.manage', 'commit', 'pr', 'threads.side'];
   if (processKeychain()) capabilities.push('keychain');
   return { name: 'cedia', version: VERSION, protocol: PROTOCOL, capabilities };
 }

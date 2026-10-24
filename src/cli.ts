@@ -18,7 +18,7 @@ import { addMcp, checkMcp, listMcp, removeMcp } from './core/mcp/manage.ts';
 import { commitFiles, currentBranch, headCommit, prPlan, pushAndOpenPr, threadChanges, type CommitDraft, type Committed, type PrOpened } from './core/project/commit.ts';
 import { draftCommitMessage } from './core/project/draft.ts';
 import { deleteThread } from './core/project/delete.ts';
-import { forkThread } from './core/project/fork.ts';
+import { type ForkResult, forkThread } from './core/project/fork.ts';
 import { workspaceSnapshots } from './core/safety/snapshot.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
@@ -106,7 +106,7 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                             cache misses by cause, and cost by day, model, project and thread
                                             (default: this project's last 20 sessions; --since: every session
                                             in the range; --all: every project)
-       cedia threads [--all] [--cwd <dir>]  list this project's threads (--all: archived ones too)
+       cedia threads [--all] [--cwd <dir>]  list this project's threads (--all: archived ones and side chats too)
        cedia threads show <id>              a thread's task, state, sessions, handoff note, result and messages
        cedia threads send <id> <text>       leave a message the thread sees at its next turn; prints the message id
        cedia threads unsend <id> [<msg>...] take back your messages it has not seen yet (all of them by default)
@@ -128,10 +128,11 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                             conversation and files together: the thread goes on from there, and
                                             every file a later run changed is put back. It refuses while the thread
                                             is working, or when such a file changed since (--force: anyway).
-       cedia threads fork <id> <n|run> [--json]
+       cedia threads fork <id> <n|run|end> [--side] [--json]
                                             a new thread whose conversation is this one's just before run n (or the
                                             run with that id), for sending its message again, edited; the original
-                                            thread and the files are left as they are
+                                            thread and the files are left as they are. end: as it stands now, even
+                                            while it works; --side marks it a side chat, which list leaves out
                                             Without n, lists the runs
        cedia schedules [list | due] [--json]
                                             the project's scheduled prompts, or the ones due now. Whoever runs
@@ -398,13 +399,14 @@ function threads(argv: string[]): number {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' }, json: { type: 'boolean' } },
+    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' }, side: { type: 'boolean' }, json: { type: 'boolean' } },
   });
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(values.cwd ?? process.cwd())));
   const [cmd = 'list', id, ...rest] = positionals;
   try {
     if (cmd === 'list') {
-      const all = store.list().filter((t) => values.all || !t.archived);
+      // A side chat belongs to the thread it was forked from, and shows beside it in a client.
+      const all = store.list().filter((t) => values.all || (!t.archived && !t.side));
       console.log(all.length ? all.map(threadLine).join('\n') : 'no threads in this project');
       return 0;
     }
@@ -485,9 +487,11 @@ function threads(argv: string[]): number {
     }
     if (cmd === 'fork' && id && rest.length === 1) {
       if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
-      const r = forkThread(store, id, rest[0]!, { sessionFile: (cwd, sid) => sessionPath(cwd, sid) });
+      const r = forkThread(store, id, rest[0]!, { sessionFile: (cwd, sid) => sessionPath(cwd, sid) }, { side: values.side ?? false });
       if ('error' in r) throw new Error(r.error);
-      console.log(values.json ? JSON.stringify({ thread: r.thread, run: r.run.id, ...(r.sessionId ? { sessionId: r.sessionId } : {}) }) : `forked ${id} at run ${JSON.stringify(r.run.prompt.split('\n')[0])} into ${r.thread}; send the edited message with cedia -p <text> --thread ${r.thread}`);
+      const out: ForkResult = { thread: r.thread, ...(r.run ? { run: r.run.id } : {}), ...(r.sessionId ? { sessionId: r.sessionId } : {}) };
+      const at = r.run ? `at run ${JSON.stringify(r.run.prompt.split('\n')[0])}` : 'at its end';
+      console.log(values.json ? JSON.stringify(out) : `forked ${id} ${at} into ${r.thread}; send ${r.run ? 'the edited message' : 'a question'} with cedia -p <text> --thread ${r.thread}`);
       return 0;
     }
     if (cmd === 'diff' && id) {
@@ -507,7 +511,7 @@ function threads(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run> [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id> | rename <id> <title> | delete <id> [--force] [--json]] [--cwd <dir>]');
+  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run|end> [--side] [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id> | rename <id> <title> | delete <id> [--force] [--json]] [--cwd <dir>]');
   return 2;
 }
 
