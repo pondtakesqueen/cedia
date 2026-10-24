@@ -271,8 +271,9 @@ export type Spawned = { explore: number; work: number; handoffs: number; peakCon
 
 // A role run around the writer. `via: 'claude-code'` is the user's own Claude Code CLI (their subscription): its
 // session lives in Claude Code, and its reported cost is not added to costUsd. ms: the step's wall time, start to
-// answer, so a run's time can be split between the writer and the roles around it.
-export type Step = { model: string; via: 'cedia' | 'claude-code'; sessionId: string; costUsd?: number; ms?: number };
+// answer, so a run's time can be split between the writer and the roles around it. requests: the model requests the
+// step made, and apiMs the time spent in them, so the rest of ms is the step's own start and its tools.
+export type Step = { model: string; via: 'cedia' | 'claude-code'; sessionId: string; costUsd?: number; ms?: number; requests?: number; apiMs?: number };
 
 // Where a run's wall time went. outputTokPerSec is the model's decode rate: output tokens (thinking included)
 // over streaming time. harnessMs is everything that was neither the model nor a tool: cedia's own overhead.

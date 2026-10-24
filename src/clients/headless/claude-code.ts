@@ -7,7 +7,7 @@
 // is untouched (unlike --bare, which reads no keychain).
 
 export type ClaudeCodeStep = { prompt: string; model: string; effort?: string; cwd: string; allowed: string[]; signal?: AbortSignal };
-export type ClaudeCodeResult = { ok: boolean; text: string; sessionId: string; costUsd?: number; error?: string };
+export type ClaudeCodeResult = { ok: boolean; text: string; sessionId: string; costUsd?: number; turns?: number; apiMs?: number; error?: string };
 
 // Keys that would switch Claude Code from the subscription to API billing, and cedia's own settings.
 const STRIPPED = /^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CEDIA_.*|OPENCODE_API_KEY|DEEPSEEK_API_KEY)$/;
@@ -39,6 +39,8 @@ export async function runClaudeCode(step: ClaudeCodeStep, bin = process.env.CEDI
     text: String(j.result ?? ''),
     sessionId: String(j.session_id ?? ''),
     ...(typeof j.total_cost_usd === 'number' ? { costUsd: j.total_cost_usd } : {}),
+    ...(typeof j.num_turns === 'number' ? { turns: j.num_turns } : {}),
+    ...(typeof j.duration_api_ms === 'number' ? { apiMs: j.duration_api_ms } : {}),
     ...(ok ? {} : { error: String(j.result ?? j.subtype) }),
   };
 }
