@@ -377,15 +377,17 @@ describe('cedia -p (offline, faux)', () => {
       expect(JSON.parse(long.out)).toMatchObject({ subtype: 'success', review: { verdict: 'approve' } });
     });
 
-    test("a plan's parts go to work sub-threads before the writer, on the model the planner picked", () => {
+    test("with worktrees on, a plan's parts go to work sub-threads before the writer, on the model the planner picked", () => {
       const args = ['-p', 'write a and b, then f', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -d .', '--plan', 'faux/fallback', '--plan-when', 'always', '--workers', 'faux/fallback'];
       const plan = 'f last.\n<part files="a.txt">Write a to a.txt.</part>\n<part files="b.txt" model="faux/fallback">Write b to b.txt.</part>';
       const part = (file: string, id: string) => [call(`${id}1`, `echo ${file} > ${file}.txt`), call(`${id}2`, 'test -d .'), reply(`${file} done`)];
-      const r = cedia([reply(plan), ...part('a', 'a'), ...part('b', 'b'), call('w1', 'echo f > f.txt'), call('w2', 'test -d .'), reply('done')], [...args, '--spawn', 'on']);
+      const r = cedia([reply(plan), ...part('a', 'a'), ...part('b', 'b'), call('w1', 'echo f > f.txt'), call('w2', 'test -d .'), reply('done')], [...args, '--spawn', 'worktree']);
       const result = JSON.parse(r.out);
       expect(result).toMatchObject({ subtype: 'success', subthreads: 2, spawned: { work: 2, explore: 0 } });
       expect(result.evidence.changed).toEqual(expect.arrayContaining(['a.txt', 'b.txt', 'f.txt']));
       expect(r.err).toContain('cedia: the plan splits off 2 parts; each goes to a work sub-thread first');
+      // Outside git there is no worktree, so they run in place, one after another.
+      expect(r.err).toContain('no worktree for the plan\'s parts');
       const all = sessionsOf(r.home);
       const planner = all.find((l) => (l[0] as { role: string }).role === 'plan')!;
       expect(userTexts(planner)[0]).toContain('<part files="every file it changes, comma-separated" model="…">the brief</part>');
@@ -396,7 +398,7 @@ describe('cedia -p (offline, faux)', () => {
       expect([modelOf('Write a to a.txt.'), modelOf('Write b to b.txt.')]).toEqual(['faux/scripted', 'faux/fallback']);
       // A part is not held to the run's checks, which cover the whole task: one that reports without running them
       // gets no done-gate reminder. The writer after the parts still is.
-      const unchecked = cedia([reply(plan), call('a1', 'echo a > a.txt'), reply('a done'), call('b1', 'echo b > b.txt'), reply('b done'), call('w1', 'echo f > f.txt'), reply('done'), call('w2', 'test -d .'), reply('done')], [...args, '--spawn', 'on']);
+      const unchecked = cedia([reply(plan), call('a1', 'echo a > a.txt'), reply('a done'), call('b1', 'echo b > b.txt'), reply('b done'), call('w1', 'echo f > f.txt'), reply('done'), call('w2', 'test -d .'), reply('done')], [...args, '--spawn', 'worktree']);
       expect(JSON.parse(unchecked.out)).toMatchObject({ subtype: 'success', subthreads: 2 });
       const parts = sessionsOf(unchecked.home).filter((l) => userTexts(l)[0]?.startsWith('You are a sub-thread'));
       expect(parts.length).toBe(2);
@@ -409,12 +411,15 @@ describe('cedia -p (offline, faux)', () => {
       expect(first).toContain('2 parts of the plan were already done before you started');
       expect(first).toContain('a done');
       expect(first).toContain('b done');
-      // With spawn off nothing is split: the planner is not asked, and no sub-thread runs.
-      const off = cedia([reply(plan), call('w1', 'echo f > f.txt'), call('w2', 'test -d .'), reply('done')], [...args, '--spawn', 'off']);
-      expect(JSON.parse(off.out)).toMatchObject({ subtype: 'success' });
-      expect(JSON.parse(off.out).subthreads).toBeUndefined();
-      const offAll = sessionsOf(off.home);
-      expect(userTexts(offAll.find((l) => (l[0] as { role: string }).role === 'plan')!)[0]).not.toContain('<part files=');
+      // With spawn on or off nothing is split, since the parts could only run one after another: the planner is not
+      // asked, and no sub-thread runs.
+      for (const mode of ['on', 'off']) {
+        const off = cedia([reply(plan), call('w1', 'echo f > f.txt'), call('w2', 'test -d .'), reply('done')], [...args, '--spawn', mode]);
+        expect(JSON.parse(off.out)).toMatchObject({ subtype: 'success' });
+        expect(JSON.parse(off.out).subthreads).toBeUndefined();
+        const offAll = sessionsOf(off.home);
+        expect(userTexts(offAll.find((l) => (l[0] as { role: string }).role === 'plan')!)[0]).not.toContain('<part files=');
+      }
     });
 
     test('a review cut off by a stop is reported as interrupted, not as no verdict', async () => {

@@ -859,10 +859,11 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const wantsPlan = planWhen !== 'never' && !direct;
     if (roles.plan && !wantsPlan) say('cedia: no plan for this one\n');
     if (roles.plan && wantsPlan) {
-      // With spawn on, the planner may split the work into parts that cedia hands to work sub-threads before the
+      // With worktrees on, the planner may split the work into parts that cedia hands to work sub-threads before the
       // writer starts: what to delegate, and to which model, is the stronger model's call (no DeepSeek run ever
-      // delegated on its own).
-      const split: Split | undefined = !spawnOn || policy.plan || policy.mode === 'read-only' ? undefined : { mode: spawnMode === 'worktree' ? 'parallel' : 'alone', writer: model.ref, workers: roles.workers.filter((w) => w.ref !== model.ref).map((w) => w.ref) };
+      // delegated on its own). Without them the parts would run one after another, which costs time the writer
+      // doing them itself does not (2026-10-24: 121 s of a real task's 683 s, evals/results/README.md).
+      const split: Split | undefined = spawnMode !== 'worktree' || policy.plan || policy.mode === 'read-only' ? undefined : { mode: 'parallel', writer: model.ref, workers: roles.workers.filter((w) => w.ref !== model.ref).map((w) => w.ref) };
       say(`cedia: planning with ${roles.plan.via === 'claude-code' ? `claude-code:${roles.plan.model}@${roles.plan.effort}` : `${roles.plan.model.ref}${roles.plan.effort ? `@${roles.plan.effort}` : ''}`}\n`);
       const p = await side('plan', roles.plan, planPrompt(task, split));
       if (p.ok && p.text.trim()) {

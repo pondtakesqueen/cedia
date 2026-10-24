@@ -270,3 +270,14 @@ The 24-task comparison with Claude Code averaged 238 s a task in auto mode (Haik
 - In the 24-task run the 5 real-repository tasks took 60% of all the time: 683 s each on average, 393 s of it the writer's own 40 to 64 turns, with 51 to 215 s of that in tools.
 
 A change of at most 40 lines to a message the triage sent straight to the writer now goes without a review (`SMALL_CHANGE_LINES`).
+
+The 24-task run's session logs, split by step from their timestamps (plan: the triage's end to the first part or writer session; parts: the plan's sub-threads before the writer; review: the writer's last turn to the reviewer's message; fix: the session after it):
+
+| Tasks | Wall | Plan | Parts | Writer | Review | Fix |
+|---|---|---|---|---|---|---|
+| 4 small (no plan) | 32 s | 0 | 0 | 31 s | 0 | 0 |
+| 15 planned | 145 s | 42 s | 8 s | 36 s | 39 s | 20 s |
+| 5 real-repository | 683 s | 205 s | 121 s | 134 s | 99 s | 125 s |
+| all 24 | 238 s | 69 s | 30 s | 56 s | 45 s | 39 s |
+
+- On the real tasks the plan split off 2 or 3 parts in 4 of 5, and the parts ran one after another in place for 47 to 93 s each before the writer started (`--spawn on`, no worktrees). The writer then read and checked their work anyway. With spawn on but no worktrees the planner is no longer asked to split; with `--spawn worktree` the parts run at once. Its effect on time and quality is to be measured on the real tasks.
