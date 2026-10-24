@@ -534,7 +534,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       }
       const allowed = ['Read', 'Grep', 'Glob', ...(role === 'review' ? GIT_READS : []), ...checks.map((c) => `Bash(${c})`)];
       const r = await runClaudeCode({ prompt, model: choice.model, effort: choice.effort, cwd: args.cwd, allowed, signal: ac.signal });
-      if (!r.ok) say(`cedia: the ${role} step in Claude Code failed: ${r.error}\n`);
+      if (!r.ok && !ac.signal.aborted) say(`cedia: the ${role} step in Claude Code failed: ${r.error}\n`);
       return { ok: r.ok, text: r.text, step: { ...step, sessionId: r.sessionId, ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}) } };
     }
     const log = openLog();
@@ -948,8 +948,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     let review: ReviewOutcome | undefined;
     if (roles.review && result.subtype === 'success' && result.evidence?.changed.length) {
       const r = await side('review', roles.review, reviewPrompt(args.prompt, result.evidence, changesPatch()));
-      const { verdict, findings, overruled } = r.ok ? parseVerdict(r.text) : { verdict: 'unclear' as const, findings: '', overruled: undefined };
+      // A review cut off by a stop said nothing about the change: it was interrupted, not without a verdict.
+      const { verdict, findings, overruled } = r.ok ? parseVerdict(r.text) : { verdict: ac.signal.aborted ? ('interrupted' as const) : ('unclear' as const), findings: '', overruled: undefined };
       review = { ...r.step, verdict, fixed: false };
+      if (verdict === 'interrupted') say(`cedia: the review by ${r.step.model} was interrupted before it gave a verdict; the change is as the writer left it\n`);
       if (overruled) say(`cedia: the review by ${r.step.model} approved but named a file and line; sending it back as changes\n`);
       if (verdict === 'changes') {
         const t0 = Date.now();
@@ -1016,7 +1018,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       if (result.goal) say(`cedia goal: ${result.goal.verdict.replace('_', ' ')} after ${result.goal.rounds.length} judgement${result.goal.rounds.length === 1 ? '' : 's'} by ${goalJudge!.ref}${result.goal.verdict === 'met' ? '' : `: ${result.goal.rounds.at(-1)?.reason.split('\n')[0] ?? ''}`}\n`);
       if (result.classified) say(`cedia classifier: ${result.classified.model} read ${result.classified.calls} command${result.classified.calls === 1 ? '' : 's'} and blocked ${result.classified.blocked}\n`);
       if (result.advice) say(`cedia advisor: ${result.advice.model} read ${result.advice.turns} turn${result.advice.turns === 1 ? '' : 's'} and left ${result.advice.notes} note${result.advice.notes === 1 ? '' : 's'}\n`);
-      if (result.review) say(`cedia review: ${result.review.model} ${result.review.verdict === 'changes' ? 'asked for changes, sent back to the writer once' : result.review.verdict === 'approve' ? 'approved' : 'gave no verdict'}\n`);
+      if (result.review) say(`cedia review: ${result.review.model} ${result.review.verdict === 'changes' ? 'asked for changes, sent back to the writer once' : result.review.verdict === 'approve' ? 'approved' : result.review.verdict === 'interrupted' ? 'was interrupted' : 'gave no verdict'}\n`);
       if (threadId) say(`cedia thread: ${threadId}${handoffs ? ` (${handoffs} handoff${handoffs === 1 ? '' : 's'})` : ''}; go on with --thread ${threadId}\n`);
     }
     else out(encode(result));

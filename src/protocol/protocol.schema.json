@@ -615,7 +615,8 @@
               "enum": [
                 "approve",
                 "changes",
-                "unclear"
+                "unclear",
+                "interrupted"
               ]
             },
             "fixed": {
