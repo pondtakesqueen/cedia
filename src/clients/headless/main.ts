@@ -935,9 +935,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     if (roles.review && result.subtype === 'success' && result.evidence?.changed.length) {
       const r = await side('review', roles.review, reviewPrompt(args.prompt, result.evidence, changesPatch()));
       // A review cut off by a stop said nothing about the change: it was interrupted, not without a verdict.
-      const { verdict, findings } = r.ok ? parseVerdict(r.text) : { verdict: ac.signal.aborted ? ('interrupted' as const) : ('unclear' as const), findings: '' };
+      const { verdict, findings, overruled } = r.ok ? parseVerdict(r.text) : { verdict: ac.signal.aborted ? ('interrupted' as const) : ('unclear' as const), findings: '', overruled: undefined };
       review = { ...r.step, verdict, fixed: false };
       if (verdict === 'interrupted') say(`cedia: the review by ${r.step.model} was interrupted before it gave a verdict; the change is as the writer left it\n`);
+      if (overruled) say(`cedia: the review by ${r.step.model} approved but named a file and line; sending it back as changes\n`);
       if (verdict === 'changes') {
         result = await recover(await write(writer.model, writer.log, fixPrompt(r.step.model, findings)));
         review.fixed = true;
