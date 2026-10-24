@@ -3,5 +3,6 @@
   "category": "feature",
   "source": "cedia src/core/safety/shell.ts (simpleCommands)",
   "prompt": "Implement `simpleCommands` in shell.ts so a permission policy can see the argv of every simple command in a shell line. The doc comment lists every rule. Run `bun test` until it passes.",
-  "verify": "bun test"
+  "verify": "bun test",
+  "timeoutSec": 450
 }
