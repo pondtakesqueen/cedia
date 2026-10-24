@@ -18,8 +18,19 @@ describe('review', () => {
     for (const t of ['Nothing to fix.\nVERDICT: approve', 'Checked at 12:30, v1.2 is fine.\nVERDICT: approve', 'The parser handles quotes.\nVERDICT: approve'])
       expect(parseVerdict(t)).toEqual({ verdict: 'approve', findings: t.split('\n')[0]! });
     expect(parseVerdict('a.ts:3 drops the error.\nVERDICT: changes').overruled).toBeUndefined();
-    expect(reviewPrompt('t', undefined, undefined)).toContain('an approval names none');
-    expect(askedReviewPrompt({ kind: 'changes', untracked: [] }, '+x')).toContain('an approval names none');
+    expect(reviewPrompt('t', undefined, undefined)).toContain('`FINDINGS: none`');
+    expect(askedReviewPrompt({ kind: 'changes', untracked: [] }, '+x')).toContain('`FINDINGS: none`');
+  });
+
+  test('with the FINDING lines the prompt asks for, a FINDING turns an approval and cited evidence does not', () => {
+    // 2026-10-24, refactor-rename: an approval that cited lines as evidence was sent back for nothing.
+    const evidence = 'Its three lines only use `run` (`test.js:1`), which calls it through `src/app.js:2`.\n\nFINDINGS: none\nVERDICT: approve';
+    expect(parseVerdict(evidence)).toEqual({ verdict: 'approve', findings: evidence.split('\nVERDICT')[0]! });
+    const named = 'Checked the parser.\nFINDING: memo.ts:41 counts expired entries in size.\nVERDICT: approve';
+    expect(parseVerdict(named)).toMatchObject({ verdict: 'changes', overruled: true });
+    expect(parseVerdict('- **FINDING:** the stream stays open (`csv.ts:12`)\nVERDICT: approve').verdict).toBe('changes');
+    expect(parseVerdict('FINDING: a.ts:3 drops the error.\nVERDICT: changes')).toEqual({ verdict: 'changes', findings: 'FINDING: a.ts:3 drops the error.' });
+    expect(parseVerdict('**FINDINGS: none**\n**VERDICT: approve**').verdict).toBe('approve');
   });
 
   test('the prompt carries the task, the receipt and the diff, and drops a diff that is too long', () => {

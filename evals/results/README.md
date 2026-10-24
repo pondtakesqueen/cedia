@@ -247,7 +247,7 @@ Opus in Claude Code reviewed the diffs of the 4 hard tasks where Claude Code's o
 | medium | 2 of 8 | |
 | high | 7 of 8 | about 18 s |
 
-At medium the review often named the defect (a stream left open, expired entries counted in the size, a sparse array) and still approved. The review stays at medium, which the owner chose over the 18 s; instead an approval that still names a file and line counts as changes (`parseVerdict` in `core/trust/review.ts`), and the prompt says an approval names none. `claude-code@high` still raises it. The rows were not kept in the repository.
+At medium the review often named the defect (a stream left open, expired entries counted in the size, a sparse array) and still approved. The review stays at medium, which the owner chose over the 18 s; instead an approval that still names a file and line counts as changes (`parseVerdict` in `core/trust/review.ts`), and the prompt says an approval names none. `claude-code@high` still raises it. Since the measurement below, the prompt asks for each finding on a `FINDING:` line or `FINDINGS: none`, and only a FINDING line turns an approval; a review without either still falls back to the file-and-line rule. The rows were not kept in the repository.
 
 The memo-async loss on the earlier 24-task comparison came from the eval's 300 s timeout killing the review, not from its verdict; the tasks have run with 600 s since.
 
