@@ -228,7 +228,8 @@ export type HeadlessResult = {
   peakContext?: number;
   // The plan the writer was given, and the review of its change (see core/trust/review.ts).
   plan?: Step;
-  review?: Step & { verdict: 'approve' | 'changes' | 'unclear'; fixed: boolean };
+  // fixMs: the wall time of the writer's fix round, when the review sent it back.
+  review?: Step & { verdict: 'approve' | 'changes' | 'unclear'; fixed: boolean; fixMs?: number };
   // Goal mode (core/trust/goal.ts): the condition, the last judge's verdict, and each judgement. Full mode adds the
   // planner's criteria, which each round left unmet, and the strategist's proposal when one ran.
   goal?: {
@@ -268,8 +269,9 @@ export type Question = { question: string; options?: string[] };
 export type Spawned = { explore: number; work: number; handoffs: number; peakContext: number };
 
 // A role run around the writer. `via: 'claude-code'` is the user's own Claude Code CLI (their subscription): its
-// session lives in Claude Code, and its reported cost is not added to costUsd.
-export type Step = { model: string; via: 'cedia' | 'claude-code'; sessionId: string; costUsd?: number };
+// session lives in Claude Code, and its reported cost is not added to costUsd. ms: the step's wall time, start to
+// answer, so a run's time can be split between the writer and the roles around it.
+export type Step = { model: string; via: 'cedia' | 'claude-code'; sessionId: string; costUsd?: number; ms?: number };
 
 // Where a run's wall time went. outputTokPerSec is the model's decode rate: output tokens (thinking included)
 // over streaming time. harnessMs is everything that was neither the model nor a tool: cedia's own overhead.

@@ -512,6 +512,11 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   };
   // A plan or review step, in cedia or through the user's own Claude Code.
   const side = async (role: 'plan' | 'review', choice: RoleChoice, prompt: string): Promise<{ ok: boolean; text: string; step: Step }> => {
+    const t0 = Date.now();
+    const r = await sideStep(role, choice, prompt);
+    return { ...r, step: { ...r.step, ms: Date.now() - t0 } };
+  };
+  const sideStep = async (role: 'plan' | 'review', choice: RoleChoice, prompt: string): Promise<{ ok: boolean; text: string; step: Step }> => {
     if (choice.via === 'claude-code') {
       const step: Step = { model: `claude-code:${choice.model}@${choice.effort}`, via: 'claude-code', sessionId: '' };
       if (privacy === 'zdr') {
@@ -938,8 +943,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       review = { ...r.step, verdict, fixed: false };
       if (overruled) say(`cedia: the review by ${r.step.model} approved but named a file and line; sending it back as changes\n`);
       if (verdict === 'changes') {
+        const t0 = Date.now();
         result = await recover(await write(writer.model, writer.log, fixPrompt(r.step.model, findings)));
         review.fixed = true;
+        review.fixMs = Date.now() - t0;
       } else if (verdict === 'unclear') say(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
     }
     // Goal: a separate judge decides whether the condition holds; while it does not, the writer goes on in its

@@ -54,8 +54,11 @@ export type Reported = {
   turns?: number;
   // cedia only: where the run's time went (see Timing in src/core/types.ts).
   timing?: { modelMs: number; ttftMs: number; toolMs: number; retryMs?: number; harnessMs: number; outputTokPerSec: number };
-  // cedia with --review: what the reviewer said and whether the writer was sent back to fix it.
-  review?: { verdict: string; fixed: boolean };
+  // cedia with --plan: how long planning took.
+  plan?: { ms?: number };
+  // cedia with --review: what the reviewer said, whether the writer was sent back to fix it, and how long the
+  // review and the fix round took.
+  review?: { verdict: string; fixed: boolean; ms?: number; fixMs?: number };
   // cedia: handoffs to a new session, and sub-threads spawned.
   handoffs?: number;
   subthreads?: number;
@@ -216,7 +219,8 @@ export function parseReported(stdout: string): { reported: Reported; text: strin
         cacheHitRatio: Number(j.cacheHitRatio),
         turns: Number(j.numTurns),
         ...(j.timing ? { timing: j.timing as Reported["timing"] } : {}),
-        ...(j.review ? { review: { verdict: String((j.review as { verdict: unknown }).verdict), fixed: Boolean((j.review as { fixed: unknown }).fixed) } } : {}),
+        ...(j.plan ? { plan: msOf(j.plan, "ms") } : {}),
+        ...(j.review ? { review: { verdict: String((j.review as { verdict: unknown }).verdict), fixed: Boolean((j.review as { fixed: unknown }).fixed), ...msOf(j.review, "ms"), ...msOf(j.review, "fixMs") } } : {}),
         ...(Array.isArray(j.sessions) ? { handoffs: j.sessions.length - 1 } : {}),
         ...(typeof j.subthreads === "number" ? { subthreads: j.subthreads } : {}),
         ...(j.spawned && typeof j.spawned === "object" ? { spawned: j.spawned as Reported["spawned"] } : {}),
@@ -387,7 +391,7 @@ export async function runAll(
       results.push(r);
       spent += r.reported.costUsd ?? 0;
       const cost = r.reported.costUsd !== undefined ? ` $${r.reported.costUsd.toFixed(4)}` : "";
-      log(`  ${r.passed ? "PASS" : "FAIL"} ${task.id}#${run} (${(r.wallMs / 1000).toFixed(1)}s${cost}${r.falseDone ? ", FALSE DONE" : ""}${r.refusedClaim ? ", claim refused" : ""}${r.reported.review ? `, review ${r.reported.review.verdict}` : ""}${r.reported.handoffs ? `, ${r.reported.handoffs} handoff` : ""}${r.reported.subthreads ? `, ${spawnedNote(r.reported)}` : ""}${r.reported.peakContext ? `, peak ${Math.round(r.reported.peakContext / 1000)}k` : ""})`);
+      log(`  ${r.passed ? "PASS" : "FAIL"} ${task.id}#${run} (${(r.wallMs / 1000).toFixed(1)}s${cost}${r.falseDone ? ", FALSE DONE" : ""}${r.refusedClaim ? ", claim refused" : ""}${r.reported.plan?.ms ? `, plan ${(r.reported.plan.ms / 1000).toFixed(0)}s` : ""}${r.reported.review ? `, review ${r.reported.review.verdict}${r.reported.review.ms ? ` ${(r.reported.review.ms / 1000).toFixed(0)}s` : ""}${r.reported.review.fixMs ? `, fix ${(r.reported.review.fixMs / 1000).toFixed(0)}s` : ""}` : ""}${r.reported.handoffs ? `, ${r.reported.handoffs} handoff` : ""}${r.reported.subthreads ? `, ${spawnedNote(r.reported)}` : ""}${r.reported.peakContext ? `, peak ${Math.round(r.reported.peakContext / 1000)}k` : ""})`);
       if (spent >= opts.budget && !stopped) {
         stopped = true;
         console.error(`budget $${opts.budget} reached after $${spent.toFixed(4)}; stopping`);
@@ -579,6 +583,12 @@ function contextOf(results: Result[]): { context?: Summary["context"] } {
     },
   };
 }
+
+// A step's time from cedia's JSON, kept only when it is a number.
+const msOf = (o: unknown, key: "ms" | "fixMs"): { ms?: number; fixMs?: number } => {
+  const v = (o as Record<string, unknown>)[key];
+  return typeof v === "number" ? { [key]: v } : {};
+};
 
 export function missCounts(misses: { cause: string; tokens: number }[]): NonNullable<Reported["cacheMisses"]> {
   const count: Record<string, number> = {};
