@@ -8,6 +8,7 @@ import { defaultHandoffAt } from './project/handoff.ts';
 import { FALLBACKS, resolveModel } from './providers/catalog.ts';
 import { secretPaths } from './safety/secrets.ts';
 import { checkHooks, type Hooks } from './hooks.ts';
+import { pluginHooks } from './plugins/registry.ts';
 import type { Effort, ModelSpec, PrivacyLevel } from './types.ts';
 
 export type Settings = {
@@ -405,7 +406,12 @@ export function loadSandbox(flags: { mode?: string; allowDomains?: string[] } = 
   return { mode: mode as SandboxSetting, allowedDomains: [...new Set([...DEFAULT_DOMAINS, ...(user.allowedDomains ?? []), ...(flags.allowDomains ?? [])])] };
 }
 
-// Hooks come from the user's settings only; a repo's .cedia/settings.json may name them but they are never read.
+// Hooks come from the user's settings, then from the plugins whose hooks the user turned on (core/plugins); a
+// repo's .cedia/settings.json may name them but they are never read.
 export function loadHooks(): Hooks {
-  return readSettings(join(cediaHome(), 'settings.json')).hooks ?? {};
+  const user = readSettings(join(cediaHome(), 'settings.json')).hooks ?? {};
+  const plugins = pluginHooks(cediaHome());
+  const out: Hooks = { ...user };
+  for (const [event, list] of Object.entries(plugins) as [keyof Hooks, Hooks[keyof Hooks]][]) out[event] = [...(out[event] ?? []), ...(list ?? [])];
+  return out;
 }

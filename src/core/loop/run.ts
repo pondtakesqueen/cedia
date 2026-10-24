@@ -10,6 +10,7 @@ import { MAX_IMAGES_PER_SESSION, type ImageRef } from '../images.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
 import { hookName, runHook, type Hooks } from '../hooks.ts';
+import { claudeMatches } from '../plugins/claude-hooks.ts';
 import { decide, READ_ONLY_POLICY, ruleMatches, type Policy } from '../safety/policy.ts';
 import { redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
@@ -833,6 +834,7 @@ async function stopHooks(opts: RunOptions, log: SessionLog, result: string, chan
 async function preHooks(opts: RunOptions, log: SessionLog, spec: ToolSpec, callId: string, input: JsonObject): Promise<{ decision: 'allow'; input: JsonObject } | { decision: 'block'; hook: string; reason: string }> {
   for (const [i, h] of (opts.hooks?.preToolUse ?? []).entries()) {
     if (h.match && !ruleMatches(h.match, spec, input, opts.cwd)) continue;
+    if (h.claude && !claudeMatches(h.claude.matcher, spec.name)) continue;
     const t0 = performance.now();
     const o = await runHook(h, { event: 'preToolUse', sessionId: log.id, cwd: opts.cwd, tool: spec.name, callId, input }, opts.hookHome ?? tmpdir(), opts.signal);
     const hook = hookName('preToolUse', i, h);
@@ -849,6 +851,7 @@ async function preHooks(opts: RunOptions, log: SessionLog, spec: ToolSpec, callI
 async function postHooks(opts: RunOptions, log: SessionLog, j: { callId: string; spec: ToolSpec; input: JsonObject }, out: ToolOutput): Promise<ToolOutput> {
   for (const [i, h] of (opts.hooks?.postToolUse ?? []).entries()) {
     if (h.match && !ruleMatches(h.match, j.spec, j.input, opts.cwd)) continue;
+    if (h.claude && !claudeMatches(h.claude.matcher, j.spec.name)) continue;
     const t0 = performance.now();
     const o = await runHook(h, { event: 'postToolUse', sessionId: log.id, cwd: opts.cwd, tool: j.spec.name, callId: j.callId, input: j.input, output: { text: out.text, isError: out.isError, ...(out.exitCode !== undefined ? { exitCode: out.exitCode } : {}) } }, opts.hookHome ?? tmpdir(), opts.signal);
     const hook = hookName('postToolUse', i, h);

@@ -46,6 +46,12 @@
     "McpCheck": {
       "$ref": "#/definitions/McpCheck"
     },
+    "PluginList": {
+      "$ref": "#/definitions/PluginList"
+    },
+    "PluginEntry": {
+      "$ref": "#/definitions/PluginEntry"
+    },
     "CommitDraft": {
       "$ref": "#/definitions/CommitDraft"
     },
@@ -249,7 +255,8 @@
         "threads.delete",
         "mcp.manage",
         "commit",
-        "pr"
+        "pr",
+        "plugins"
       ]
     },
     "Check": {
@@ -360,10 +367,14 @@
           "type": "string",
           "enum": [
             "user",
-            "repository"
+            "repository",
+            "plugin"
           ]
         },
         "argumentHint": {
+          "type": "string"
+        },
+        "plugin": {
           "type": "string"
         }
       },
@@ -1323,6 +1334,173 @@
           "const": "plan"
         }
       ]
+    },
+    "PluginEntry": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "format": {
+          "$ref": "#/definitions/PluginFormat"
+        },
+        "source": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string",
+                "enum": [
+                  "skill",
+                  "command"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "from"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "mcp": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "servers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "command": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "env": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "headers": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "enabled",
+            "servers"
+          ],
+          "additionalProperties": false
+        },
+        "hooks": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "list": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "event": {
+                    "type": "string"
+                  },
+                  "matcher": {
+                    "type": "string"
+                  },
+                  "command": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "event",
+                  "command"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "enabled",
+            "list"
+          ],
+          "additionalProperties": false
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "format",
+        "source",
+        "skills",
+        "mcp",
+        "hooks",
+        "skipped"
+      ],
+      "additionalProperties": false
+    },
+    "PluginFormat": {
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "codex",
+        "pi",
+        "skills"
+      ]
+    },
+    "PluginList": {
+      "type": "object",
+      "properties": {
+        "plugins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PluginEntry"
+          }
+        }
+      },
+      "required": [
+        "plugins"
+      ],
+      "additionalProperties": false
     },
     "PrOpened": {
       "anyOf": [

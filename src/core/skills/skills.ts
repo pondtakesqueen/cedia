@@ -3,6 +3,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { inside, real, repoRoot, SECRET_NAME } from '../project/instructions.ts';
 import { redactSecrets } from '../safety/secrets.ts';
 import { inert } from '../trust/frame.ts';
+import { pluginVars, readPlugins } from '../plugins/registry.ts';
 import type { ToolSpec } from '../tools/registry.ts';
 
 // Skills: a folder with a SKILL.md (Agent Skills format: front matter with a name and a description, then the
@@ -15,12 +16,16 @@ import type { ToolSpec } from '../tools/registry.ts';
 // like its AGENTS.md: a skill whose folder resolves outside the repository is left out, its files are read only
 // inside its folder and never when they look like secrets, and all of it is redacted and made inert. Neither kind
 // can widen what the permission mode and the sandbox allow.
+//
+// An installed plugin's skills (core/plugins) come after the user's: the user chose to install them, so they load
+// as the user's do, named as the plugin's. `vars` are the paths a plugin's skill may write as ${CLAUDE_PLUGIN_ROOT}
+// and the like, filled in when the skill is loaded.
 
-export type Skill = { name: string; description: string; dir: string; source: 'user' | 'repository'; argumentHint?: string };
+export type Skill = { name: string; description: string; dir: string; source: 'user' | 'repository' | 'plugin'; argumentHint?: string; plugin?: string; vars?: Record<string, string> };
 
 // `cedia commands --json`: what a client offers when the person types `/`. Each skill is a command; `/<name> <text>`
 // sent as a prompt asks the writer to load that skill first (skillCommand).
-export type CommandEntry = { name: string; description: string; kind: 'skill'; source: Skill['source']; argumentHint?: string };
+export type CommandEntry = { name: string; description: string; kind: 'skill'; source: Skill['source']; argumentHint?: string; plugin?: string };
 export type CommandList = { commands: CommandEntry[] };
 
 export const SKILL_DIRS = ['.agents/skills', '.claude/skills', '.cursor/skills'];
@@ -92,14 +97,28 @@ const subdirs = (dir: string): string[] => {
   }
 };
 
-// The skills a session in `cwd` can use. The user's come first and win a name; then the repository's, nearest
-// directory first.
+// The skills a session in `cwd` can use. The user's come first and win a name; then the installed plugins'
+// (one whose name is taken is <plugin>-<name>); then the repository's, nearest directory first.
 export function loadSkills(cwd: string, home: string): Skill[] {
   const found: Skill[] = [];
   for (const d of subdirs(join(home, 'skills'))) {
     const s = readSkill(d, 'user');
     if (s) found.push(s);
   }
+  let plugins: ReturnType<typeof readPlugins>['plugins'] = [];
+  try {
+    plugins = readPlugins(home).plugins;
+  } catch {
+    // A broken registry costs its plugins' skills, not the session; `cedia plugin list` says what is wrong.
+  }
+  for (const p of plugins)
+    for (const ps of p.skills) {
+      const s = readSkill(ps.dir, 'plugin');
+      if (!s) continue;
+      const taken = found.some((f) => f.name === s.name);
+      const name = taken && NAME.test(`${p.name}-${s.name}`) ? `${p.name}-${s.name}` : s.name;
+      found.push({ ...s, name, plugin: p.name, vars: pluginVars(p, ps.dir) });
+    }
   const root = real(repoRoot(resolve(cwd)));
   const here = real(resolve(cwd));
   if (root && here && inside(root, here)) {
@@ -124,7 +143,7 @@ export function skillsBlock(skills: Skill[], max = MAX_SKILLS_BLOCK): string {
   const lines: string[] = [];
   let used = 0;
   for (const s of skills) {
-    const line = `- ${s.name}${s.source === 'user' ? ' (the user\'s)' : ' (the repository\'s)'}: ${inert(s.description)}`;
+    const line = `- ${s.name}${s.source === 'user' ? ' (the user\'s)' : s.source === 'plugin' ? ` (plugin ${s.plugin})` : ' (the repository\'s)'}: ${inert(s.description)}`;
     if (used + line.length > max) break;
     lines.push(line);
     used += line.length + 1;
@@ -196,11 +215,13 @@ export function skillTool(skills: Skill[]): ToolSpec {
       }
       const f = skillFile(skill, 'SKILL.md');
       if ('error' in f) return { text: f.error, isError: true };
-      const body = (frontMatter(f.text)?.body ?? f.text).trim();
+      const vars = skill.vars ?? {};
+      const body = (frontMatter(f.text)?.body ?? f.text).trim().replace(/\$\{(CLAUDE_PLUGIN_ROOT|CLAUDE_PLUGIN_DATA|CLAUDE_SKILL_DIR)\}/g, (m, k: string) => vars[k] ?? m);
       const files = skillFiles(real(skill.dir) ?? skill.dir);
-      const where = skill.source === 'repository' ? ` Its folder is ${inert(skill.dir)}.` : '';
+      const where = skill.source !== 'user' ? ` Its folder is ${inert(skill.dir)}.` : '';
+      const from = skill.source === 'user' ? 'from the user' : skill.source === 'plugin' ? `from the plugin ${skill.plugin}, which the user installed` : 'from the repository';
       return {
-        text: `Skill ${skill.name}, ${skill.source === 'user' ? 'from the user' : 'from the repository'}: how to do this kind of task.${where}\n\n${inert(body)}${files.length ? `\n\nFiles in this skill (read one with the skill tool and \`file\`): ${inert(files.join(', '))}` : ''}`,
+        text: `Skill ${skill.name}, ${from}: how to do this kind of task.${where}\n\n${inert(body)}${files.length ? `\n\nFiles in this skill (read one with the skill tool and \`file\`): ${inert(files.join(', '))}` : ''}`,
         isError: false,
       };
     },
@@ -208,14 +229,15 @@ export function skillTool(skills: Skill[]): ToolSpec {
 }
 
 export const commandList = (skills: Skill[]): CommandList => ({
-  commands: skills.map((s) => ({ name: s.name, description: s.description, kind: 'skill', source: s.source, ...(s.argumentHint ? { argumentHint: s.argumentHint } : {}) })),
+  commands: skills.map((s) => ({ name: s.name, description: s.description, kind: 'skill', source: s.source, ...(s.argumentHint ? { argumentHint: s.argumentHint } : {}), ...(s.plugin ? { plugin: s.plugin } : {}) })),
 });
 
 // A prompt that starts with `/<skill>`: the person picked that skill from the command list. The prompt goes as
 // typed, with a line asking the writer to load the skill first; any other prompt, `/` or not, is left alone.
+// `/<plugin>:<skill>`, as a plugin's own docs write it for Claude Code, names that plugin's skill.
 export function skillCommand(prompt: string, skills: Skill[]): string | undefined {
-  const m = /^\/([a-z0-9-]+)(?:\s|$)/.exec(prompt);
-  const skill = m && skills.find((s) => s.name === m[1]);
+  const m = /^\/(?:([a-z0-9][a-z0-9._-]*):)?([a-z0-9-]+)(?:\s|$)/.exec(prompt);
+  const skill = m && (m[1] ? skills.find((s) => s.plugin === m[1] && (s.name === m[2] || s.name === `${m[1]}-${m[2]}`)) : skills.find((s) => s.name === m[2]));
   if (!skill) return undefined;
   const rest = prompt.slice(m[0].length).trim();
   return `${prompt.trimEnd()}\n\n(/${skill.name} is the ${skill.name} skill: load it with the skill tool first, then do what it says${rest ? ', for the text after the command' : ''}.)`;

@@ -1,5 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { claudeArgv, claudeEnv, claudeHookInput, claudeOutcome, type ClaudeHook } from './plugins/claude-hooks.ts';
 import type { JsonObject } from './types.ts';
 import { scrubbedEnv } from './tools/bash.ts';
 import { inert } from './trust/frame.ts';
@@ -21,8 +22,9 @@ import { inert } from './trust/frame.ts';
 export const HOOK_EVENTS = ['preToolUse', 'postToolUse', 'stop'] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
 // `match`: an allow-rule pattern (`bash(git commit*)`, `edit(src/*)`, or a tool name); absent matches every call.
-// Stop hooks have no match.
-export type HookSpec = { command: string[]; match?: string; timeoutMs?: number };
+// Stop hooks have no match. `claude`: a hook of an installed plugin, written for Claude Code
+// (core/plugins/claude-hooks.ts); it runs in the plugin's folder and speaks Claude Code's input and answers.
+export type HookSpec = { command: string[]; match?: string; timeoutMs?: number; claude?: ClaudeHook };
 export type Hooks = Partial<Record<HookEvent, HookSpec[]>>;
 
 // What a hook is handed on stdin.
@@ -43,7 +45,7 @@ const MAX_HOOK_OUTPUT = 1_000_000;
 
 const expandHome = (p: string) => (p === '~' || p.startsWith('~/') ? homedir() + p.slice(1) : p);
 
-export const hookName = (event: HookEvent, i: number, spec: HookSpec) => `${event}[${i}] ${spec.command[0] ?? ''}`.trim();
+export const hookName = (event: HookEvent, i: number, spec: HookSpec) => `${event}[${i}] ${spec.claude ? `plugin ${spec.claude.plugin}` : (spec.command[0] ?? '')}`.trim();
 
 const capped = (text: string) => {
   const t = inert(text.trim());
@@ -61,20 +63,24 @@ async function readCapped(stream: ReadableStream<Uint8Array>): Promise<string> {
 }
 
 export async function runHook(spec: HookSpec, input: HookInput, home: string, signal?: AbortSignal): Promise<HookOutcome> {
-  const failed = (why: string): HookOutcome => ({ decision: 'block', reason: capped(`the hook ${spec.command[0] ?? '(empty)'} failed (${why}), so cedia blocked this step`), failed: true });
+  const claude = spec.claude;
+  const failed = (why: string): HookOutcome =>
+    claude && claude.onFailure !== 'block' ? { decision: 'allow' } : { decision: 'block', reason: capped(`the hook ${claude ? `of plugin ${claude.plugin}` : (spec.command[0] ?? '(empty)')} failed (${why}), so cedia blocked this step`), failed: true };
   if (!spec.command.length) return failed('it has no command');
   if (signal?.aborted) return failed('the run was stopped');
-  const cwd = home;
+  const cwd = claude ? claude.root : home;
   try {
     mkdirSync(home, { recursive: true });
   } catch {
     // spawn reports it
   }
-  const argv = [expandHome(spec.command[0]!), ...spec.command.slice(1)];
+  const command = claude ? claudeArgv(spec.command, claude, input.cwd) : spec.command;
+  const argv = [expandHome(command[0]!), ...command.slice(1)];
   let proc: ReturnType<typeof Bun.spawn>;
   try {
     // The input goes as a whole buffer: a hook that answers without reading it (a fixed verdict) is not a failure.
-    proc = Bun.spawn(argv, { cwd, env: scrubbedEnv(), stdin: new TextEncoder().encode(JSON.stringify(input)), stdout: 'pipe', stderr: 'pipe', detached: true });
+    const env = claude ? { ...scrubbedEnv(), ...claudeEnv(claude, input.cwd) } : scrubbedEnv();
+    proc = Bun.spawn(argv, { cwd, env, stdin: new TextEncoder().encode(JSON.stringify(claude ? claudeHookInput(input) : input)), stdout: 'pipe', stderr: 'pipe', detached: true });
   } catch (e) {
     return failed(`it could not start: ${(e as Error).message}`);
   }
@@ -105,6 +111,11 @@ export async function runHook(spec: HookSpec, input: HookInput, home: string, si
   const [stdout, stderr] = await Promise.all([out, err]);
   if (stopped === 'timeout') return failed(`it ran past ${timeout} ms`);
   if (stopped === 'abort') return failed('the run was stopped');
+  if (claude) {
+    const a = claudeOutcome(input, claude, code, stdout, stderr);
+    if (a.decision === 'block') return { decision: 'block', reason: capped(a.reason), ...(a.failed ? { failed: true } : {}) };
+    return { decision: 'allow', ...(a.updatedInput ? { updatedInput: a.updatedInput } : {}), ...(a.note ? { note: capped(a.note) } : {}) };
+  }
   if (code === 2) return { decision: 'block', reason: capped(stderr) || `the hook ${spec.command[0]} blocked this step` };
   if (code !== 0) return failed(`exit ${code}${stderr.trim() ? `: ${stderr.trim().slice(0, 200)}` : ''}`);
   let answer: unknown;

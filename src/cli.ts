@@ -15,6 +15,8 @@ import { commandList, loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
 import { rewindThread, rewoundText, runLines, type RewindResult } from './core/project/rewind.ts';
 import { addMcp, checkMcp, listMcp, removeMcp } from './core/mcp/manage.ts';
+import { addPlugin, getPlugin, removePlugin, setPluginHooks, setPluginMcp, updatePlugin } from './core/plugins/install.ts';
+import { pluginEntry, readPlugins, type PluginEntry, type PluginList } from './core/plugins/registry.ts';
 import { commitFiles, currentBranch, headCommit, prPlan, pushAndOpenPr, threadChanges, type CommitDraft, type Committed, type PrOpened } from './core/project/commit.ts';
 import { draftCommitMessage } from './core/project/draft.ts';
 import { deleteThread } from './core/project/delete.ts';
@@ -152,6 +154,17 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                      [--read-only] [--timeout <sec>]
                                             add a server, or replace the one of that name
        cedia mcp remove <name>              take a server out
+       cedia plugin add <git-url|owner/repo|folder> [--name <n>] [--ref <ref>] [--plugin <entry>]
+                     [--mcp on|off] [--hooks on|off] [--json]
+                                            install a plugin written for Claude Code, Codex or pi: its skills
+                                            load at once, its commands and prompts become skills; its MCP servers
+                                            and hooks stay off until you turn them on (asked at a terminal)
+       cedia plugin [list] [--json]         the installed plugins
+       cedia plugin show <name> [--json]    what a plugin brought: skills, servers, hooks and what was skipped
+       cedia plugin mcp|hooks <name> on|off turn its MCP servers or its hooks on or off (they run outside the sandbox)
+       cedia plugin update <name> [--keep-enabled]
+                                            fetch it again; servers and hooks go off if it changed
+       cedia plugin remove <name>           uninstall it, with its servers
        cedia commit --thread <id> [--cwd <dir>] [--model <ref>] [--json]
                                             draft a message for the files the thread changed; commits nothing
        cedia commit --thread <id> --message <m> [--file <f>]... [--json]
@@ -182,6 +195,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'permissions') return permissions(argv.slice(1));
   if (argv[0] === 'models') return models(argv.slice(1));
   if (argv[0] === 'mcp') return mcp(argv.slice(1));
+  if (argv[0] === 'plugin' || argv[0] === 'plugins') return plugin(argv.slice(1));
   if (argv[0] === 'commit') return commit(argv.slice(1));
   if (argv[0] === 'pr') return pr(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
@@ -614,6 +628,95 @@ async function mcp(argv: string[]): Promise<number> {
     return 1;
   }
   console.error('usage: cedia mcp [list [--json] | check <name> [--json] | add <name> (--command <cmd> [--arg <a>]... [--env K=V]... | --url <url> [--header K=V]...) [--read-only] [--timeout <sec>] | remove <name>]');
+  return 2;
+}
+
+function pluginText(p: PluginEntry): string {
+  const lines = [`${p.name}${p.version ? ` ${p.version}` : ''}  (${p.format})  ${p.source}`];
+  if (p.description) lines.push(`  ${p.description}`);
+  lines.push(`  skills: ${p.skills.length ? p.skills.map((s) => (s.from === 'command' ? `${s.name} (command)` : s.name)).join(', ') : 'none'}`);
+  if (p.mcp.servers.length) lines.push(`  MCP servers (${p.mcp.enabled ? 'on' : 'off'}):`, ...p.mcp.servers.map((s) => `    ${s.name}: ${s.url ?? s.command}`));
+  if (p.hooks.list.length) lines.push(`  hooks (${p.hooks.enabled ? 'on' : 'off'}; they run outside the sandbox):`, ...p.hooks.list.map((h) => `    ${h.event}${h.matcher ? ` [${h.matcher}]` : ''}: ${h.command}`));
+  if (p.skipped.length) lines.push('  skipped:', ...p.skipped.map((s) => `    ${s}`));
+  return lines.join('\n');
+}
+
+// Asks at a terminal; anywhere else the answer is no, and the command to turn it on is printed instead.
+function confirm(question: string): boolean {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+  return /^y(es)?$/i.test((prompt(`${question} [y/N]`) ?? '').trim());
+}
+
+async function plugin(argv: string[]): Promise<number> {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: { json: { type: 'boolean' }, name: { type: 'string' }, ref: { type: 'string' }, plugin: { type: 'string' }, mcp: { type: 'string' }, hooks: { type: 'string' }, 'keep-enabled': { type: 'boolean' } },
+    });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const { values, positionals } = parsed;
+  const [cmd = 'list', name, arg, ...rest] = positionals;
+  const home = cediaHome();
+  const onOff = (v: string | undefined, flag: string) => {
+    if (v !== undefined && v !== 'on' && v !== 'off') throw new Error(`${flag} takes on or off`);
+    return v;
+  };
+  try {
+    if (cmd === 'list' && !name) {
+      const list: PluginList = { plugins: readPlugins(home).plugins.map(pluginEntry) };
+      console.log(values.json ? JSON.stringify(list) : list.plugins.length ? list.plugins.map(pluginText).join('\n') : 'no plugins installed (cedia plugin add <git-url|owner/repo|folder>)');
+      return 0;
+    }
+    if (cmd === 'show' && name && !arg) {
+      const p = pluginEntry(getPlugin(home, name));
+      console.log(values.json ? JSON.stringify(p) : pluginText(p));
+      return 0;
+    }
+    if (cmd === 'add' && name && !arg) {
+      const mcpFlag = onOff(values.mcp, '--mcp');
+      const hooksFlag = onOff(values.hooks, '--hooks');
+      let record = addPlugin(home, { source: name, ...(values.name ? { name: values.name } : {}), ...(values.ref ? { ref: values.ref } : {}), ...(values.plugin ? { plugin: values.plugin } : {}) });
+      if (!values.json) console.log(`installed ${pluginText(pluginEntry(record))}`);
+      const servers = Object.keys(record.mcp.servers).length;
+      if (servers && (mcpFlag === 'on' || (mcpFlag === undefined && !values.json && confirm(`Turn on its ${servers} MCP server${servers === 1 ? '' : 's'} (they run outside the sandbox)?`)))) record = setPluginMcp(home, record.name, true);
+      const hooks = Object.values(record.hooks.list).reduce((n, l) => n + (l?.length ?? 0), 0);
+      if (hooks && (hooksFlag === 'on' || (hooksFlag === undefined && !values.json && confirm(`Turn on its ${hooks} hook${hooks === 1 ? '' : 's'} (they run outside the sandbox)?`)))) record = setPluginHooks(home, record.name, true);
+      if (values.json) console.log(JSON.stringify(pluginEntry(record)));
+      else {
+        if (servers && !record.mcp.enabled) console.log(`MCP servers are off: cedia plugin mcp ${record.name} on`);
+        if (hooks && !record.hooks.enabled) console.log(`hooks are off: cedia plugin hooks ${record.name} on`);
+      }
+      return 0;
+    }
+    if ((cmd === 'mcp' || cmd === 'hooks') && name && (arg === 'on' || arg === 'off') && !rest.length) {
+      const record = (cmd === 'mcp' ? setPluginMcp : setPluginHooks)(home, name, arg === 'on');
+      console.log(values.json ? JSON.stringify(pluginEntry(record)) : `${name}: ${cmd === 'mcp' ? 'MCP servers' : 'hooks'} ${arg}`);
+      return 0;
+    }
+    if (cmd === 'update' && name && !arg) {
+      const u = updatePlugin(home, name, values['keep-enabled'] ?? false);
+      if (values.json) console.log(JSON.stringify(pluginEntry(u.record)));
+      else {
+        console.log(`${u.changed ? 'updated' : 'already up to date:'} ${pluginText(pluginEntry(u.record))}`);
+        for (const what of u.turnedOff) console.log(`${what === 'mcp' ? 'MCP servers' : 'hooks'} turned off because the plugin changed; look at them, then: cedia plugin ${what} ${name} on`);
+      }
+      return 0;
+    }
+    if (cmd === 'remove' && name && !arg) {
+      removePlugin(home, name);
+      console.log(`removed plugin ${name}`);
+      return 0;
+    }
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 1;
+  }
+  console.error('usage: cedia plugin [list [--json] | show <name> | add <git-url|owner/repo|folder> [--name <n>] [--ref <ref>] [--plugin <entry>] [--mcp on|off] [--hooks on|off] | mcp <name> on|off | hooks <name> on|off | update <name> [--keep-enabled] | remove <name>] [--json]');
   return 2;
 }
 
