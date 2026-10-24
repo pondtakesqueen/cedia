@@ -237,3 +237,16 @@ Files: `2026-10-22-vs-cedia-flash.jsonl` and `2026-10-22-vs-claude-p.jsonl`, kep
 - Both pass every run, the injection task included, so this set cannot rank them on quality.
 - Claude Code is three times faster and reads a third of the tokens; cedia on Flash costs about an eighteenth at API prices. On a subscription `claude -p` costs nothing extra until its quota runs out, so cedia's case is long or many unattended runs past that quota, and runs that need the done gate and a session log that can be checked.
 - Next: a task set hard enough that one of them fails.
+
+## 2026-10-24: how hard the Claude Code review should look
+
+Opus in Claude Code reviewed the diffs of the 4 hard tasks where Claude Code's own result beat cedia's (csv-stream, memo-async, window, redact-bugs), 2 runs per effort, the same review prompt each time.
+
+| Effort | Asked for changes | Extra time a review |
+|---|---|---|
+| medium | 2 of 8 | |
+| high | 7 of 8 | about 18 s |
+
+At medium the review often named the defect (a stream left open, expired entries counted in the size, a sparse array) and still approved. The review stays at medium, which the owner chose over the 18 s; instead an approval that still names a file and line counts as changes (`parseVerdict` in `core/trust/review.ts`), and the prompt says an approval names none. `claude-code@high` still raises it. The rows were not kept in the repository.
+
+The memo-async loss on the earlier 24-task comparison came from the eval's 300 s timeout killing the review, not from its verdict; the tasks have run with 600 s since.
