@@ -437,6 +437,8 @@ describe('cedia -p (offline, faux)', () => {
         review: { model: 'claude-code:opus@medium', via: 'claude-code', verdict: 'changes', fixed: true },
       });
       expect(out.costUsd).toBeLessThan(0.5); // the subscription's notional cost is not cedia's spend
+      // Each step's wall time, so a run's time can be split between the writer and the roles around it.
+      for (const ms of [out.plan.ms, out.review.ms, out.review.fixMs]) expect(ms).toBeGreaterThanOrEqual(0);
       const planArgs = readFileSync(join(dir, 'args1'), 'utf8');
       expect(planArgs).toContain('--permission-mode\ndontAsk');
       // The repository under review runs no hook, MCP server or command through Claude Code.

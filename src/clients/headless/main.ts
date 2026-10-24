@@ -43,6 +43,7 @@ import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
 import { ADVISOR_SYSTEM, adviceOf, advicePrompt, adviceReminder, turnDigest } from '../../core/trust/advisor.ts';
 import { callText, CLASSIFIER_SYSTEM, classifyPrompt, MAX_INPUT, namedFiles, verdictOf, type Verdict } from '../../core/trust/classifier.ts';
 import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
+import { existingTests, leavesTestsAlone, PROTECTED_TEST_REASON } from '../../core/trust/tests.ts';
 import { goalContinuePrompt, goalPlanPrompt, goalPrompt, judgeWithPlan, MAX_GOAL_ROUNDS, parseCriteria, parseGoal, strategistPrompt, withCriteria, type GoalRound } from '../../core/trust/goal.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type JsonObject, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
 import { runClaudeCode } from './claude-code.ts';
@@ -235,6 +236,14 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   } catch (e) {
     await sandbox.close();
     throw e;
+  }
+  // A task that says to leave the existing tests alone: they become paths no tool may change this run.
+  if (policy.mode !== 'read-only' && leavesTestsAlone(args.prompt)) {
+    const paths = existingTests(args.cwd);
+    if (paths.length) {
+      policy = { ...policy, protect: { paths, reason: PROTECTED_TEST_REASON } };
+      say(`cedia: the task leaves the existing tests alone, so ${paths.length} test file${paths.length === 1 ? '' : 's'} may not change\n`);
+    }
   }
   if (!sandbox.on && policy.mode === 'read-only' && !args.permission && !process.env.CEDIA_PERMISSION)
     say('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
@@ -512,6 +521,11 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   };
   // A plan or review step, in cedia or through the user's own Claude Code.
   const side = async (role: 'plan' | 'review', choice: RoleChoice, prompt: string): Promise<{ ok: boolean; text: string; step: Step }> => {
+    const t0 = Date.now();
+    const r = await sideStep(role, choice, prompt);
+    return { ...r, step: { ...r.step, ms: Date.now() - t0 } };
+  };
+  const sideStep = async (role: 'plan' | 'review', choice: RoleChoice, prompt: string): Promise<{ ok: boolean; text: string; step: Step }> => {
     if (choice.via === 'claude-code') {
       const step: Step = { model: `claude-code:${choice.model}@${choice.effort}`, via: 'claude-code', sessionId: '' };
       if (privacy === 'zdr') {
@@ -940,8 +954,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       if (verdict === 'interrupted') say(`cedia: the review by ${r.step.model} was interrupted before it gave a verdict; the change is as the writer left it\n`);
       if (overruled) say(`cedia: the review by ${r.step.model} approved but named a file and line; sending it back as changes\n`);
       if (verdict === 'changes') {
+        const t0 = Date.now();
         result = await recover(await write(writer.model, writer.log, fixPrompt(r.step.model, findings)));
         review.fixed = true;
+        review.fixMs = Date.now() - t0;
       } else if (verdict === 'unclear') say(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
     }
     // Goal: a separate judge decides whether the condition holds; while it does not, the writer goes on in its

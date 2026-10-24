@@ -88,6 +88,9 @@ describe("evals runner", () => {
     expect(parseReported("plain text")).toBeUndefined();
     const reviewed = parseReported('{"type":"result","subtype":"success","costUsd":0,"cacheHitRatio":0,"numTurns":1,"result":"ok","usage":{},"review":{"model":"m","verdict":"changes","fixed":true}}');
     expect(reviewed?.reported.review).toEqual({ verdict: "changes", fixed: true });
+    const timed = parseReported('{"type":"result","subtype":"success","costUsd":0,"cacheHitRatio":0,"numTurns":1,"result":"ok","usage":{},"plan":{"model":"m","ms":4100},"review":{"model":"m","verdict":"changes","fixed":true,"ms":9000,"fixMs":"x"}}');
+    expect(timed?.reported.plan).toEqual({ ms: 4100 });
+    expect(timed?.reported.review).toEqual({ verdict: "changes", fixed: true, ms: 9000 });
   });
 
   test("summarize computes pass@1, pass^k, false-done and cost per passed run", () => {
