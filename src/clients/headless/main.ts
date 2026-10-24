@@ -42,7 +42,7 @@ import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
 import { ADVISOR_SYSTEM, adviceOf, advicePrompt, adviceReminder, turnDigest } from '../../core/trust/advisor.ts';
 import { callText, CLASSIFIER_SYSTEM, classifyPrompt, MAX_INPUT, namedFiles, verdictOf, type Verdict } from '../../core/trust/classifier.ts';
-import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
+import { changedLines, fixPrompt, parseVerdict, reviewPrompt, SMALL_CHANGE_LINES, type ReviewOutcome } from '../../core/trust/review.ts';
 import { existingTests, leavesTestsAlone, PROTECTED_TEST_REASON } from '../../core/trust/tests.ts';
 import { goalContinuePrompt, goalPlanPrompt, goalPrompt, judgeWithPlan, MAX_GOAL_ROUNDS, parseCriteria, parseGoal, strategistPrompt, withCriteria, type GoalRound } from '../../core/trust/goal.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type JsonObject, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
@@ -850,7 +850,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // What the plan's parts changed before the writer started.
     let inherited: string[] = [];
     // Triage (core/roles.ts): the writer's model says first whether the message is work a plan helps.
-    const wantsPlan = planWhen === 'never' ? false : roles.plan && planWhen === 'auto' && !resumed?.question ? await triage() : true;
+    // direct: the triage sent the message straight to the writer, which also lets a small change skip the review.
+    const triaged = planWhen === 'auto' && roles.plan !== undefined && !resumed?.question;
+    const direct = triaged && !(await triage());
+    const wantsPlan = planWhen !== 'never' && !direct;
     if (roles.plan && !wantsPlan) say('cedia: no plan for this one\n');
     if (roles.plan && wantsPlan) {
       // With spawn on, the planner may split the work into parts that cedia hands to work sub-threads before the
@@ -946,8 +949,11 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // Review: after the writer's claim passed the done gate, a second model reads the change. Changes it asks
     // for go back to the writer's own session once.
     let review: ReviewOutcome | undefined;
-    if (roles.review && result.subtype === 'success' && result.evidence?.changed.length) {
-      const r = await side('review', roles.review, reviewPrompt(args.prompt, result.evidence, changesPatch()));
+    const patch = roles.review && result.subtype === 'success' && result.evidence?.changed.length ? changesPatch() : undefined;
+    const small = direct && patch !== undefined && changedLines(patch) <= SMALL_CHANGE_LINES;
+    if (small) say(`cedia: a small change to a message the triage sent straight to the writer; no review\n`);
+    if (roles.review && result.subtype === 'success' && result.evidence?.changed.length && !small) {
+      const r = await side('review', roles.review, reviewPrompt(args.prompt, result.evidence, patch));
       // A review cut off by a stop said nothing about the change: it was interrupted, not without a verdict.
       const { verdict, findings, overruled } = r.ok ? parseVerdict(r.text) : { verdict: ac.signal.aborted ? ('interrupted' as const) : ('unclear' as const), findings: '', overruled: undefined };
       review = { ...r.step, verdict, fixed: false };

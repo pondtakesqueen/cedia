@@ -10,6 +10,14 @@ export type ReviewOutcome = NonNullable<HeadlessResult['review']>;
 // A diff past this many characters is left out; the reviewer reads the changed files itself.
 export const MAX_REVIEW_DIFF = 60_000;
 
+// A change of at most this many added and removed lines, to a message the triage sent straight to the writer (one
+// small change spelled out exactly), goes without a review: on the eval's small tasks the review found nothing in
+// 8 of 8 runs and took most of each run's time (evals/results/README.md, 2026-10-24).
+export const SMALL_CHANGE_LINES = 40;
+
+export const changedLines = (patch: string): number =>
+  patch.split('\n').filter((l) => (l.startsWith('+') || l.startsWith('-')) && !l.startsWith('+++') && !l.startsWith('---')).length;
+
 // How every review ends, the one the run asks for and the one the user does.
 const VERDICT_ASK =
   'End with one line on its own: `VERDICT: approve` when nothing needs fixing, or `VERDICT: changes` when something does. A file and line is how a finding is named, so an approval names none: a review that names one goes back to be fixed.';

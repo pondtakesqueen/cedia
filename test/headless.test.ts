@@ -363,6 +363,19 @@ describe('cedia -p (offline, faux)', () => {
       expect(JSON.parse(never.out).plan).toBeUndefined();
     });
 
+    test('a small change to a message the triage sent straight to the writer skips the review; a planned one gets it', () => {
+      const small = cedia([reply('DIRECT'), ...writes], [...base, '--plan', 'faux/fallback', '--review', 'faux/fallback']);
+      expect(JSON.parse(small.out)).toMatchObject({ subtype: 'success', result: 'done' });
+      expect(JSON.parse(small.out).review).toBeUndefined();
+      expect(small.err).toContain('no review');
+      expect(sessionsOf(small.home).map((l) => (l[0] as { role: string }).role).sort()).toEqual(['code', 'triage']);
+      // The same change after a plan is reviewed, and so is a direct one past SMALL_CHANGE_LINES.
+      const planned = cedia([reply('PLAN'), reply('1. Write good to f.txt.'), ...writes, reply('VERDICT: approve')], [...base, '--plan', 'faux/fallback', '--review', 'faux/fallback']);
+      expect(JSON.parse(planned.out)).toMatchObject({ subtype: 'success', review: { verdict: 'approve' } });
+      const long = cedia([reply('DIRECT'), call('c1', 'seq 50 > f.txt'), call('c2', 'test -s f.txt'), reply('done'), reply('VERDICT: approve')], [...base, '--plan', 'faux/fallback', '--review', 'faux/fallback']);
+      expect(JSON.parse(long.out)).toMatchObject({ subtype: 'success', review: { verdict: 'approve' } });
+    });
+
     test("a plan's parts go to work sub-threads before the writer, on the model the planner picked", () => {
       const args = ['-p', 'write a and b, then f', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -d .', '--plan', 'faux/fallback', '--plan-when', 'always', '--workers', 'faux/fallback'];
       const plan = 'f last.\n<part files="a.txt">Write a to a.txt.</part>\n<part files="b.txt" model="faux/fallback">Write b to b.txt.</part>';
