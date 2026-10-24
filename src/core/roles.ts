@@ -3,7 +3,7 @@ import { inert } from './trust/frame.ts';
 // Prompts that hand work between roles: the planner's task, and the writer's task with the plan attached.
 
 // Splitting the work (core/tools/spawn.ts): cedia hands each part of the plan to a work sub-thread of its own,
-// one after another, or all at once in worktrees, on the model the planner picked.
+// all at once in worktrees (headless asks for a split only then), or one after another, on the model the planner picked.
 export type Split = { mode: 'alone' | 'parallel'; writer: string; workers: string[] };
 
 // A part of the plan: the files it changes, its brief, and the model it should run on.
