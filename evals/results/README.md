@@ -247,6 +247,26 @@ Opus in Claude Code reviewed the diffs of the 4 hard tasks where Claude Code's o
 | medium | 2 of 8 | |
 | high | 7 of 8 | about 18 s |
 
-At medium the review often named the defect (a stream left open, expired entries counted in the size, a sparse array) and still approved. The review stays at medium, which the owner chose over the 18 s; instead an approval that still names a file and line counts as changes (`parseVerdict` in `core/trust/review.ts`), and the prompt says an approval names none. `claude-code@high` still raises it. The rows were not kept in the repository.
+At medium the review often named the defect (a stream left open, expired entries counted in the size, a sparse array) and still approved. The review stays at medium, which the owner chose over the 18 s; instead an approval that still names a file and line counts as changes (`parseVerdict` in `core/trust/review.ts`), and the prompt says an approval names none. `claude-code@high` still raises it. Since the measurement below, the prompt asks for each finding on a `FINDING:` line or `FINDINGS: none`, and only a FINDING line turns an approval; a review without either still falls back to the file-and-line rule. The rows were not kept in the repository.
 
 The memo-async loss on the earlier 24-task comparison came from the eval's 300 s timeout killing the review, not from its verdict; the tasks have run with 600 s since.
+
+## 2026-10-24: where auto mode's time goes
+
+The 24-task comparison with Claude Code averaged 238 s a task in auto mode (Haiku writing, Opus plan and review in Claude Code), against 83 s for Claude Code. Those rows predate step timing, so the 19 tasks that are not real-repository ones ran again with it: Haiku 5.5 writing on the Anthropic API, plan and review on Opus 5.5 at medium through cedia on the API (the Claude subscription's weekly limit was nearly used up), `--plan-when auto`, 1 run, 4 at a time. 19 of 19 passed, $3.87 in all. File: `2026-10-24-cedia-anthropic_claude-haiku-5-5-023601.jsonl`.
+
+| Step | Mean | Share |
+|---|---|---|
+| plan (15 tasks planned, 0 s for the rest) | 29.9 s | 29% |
+| review | 39.3 s | 38% |
+| fix round after the review | 12.1 s | 12% |
+| triage and the writer's first pass | 22.3 s | 21% |
+| **wall** | **103.6 s** | |
+
+- Plan and review spend their time decoding, not waiting on tools: a plan took 3 to 6 requests and about 3.5k output tokens, a review 2 to 8 requests and about 3.2k.
+- The same 19 tasks with both steps in Claude Code averaged 121 s, with the writer at 38 s: the steps took about 83 s a task there against 69 s on the API, so Claude Code's start and its own prompt add about 14 s a task.
+- On the 4 small tasks (no plan) the review was most of the run: 19 to 35 s in Claude Code and 7 to 19 s on the API, against 4 to 7 s of writing. It asked for nothing real in 8 of 8 runs.
+- 2 of the 19 reviews approved and were still sent back as changes, because they cited a file and line as evidence (`test.js:1` in refactor-rename, `parseCsv` lines in hard-csv-stream). Each cost a fix round of 6 and 13 s for nothing.
+- In the 24-task run the 5 real-repository tasks took 60% of all the time: 683 s each on average, 393 s of it the writer's own 40 to 64 turns, with 51 to 215 s of that in tools.
+
+A change of at most 40 lines to a message the triage sent straight to the writer now goes without a review (`SMALL_CHANGE_LINES`).

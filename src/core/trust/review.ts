@@ -10,9 +10,16 @@ export type ReviewOutcome = NonNullable<HeadlessResult['review']>;
 // A diff past this many characters is left out; the reviewer reads the changed files itself.
 export const MAX_REVIEW_DIFF = 60_000;
 
+// A change of at most this many added and removed lines, to a message the triage sent straight to the writer (one
+// small change spelled out exactly), goes without a review: on the eval's small tasks the review found nothing in
+// 8 of 8 runs and took most of each run's time (evals/results/README.md, 2026-10-24).
+export const SMALL_CHANGE_LINES = 40;
+
+export const changedLines = (patch: string): number =>
+  patch.split('\n').filter((l) => (l.startsWith('+') || l.startsWith('-')) && !l.startsWith('+++') && !l.startsWith('---')).length;
+
 // How every review ends, the one the run asks for and the one the user does.
-const VERDICT_ASK =
-  'End with one line on its own: `VERDICT: approve` when nothing needs fixing, or `VERDICT: changes` when something does. A file and line is how a finding is named, so an approval names none: a review that names one goes back to be fixed.';
+const VERDICT_ASK = `End with your findings, each on its own line that starts \`FINDING:\` and names a file and line, or the line \`FINDINGS: none\` when there is none. Then one last line on its own: \`VERDICT: approve\` when there is no finding, or \`VERDICT: changes\` when there is one. Files and lines you cite as evidence elsewhere are fine; a FINDING line sends the change back to be fixed, whatever the verdict says.`;
 
 export function reviewPrompt(task: string, ev: Evidence | undefined, patch: string | undefined): string {
   const changed = ev?.changed.length ? ev.changed.join(', ') : 'none recorded';
@@ -54,10 +61,14 @@ ${VERDICT_ASK}`;
 
 // A file and line as a finding names it: `src/a.ts:12`, `memo.test.ts:40-45`.
 const FILE_LINE = /(?:^|[\s`'"(\[*])[\w./-]*\w\.[A-Za-z]\w*:\d+\b/m;
+const FINDING_LINE = /^\W*FINDING:/im;
+const NO_FINDINGS = /^\W*FINDINGS:\s*none\b/im;
 
-// The last VERDICT line decides, except that an approval which still names a file and line counts as changes: a
-// reviewer at medium effort often named the defect and approved all the same (evals/results/README.md). `overruled`
-// says the approval was turned.
+// The last VERDICT line decides, except that an approval with a finding counts as changes: a reviewer at medium
+// effort often named the defect and approved all the same (evals/results/README.md). A FINDING line is a finding;
+// without the FINDING lines or `FINDINGS: none` the prompt asks for, any file and line is taken as one. That older
+// rule also turned approvals that cited a file and line as evidence, 2 of 19 on 2026-10-24. `overruled` says the
+// approval was turned.
 export function parseVerdict(text: string): { verdict: Verdict; findings: string; overruled?: true } {
   const lines = text.trimEnd().split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -65,7 +76,8 @@ export function parseVerdict(text: string): { verdict: Verdict; findings: string
     if (!m) continue;
     const verdict = m[1]!.toLowerCase() as Verdict;
     const findings = lines.slice(0, i).join('\n').trim();
-    if (verdict === 'approve' && FILE_LINE.test(findings)) return { verdict: 'changes', findings, overruled: true };
+    const found = FINDING_LINE.test(findings) || (!NO_FINDINGS.test(findings) && FILE_LINE.test(findings));
+    if (verdict === 'approve' && found) return { verdict: 'changes', findings, overruled: true };
     return { verdict, findings };
   }
   return { verdict: 'unclear', findings: text.trim() };

@@ -643,6 +643,12 @@
             },
             "ms": {
               "type": "number"
+            },
+            "requests": {
+              "type": "number"
+            },
+            "apiMs": {
+              "type": "number"
             }
           },
           "required": [
@@ -805,6 +811,12 @@
             },
             "ms": {
               "type": "number"
+            },
+            "requests": {
+              "type": "number"
+            },
+            "apiMs": {
+              "type": "number"
             }
           },
           "required": [
@@ -842,6 +854,12 @@
               "type": "number"
             },
             "ms": {
+              "type": "number"
+            },
+            "requests": {
+              "type": "number"
+            },
+            "apiMs": {
               "type": "number"
             }
           },
@@ -2507,6 +2525,12 @@
           "type": "number"
         },
         "ms": {
+          "type": "number"
+        },
+        "requests": {
+          "type": "number"
+        },
+        "apiMs": {
           "type": "number"
         }
       },
