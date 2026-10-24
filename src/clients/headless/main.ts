@@ -535,12 +535,12 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       const allowed = ['Read', 'Grep', 'Glob', ...(role === 'review' ? GIT_READS : []), ...checks.map((c) => `Bash(${c})`)];
       const r = await runClaudeCode({ prompt, model: choice.model, effort: choice.effort, cwd: args.cwd, allowed, signal: ac.signal });
       if (!r.ok && !ac.signal.aborted) say(`cedia: the ${role} step in Claude Code failed: ${r.error}\n`);
-      return { ok: r.ok, text: r.text, step: { ...step, sessionId: r.sessionId, ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}) } };
+      return { ok: r.ok, text: r.text, step: { ...step, sessionId: r.sessionId, ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}), ...(r.turns !== undefined ? { requests: r.turns } : {}), ...(r.apiMs !== undefined ? { apiMs: r.apiMs } : {}) } };
     }
     const log = openLog();
     const r = await run(choice.model, log, prompt, { role, ...(choice.effort ? { effort: choice.effort } : {}) });
     if (r.subtype !== 'success') say(`cedia: the ${role} step on ${choice.model.ref} ended with ${r.subtype}\n`);
-    return { ok: r.subtype === 'success', text: r.result, step: { model: choice.model.ref, via: 'cedia', sessionId: log.id, costUsd: r.costUsd } };
+    return { ok: r.subtype === 'success', text: r.result, step: { model: choice.model.ref, via: 'cedia', sessionId: log.id, costUsd: r.costUsd, requests: r.numTurns, ...(r.timing ? { apiMs: r.timing.modelMs } : {}) } };
   };
   // True unless the writer's model, reading the message alone, finds it needs no plan; a failed triage plans.
   const triage = async (): Promise<boolean> => {

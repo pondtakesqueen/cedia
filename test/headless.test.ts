@@ -337,7 +337,8 @@ describe('cedia -p (offline, faux)', () => {
     test('a cedia planner reads only, and the writer gets its plan with the task', () => {
       const r = cedia([call('p1', 'cat f.txt'), reply('1. Write good to f.txt.\n2. Run test -s f.txt.'), ...writes], [...base, '--plan', 'faux/fallback', '--plan-when', 'always']);
       const result = JSON.parse(r.out);
-      expect(result).toMatchObject({ subtype: 'success', plan: { model: 'faux/fallback', via: 'cedia' } });
+      expect(result).toMatchObject({ subtype: 'success', plan: { model: 'faux/fallback', via: 'cedia', requests: 2 } });
+      expect(result.plan.apiMs).toBeGreaterThanOrEqual(0);
       const all = sessionsOf(r.home);
       const planner = all.find((l) => (l[0] as { role: string }).role === 'plan')!;
       expect((planner[0] as Extract<SessionEvent, { kind: 'session' }>).tools.map((t) => t.name)).toEqual(['read', 'grep', 'bash', 'web_fetch']);
@@ -430,7 +431,7 @@ describe('cedia -p (offline, faux)', () => {
     test('claude-code plans and reviews in your own Claude Code, read-only and without API keys', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cedia-fake-claude-'));
       const bin = join(dir, 'claude');
-      const result = (text: string) => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: 'cc-1', total_cost_usd: 0.5 });
+      const result = (text: string) => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: 'cc-1', total_cost_usd: 0.5, num_turns: 3, duration_api_ms: 1200 });
       writeFileSync(join(dir, '1'), result('Write good to f.txt.'));
       writeFileSync(join(dir, '2'), result('f.txt:1 needs a period.\nVERDICT: changes'));
       writeFileSync(
@@ -446,8 +447,8 @@ describe('cedia -p (offline, faux)', () => {
       expect(out).toMatchObject({
         subtype: 'success',
         result: 'fixed',
-        plan: { model: 'claude-code:opus@medium', via: 'claude-code', sessionId: 'cc-1', costUsd: 0.5 },
-        review: { model: 'claude-code:opus@medium', via: 'claude-code', verdict: 'changes', fixed: true },
+        plan: { model: 'claude-code:opus@medium', via: 'claude-code', sessionId: 'cc-1', costUsd: 0.5, requests: 3, apiMs: 1200 },
+        review: { model: 'claude-code:opus@medium', via: 'claude-code', verdict: 'changes', fixed: true, requests: 3, apiMs: 1200 },
       });
       expect(out.costUsd).toBeLessThan(0.5); // the subscription's notional cost is not cedia's spend
       // Each step's wall time, so a run's time can be split between the writer and the roles around it.
