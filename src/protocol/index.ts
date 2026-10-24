@@ -15,6 +15,7 @@ export type { CommandEntry, CommandList } from '../core/skills/skills.ts';
 export type { Restored } from '../core/project/undo.ts';
 export type { RewindResult } from '../core/project/rewind.ts';
 export type { DeleteResult } from '../core/project/delete.ts';
+export type { ForkResult } from '../core/project/fork.ts';
 export type { McpCheck, McpList } from '../core/mcp/manage.ts';
 export type { CommitDraft, Committed, PrOpened, PrPlan } from '../core/project/commit.ts';
 export type { Capability, VersionInfo } from './version.ts';

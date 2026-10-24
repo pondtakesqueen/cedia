@@ -40,6 +40,9 @@
     "DeleteResult": {
       "$ref": "#/definitions/DeleteResult"
     },
+    "ForkResult": {
+      "$ref": "#/definitions/ForkResult"
+    },
     "McpList": {
       "$ref": "#/definitions/McpList"
     },
@@ -240,6 +243,7 @@
         "permissions",
         "commands",
         "threads.fork",
+        "threads.side",
         "usage",
         "browser",
         "threads.restore-json",
@@ -640,8 +644,25 @@
         }
       },
       "required": [
-        "thread",
-        "run"
+        "thread"
+      ],
+      "additionalProperties": false
+    },
+    "ForkResult": {
+      "type": "object",
+      "properties": {
+        "thread": {
+          "type": "string"
+        },
+        "run": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread"
       ],
       "additionalProperties": false
     },
@@ -2959,6 +2980,9 @@
             },
             "forkOf": {
               "$ref": "#/definitions/ForkOf"
+            },
+            "side": {
+              "type": "boolean"
             },
             "at": {
               "type": "string"
