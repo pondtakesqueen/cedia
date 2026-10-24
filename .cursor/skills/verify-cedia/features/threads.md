@@ -1,6 +1,6 @@
 # Threads
 
-`cedia threads` lists the project's threads, shows one, leaves a user message, and archives or restores one. Every `cedia -p` run opens a thread under `$CEDIA_HOME/projects/<slug>/threads/`.
+`cedia threads` lists the project's threads, shows one, leaves a user message, and archives or restores one. A `cedia -p` run opens a thread under `$CEDIA_HOME/projects/<slug>/threads/`. A run that passes `--no-session-file` does not. It prints the model's text and leaves the thread files unchanged.
 
 ## Sub-features
 
@@ -48,4 +48,5 @@ tid=$(sed -n 's/^cedia thread: \(t-[0-9a-f]\{8\}\).*/\1/p' "$CEDIA_VERIFY_EVIDEN
 - `cedia threads send t-00000000 hi` prints `cedia: no thread t-00000000 in this project` and exits 1. Send and show do not share one missing-id message.
 - Archiving removes the thread from the default list only. `threads list --all` still prints it. The word in the line is `(archived)`.
 - A message stays `(not seen yet)` until a later `cedia -p --thread <id>` turn. This file does not resume the thread. That continuation is unverified in the seeding probes.
-- The text of `threads send` is the remaining arguments joined by spaces. An argument that starts with `--` is parsed as a flag.
+- The text of `threads send` is the remaining arguments joined by spaces. An argument that starts with `-` is parsed as a flag. `cedia threads send <id> --nope` prints a Bun stack, `TypeError: Unknown option '--nope'`, and exits 1. Observed 2026-10-24.
+- Put a positional that starts with `-` after `--`. `control-cedia run` appends `--cwd` after your arguments. A `--` before that appended flag hides the work directory. The command then prints `cedia: no thread <id> in this project`. `control-cedia capture` uses the work directory as its cwd. From there, `cedia threads send <id> -- --dashed` delivers the text `--dashed`. Observed 2026-10-24.
