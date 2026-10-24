@@ -9,6 +9,16 @@ import type { ThreadStore } from './threads.ts';
 // pushes the current branch and opens the pull request through `gh`; it refuses the default branch, and the push
 // also waits for the user's yes.
 
+// What `cedia commit` and `cedia pr` print with --json, for a client that shows the step and asks before it.
+// The files the thread changed and the message drafted for them; nothing is committed yet.
+export type CommitDraft = { files: string[]; message: string; branch?: string } | { error: string };
+// The commit made, or why there is none.
+export type Committed = { commit: string; subject: string; files: string[] } | { error: string };
+// Where a PR would go from here, or why it cannot.
+export type PrPlan = { branch?: string; base?: string; blocked?: string };
+// The pull request opened, with what gh said, or why there is none.
+export type PrOpened = { branch: string; base?: string; url?: string; out: string } | { error: string };
+
 export const COMMIT_SYSTEM = `You write git commit messages. Reply with the message only: no preamble, no code fence.
 
 A subject line of at most 72 characters in the imperative mood that says what the change does, a blank line, then a body of a few short lines on what changed and why, wrapped at 72 columns. Follow the style of the recent subjects you are shown. Name no tool or model that wrote the change.`;
@@ -80,6 +90,11 @@ export function commitFiles(cwd: string, files: string[], message: string): { ok
   return { ok: c.status === 0, out: (c.stdout + c.stderr).trim() };
 }
 
+export function headCommit(cwd: string): string | undefined {
+  const r = git(cwd, ['rev-parse', 'HEAD']);
+  return r.status === 0 ? r.stdout.trim() : undefined;
+}
+
 export function currentBranch(cwd: string): string | undefined {
   const r = git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
   return r.status === 0 ? r.stdout.trim() : undefined;
@@ -113,6 +128,13 @@ async function run(cmd: string[], cwd: string, signal?: AbortSignal): Promise<{ 
   } catch (e) {
     return { ok: false, out: (e as Error).message };
   }
+}
+
+export function prPlan(cwd: string): PrPlan {
+  const branch = currentBranch(cwd);
+  const base = defaultBranch(cwd);
+  const blocked = prBlocked(cwd);
+  return { ...(branch ? { branch } : {}), ...(base ? { base } : {}), ...(blocked ? { blocked } : {}) };
 }
 
 // Pushes the branch and opens its PR with the commits' titles and bodies. Asked for again after a prBlocked check

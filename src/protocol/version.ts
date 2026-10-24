@@ -37,7 +37,9 @@ export type Capability =
   | 'cache-ttl' // --cache-ttl 5m|1h: how long the writer's cached prompt lasts on the Anthropic wire
   | 'threads.rename' // cedia threads rename <id> <title>: a 'title' thread event, the latest one the thread's title
   | 'threads.delete' // cedia threads delete <id> [--force] [--json] (DeleteResult): the thread, its sub-threads and their logs
-  | 'mcp.manage'; // cedia mcp list|check --json (McpList, McpCheck), add and remove: the user's MCP servers
+  | 'mcp.manage' // cedia mcp list|check --json (McpList, McpCheck), add and remove: the user's MCP servers
+  | 'commit' // cedia commit --thread <id> [--message <m> [--file <f>]...] --json (CommitDraft, Committed): the thread's files
+  | 'pr'; // cedia pr [--check] --json (PrPlan, PrOpened): push the branch and open its pull request through gh
 
 export type VersionInfo = { name: 'cedia'; version: string; protocol: string; capabilities: Capability[] };
 
@@ -45,7 +47,7 @@ export type VersionInfo = { name: 'cedia'; version: string; protocol: string; ca
 export const PROTOCOL = hash(schemaText as unknown as string);
 
 export function versionInfo(): VersionInfo {
-  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask', 'todo', 'profiles', 'open_thread', 'schedules', 'worktree.newest-wins', 'spawn.best-of-n', 'models', 'permissions', 'commands', 'threads.fork', 'usage', 'threads.restore-json', 'images', 'browser', 'cache-ttl', 'threads.rename', 'threads.delete', 'mcp.manage'];
+  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask', 'todo', 'profiles', 'open_thread', 'schedules', 'worktree.newest-wins', 'spawn.best-of-n', 'models', 'permissions', 'commands', 'threads.fork', 'usage', 'threads.restore-json', 'images', 'browser', 'cache-ttl', 'threads.rename', 'threads.delete', 'mcp.manage', 'commit', 'pr'];
   if (processKeychain()) capabilities.push('keychain');
   return { name: 'cedia', version: VERSION, protocol: PROTOCOL, capabilities };
 }
