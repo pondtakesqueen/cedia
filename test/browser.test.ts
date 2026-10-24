@@ -32,6 +32,7 @@ describe('pageDenied', () => {
     const { tool } = browserTool('http://127.0.0.1:1', { anyHost: false, allowedDomains: [] });
     const ro = { mode: 'read-only' as const, allow: [], deny: [] };
     expect(decide(ro, tool, { action: 'read' }, '/').decision).toBe('allow');
+    expect(decide(ro, tool, { action: 'screenshot' }, '/').decision).toBe('allow');
     expect(decide(ro, tool, { action: 'open', url: 'http://localhost/' }, '/').decision).toBe('allow');
     expect(decide(ro, tool, { action: 'click', control: 1 }, '/').decision).toBe('deny');
     expect(decide({ ...ro, allow: ['browser'] }, tool, { action: 'click', control: 1 }, '/').decision).toBe('allow');
@@ -102,6 +103,16 @@ describe.skipIf(!chromium)('browser on a real Chromium', () => {
     const r = await run({ action: 'click', control: 6 });
     expect(r.text).toContain('clicked 1');
     expect((await run({ action: 'console' })).text).toContain('error: boom');
+  }, 20_000);
+
+  test('screenshot shows the page as a PNG, and reading is all it needs', async () => {
+    await run({ action: 'open', url: `${base}/` });
+    const r = await run({ action: 'screenshot' });
+    expect(r.isError).toBe(false);
+    expect(r.text).toMatch(new RegExp(`^Preview\\n${base}/\\nscreenshot \\d+x\\d+ px$`));
+    expect(r.images).toHaveLength(1);
+    expect(r.images![0]).toMatchObject({ mime: 'image/png' });
+    expect(r.images![0]!.width).toBeGreaterThan(0);
   }, 20_000);
 
   test('type fills a field and a select, submit sends the form', async () => {
