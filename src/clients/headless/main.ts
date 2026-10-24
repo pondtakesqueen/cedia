@@ -43,6 +43,7 @@ import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
 import { ADVISOR_SYSTEM, adviceOf, advicePrompt, adviceReminder, turnDigest } from '../../core/trust/advisor.ts';
 import { callText, CLASSIFIER_SYSTEM, classifyPrompt, MAX_INPUT, namedFiles, verdictOf, type Verdict } from '../../core/trust/classifier.ts';
 import { fixPrompt, parseVerdict, reviewPrompt, type ReviewOutcome } from '../../core/trust/review.ts';
+import { existingTests, leavesTestsAlone, PROTECTED_TEST_REASON } from '../../core/trust/tests.ts';
 import { goalContinuePrompt, goalPlanPrompt, goalPrompt, judgeWithPlan, MAX_GOAL_ROUNDS, parseCriteria, parseGoal, strategistPrompt, withCriteria, type GoalRound } from '../../core/trust/goal.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type JsonObject, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
 import { runClaudeCode } from './claude-code.ts';
@@ -235,6 +236,14 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   } catch (e) {
     await sandbox.close();
     throw e;
+  }
+  // A task that says to leave the existing tests alone: they become paths no tool may change this run.
+  if (policy.mode !== 'read-only' && leavesTestsAlone(args.prompt)) {
+    const paths = existingTests(args.cwd);
+    if (paths.length) {
+      policy = { ...policy, protect: { paths, reason: PROTECTED_TEST_REASON } };
+      say(`cedia: the task leaves the existing tests alone, so ${paths.length} test file${paths.length === 1 ? '' : 's'} may not change\n`);
+    }
   }
   if (!sandbox.on && policy.mode === 'read-only' && !args.permission && !process.env.CEDIA_PERMISSION)
     say('cedia: the sandbox is off, so this session is read-only. Use --permission workspace to allow writes without it.\n');
