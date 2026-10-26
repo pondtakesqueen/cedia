@@ -58,6 +58,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const stopRef = useRef<AbortController | null>(null);
   const pendingRef = useRef<{ what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined>(undefined);
   const [scrollOffset, setScrollOffset] = useState(0);
+  const historyRef = useRef<string[]>([]);
+  const [historySearch, setHistorySearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
   const [picker, setPicker] = useState<{ title: string; items: { value: string; label: string }[]; onPick: (v: string) => void } | null>(null);
   const [suggestion, setSuggestion] = useState<string | null>(null);
   const [selection, setSelection] = useState<{ aMsg: number; aCol: number; bMsg: number; bCol: number } | null>(null);
@@ -474,6 +476,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     }
     setMessages((m) => [...m, { role: 'user', text }]);
     setInput('');
+    historyRef.current.push(text);
     setRunning(true);
     setActivity('starting');
     let buffer = '';
@@ -669,6 +672,37 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const visibleMessages = messages.slice(renderStart, renderEnd);
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, messages.length - renderEnd);
+  useInput((input, key) => {
+    if (historySearch.open) {
+      if (key.escape) { setHistorySearch({ open: false, query: '', selected: 0 }); return; }
+      if (key.upArrow) { setHistorySearch((h) => ({ ...h, selected: Math.max(0, h.selected - 1) })); return; }
+      if (key.downArrow) {
+        const filtered = historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()));
+        if (!filtered.length) return;
+        setHistorySearch((h) => ({ ...h, selected: Math.min(filtered.length - 1, h.selected + 1) }));
+        return;
+      }
+      if (key.return) {
+        const filtered = historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()));
+        const selected = filtered[historySearch.selected];
+        setHistorySearch({ open: false, query: '', selected: 0 });
+        if (selected !== undefined) submit(selected);
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setHistorySearch((h) => ({ ...h, query: h.query.slice(0, -1), selected: 0 }));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta) {
+        setHistorySearch((h) => ({ ...h, query: h.query + input, selected: 0 }));
+        return;
+      }
+      return;
+    }
+    if (key.ctrl && (input === 'r' || input === 'R')) {
+      setHistorySearch({ open: true, query: '', selected: 0 });
+    }
+  });
   return (
     <Box flexDirection="row" height="100%">
       <Box flexDirection="column" flexGrow={1}>
@@ -727,6 +761,18 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               <Text key={i}>{i + 1}. {it.label}</Text>
             ))}
             <Text dimColor>type a number to select, Esc to cancel</Text>
+          </Box>
+        ) : null}
+        {historySearch.open ? (
+          <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+            <Text bold color="cyan">history search: {historySearch.query || '(type to filter)'}</Text>
+            {historyRef.current
+              .filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()))
+              .map((h, i) => (
+                <Text key={i} color={i === historySearch.selected ? 'black' : undefined} backgroundColor={i === historySearch.selected ? 'cyan' : undefined}>{h}</Text>
+              ))}
+            {historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase())).length === 0 ? <Text dimColor>no matches</Text> : null}
+            <Text dimColor>↑↓ navigate · Enter run · Esc close</Text>
           </Box>
         ) : null}
         {suggestion ? <Text dimColor>💡 {suggestion} (Tab to accept)</Text> : null}
