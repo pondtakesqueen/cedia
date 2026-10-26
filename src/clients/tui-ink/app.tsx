@@ -111,6 +111,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [vimMode, setVimMode] = useState<'insert' | 'normal'>('insert');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'status' | 'config' | 'usage'>('status');
+  const [settingsQuery, setSettingsQuery] = useState('');
+  const settingsOpenRef = useRef(settingsOpen);
+  useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
   const stopRef = useRef<AbortController | null>(null);
   const pendingRef = useRef<{ what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined>(undefined);
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -472,6 +475,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       case 'settings':
       case 'config': {
         setSettingsTab('status');
+        setSettingsQuery('');
         setSettingsOpen(true);
         return;
       }
@@ -652,6 +656,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     const stdin = process.stdin;
     try { stdin.setRawMode(true); } catch {}
     const handler = (data: Buffer) => {
+      if (settingsOpenRef.current) return;
       require('fs').appendFileSync('/tmp/manual.log', 'DATA ' + JSON.stringify(data.toString()) + '\n');
       const str = data.toString();
       if (str === '\u0003') { exit(); return; } // Ctrl+C
@@ -794,21 +799,24 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
   useInput((input, key) => {
     if (settingsOpen) {
-      if (key.escape) { setSettingsOpen(false); return; }
+      if (key.escape) {
+        if (settingsTab === 'config' && settingsQuery) { setSettingsQuery(''); return; }
+        setSettingsOpen(false);
+        setSettingsQuery('');
+        return;
+      }
       const tabs: Array<'status' | 'config' | 'usage'> = ['status', 'config', 'usage'];
-      if (key.tab || key.rightArrow) {
-        setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
-        return;
-      }
-      if (key.leftArrow) {
-        setSettingsTab((t) => tabs[(tabs.indexOf(t) - 1 + tabs.length) % tabs.length]!);
-        return;
-      }
-      if (key.upArrow || key.downArrow) {
-        // allow tab switching via arrows too
-        if (key.downArrow || key.rightArrow) setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
+      if (key.tab || key.rightArrow || key.leftArrow || key.upArrow || key.downArrow) {
+        if (key.tab || key.rightArrow || key.downArrow) setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
         else setSettingsTab((t) => tabs[(tabs.indexOf(t) - 1 + tabs.length) % tabs.length]!);
         return;
+      }
+      if (settingsTab === 'config') {
+        if (key.backspace || key.delete) { setSettingsQuery((q) => q.slice(0, -1)); return; }
+        if (input && !key.ctrl && !key.meta && !key.return && input.length === 1 && input >= ' ') {
+          setSettingsQuery((q) => q + input);
+          return;
+        }
       }
       return;
     }
@@ -1036,10 +1044,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             ) : null}
             {settingsTab === 'config' ? (
               <Box flexDirection="column">
+                <Text dimColor>search: {settingsQuery || '(type to filter)'}</Text>
                 {(() => {
                   try {
                     const raw = readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>;
-                    const keys = Object.keys(raw);
+                    const q = settingsQuery.toLowerCase();
+                    const keys = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q));
                     if (!keys.length) return <Text dimColor>no settings</Text>;
                     return keys.map((k) => <Text key={k}>{k}: {JSON.stringify(raw[k])}</Text>);
                   } catch (e) {
