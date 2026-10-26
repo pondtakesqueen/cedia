@@ -58,6 +58,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const stopRef = useRef<AbortController | null>(null);
   const pendingRef = useRef<{ what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined>(undefined);
   const [scrollOffset, setScrollOffset] = useState(0);
+  const [transcriptExpanded, setTranscriptExpanded] = useState(true);
   const historyRef = useRef<string[]>([]);
   const [historySearch, setHistorySearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
   const [messageSelector, setMessageSelector] = useState<{ open: boolean; selected: number }>({ open: false, selected: 0 });
@@ -94,9 +95,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       case 'status':
         say(`${args.model ?? 'auto'} · ${args.permission ?? 'auto'} · ${thread ?? 'new thread'} · ${running ? 'working' : 'idle'}`);
         return;
-      case 'transcript':
-        say(messages.map((m) => (m.role === 'user' ? `› ${m.text}` : m.text)).join('\n').slice(0, 4000));
+      case 'transcript': {
+        const next = !transcriptExpanded;
+        setTranscriptExpanded(next);
+        push({ role: 'system', text: `transcript ${next ? 'expanded' : 'compact'}` });
         return;
+      }
       case 'search': {
         const term = rest.join(' ').trim().toLowerCase();
         if (!term) { say('/search <term>'); return; }
@@ -447,7 +451,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       default:
         say(`unknown command /${name}; /help lists them`);
     }
-  }, [args, messages, running, store, thread, exit, spent, context, goal]);
+  }, [args, messages, running, store, thread, exit, spent, context, goal, transcriptExpanded]);
 
   const submit = useCallback(async (text: string, planWhen?: 'always' | 'never') => {
     if (!text.trim() || running) return;
@@ -665,14 +669,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const { columns } = useWindowSize();
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1';
   const showSidebar = !screenReader && columns >= 120;
+  const displayMessages = transcriptExpanded ? messages : messages.filter((m) => m.role !== 'tool');
   const windowSize = 40;
-  const windowStart = Math.max(0, messages.length - windowSize - scrollOffset);
-  const windowEnd = scrollOffset > 0 ? messages.length - scrollOffset : messages.length;
+  const windowStart = Math.max(0, displayMessages.length - windowSize - scrollOffset);
+  const windowEnd = scrollOffset > 0 ? displayMessages.length - scrollOffset : displayMessages.length;
   const renderStart = Math.max(0, windowStart - 5);
   const renderEnd = windowEnd;
-  const visibleMessages = messages.slice(renderStart, renderEnd);
+  const visibleMessages = displayMessages.slice(renderStart, renderEnd);
   const aboveHidden = renderStart;
-  const belowHidden = Math.max(0, messages.length - renderEnd);
+  const belowHidden = Math.max(0, displayMessages.length - renderEnd);
   useInput((input, key) => {
     if (messageSelector.open) {
       const runs = thread ? runLines(store.read(thread)) : [];
@@ -733,7 +738,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     <Box flexDirection="row" height="100%">
       <Box flexDirection="column" flexGrow={1}>
         <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
-          {messages.length === 0 ? (
+          {displayMessages.length === 0 ? (
             <Text dimColor>no messages yet</Text>
           ) : (
             <>
