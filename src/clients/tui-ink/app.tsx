@@ -4,7 +4,7 @@ import { buildAutoItems, highlightSpans, truncateDescription, truncateLongText, 
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
-import { inkTheme } from './theme-tokens.ts';
+import { inkTheme, type ThemeTokens } from './theme-tokens.ts';
 import { PermissionDialog, permissionDialogFor, toolLabel } from './permission-dialogs.tsx';
 import { StatusBar } from './status-bar.tsx';
 import { runHeadless } from '../headless/main.ts';
@@ -116,8 +116,8 @@ const shortCwd = (cwd: string): string => {
   } catch { return cwd; }
 };
 
-const colorFor = (role: Msg['role']): string | undefined =>
-  role === 'user' ? undefined : role === 'assistant' ? 'white' : role === 'tool' ? 'gray' : 'yellow';
+const themedColorFor = (T: ThemeTokens, role: Msg['role']): string | undefined =>
+  role === 'user' ? undefined : role === 'assistant' ? T.text : role === 'tool' ? T.textMuted : T.warning;
 
 export type DialogKind = 'picker' | 'historySearch' | 'messageSelector' | null;
 
@@ -1589,9 +1589,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 <Markdown>{m.text}</Markdown>
               ) : hasSel ? (
                 <Text wrap="wrap">
-                  <Text color={colorFor(m.role)}>{full.slice(0, sa)}</Text>
+                  <Text color={themedColorFor(T, m.role)}>{full.slice(0, sa)}</Text>
                   <Text backgroundColor="blue" color="white">{full.slice(sa, sb)}</Text>
-                  <Text color={colorFor(m.role)}>{full.slice(sb)}</Text>
+                  <Text color={themedColorFor(T, m.role)}>{full.slice(sb)}</Text>
                 </Text>
               ) : m.role === 'tool' && !isToolError && full.split('\n').some((l) => /^[+-]/.test(l)) ? (
                 <Box flexDirection="column">
@@ -1602,7 +1602,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                   {full.split('\n').length > 12 ? <Text dimColor={!screenReader}>…{full.split('\n').length - 12} more lines</Text> : null}
                 </Box>
               ) : (
-                <Text color={isUserRow || screenReader ? undefined : isToolError ? T.error : m.tone === 'red' ? T.error : m.dim ? undefined : colorFor(m.role)} dimColor={screenReader ? false : !!m.dim && !isUserRow} wrap="wrap">{full}</Text>
+                <Text color={isUserRow || screenReader ? undefined : isToolError ? T.error : m.tone === 'red' ? T.error : m.dim ? undefined : themedColorFor(T, m.role)} dimColor={screenReader ? false : !!m.dim && !isUserRow} wrap="wrap">{full}</Text>
               )}
             </Box>
             );
