@@ -1,5 +1,3 @@
-import { appendFileSync } from 'node:fs';
-appendFileSync('/tmp/viminput.log', 'MODULE_LOADED\n');
 import React, { useState, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
 
@@ -13,7 +11,6 @@ type Props = {
 };
 
 export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setVimMode }: Props): React.ReactElement {
-  appendFileSync('/tmp/viminput.log', 'COMPONENT_RENDER\n');
   const [cursor, setCursor] = useState(0);
   const [pendingOp, setPendingOp] = useState<'d' | 'c' | 'y' | null>(null);
   const [count, setCount] = useState<number | null>(null);
@@ -21,7 +18,6 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
   const clamp = (n: number) => Math.max(0, Math.min(n, value.length));
 
   useInput((input, key) => {
-    appendFileSync('/tmp/viminput.log', 'USEINPUT_FIRED ' + JSON.stringify(input) + '\n');
     const n = count ?? 1;
     if (vimMode === 'insert') {
       if (key.escape) { setVimMode('normal'); return; }
@@ -30,7 +26,6 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
         const nl = input.search(/[\r\n]/);
         const before = nl >= 0 ? input.slice(0, nl) : input;
         const v = value.slice(0, cursor) + before + value.slice(cursor);
-        appendFileSync('/tmp/viminput.log', 'NEWLINE_SUBMIT ' + JSON.stringify(v) + '\n');
         onChange(v);
         if (nl >= 0) { setCursor(0); onSubmit(v); } else setCursor(cursor + before.length);
         return;
