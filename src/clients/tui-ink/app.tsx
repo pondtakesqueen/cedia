@@ -691,8 +691,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       const release = /\x1b\[<0;(\d+);(\d+)m/.exec(s);
       if (release && selecting) {
         setSelecting(false);
-        if (selection) {
-          const lo = Math.min(selection.aMsg, selection.bMsg);
+        if (!selection) return;
+        if (selection.aMsg === selection.bMsg && selection.aCol === selection.bCol) { setSelection(null); return; }
+        const lo = Math.min(selection.aMsg, selection.bMsg);
           const hi = Math.max(selection.aMsg, selection.bMsg);
           const parts: string[] = [];
           for (let i = lo; i <= hi; i++) {
@@ -713,12 +714,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             }
           }
           const text = parts.join('\n');
+          if (!text) { setSelection(null); return; }
           try {
             const proc = Bun.spawn(['pbcopy'], { stdin: new TextEncoder().encode(text) });
             void proc.exited;
           } catch {}
           push({ role: 'system', text: 'copied selection' });
-        }
       }
     };
     stdin.on('data', handler);
@@ -761,6 +762,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
   useInput((input, key) => {
+    if (key.escape && !running) {
+      setSelection(null);
+      setSelecting(false);
+    }
     if (!running && !focusedDialog) {
       const id = inkKeyId(input, key);
       const resolved = resolveBindings(loadedKeybindings);
