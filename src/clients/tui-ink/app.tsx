@@ -169,6 +169,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const lastActivityRef = useRef(Date.now());
   const [thread, setThread] = useState<string | undefined>(args.thread);
   const [permission, setPermission] = useState<string | undefined>(args.permission);
+  const [model, setModel] = useState<string | undefined>(args.model);
+  const [effort, setEffort] = useState<'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined>(undefined);
   const [goal, setGoal] = useState<string | undefined>(args.goal);
   const [vimMode, setVimMode] = useState<'insert' | 'normal'>('insert');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -290,7 +292,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         say(`context: ${context} tokens${context ? ` (~${Math.round(context / 1000)}k)` : ''}`);
         return;
       case 'status':
-        say(`${args.model ?? 'auto'} · ${permission ?? 'auto'} · ${thread ?? 'new thread'} · ${running ? 'working' : 'idle'}`);
+        say(`${model ?? 'auto'} · ${permission ?? 'auto'} · ${thread ?? 'new thread'} · ${running ? 'working' : 'idle'}`);
         return;
       case 'transcript': {
         const next = !transcriptExpanded;
@@ -361,7 +363,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           let message = own;
           if (!message) {
             try {
-              const writerModel = args.model && !isMode(args.model) ? args.model : loadRoles({}).code.ref;
+              const writerModel = model && !isMode(model) ? model : loadRoles({}).code.ref;
               const drafted = await draftCommitMessage({ cwd: args.cwd, model: writerModel, files, signal: new AbortController().signal });
               message = drafted.message;
               setSpent((s) => s + drafted.costUsd);
@@ -405,9 +407,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             subject = { kind: 'changes', untracked: w.untracked };
             patch = w.patch;
           }
-          const roles = loadRoles(args.model && !isMode(args.model) ? { code: args.model } : {});
-          const model = roles.review?.via === 'cedia' ? roles.review.model : resolveModel(args.model && !isMode(args.model) ? args.model : loadRoles({}).code.ref);
-          say(`reviewing ${subject.kind === 'pr' ? `pull request #${(subject as { number: string }).number}` : 'the uncommitted changes'} with ${model.ref}…`);
+          const roles = loadRoles(model && !isMode(model) ? { code: model } : {});
+          const reviewModel = roles.review?.via === 'cedia' ? roles.review.model : resolveModel(model && !isMode(model) ? model : loadRoles({}).code.ref);
+          say(`reviewing ${subject.kind === 'pr' ? `pull request #${(subject as { number: string }).number}` : 'the uncommitted changes'} with ${reviewModel.ref}…`);
           const id = crypto.randomUUID();
           const log = SessionLog.create({ id, path: sessionPath(args.cwd, id) });
           log.listeners.push((e) => {
@@ -427,10 +429,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           const r = await runPrompt(
             {
               log,
-              provider: providerFor(model, { fauxScript }),
-              model,
+              provider: providerFor(reviewModel, { fauxScript }),
+              model: reviewModel,
               tools: CORE_TOOLS.filter((t) => t.effect !== 'write_workspace'),
-              system: systemFor(model),
+              system: systemFor(reviewModel),
               cwd: args.cwd,
               role: 'review',
               permission: { ...loadPolicy(args.cwd, { allow: args.allow ?? [], deny: args.deny ?? [], unlock: args.unlock ?? [] }), mode: 'read-only' },
@@ -446,7 +448,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           const { verdict, findings } = parseVerdict(r.result);
           if (verdict !== 'changes' || subject.kind !== 'changes' || !findings) return;
           say(`send these findings to ${thread ? "this thread's writer" : 'a new thread'} to fix? y to send; n, or anything else you type, cancels`);
-          pendingRef.current = { what: 'sending the findings', yes: (signal) => submit(fixPrompt(model.ref, findings), undefined) };
+          pendingRef.current = { what: 'sending the findings', yes: (signal) => submit(fixPrompt(reviewModel.ref, findings), undefined) };
         })();
         return;
       }
@@ -487,7 +489,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'model': {
         if (rest[0]) {
-          say(`model set to ${rest[0]} (takes effect next turn)`);
+          setModel(rest[0]);
+          say(`the next turn runs on ${rest[0]}`);
           return;
         }
         try {
@@ -495,7 +498,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           const roles = loadRoles({});
           const ml = modelList(roles.code.ref, process.env as any, undefined);
           const items = ml.models.map((m: any) => ({ value: m.ref, label: `${m.available ? ' ' : '-'} ${m.ref}  ${m.label}` }));
-          setPicker({ title: 'models', items, onPick: (v) => { push({ role: "system", text: `model: ${v}` }); } });
+          setPicker({ title: 'models', items, onPick: (v) => { setModel(v); push({ role: "system", text: `the next turn runs on ${v}` }); } });
            openDialog('picker');
         } catch (e) { say('error: ' + (e as Error).message); }
         return;
@@ -518,7 +521,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           const styles = loadOutputStyles(cediaHome());
           const cur = loadOutputStyleSetting(cediaHome());
           const items = styles.map((s: any) => ({ value: s.name, label: `${s.name === cur ? '*' : ' '} ${s.name}  ${s.description ?? ''}` }));
-          setPicker({ title: 'output styles', items, onPick: (v) => { push({ role: "system", text: `output style: ${v}` }); } });
+          setPicker({ title: 'output styles', items, onPick: (v) => {
+            try {
+              const pp = join(cediaHome(), 'settings.json');
+              let raw: Record<string, unknown> = {};
+              try { raw = JSON.parse(fsRead(pp, 'utf8')); } catch {}
+              raw.outputStyle = v;
+              fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
+              push({ role: "system", text: `output style: ${v} (takes effect next turn)` });
+            } catch (e) { push({ role: "system", text: `error: ${(e as Error).message}` }); }
+          } });
          openDialog('picker');
         } catch (e) { say('error: ' + (e as Error).message); }
         return;
@@ -600,7 +612,19 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'theme': {
-        say(`theme: ${loadTheme()}`);
+        const t = rest[0];
+        if (t && t !== 'dark' && t !== 'light') { say(`unknown theme: ${t} (dark | light)`); return; }
+        if (t) {
+          try {
+            const pp = join(cediaHome(), 'settings.json');
+            const raw = JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown>;
+            raw.theme = t;
+            fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
+          } catch { /* ignore */ }
+          say(`theme: ${t} (applies to the pi-tui; ink follows the terminal)`);
+          return;
+        }
+        say(`theme: ${loadTheme()} (ink follows the terminal)`);
         return;
       }
       case 'settings':
@@ -616,8 +640,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'effort': {
         const lvl = rest[0];
-        if (!lvl) { say('effort: (default)'); return; }
-        say(`effort: ${lvl} (set in settings.json)`);
+        if (!lvl) { say(`effort: ${effort ?? '(default)'}`); return; }
+        if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(lvl)) { say(`unknown effort: ${lvl} (low | medium | high | xhigh | max)`); return; }
+        setEffort(lvl as 'low' | 'medium' | 'high' | 'xhigh' | 'max');
+        try {
+          const pp = join(cediaHome(), 'settings.json');
+          const raw = JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown>;
+          raw.effort = lvl;
+          fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
+        } catch { /* session-only if settings unwritable */ }
+        say(`effort: ${lvl} (takes effect next turn)`);
         return;
       }
       case 'compact': {
@@ -658,14 +690,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       case 'statusline': {
         const cmd = rest.join(' ').trim();
         if (!cmd) { say('usage: /statusline <command>'); return; }
-        const out = runStatusLineCommand(cmd, { model: args.model ?? 'auto', workspace: args.cwd, costUsd: spent, contextWindow: context, permissionMode: permission, vimMode });
+        const out = runStatusLineCommand(cmd, { model: model ?? args.model ?? 'auto', workspace: args.cwd, costUsd: spent, contextWindow: context, permissionMode: permission, vimMode });
         say(out || '(no output)');
         return;
       }
       default:
         say(`unknown command /${name}; /help lists them`);
     }
-  }, [args, messages, running, store, thread, exit, spent, context, goal, transcriptExpanded, openDialog]);
+  }, [args, messages, running, store, thread, exit, spent, context, goal, transcriptExpanded, openDialog, model, permission, effort]);
 
   const submit = useCallback(async (text: string, planWhen?: 'always' | 'never') => {
     if (!text.trim() || running) return;
@@ -754,7 +786,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     let resultCost = 0;
     try {
       const result = await runHeadless(
-        { ...args, permission: permission ?? args.permission, cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
+        { ...args, model: model ?? args.model, permission: permission ?? args.permission, ...(effort ? { effort } : {}), cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
         handleChunk,
       );
       setThread(result.thread ?? thread);
@@ -766,7 +798,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         void (async () => {
           try {
             const { generateSuggestion } = await import('../../core/suggestions/prompt-suggestion.ts');
-            const sug = await generateSuggestion({ cwd: args.cwd, model: args.model, lastResult: result.subtype });
+            const sug = await generateSuggestion({ cwd: args.cwd, model: model ?? args.model, lastResult: result.subtype });
             if (sug) setSuggestion(sug.text);
           } catch {}
         })();
@@ -783,7 +815,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       lastActivityRef.current = Date.now();
     }
-  }, [args, running, thread, handleCommand, goal, picker, closeDialog, permission]);
+  }, [args, running, thread, handleCommand, goal, picker, closeDialog, permission, model, effort]);
 
 
 
@@ -885,9 +917,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       else if (raw?.statusLine && typeof (raw.statusLine as { command?: unknown }).command === 'string') cmd = (raw.statusLine as { command: string }).command;
     } catch {}
     if (!cmd) { setStatusLineOutput(''); return; }
-    const out = runStatusLineCommand(cmd, { model: args.model ?? 'auto', workspace: args.cwd, costUsd: spent, contextWindow: context, permissionMode: permission, vimMode });
+    const out = runStatusLineCommand(cmd, { model: model ?? args.model ?? 'auto', workspace: args.cwd, costUsd: spent, contextWindow: context, permissionMode: permission, vimMode });
     setStatusLineOutput(out);
-  }, [spent, context, thread, args.model, args.cwd, permission, vimMode]);
+  }, [spent, context, thread, args.model, model, args.cwd, permission, vimMode]);
   const { columns, rows } = useWindowSize();
   // Rows reserved for input, status, dividers and margins — overlays are capped
   // to this budget so the chat box always stays on screen (like cc's modals).
@@ -1182,7 +1214,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               </Box>
               <Box flexDirection="column">
                 <Text bold={screenReader ? false : true}>cedia {versionInfo().version}</Text>
-                <Text dimColor={!screenReader}>{args.model ?? 'auto'} · {shortCwd(args.cwd)}</Text>
+                <Text dimColor={!screenReader}>{model ?? 'auto'} · {shortCwd(args.cwd)}</Text>
                 <Text dimColor={!screenReader}>/help for commands · Esc stops a turn</Text>
               </Box>
             </Box>
@@ -1322,7 +1354,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             {settingsTab === 'status' ? (
               <Box flexDirection="column">
                 {[
-                  ['Model', args.model ?? 'auto'],
+                  ['Model', model ?? 'auto'],
                   ['Permission', permission ?? 'auto'],
                   ['Thread', thread ?? 'new'],
                   ['Context', `${context} tokens`],
@@ -1448,14 +1480,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '' : '› '}</Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} />
         </Box>
-        <StatusBar thread={thread} model={args.model} permission={permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} agents={agentCount} />
+        <StatusBar thread={thread} model={model} permission={permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} agents={agentCount} />
         {statusLineOutput ? <Text dimColor={!screenReader}>{statusLineOutput}</Text> : null}
       </Box>
       {showSidebar ? (
         <Box flexDirection="column" width={28} borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "gray"} paddingX={1}>
           <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>sidebar</Text>
           <Text dimColor={!screenReader}>thread: {thread ?? 'new'}</Text>
-          <Text dimColor={!screenReader}>model: {args.model ?? 'auto'}</Text>
+          <Text dimColor={!screenReader}>model: {model ?? 'auto'}</Text>
           <Text dimColor={!screenReader}>{running ? 'working' : 'idle'}</Text>
           <Text dimColor={!screenReader}>scroll: {scrollOffset}</Text>
           <Text dimColor={!screenReader}>msgs: {messages.length}</Text>
