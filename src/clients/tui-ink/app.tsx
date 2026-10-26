@@ -215,23 +215,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsTab, settingsOpen]);
   const projectUsageStats = settingsTab === 'stats' ? projectUsage : null;
-  // Open threads for the tab bar (memoized: ThreadStore.list hits disk).
-  const openThreads = React.useMemo(() => {
-    try {
-      const all = store.list();
-      const open = all.filter((t) => !t.archived);
-      if (!open.length && thread) {
-        try { const t = store.read(thread); if (!t.archived) return [t]; } catch {}
-      }
-      return open;
-    } catch {
-      if (thread) {
-        try { const t = store.read(thread); if (!t.archived) return [t]; } catch {}
-      }
-      return [];
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [thread, messages.length]);
   // Effective model for display (status, receipts): explicit choice, else the code role default.
   const effModel = React.useMemo(() => {
     try {
@@ -326,7 +309,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
   // @-file mentions (like cc): file paths from the working tree, fuzzy-matched.
   const [mentionSelected, setMentionSelected] = useState(0);
-  const mentionDismissedFor = useRef<string | null>(null);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
   // Frecency-ranked autocomplete (opencode-style): picks are recorded per value
   // and boost that item's rank next time. Refreshed after every recorded pick.
   const [frecencyTick, setFrecencyTick] = useState(0);
@@ -353,16 +336,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     if (mentionQuery === null) return [];
     return buildAutoItems([], fileList.map((f) => ({ value: f, name: f, description: 'file' })), mentionQuery, frecencyOf);
   }, [mentionQuery, fileList, frecencyMap]);
-  useEffect(() => { setMentionSelected(0); mentionDismissedFor.current = null; }, [mentionQuery]);
+  useEffect(() => { setMentionSelected(0); setMentionDismissed(false); }, [mentionQuery]);
   const mentionOpen = mentionQuery !== null && mentionItems.length > 0
     && !focusedDialog && !settingsOpen && !permissionDialog && !picker && !transcriptSearch.open
-    && mentionDismissedFor.current !== input;
+    && !mentionDismissed;
 
   // Autocomplete dropdown state (derived during render, never set in an effect —
   // setting picker state from an effect on picker itself caused an update loop).
   const [autoSelected, setAutoSelected] = useState(0);
-  const [autoNonce, setAutoNonce] = useState(0);
-  const autoDismissedFor = useRef<string | null>(null);
+  const [autoDismissed, setAutoDismissed] = useState(false);
   const skillsList = React.useMemo(() => {
     try { return loadSkills(args.cwd, cediaHome()); } catch { return []; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -375,12 +357,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     return buildAutoItems(cmds, skills, autoQuery, frecencyOf);
   }, [autoQuery, skillsList, frecencyMap]);
   // Reset autocomplete selection whenever the query changes (string dep: no loop).
-  useEffect(() => { setAutoSelected(0); autoDismissedFor.current = null; }, [autoQuery]);
+  useEffect(() => { setAutoSelected(0); setAutoDismissed(false); }, [autoQuery]);
   useEffect(() => { setConfigSelected(0); }, [settingsQuery, settingsTab]);
   // Read during render so bumping it forces a re-render (used by Tab re-open).
   const autoOpen = autoQuery !== null && mentionQuery === null && autoItems.length > 0
     && !focusedDialog && !settingsOpen && !permissionDialog && !picker && !transcriptSearch.open
-    && autoDismissedFor.current !== input.trim() && autoNonce >= 0;
+    && !autoDismissed;
 
   const handleCommand = useCallback((line: string) => {
     const [name = '', ...rest] = line.trim().split(/\s+/);
@@ -1196,7 +1178,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // to this budget so the chat box always stays on screen (like cc's modals).
   const overlayBudget = Math.max(4, rows - 12);
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
-  const showSidebar = !screenReader && columns >= 100;
   const displayMessages = transcriptExpanded ? messages.filter((m) => showThinking || !m.dim) : messages.filter((m) => m.role !== 'tool' && (showThinking || !m.dim));
   const windowSize = Math.max(5, rows - 6);
   React.useEffect(() => {
@@ -1221,6 +1202,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   }
   const renderStart = Math.max(0, heightStart - 1);
   const renderEnd = heightEnd;
+
   // While an overlay with its own text state owns the keyboard, VimInput must
   // ignore keys (otherwise typing in the overlay also types into the editor).
   // The autocomplete/mention/picker dropdowns filter on the editor text itself,
@@ -1230,7 +1212,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // overlay action (double submit with two different texts).
   const inputCaptured = permissionDialog !== null || messageSelector.open || trustOpen
     || historySearch.open || settingsOpen || transcriptSearch.open
-    || (focusedDialog === 'picker' && picker !== null) || autoOpen || mentionOpen;
+    || (focusedDialog === 'picker' && picker !== null);
   const visibleMessages = displayMessages.slice(renderStart, renderEnd);
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
@@ -1315,7 +1297,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     // @-file mentions (like cc): ↑/↓ navigate, Enter/Tab accept, Esc dismiss.
     if (mentionOpen) {
       const sel = Math.min(mentionSelected, mentionItems.length - 1);
-      if (key.escape) { mentionDismissedFor.current = input; return; }
+      if (key.escape) { setMentionDismissed(true); return; }
       if (key.upArrow) { setMentionSelected((s) => Math.max(0, s - 1)); return; }
       if (key.downArrow) { setMentionSelected((s) => Math.min(mentionItems.length - 1, s + 1)); return; }
       if (key.return || key.tab) {
@@ -1324,7 +1306,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           notePick(item.value);
           const next = input.replace(/@[\w./-]*$/, `${item.value} `);
           setInput(next);
-          mentionDismissedFor.current = next;
+          setMentionDismissed(true);
         }
         return;
       }
@@ -1333,20 +1315,19 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     // Compact autocomplete dropdown (like cc): ↑/↓ navigate, Enter/Tab accept, Esc dismiss.
     if (autoOpen) {
       const sel = Math.min(autoSelected, autoItems.length - 1);
-      if (key.escape) { autoDismissedFor.current = input.trim(); return; }
+      if (key.escape) { setAutoDismissed(true); return; }
       if (key.upArrow) { setAutoSelected((s) => Math.max(0, s - 1)); return; }
       if (key.downArrow) { setAutoSelected((s) => Math.min(autoItems.length - 1, s + 1)); return; }
       if (key.return || key.tab) {
         const item = autoItems[sel];
-        if (item) { notePick(item.value); setInput(`/${item.value} `); autoDismissedFor.current = `/${item.value} `; }
+        if (item) { notePick(item.value); setInput(`/${item.value} `); setAutoDismissed(true); }
         return;
       }
       // Typing filters the list (handled by derivation); other keys fall through.
     }
     // Tab re-opens a dismissed dropdown.
     if (key.tab && !running && input.trim().startsWith('/') && !autoOpen && !mentionOpen && !focusedDialog && !settingsOpen) {
-      autoDismissedFor.current = null;
-      setAutoNonce((n) => n + 1);
+      setAutoDismissed(false);
       return;
     }
     if (key.tab && suggestion) { setInput(suggestion); setSuggestion(null); return; }
@@ -1632,23 +1613,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       return;
     }
   });
-  // Definite terminal height pins the chat box to the bottom (cc-style).
-  // height="100%" does NOT work in ink: Yoga treats a percent of an
-  // indefinite parent as auto, which top-packs the whole tree.
-  const termRows = Math.max(10, rows || 24);
+  // Simple single-column layout (claude-code style): the message window is
+  // already height-budgeted above, so no fixed Yoga viewport or clipping —
+  // what is rendered is what fits, bottom-anchored by the slice.
   return (
-    <Box flexDirection="row" height={screenReader ? undefined : termRows}>
-      <Box flexDirection="column" flexGrow={1} height={screenReader ? undefined : termRows}>
-        {!screenReader && (openThreads.length > 0 || thread) ? (
-          <Box flexDirection="row" paddingX={1}>
-            {(openThreads.length ? openThreads : [{ id: thread ?? 'new', title: 'new thread' }]).slice(0, 8).map((t) => (
-              <Text key={t.id} backgroundColor={t.id === thread ? T.selectedBg : undefined} dimColor={t.id !== thread}> {t.title.slice(0, 14) || t.id} </Text>
-            ))}
-            {openThreads.length > 8 ? <Text dimColor> +{openThreads.length - 8}</Text> : null}
-            <Text dimColor> +</Text>
-          </Box>
-        ) : null}
-        <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
+    <Box flexDirection="column">
+        <Box flexDirection="column" paddingX={1}>
           <Box flexDirection="row">
             <Box flexDirection="column" marginRight={1}>
               <Text color={screenReader ? undefined : T.primary}>██</Text>
@@ -2026,16 +1996,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         ) : null}
         <StatusBar cwd={shortCwd(args.cwd)} tokens={context} windowSize={effModel?.window} spend={spent} vimMode={vimMode} activity={activity} running={running} hint="ctrl+p commands" />
         {statusLineOutput ? <Text dimColor={!screenReader}>{statusLineOutput}</Text> : null}
-      </Box>
-      {showSidebar ? (
-        <Box flexDirection="column" width={30} paddingX={1}>
-          <Text bold={screenReader ? false : true}>{(thread && openThreads.find((t) => t.id === thread)?.title) || 'new thread'}</Text>
-          <Text dimColor={!screenReader}>Context</Text>
-          <Text dimColor={!screenReader}>{context >= 1000 ? `${(context / 1000).toFixed(1)}K` : `${context}`} tokens</Text>
-          <Text dimColor={!screenReader}>{effModel?.window ? `${Math.min(99, Math.round((context / effModel.window) * 100))}% used` : '— used'}</Text>
-          <Text dimColor={!screenReader}>${spent.toFixed(2)} spent</Text>
-        </Box>
-      ) : null}
     </Box>
   );
 }
