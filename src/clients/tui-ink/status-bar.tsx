@@ -18,14 +18,15 @@ export function StatusBar(props: {
     permission === 'workspace' ? 'workspace mode on'
     : permission === 'read-only' ? 'read-only mode on'
     : permission === 'plan' ? 'plan mode on'
-    : 'auto mode on';
+    : 'auto mode on (shift+tab to cycle)';
   const agentN = agents ?? 0;
   const extra = [
     model && model !== 'auto' ? model : null,
+    `← ${agentN} agent${agentN === 1 ? '' : 's'}`,
     context ? `ctx ${Math.round(context / 1000)}k` : null,
     typeof spend === 'number' ? `$${spend.toFixed(4)}` : null,
   ].filter((p): p is string => !!p);
-  const line = `▶▶ ${activity && running ? `${activity} · ` : ''}${modeLabel}${extra.length ? ` · ${extra.join(' · ')}` : ''} · ← ${agentN} agent${agentN === 1 ? '' : 's'}`;
+  const line = `▶▶ ${activity && running ? `${activity} · ` : ''}${modeLabel}${extra.length ? ` · ${extra.join(' · ')}` : ''}`;
   return React.createElement(
     Text,
     { dimColor: !screenReader, wrap: 'truncate' },

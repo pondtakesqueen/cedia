@@ -45,7 +45,7 @@ import { join } from 'node:path';
 import { readFileSync as fsRead, writeFileSync as fsWrite, existsSync as fsExists, readdirSync as fsReaddir, statSync as fsStat } from 'node:fs';
 import { usageReport, readEventsLenient, isUsageEvent } from '../../core/session/usage.ts';
 
-type Msg = { role: 'user' | 'assistant' | 'tool' | 'system'; text: string; status?: 'running' | 'success' | 'error'; dim?: boolean };
+type Msg = { role: 'user' | 'assistant' | 'tool' | 'system'; text: string; status?: 'running' | 'success' | 'error'; dim?: boolean; tone?: 'red' };
 
 const INK_COMMANDS: { name: string; description: string }[] = [
   { name: 'help', description: 'these commands and keys' },
@@ -249,6 +249,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
   const push = (m: Msg) => setMessages((prev) => [...prev, m]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [trustOpen, setTrustOpen] = useState(false);
+  const [trustSelected, setTrustSelected] = useState(1);
 
   // @-file mentions (like cc): file paths from the working tree, fuzzy-matched.
   const [mentionSelected, setMentionSelected] = useState(0);
@@ -304,7 +306,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
   const handleCommand = useCallback((line: string) => {
     const [name = '', ...rest] = line.trim().split(/\s+/);
-    const say = (t: string) => push({ role: 'system', text: t });
+    const say = (t: string, tone?: 'red') => push({ role: 'system', text: t, ...(tone ? { tone } : {}) });
     switch (name) {
       case 'help': {
         const groups: [string, string[]][] = [
@@ -408,13 +410,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               const drafted = await draftCommitMessage({ cwd: args.cwd, model: writerModel, files, signal: new AbortController().signal });
               message = drafted.message;
               setSpent((s) => s + drafted.costUsd);
-            } catch (e) { say(`git commit failed: ${(e as Error).message}`); return; }
+            } catch (e) { say(`git commit failed: ${(e as Error).message}`, 'red'); return; }
           }
           if (!message) { say('the message came back empty: write one with /commit <message>'); return; }
           say([`commit ${files.length} file${files.length === 1 ? '' : 's'}: ${files.join(', ')}`, '', message, '', 'commit this? y to commit; n, or anything else you type, cancels'].join('\n'));
           pendingRef.current = { what: 'the commit', yes: () => {
             const r = commitFiles(args.cwd, files, message);
-            say(r.ok ? (r.out.split('\\n')[0] ?? 'committed') : `git commit failed: ${r.out}`);
+            say(r.ok ? (r.out.split('\\n')[0] ?? 'committed') : `git commit failed: ${r.out}`, r.ok ? undefined : 'red');
           } };
         })();
         return;
@@ -485,7 +487,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           );
           setSpent((s) => s + r.costUsd);
           say(`review ${r.subtype === 'success' ? 'done' : r.subtype} · ${r.numTurns} turn${r.numTurns === 1 ? '' : 's'} · $${r.costUsd.toFixed(4)}`);
-          if (r.subtype !== 'success') { if (r.result.trim()) say(r.result.trim()); return; }
+          if (r.subtype !== 'success') { if (r.result.trim()) say(r.result.trim(), 'red'); return; }
           const { verdict, findings } = parseVerdict(r.result);
           if (verdict !== 'changes' || subject.kind !== 'changes' || !findings) return;
           say(`send these findings to ${thread ? "this thread's writer" : 'a new thread'} to fix? y to send; n, or anything else you type, cancels`);
@@ -586,7 +588,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'onboarding': {
-        if (rest[0] === 'accept') { acceptTrust(cediaHome()); setNotice(null); push({ role: 'system', text: 'trust accepted' }); return; }
+        if (rest[0] === 'accept') { acceptTrust(cediaHome()); setNotice(null); setTrustOpen(false); push({ role: 'system', text: 'trust accepted' }); return; }
         if (rest[0] && rest[0] !== 'accept') {
           try { markStep(rest[0]); } catch {}
           setNotice(null);
@@ -875,6 +877,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     const stop = new AbortController();
     stopRef.current = stop;
     let resultCost = 0;
+    const turnStart = Date.now();
     try {
       const result = await runHeadless(
         { ...args, model: model ?? args.model, permission: permission ?? args.permission, ...(effort ? { effort } : {}), cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
@@ -884,7 +887,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (typeof result.peakContext === 'number') setContext(result.peakContext);
       resultCost = result.costUsd ?? 0;
       setSpent((prev) => prev + resultCost);
-      setMessages((m) => [...m, { role: 'system', text: `done · ${result.numTurns} turns · $${result.costUsd.toFixed(4)}` }]);
+      setMessages((m) => [...m, { role: 'system', text: `✳ done · ${result.numTurns} turn${result.numTurns === 1 ? '' : 's'} · $${result.costUsd.toFixed(4)} · ${((Date.now() - turnStart) / 1000).toFixed(1)}s` }]);
       if (loadPromptSuggestions(args.promptSuggestions)) {
         void (async () => {
           try {
@@ -895,7 +898,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         })();
       }
     } catch (e) {
-      setMessages((m) => [...m, { role: 'system', text: `error: ${(e as Error).message}` }]);
+      setMessages((m) => [...m, { role: 'system', text: `✗ error: ${(e as Error).message}`, tone: 'red' }]);
     } finally {
       setRunning(false);
       setActivity('');
@@ -993,8 +996,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     try {
       const pending = ONBOARDING_STEPS.filter((x: string) => !loadOnboarding().completed.includes(x));
       if (!loadOnboarding().hasTrustDialogAccepted) {
-        setNotice('trust: type y to accept, n to decline');
-        pendingRef.current = { what: 'the trust dialog', yes: () => { acceptTrust(cediaHome()); setNotice(null); push({ role: 'system', text: 'trust accepted' }); } };
+        setTrustOpen(true);
+        setTrustSelected(1);
       } else if (pending.length) {
         setNotice(`onboarding: ${pending.join(', ')} pending — /onboarding accept`);
       }
@@ -1045,6 +1048,35 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     return out;
   })();
   useInput((input, key) => {
+    // Trust dialog blocks everything until answered (like cc's workspace trust).
+    if (trustOpen) {
+      if (key.upArrow || key.downArrow) { setTrustSelected((s) => (s === 0 ? 1 : 0)); return; }
+      if (input === 'y' || input === 'Y') {
+        acceptTrust(cediaHome());
+        setTrustOpen(false);
+        setNotice(null);
+        push({ role: 'system', text: 'trust accepted' });
+        return;
+      }
+      if (input === 'n' || input === 'N' || key.escape) {
+        push({ role: 'system', text: 'not trusted: leaving' });
+        exit();
+        return;
+      }
+      if (key.return) {
+        if (trustSelected === 1) {
+          acceptTrust(cediaHome());
+          setTrustOpen(false);
+          setNotice(null);
+          push({ role: 'system', text: 'trust accepted' });
+        } else {
+          push({ role: 'system', text: 'not trusted: leaving' });
+          exit();
+        }
+        return;
+      }
+      return;
+    }
     // Ctrl+C owns the lifecycle (ink's exitOnCtrlC is off): abort a turn,
     // else clear the editor, else leave — like pi-tui.
     if (key.ctrl && input === 'c') {
@@ -1399,7 +1431,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 </Box>
               );
             }
-            return (
+              return (
             <Box key={globalIdx} flexDirection="column">
               {m.role === 'assistant' ? (
                 <Markdown>{m.text}</Markdown>
@@ -1410,7 +1442,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                   <Text color={colorFor(m.role)}>{full.slice(sb)}</Text>
                 </Text>
               ) : (
-                <Text color={m.dim ? undefined : colorFor(m.role)} dimColor={screenReader ? false : !!m.dim} wrap="wrap">{full}</Text>
+                <Text color={m.tone === 'red' && !screenReader ? 'red' : (m.dim ? undefined : colorFor(m.role))} dimColor={screenReader ? false : !!m.dim} wrap="wrap">{full}</Text>
               )}
             </Box>
             );
@@ -1423,6 +1455,19 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '* ' : ''}{activity}</Text>
           ) : null}
         </Box>
+        {trustOpen ? (
+          <Box flexDirection="column" paddingX={1}>
+            <Text color={screenReader ? undefined : 'yellow'} bold={!screenReader}>Accessing workspace:</Text>
+            <Text>{shortCwd(args.cwd)}</Text>
+            <Text wrap="wrap">Quick safety check: is this a project you created or one you trust? If not, take a moment to review what is in this folder first.</Text>
+            <Text wrap="wrap">cedia will be able to read, edit, and execute files here.</Text>
+            <Text dimColor={!screenReader}>Security guide: least privilege · deny-list enforced · snapshots can undo edits</Text>
+            {(["No, exit", "Yes, I trust this folder"] as const).map((label, i) => (
+              <Text key={label} color={screenReader ? undefined : (i === trustSelected ? 'cyan' : undefined)}>{i === trustSelected ? '› ' : '  '}{label}</Text>
+            ))}
+            <Text dimColor={!screenReader}>Enter to confirm · Esc to cancel</Text>
+          </Box>
+        ) : null}
         {focusedDialog === 'picker' && picker ? (
           (() => {
             const pStart = Math.max(0, Math.min(pickerSelected - overlayBudget + 2, Math.max(0, picker.items.length - overlayBudget)));
