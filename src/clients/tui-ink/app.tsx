@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useWindowSize, useStdin, useIsScreenReaderEnabled } from 'ink';
-import { buildAutoItems, highlightSpans, truncateDescription, truncateLongText, estimateLines, type AutoItem } from './autocomplete.ts';
+import { buildAutoItems, highlightSpans, truncateDescription, truncateLongText, estimateLines, loadFrecency, recordPick, frecencyBonus, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
@@ -231,6 +231,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [permissionDialog, setPermissionDialog] = useState<{ tool: string; input?: unknown; reason?: string; rule?: string } | null>(null);
   const toolInputByCallRef = useRef<Record<string, unknown>>({});
   const toolStartByCallRef = useRef<Record<string, number>>({});
+  const toolNameByCallRef = useRef<Record<string, string>>({});
   const thinkingRef = useRef('');
   const [focusedDialog, setFocusedDialog] = useState<DialogKind>(null);
   const openDialog = useCallback((kind: NonNullable<DialogKind>) => {
@@ -253,12 +254,61 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
   const push = (m: Msg) => setMessages((prev) => [...prev, m]);
   const [notice, setNotice] = useState<string | null>(null);
+  const keyHintLabels: Record<string, string> = {
+    cancel: 'cancel/close', submit: 'send', historyUp: 'older input', historyDown: 'newer input',
+    autocomplete: 'complete', historySearch: 'history search',
+  };
+  // User-customized keybindings (from ~/.cedia/keybindings.json), shown in /help.
+  const bindingHints = React.useMemo(() => {
+    try {
+      const customs = loadKeybindings(cediaHome());
+      if (!customs.length) return '';
+      const parts: string[] = [];
+      for (const b of customs) {
+        const label = keyHintLabels[b.command ?? ''] ?? b.command;
+        if (label) parts.push(`${b.key} ${label}`);
+      }
+      return parts.join(' · ');
+    } catch { return ''; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedKeybindings]);
+  // Draft stash per thread (opencode-style): switching threads parks the
+  // current input and restores the other thread's parked draft.
+  const draftsRef = useRef<Record<string, string>>({});
+  const switchThread = (id: string | undefined) => {
+    const key = thread ?? 'new';
+    if (input.trim()) draftsRef.current[key] = input;
+    else delete draftsRef.current[key];
+    setThread(id);
+    const draft = draftsRef.current[id ?? 'new'] ?? '';
+    setInput(draft);
+    inputRef.current = draft;
+    setContext(0);
+  };
+  const ago = (iso: string): string => {
+    const ms = Date.now() - new Date(iso).getTime();
+    if (!isFinite(ms) || ms < 0) return '';
+    const m = Math.floor(ms / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  };
   const [trustOpen, setTrustOpen] = useState(false);
   const [trustSelected, setTrustSelected] = useState(1);
 
   // @-file mentions (like cc): file paths from the working tree, fuzzy-matched.
   const [mentionSelected, setMentionSelected] = useState(0);
   const mentionDismissedFor = useRef<string | null>(null);
+  // Frecency-ranked autocomplete (opencode-style): picks are recorded per value
+  // and boost that item's rank next time. Refreshed after every recorded pick.
+  const [frecencyTick, setFrecencyTick] = useState(0);
+  const frecencyPath = join(cediaHome(), 'frecency.json');
+  const frecencyMap = React.useMemo(() => loadFrecency(frecencyPath), [frecencyTick]);
+  const frecencyOf = (value: string) => frecencyBonus(frecencyMap, value);
+  const notePick = (value: string) => { try { recordPick(frecencyPath, value); } catch {} setFrecencyTick((t) => t + 1); };
+
   const fileList = React.useMemo(() => {
     try {
       const glob = new Bun.Glob('**/*');
@@ -275,9 +325,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const mentionQuery = !running ? (/((?:^|\s)@([\w./-]*))$/.exec(input)?.[2] ?? null) : null;
   const mentionItems = React.useMemo(() => {
     if (mentionQuery === null) return [];
-    return buildAutoItems([], fileList.map((f) => ({ value: f, name: f, description: 'file' })), mentionQuery);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mentionQuery, fileList]);
+    return buildAutoItems([], fileList.map((f) => ({ value: f, name: f, description: 'file' })), mentionQuery, frecencyOf);
+  }, [mentionQuery, fileList, frecencyMap]);
   useEffect(() => { setMentionSelected(0); mentionDismissedFor.current = null; }, [mentionQuery]);
   const mentionOpen = mentionQuery !== null && mentionItems.length > 0
     && !focusedDialog && !settingsOpen && !permissionDialog && !picker && !transcriptSearch.open
@@ -297,9 +346,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     if (autoQuery === null) return [];
     const cmds: AutoItem[] = INK_COMMANDS.map((c) => ({ value: c.name, name: `/${c.name}`, description: c.description }));
     const skills: AutoItem[] = skillsList.map((s) => ({ value: s.name, name: s.name, description: String(s.description).split('\n')[0] ?? '' }));
-    return buildAutoItems(cmds, skills, autoQuery);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoQuery, skillsList]);
+    return buildAutoItems(cmds, skills, autoQuery, frecencyOf);
+  }, [autoQuery, skillsList, frecencyMap]);
   // Reset autocomplete selection whenever the query changes (string dep: no loop).
   useEffect(() => { setAutoSelected(0); autoDismissedFor.current = null; }, [autoQuery]);
   useEffect(() => { setConfigSelected(0); }, [settingsQuery, settingsTab]);
@@ -322,7 +370,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         ];
         const byName = new Map(INK_COMMANDS.map((c) => [c.name, c.description]));
         say(groups.map(([g, names]) => `${g}: ${names.map((n) => `${n} — ${byName.get(n.slice(1)) ?? ''}`).join(' · ')}`).join('\n'));
-        say('keys: Esc stops a turn · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Ctrl+G external editor · Tab completes · Shift+Tab permission · Meta+P model · Meta+O fast · Meta+T thinking · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · \\+Enter newline');
+        say('keys: Esc stops a turn · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Ctrl+G external editor · Tab completes · Shift+Tab permission · Meta+P model · Meta+O fast · Meta+T thinking · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · \\+Enter newline' + (bindingHints ? ` · custom keys: ${bindingHints}` : ''));
         return;
       }
       case 'historyUp':
@@ -401,7 +449,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'new':
-        setThread(undefined);
+        switchThread(undefined);
         say('the next prompt starts a new thread');
         return;
       case 'plan':
@@ -548,7 +596,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         const side = rest.includes('--side');
         const r = forkThread(store, thread, at, { sessionFile: (cwd, sid) => `${cwd}/${sid}.jsonl` }, { side });
         if ('error' in r) { say('error: ' + r.error); return; }
-        setThread(r.thread);
+        switchThread(r.thread);
         say(`forked into ${r.thread}`);
         return;
       }
@@ -654,7 +702,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           return;
         }
         if (!store.has(rest[0])) { say(`no thread ${rest[0]}`); return; }
-        setThread(rest[0]);
+        switchThread(rest[0]);
         say(`going on with ${rest[0]}`);
         return;
       }
@@ -662,13 +710,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         if (!rest[0]) {
           const threads = store.list().filter((t) => !t.archived);
           if (!threads.length) { say('no threads'); return; }
-          const items = threads.map((t) => ({ value: t.id, label: `${t.id}  ${t.title}` }));
-          setPicker({ title: 'resume', items, onPick: (v) => { setThread(v); push({ role: 'system', text: `going on with ${v}` }); } });
+          const items = threads.map((t) => ({ value: t.id, label: `${t.id}  ${t.title}${t.updatedAt ? `  (${ago(t.updatedAt)})` : ''} · ${t.messages?.length ?? 0} msgs` }));
+          setPicker({ title: 'resume', items, onPick: (v) => { switchThread(v); push({ role: 'system', text: `going on with ${v}` }); } });
           openDialog('picker');
           return;
         }
         if (!store.has(rest[0])) { say(`no thread ${rest[0]}`); return; }
-        setThread(rest[0]); say(`going on with ${rest[0]}`); return;
+        switchThread(rest[0]); say(`going on with ${rest[0]}`); return;
       }
       case 'rename': {
         const title = rest.join(' ').trim();
@@ -879,16 +927,22 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             if (e.kind === 'tool_intent') {
               toolInputByCallRef.current[e.callId] = e.input;
               toolStartByCallRef.current[e.callId] = Date.now();
+              toolNameByCallRef.current[e.callId] = e.tool;
               setMessages((prev) => [...prev, { role: 'tool', text: `● ${e.tool} ${String(e.input?.command ?? e.input?.path ?? '').slice(0, 80)}`, status: 'running' }]);
               setActivity(`running ${e.tool}`);
             }
             if (e.kind === 'tool_result') {
-              const first = e.output.text.split('\n').find((l) => l.trim()) ?? '';
+              const lines = e.output.text.split('\n');
+              const first = lines.find((l) => l.trim()) ?? '';
               const exit = e.output.exitCode !== undefined ? ` exit=${e.output.exitCode}` : '';
               const started = toolStartByCallRef.current[e.callId];
               const took = started !== undefined ? ` · ${((Date.now() - started) / 1000).toFixed(1)}s` : '';
               delete toolStartByCallRef.current[e.callId];
-              setMessages((prev) => [...prev, { role: 'tool', text: `  ⎿ ${e.output.isError ? 'ERR ' : ''}${first.slice(0, 120)}${exit}${took}`, status: e.output.isError ? 'error' : 'success' }]);
+              const toolName = toolNameByCallRef.current[e.callId] ?? '';
+              delete toolNameByCallRef.current[e.callId];
+              const looksDiff = /^(edit|write|filewrite|sed)$/i.test(toolName) && lines.some((l, i) => i > 0 && /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
+              const body = looksDiff ? lines.slice(0, 40).join('\n').slice(0, 1500) : `${first.slice(0, 120)}`;
+              setMessages((prev) => [...prev, { role: 'tool', text: `  ⎿ ${e.output.isError ? 'ERR ' : ''}${body}${exit}${took}`, status: e.output.isError ? 'error' : 'success' }]);
             }
             if (e.kind === 'request') setActivity('waiting for model');
             if (e.kind === 'snapshot' && e.changed.length) setMessages((prev) => [...prev, { role: 'system', text: `changed ${e.changed.join(', ')}` }]);
@@ -1160,6 +1214,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (key.return || key.tab) {
         const item = mentionItems[sel];
         if (item) {
+          notePick(item.value);
           const next = input.replace(/@[\w./-]*$/, `${item.value} `);
           setInput(next);
           mentionDismissedFor.current = next;
@@ -1176,7 +1231,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (key.downArrow) { setAutoSelected((s) => Math.min(autoItems.length - 1, s + 1)); return; }
       if (key.return || key.tab) {
         const item = autoItems[sel];
-        if (item) { setInput(`/${item.value} `); autoDismissedFor.current = `/${item.value} `; }
+        if (item) { notePick(item.value); setInput(`/${item.value} `); autoDismissedFor.current = `/${item.value} `; }
         return;
       }
       // Typing filters the list (handled by derivation); other keys fall through.
@@ -1427,6 +1482,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       openDialog('historySearch');
       return;
     }
+    if (key.shift && key.upArrow && !running && !focusedDialog && !settingsOpen && !permissionDialog && !transcriptSearch.open && !historySearch.open && !messageSelector.open) {
+      if (input.trim()) return; // let the editor move the cursor when typing
+      handleCommand('actions');
+      return;
+    }
     if (key.ctrl && (input === 'o' || input === 'O')) {
       if (transcriptSearch.open || historySearch.open) return;
       if (!thread) { push({ role: 'system', text: 'no thread yet' }); return; }
@@ -1528,6 +1588,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                   <Text backgroundColor="blue" color="white">{full.slice(sa, sb)}</Text>
                   <Text color={colorFor(m.role)}>{full.slice(sb)}</Text>
                 </Text>
+              ) : m.role === 'tool' && !isToolError && full.split('\n').some((l) => /^[+-]/.test(l)) ? (
+                <Box flexDirection="column">
+                  {full.split('\n').slice(0, 12).map((ln, li) => {
+                    const diff = /^[+](?![+][+])/.test(ln) ? 'green' : /^-(?!--)/.test(ln) ? 'red' : undefined;
+                    return <Text key={li} wrap="truncate" color={screenReader ? undefined : diff} dimColor={screenReader ? false : (!diff && li > 0)}>{ln.slice(0, Math.max(20, columns - 6))}</Text>;
+                  })}
+                  {full.split('\n').length > 12 ? <Text dimColor={!screenReader}>…{full.split('\n').length - 12} more lines</Text> : null}
+                </Box>
               ) : (
                 <Text color={isUserRow || screenReader ? undefined : isToolError ? 'red' : m.tone === 'red' ? 'red' : m.dim ? undefined : colorFor(m.role)} dimColor={screenReader ? false : !!m.dim && !isUserRow} wrap="wrap">{full}</Text>
               )}
