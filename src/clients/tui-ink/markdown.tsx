@@ -23,7 +23,7 @@ export async function renderMarkdown(src: string): Promise<string> {
   }
 }
 
-export default function Markdown({ children }: { children: string }): React.ReactElement {
+export default function Markdown({ children, ...options }: { children: string } & Record<string, unknown>): React.ReactElement {
   const [text, setText] = React.useState<string>(children ?? '');
   React.useEffect(() => {
     let cancelled = false;
@@ -32,5 +32,5 @@ export default function Markdown({ children }: { children: string }): React.Reac
     });
     return () => { cancelled = true; };
   }, [children]);
-  return React.createElement(Text, null, text);
+  return React.createElement(Text, options as Record<string, unknown>, text);
 }
