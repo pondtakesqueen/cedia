@@ -666,7 +666,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       require('fs').appendFileSync('/tmp/manual.log', 'DATA ' + JSON.stringify(data.toString()) + '\n');
       const s = data.toString();
       // wheel
-      if (/\x1b\[<64;/.test(s)) setScrollOffset((o) => Math.min(o + 3, Math.max(0, messages.length - 40)));
+      if (/\x1b\[<64;/.test(s)) setScrollOffset((o) => Math.min(o + 3, Math.max(0, messages.length - Math.max(1, rows - 5))));
       if (/\x1b\[<65;/.test(s)) setScrollOffset((o) => Math.max(0, o - 3));
       // left button press: \x1b[<0;COL;ROW M  ; drag (motion): \x1b[<32;COL;ROW M ; release: ...m
       const press = /\x1b\[<0;(\d+);(\d+)M/.exec(s);
@@ -749,11 +749,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     const out = runStatusLineCommand(cmd, { model: args.model ?? 'auto', workspace: args.cwd, costUsd: spent, contextWindow: context, permissionMode: args.permission, vimMode });
     setStatusLineOutput(out);
   }, [spent, context, thread, args.model, args.cwd, args.permission, vimMode]);
-  const { columns } = useWindowSize();
+  const { columns, rows } = useWindowSize();
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1';
   const showSidebar = !screenReader && columns >= 120;
   const displayMessages = transcriptExpanded ? messages : messages.filter((m) => m.role !== 'tool');
-  const windowSize = 40;
+  const windowSize = Math.max(1, rows - 5);
+  React.useEffect(() => {
+    const max = Math.max(0, displayMessages.length - windowSize);
+    setScrollOffset((o) => (o > max ? max : o));
+  }, [columns, rows]);
   const windowStart = Math.max(0, displayMessages.length - windowSize - scrollOffset);
   const windowEnd = scrollOffset > 0 ? displayMessages.length - scrollOffset : displayMessages.length;
   const renderStart = Math.max(0, windowStart - 5);
