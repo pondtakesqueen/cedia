@@ -45,7 +45,7 @@ const dark: ThemeTokens = {
   background: '#1a1b26',
   backgroundPanel: '#16161e',
   backgroundElement: '#1f2335',
-  userRowBg: '#292e42',
+  userRowBg: '#343a58',
   selectedBg: '#28344a',
   border: '#3b4261',
   borderActive: '#7aa2f7',

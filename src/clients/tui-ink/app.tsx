@@ -250,6 +250,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [suggestion, setSuggestion] = useState<string | null>(null);
   const [thinkingText, setThinkingText] = useState('');
   const [showThinking, setShowThinking] = useState(true);
+  const [spin, setSpin] = useState(0);
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => setSpin((s) => s + 1), 80);
+    return () => clearInterval(t);
+  }, [running]);
+  const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   const [selection, setSelection] = useState<{ aMsg: number; aCol: number; bMsg: number; bCol: number } | null>(null);
   const [selecting, setSelecting] = useState(false);
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
@@ -1536,8 +1543,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
           <Box flexDirection="row">
             <Box flexDirection="column" marginRight={1}>
-              <Text>██</Text>
-              <Text>██</Text>
+              <Text color={screenReader ? undefined : T.primary}>██</Text>
+              <Text color={screenReader ? undefined : T.primary}>██</Text>
             </Box>
             <Box flexDirection="column">
               <Text bold={screenReader ? false : true}>cedia {versionInfo().version}</Text>
@@ -1612,7 +1619,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           )}
           {thinkingText && showThinking ? <Text dimColor={!screenReader} wrap="wrap">{thinkingText.slice(-500)}</Text> : null}
           {running && activity ? (
-            <Text color={screenReader ? undefined : T.primary}>{screenReader ? '* ' : ''}{activity}</Text>
+            <Text color={screenReader ? undefined : T.primary}>{screenReader ? '' : `${SPINNER_FRAMES[spin % SPINNER_FRAMES.length]} `}{activity}</Text>
           ) : null}
         </Box>
         {trustOpen ? (
@@ -1881,6 +1888,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         {notice ? (
           <Box justifyContent="flex-end" paddingX={1}>
             <Text color={screenReader ? undefined : T.warning}>{notice}</Text>
+          </Box>
+        ) : ((args.images?.length ?? 0) > 0 || effort) ? (
+          <Box justifyContent="flex-end" paddingX={1}>
+            <Text dimColor={!screenReader}>
+              {(args.images ?? []).slice(0, 3).map((p) => `[Image ${(args.images ?? []).indexOf(p) + 1}]`).join(' ')}{effort ? `  ◐ ${effort}` : ''}
+            </Text>
           </Box>
         ) : null}
         <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, columns))}</Text>
