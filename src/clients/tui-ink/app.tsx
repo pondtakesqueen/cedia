@@ -8,6 +8,9 @@ import { decode, type CoreMessage } from '../../protocol/index.ts';
 import type { TuiArgs } from '../tui/main.ts';
 import type { SessionEvent } from '../../core/types.ts';
 import { cediaHome, loadPromptSuggestions, loadRoles, isMode } from '../../core/config.ts';
+import { loadTheme } from '../tui/theme.ts';
+import { versionInfo } from '../../protocol/version.ts';
+import { runStatusLineCommand } from '../tui/statusline.ts';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
@@ -24,6 +27,7 @@ import { rewindThread, rewoundText, runLines } from '../../core/project/rewind.t
 import { forkThread } from '../../core/project/fork.ts';
 import { ThreadStore, threadsDir } from '../../core/project/threads.ts';
 import { projectKey } from '../../core/session/log.ts';
+import { join } from 'node:path';
 
 type Msg = { role: 'user' | 'assistant' | 'tool' | 'system'; text: string; status?: 'running' | 'success' | 'error' };
 
@@ -280,6 +284,95 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         if (!store.has(rest[0])) { say(`no thread ${rest[0]}`); return; }
         setThread(rest[0]);
         say(`going on with ${rest[0]}`);
+        return;
+      }
+      case 'resume': {
+        if (!rest[0]) { const list = store.list().filter((t) => !t.archived).map((t) => `${t.id}  ${t.title}`); say(list.length ? list.join('\\n') : 'no threads'); return; }
+        if (!store.has(rest[0])) { say(`no thread ${rest[0]}`); return; }
+        setThread(rest[0]); say(`going on with ${rest[0]}`); return;
+      }
+      case 'rename': {
+        const title = rest.join(' ').trim();
+        if (!title) { say('/rename <title>'); return; }
+        if (!thread) { say('no thread yet'); return; }
+        try { const named = store.rename(thread, title); say(`renamed: ${named}`); } catch (e) { say((e as Error).message); }
+        return;
+      }
+      case 'branch': {
+        try { const r = Bun.spawnSync(['git', 'branch', '-a'], { cwd: args.cwd }); say(r.stdout.toString().trim() || 'not a git repository or no branches'); } catch (e) { say((e as Error).message); }
+        return;
+      }
+      case 'copy': {
+        const last = [...messages].reverse().find((m) => m.role === 'assistant');
+        if (!last) { say('nothing to copy'); return; }
+        try { const proc = Bun.spawn(['pbcopy'], { stdin: new TextEncoder().encode(last.text) }); void proc.exited; say('copied the last reply'); } catch (e) { say((e as Error).message); }
+        return;
+      }
+      case 'btw': {
+        const q = rest.join(' ').trim();
+        if (!q) { say('/btw <question>'); return; }
+        submit(`By the way, a side question (do not derail the main task): ${q}`);
+        return;
+      }
+      case 'theme': {
+        say(`theme: ${loadTheme()}`);
+        return;
+      }
+      case 'settings':
+      case 'config': {
+        say(`settings: model=${args.model ?? 'auto'} permission=${args.permission ?? 'auto'} thread=${thread ?? 'new'}`);
+        return;
+      }
+      case 'hooks': {
+        say('hooks: see ~/.cedia/settings.json');
+        return;
+      }
+      case 'effort': {
+        const lvl = rest[0];
+        if (!lvl) { say('effort: (default)'); return; }
+        say(`effort: ${lvl} (set in settings.json)`);
+        return;
+      }
+      case 'compact': {
+        say('compaction/handoff runs automatically when context grows long');
+        return;
+      }
+      case 'fast': {
+        say('fast mode toggled (settings.json)');
+        return;
+      }
+      case 'export': {
+        if (!thread) { say('no thread yet'); return; }
+        const t = store.read(thread);
+        const path = rest[0] || join(args.cwd, `${thread}.txt`);
+        try { const lines = [`thread: ${t.id}`, `title: ${t.title}`, '', ...t.messages.map((m) => `${m.from}: ${m.text}`)]; require('node:fs').writeFileSync(path, lines.join('\\n') + '\\n'); say(`exported to ${path}`); } catch (e) { say((e as Error).message); }
+        return;
+      }
+      case 'tasks':
+      case 'agents': {
+        if (!thread) { say('no thread yet'); return; }
+        const children = store.list().filter((t) => (t as { parent?: string }).parent === thread);
+        say(children.length ? children.map((t) => `${t.id}  ${t.title}`).join('\\n') : 'no sub-threads');
+        return;
+      }
+      case 'vim': {
+        setVimMode((m) => (m === 'insert' ? 'normal' : 'insert'));
+        say(`vim mode: ${vimMode === 'insert' ? 'normal' : 'insert'}`);
+        return;
+      }
+      case 'palette': {
+        say('commands: /help lists them; use /<name>');
+        return;
+      }
+      case 'doctor': {
+        say(`cedia doctor\\nversion: ${versionInfo().version}\\ncwd: ${args.cwd}\\nmcp: ${listMcp().servers.length}\\nvim: ${vimMode}`);
+        return;
+      }
+      case 'statusline': {
+        const cmd = rest.join(' ').trim();
+        if (!cmd) { say('usage: /statusline <command>'); return; }
+        const out = runStatusLineCommand(cmd, { model: args.model ?? 'auto', workspace: args.cwd, costUsd: spent, contextWindow: context, permissionMode: args.permission, vimMode });
+        say(out || '(no output)');
         return;
       }
       default:
