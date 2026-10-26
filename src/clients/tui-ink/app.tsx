@@ -95,6 +95,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         setThread(undefined);
         say('the next prompt starts a new thread');
         return;
+      case 'plan':
+      case 'quick': {
+        const prompt = rest.join(' ').trim();
+        if (!prompt) { say(`/${name} <prompt>`); return; }
+        push({ role: 'user', text: line.trim() });
+        submit(prompt, name === 'plan' ? 'always' : 'never');
+        return;
+      }
       case 'diff': {
         const d = workingDiff(args.cwd);
         say(d ? [d.patch, ...(d.untracked.length ? ['untracked: ' + d.untracked.join(', ')] : [])].join('\n').slice(0, 4000) : 'no changes');
@@ -252,7 +260,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     }
   }, [args, messages, running, store, thread, exit, spent, context, goal]);
 
-  const submit = useCallback(async (text: string) => {
+  const submit = useCallback(async (text: string, planWhen?: 'always' | 'never') => {
     if (!text.trim() || running) return;
     if (picker) {
       const n = Number(text.trim());
@@ -328,7 +336,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     stopRef.current = stop;
     try {
       const result = await runHeadless(
-        { ...args, cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), signal: stop.signal },
+        { ...args, cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
         handleChunk,
       );
       setThread(result.thread ?? thread);
