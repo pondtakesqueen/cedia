@@ -179,10 +179,11 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
 
   if (vimMode === 'insert') {
     if (!value && placeholder) {
+      // Cursor sits on the first cell, over the placeholder (like cc).
       return (
         <Box>
-          <Text dimColor>{placeholder}</Text>
           <Text inverse> </Text>
+          <Text dimColor>{placeholder.slice(1)}</Text>
         </Box>
       );
     }
