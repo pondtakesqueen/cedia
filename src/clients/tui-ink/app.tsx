@@ -1180,14 +1180,19 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
   const displayMessages = transcriptExpanded ? messages.filter((m) => showThinking || !m.dim) : messages.filter((m) => m.role !== 'tool' && (showThinking || !m.dim));
   const windowSize = Math.max(5, rows - 6);
+  // Full message range: the height-budgeted slice below decides what fits,
+  // so the offset may travel to the very first message (count-based windows
+  // would strand tall single messages).
+  const maxScrollOffset = Math.max(0, displayMessages.length - 1);
   React.useEffect(() => {
-    const max = Math.max(0, displayMessages.length - windowSize);
-    setScrollOffset((o) => (o > max ? max : o));
+    setScrollOffset((o) => (o > maxScrollOffset ? maxScrollOffset : o));
   }, [columns, rows, displayMessages.length]);
   // Height-budgeted window (like cc's virtual list): walk back from the bottom
   // accumulating estimated wrapped heights, so long wrapped messages are
   // measured instead of counted. windowSize stays as the PgUp/PgDn step.
-  const heightBudget = Math.max(5, rows - 6);
+  // The budget reserves the header, both scroll indicators, the input box,
+  // the model line and the status bar.
+  const heightBudget = Math.max(3, rows - 8);
   const heightEnd = displayMessages.length - scrollOffset;
   let heightStart = heightEnd;
   {
@@ -1345,9 +1350,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         setConfigSelected(0);
         return;
       }
-      if ((key.leftArrow || key.rightArrow) && settingsTab !== 'config') {
+      if (key.leftArrow || key.rightArrow) {
         if (key.rightArrow) setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
         else setSettingsTab((t) => tabs[(tabs.indexOf(t) - 1 + tabs.length) % tabs.length]!);
+        setConfigSelected(0);
         return;
       }
       if (settingsTab === 'config') {
@@ -1424,7 +1430,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       return;
     }
     if (key.home) {
-      setScrollOffset(Math.max(0, displayMessages.length - windowSize));
+      setScrollOffset(maxScrollOffset);
       return;
     }
     if (key.end) {
@@ -1432,7 +1438,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       return;
     }
     if (key.pageUp) {
-      setScrollOffset((o) => Math.min(Math.max(0, displayMessages.length - windowSize), o + windowSize));
+      setScrollOffset((o) => Math.min(maxScrollOffset, o + windowSize));
       return;
     }
     if (key.pageDown) {
@@ -1456,6 +1462,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         const match = (id !== undefined && id === b.key.toLowerCase()) || matchesKey(input, b.key as any);
         if (!match) continue;
         const cmd = b.command;
+        // The editor owns Up/Down when it moves the cursor itself: vim
+        // non-insert modes (arrows act as hjkl) and multiline insert input
+        // (arrows move between rows). Otherwise Up/Down recalls history.
+        if ((cmd === 'historyUp' || cmd === 'historyDown')
+          && (vimMode !== 'insert' || inputRef.current.includes('\n'))) return;
         if (cmd === 'cancel') {
           setInput('');
           inputRef.current = '';
@@ -1548,7 +1559,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (key.return) {
         const gi = searchHits[transcriptSearch.selected];
         if (gi !== undefined) {
-          const maxOff = Math.max(0, displayMessages.length - windowSize);
+          const maxOff = Math.max(0, displayMessages.length - 1);
           setScrollOffset(Math.min(maxOff, Math.max(0, displayMessages.length - 1 - gi - Math.floor(windowSize / 2))));
           push({ role: 'system', text: `jumped to match ${transcriptSearch.selected + 1}/${searchHits.length}` });
         }
@@ -1613,12 +1624,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       return;
     }
   });
-  // Simple single-column layout (claude-code style): the message window is
-  // already height-budgeted above, so no fixed Yoga viewport or clipping —
-  // what is rendered is what fits, bottom-anchored by the slice.
+  // Bottom-pinned chat (claude-code style): the outer box owns the terminal
+  // height, the transcript flex-grows between the header and the input, and
+  // overflow clips the top (oldest) first. The slice above already keeps the
+  // newest content, so clipping only absorbs rounding.
+  const termRows = Math.max(10, rows || 24);
   return (
-    <Box flexDirection="column">
-        <Box flexDirection="column" paddingX={1}>
+    <Box flexDirection="column" height={screenReader ? undefined : termRows}>
+      <Box flexDirection="column" paddingX={1}>
           <Box flexDirection="row">
             <Box flexDirection="column" marginRight={1}>
               <Text color={screenReader ? undefined : T.primary}>██</Text>
@@ -1630,9 +1643,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               {displayMessages.length === 0 ? <Text dimColor={!screenReader}>/help for commands · Esc stops a turn</Text> : null}
             </Box>
           </Box>
+      </Box>
+      {displayMessages.length === 0 ? null : (
+        <Box paddingX={1}>
+          {scrollOffset > 0 || aboveHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↑ '}{aboveHidden} more above</Text> : null}
+        </Box>
+      )}
+      <Box flexDirection="column" flexGrow={1} overflow="hidden" justifyContent="flex-end" paddingX={1}>
           {displayMessages.length === 0 ? null : (
             <>
-              {scrollOffset > 0 || aboveHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↑ '}{aboveHidden} more above</Text> : null}
               {visibleMessages.map((m, i) => {
             const globalIdx = renderStart + i;
             let a = -1, b = -1;
@@ -1699,14 +1718,18 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             </Box>
             );
           })}
-                {heightEnd < displayMessages.length || belowHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↓ '}{belowHidden} more below</Text> : null}
               </>
           )}
           {thinkingText && showThinking ? <Text dimColor={!screenReader} wrap="wrap">{thinkingText.slice(-500)}</Text> : null}
           {running && activity ? (
             <Text color={screenReader ? undefined : T.primary}>{screenReader ? '' : `${SPINNER_FRAMES[spin % SPINNER_FRAMES.length]} `}{activity}</Text>
           ) : null}
+      </Box>
+      {displayMessages.length === 0 ? null : (
+        <Box paddingX={1}>
+          {heightEnd < displayMessages.length || belowHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↓ '}{belowHidden} more below</Text> : null}
         </Box>
+      )}
         {trustOpen ? (
           <Box flexDirection="column" paddingX={1}>
             <Text color={screenReader ? undefined : T.warning} bold={!screenReader}>Accessing workspace:</Text>
@@ -1917,7 +1940,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 ) : <Text dimColor={!screenReader}>no session logs yet</Text>}
               </Box>
             ) : null}
-            <Text dimColor={!screenReader}>Enter/Space to change · / to search · Esc to close</Text>
+            <Text dimColor={!screenReader}>{settingsTab === 'config' ? 'Enter/Space to change · / to search · ←/→ switch tabs · Esc to close' : '←/→ switch tabs · Esc to close'}</Text>
           </Box>
         ) : null}
         {suggestion ? <Text dimColor={!screenReader}>💡 {suggestion} (Tab to accept)</Text> : null}

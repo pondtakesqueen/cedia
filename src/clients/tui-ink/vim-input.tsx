@@ -26,6 +26,9 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
       lastVal.current = value;
       setUndoStack((s) => (s[s.length - 1] === prev ? s : [...s.slice(-49), prev]));
     }
+    // External rewrites (history recall, completions, editor) replace the
+    // text under the cursor: clamp it back into range.
+    setCursor((c) => Math.max(0, Math.min(c, value.length)));
   }, [value]);
   const [pendingOp, setPendingOp] = useState<'d' | 'c' | 'y' | null>(null);
   const [count, setCount] = useState<number | null>(null);
@@ -79,7 +82,20 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
       }
       if (key.leftArrow) { setCursor(clamp(cursor - 1)); return; }
       if (key.rightArrow) { setCursor(clamp(cursor + 1)); return; }
-      if (key.upArrow || key.downArrow) return;
+      if (key.upArrow || key.downArrow) {
+        // Multiline: move the cursor by visual row (like cc). Single-line:
+        // do nothing here — the app owns Up/Down for prompt history.
+        if (value.includes('\n')) {
+          const pos0 = locate(cursor);
+          const nr = pos0.row + (key.upArrow ? -1 : 1);
+          if (nr >= 0 && nr < pos0.lines.length) {
+            let acc = 0;
+            for (let i = 0; i < nr; i++) acc += pos0.lines[i]!.length + 1;
+            setCursor(acc + Math.min(pos0.col, pos0.lines[nr]!.length));
+          } else setCursor(key.upArrow ? 0 : value.length);
+        }
+        return;
+      }
       if (input && !key.ctrl && !key.meta) {
         const printable = input.replace(/[^\x20-\x7e]/g, '');
         if (printable) {
@@ -120,6 +136,19 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
       for (let i = 0; i < n; i++) nc = fn(nc);
       setCursor(Math.max(0, Math.min(nc, Math.max(0, value.length - 1))));
     };
+    // Arrow keys move like hjkl (cc parity: arrows always move the cursor).
+    if (key.leftArrow) { move((c) => c - 1); return; }
+    if (key.rightArrow) { move((c) => c + 1); return; }
+    if (key.upArrow || key.downArrow) {
+      const pos0 = locate(Math.min(cursor, Math.max(0, value.length - 1)));
+      const nr = pos0.row + (key.upArrow ? -n : n);
+      if (nr >= 0 && nr < pos0.lines.length) {
+        let acc = 0;
+        for (let i = 0; i < nr; i++) acc += pos0.lines[i]!.length + 1;
+        setCursor(acc + Math.min(pos0.col, pos0.lines[nr]!.length));
+      } else setCursor(key.upArrow ? 0 : value.length);
+      return;
+    }
     const isWord = (ch: string) => /[A-Za-z0-9_]/.test(ch);
     const nextWord = (c: number) => {
       let i = c;

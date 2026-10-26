@@ -150,6 +150,53 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
     }
   });
 
+  test('up recalls history in insert mode but not in normal mode', async () => {
+    // Two turns so a stray history step would visibly change the recalled text.
+    const h = start({ script: [{ blocks: [{ type: 'text', text: 'reply echo' }] }] });
+    try {
+      await Bun.sleep(500);
+      for (const q of ['aaa-first', 'bbb-second']) {
+        h.write(q);
+        await Bun.sleep(200);
+        h.write('\r');
+        await Bun.sleep(4000);
+      }
+      // Insert mode: Up recalls the latest prompt into the editor row (› ).
+      h.write('\x1b[A');
+      await Bun.sleep(500);
+      expect(h.frame()).toContain('› bbb-second');
+      // Normal mode: Up moves the cursor instead of stepping through history,
+      // so the editor keeps showing the same recalled prompt.
+      h.write('\x1b'); // Esc: insert -> normal
+      await Bun.sleep(400);
+      h.write('\x1b[A');
+      await Bun.sleep(500);
+      expect(h.frame()).toContain('› bbb-second');
+    } finally {
+      h.stop();
+    }
+  }, 60000);
+
+  test('settings panel opens, arrows switch tabs, esc closes', async () => {
+    const h = start();
+    try {
+      await Bun.sleep(500);
+      h.write('/settings');
+      await Bun.sleep(500);
+      h.write('\x1b'); // dismiss the autocomplete dropdown
+      await Bun.sleep(400);
+      h.write('\r'); // submit /settings
+      await Bun.sleep(500);
+      expect(h.frame()).toContain('Model');
+      h.write('\x1b[C'); // Right: status -> config tab
+      await Bun.sleep(500);
+      expect(h.frame()).toContain('Search');
+      h.write('\x1b'); // Esc closes the panel
+      await Bun.sleep(500);
+    } finally {
+      h.stop();
+    }
+  }, 60000);
   test('scrolling reveals older and newer messages', async () => {
     // NOTE: headless re-reads CEDIA_FAUX_SCRIPT on every turn, so every turn
     // returns the same first step. Turns are serialized with fixed sleeps:
