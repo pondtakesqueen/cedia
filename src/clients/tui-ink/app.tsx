@@ -7,12 +7,14 @@ import { runHeadless } from '../headless/main.ts';
 import { decode, type CoreMessage } from '../../protocol/index.ts';
 import type { TuiArgs } from '../tui/main.ts';
 import type { SessionEvent } from '../../core/types.ts';
-import { cediaHome, loadPromptSuggestions } from '../../core/config.ts';
+import { cediaHome, loadPromptSuggestions, loadRoles, isMode } from '../../core/config.ts';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
 import { acceptTrust, isComplete, loadOnboarding } from '../../clients/tui/onboarding.ts';
 import { workingDiff } from '../../core/project/git.ts';
+import { threadChanges, commitFiles } from '../../core/project/commit.ts';
+import { draftCommitMessage } from '../../core/project/draft.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
 import { restoreTurn } from '../../core/project/undo.ts';
 import { rewindThread, rewoundText, runLines } from '../../core/project/rewind.ts';
@@ -40,6 +42,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [goal, setGoal] = useState<string | undefined>(args.goal);
   const [vimMode, setVimMode] = useState<'insert' | 'normal'>('insert');
   const stopRef = useRef<AbortController | null>(null);
+  const pendingRef = useRef<{ what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined>(undefined);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [picker, setPicker] = useState<{ title: string; items: { value: string; label: string }[]; onPick: (v: string) => void } | null>(null);
   const [suggestion, setSuggestion] = useState<string | null>(null);
@@ -95,6 +98,32 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       case 'diff': {
         const d = workingDiff(args.cwd);
         say(d ? [d.patch, ...(d.untracked.length ? ['untracked: ' + d.untracked.join(', ')] : [])].join('\n').slice(0, 4000) : 'no changes');
+        return;
+      }
+      case 'commit': {
+        if (!thread) { say('no thread yet: nothing to commit'); return; }
+        const snaps = workspaceSnapshots(args.cwd, cediaHome());
+        if (!snaps) { say('no snapshots for this directory, so cedia cannot tell which files the thread changed'); return; }
+        const files = threadChanges(store, thread, args.cwd, snaps);
+        if (!files.length) { say('nothing this thread changed differs from HEAD'); return; }
+        const own = rest.join(' ').trim();
+        void (async () => {
+          let message = own;
+          if (!message) {
+            try {
+              const writerModel = args.model && !isMode(args.model) ? args.model : loadRoles({}).code.ref;
+              const drafted = await draftCommitMessage({ cwd: args.cwd, model: writerModel, files, signal: new AbortController().signal });
+              message = drafted.message;
+              setSpent((s) => s + drafted.costUsd);
+            } catch (e) { say(`git commit failed: ${(e as Error).message}`); return; }
+          }
+          if (!message) { say('the message came back empty: write one with /commit <message>'); return; }
+          say([`commit ${files.length} file${files.length === 1 ? '' : 's'}: ${files.join(', ')}`, '', message, '', 'commit this? y to commit; n, or anything else you type, cancels'].join('\n'));
+          pendingRef.current = { what: 'the commit', yes: () => {
+            const r = commitFiles(args.cwd, files, message);
+            say(r.ok ? (r.out.split('\\n')[0] ?? 'committed') : `git commit failed: ${r.out}`);
+          } };
+        })();
         return;
       }
       case 'undo': {
@@ -222,9 +251,19 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       setInput('');
       return;
     }
-    if (text.trim().startsWith('/')) {
+    const trimmedText = text.trim();
+    if (pendingRef.current) {
+      const p = pendingRef.current;
+      pendingRef.current = undefined;
+      const stop = new AbortController();
+      if (/^(y|yes)$/i.test(trimmedText)) { void p.yes(stop.signal); return; }
+      push({ role: 'system', text: `not done: ${p.what}` });
+      if (/^(n|no)$/i.test(trimmedText)) { setInput(''); return; }
+      // anything else falls through as a new prompt/command
+    }
+    if (trimmedText.startsWith('/')) {
       push({ role: 'user', text });
-      handleCommand(text.trim().slice(1));
+      handleCommand(trimmedText.slice(1));
       return;
     }
     setMessages((m) => [...m, { role: 'user', text }]);
