@@ -13,6 +13,9 @@ import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
 import { acceptTrust, isComplete, loadOnboarding } from '../../clients/tui/onboarding.ts';
 import { workingDiff } from '../../core/project/git.ts';
+import { MemoryStore, memoryPath } from '../../core/project/memory.ts';
+import { loadSkills } from '../../core/skills/skills.ts';
+import { listMcp } from '../../core/mcp/manage.ts';
 import { threadChanges, commitFiles, prBlocked, currentBranch, defaultBranch, pushAndOpenPr } from '../../core/project/commit.ts';
 import { draftCommitMessage } from '../../core/project/draft.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
@@ -89,6 +92,30 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'actions': {
         say('actions: /copy /rewind /fork /clear');
+        return;
+      }
+      case 'memory': {
+        const store = new MemoryStore(memoryPath(cediaHome(), projectKey(args.cwd)));
+        const text = rest.join(' ').trim();
+        if (!text) {
+          const notes = store.notes();
+          say(notes.length ? notes.map((n) => `${n.id}  ${n.text}`).join('\\n') : 'no memory notes for this project');
+          return;
+        }
+        try {
+          const n = store.add(text, 'tui');
+          say(`remembered ${n.id}: ${n.text}`);
+        } catch (e) { say((e as Error).message); }
+        return;
+      }
+      case 'skills': {
+        const skills = loadSkills(args.cwd, cediaHome());
+        say(skills.length ? skills.map((s) => `${s.name}  ${s.description}`).join('\\n') : 'no skills for this project');
+        return;
+      }
+      case 'mcp': {
+        const { servers } = listMcp();
+        say(servers.length ? servers.map((s) => `${s.name}  ${s.command ?? s.url ?? ''}`).join('\\n') : 'no MCP servers configured');
         return;
       }
       case 'new':
