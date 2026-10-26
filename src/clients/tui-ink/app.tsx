@@ -42,6 +42,59 @@ import { join } from 'node:path';
 
 type Msg = { role: 'user' | 'assistant' | 'tool' | 'system'; text: string; status?: 'running' | 'success' | 'error' };
 
+const INK_COMMANDS: { name: string; description: string }[] = [
+  { name: 'help', description: 'these commands and keys' },
+  { name: 'clear', description: 'clear the chat view' },
+  { name: 'quit', description: 'leave' },
+  { name: 'cost', description: 'spend, context tokens, rate' },
+  { name: 'context', description: 'context window usage' },
+  { name: 'status', description: 'the status line' },
+  { name: 'transcript', description: 'show the full transcript' },
+  { name: 'search', description: 'search the chat transcript' },
+  { name: 'actions', description: 'message actions menu' },
+  { name: 'new', description: 'start a new thread' },
+  { name: 'diff', description: 'working tree changes' },
+  { name: 'undo', description: 'put back the files the last turn changed' },
+  { name: 'redo', description: 'put them forward again' },
+  { name: 'rewind', description: 'go back to before a run' },
+  { name: 'commit', description: 'commit the files this thread changed' },
+  { name: 'pr', description: 'push and open a pull request' },
+  { name: 'review', description: 'review the uncommitted changes' },
+  { name: 'plan', description: 'send this prompt to the planner first' },
+  { name: 'quick', description: 'send this prompt straight to the writer' },
+  { name: 'memory', description: 'project memory' },
+  { name: 'skills', description: 'skills this session can load' },
+  { name: 'mcp', description: 'MCP servers configured' },
+  { name: 'fork', description: 'fork a thread' },
+  { name: 'thread', description: 'go on with a thread' },
+  { name: 'model', description: 'the model the next turn runs on' },
+  { name: 'goal', description: 'keep each turn going until a judge finds this holds' },
+  { name: 'palette', description: 'command palette' },
+  { name: 'settings', description: 'show the current settings' },
+  { name: 'config', description: 'show settings.json' },
+  { name: 'rename', description: 'rename this thread' },
+  { name: 'resume', description: 'go on with a thread' },
+  { name: 'branch', description: 'git branches' },
+  { name: 'copy', description: 'copy the last reply' },
+  { name: 'tasks', description: 'sub-threads / task list' },
+  { name: 'agents', description: 'sub-threads of this thread' },
+  { name: 'compact', description: 'show handoff/compaction status' },
+  { name: 'fast', description: 'toggle fast mode' },
+  { name: 'export', description: 'export this thread to a file' },
+  { name: 'btw', description: 'ask a side question' },
+  { name: 'theme', description: 'the current theme' },
+  { name: 'doctor', description: 'versions, settings, MCP, sandbox' },
+  { name: 'permission', description: 'permission mode' },
+  { name: 'vim', description: 'toggle vim mode' },
+  { name: 'hooks', description: 'hooks configured' },
+  { name: 'effort', description: 'show or set starting effort' },
+  { name: 'output-style', description: 'output style' },
+  { name: 'suggest', description: 'suggest a next prompt' },
+  { name: 'trust', description: 'accept trust' },
+  { name: 'onboarding', description: 'onboarding status' },
+  { name: 'statusline', description: 'run a status line command' },
+];
+
 const colorFor = (role: Msg['role']) =>
   role === 'user' ? 'cyan' : role === 'assistant' ? 'white' : role === 'tool' ? 'gray' : 'yellow';
 
@@ -152,6 +205,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [historySearch, setHistorySearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
   const [messageSelector, setMessageSelector] = useState<{ open: boolean; selected: number }>({ open: false, selected: 0 });
   const [picker, setPicker] = useState<{ title: string; items: { value: string; label: string }[]; onPick: (v: string) => void } | null>(null);
+  const [pickerSelected, setPickerSelected] = useState(0);
   const [focusedDialog, setFocusedDialog] = useState<DialogKind>(null);
   const openDialog = useCallback((kind: NonNullable<DialogKind>) => {
     setFocusedDialog((prev) => {
@@ -828,6 +882,34 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
   useInput((input, key) => {
+    if (focusedDialog === 'picker' && picker) {
+      if (key.escape) { closeDialog('picker'); setPicker(null); setPickerSelected(0); return; }
+      if (key.upArrow) { setPickerSelected((s) => Math.max(0, s - 1)); return; }
+      if (key.downArrow) { setPickerSelected((s) => Math.min(picker.items.length - 1, s + 1)); return; }
+      if (key.return) {
+        const item = picker.items[pickerSelected];
+        if (item) { picker.onPick(item.value); }
+        closeDialog('picker'); setPicker(null); setPickerSelected(0); setInput('');
+        return;
+      }
+      return;
+    }
+    // Tab autocomplete for commands/skills
+    if (key.tab && !running && input.trim().startsWith('/')) {
+      const q = input.trim().slice(1).toLowerCase();
+      const cmds = INK_COMMANDS.filter((c) => c.name.toLowerCase().startsWith(q));
+      const skills = loadSkills(args.cwd, cediaHome());
+      const skillItems = skills.filter((s) => s.name.toLowerCase().startsWith(q)).map((s) => ({ value: s.name, label: `${s.name}  ${s.description}` }));
+      const cmdItems = cmds.map((c) => ({ value: c.name, label: `/${c.name}  ${c.description}` }));
+      const items = [...cmdItems, ...skillItems];
+      if (items.length === 0) return;
+      if (items.length === 1) { setInput(`/${items[0]!.value} `); return; }
+      setPicker({ title: 'commands', items, onPick: (v) => { setInput(`/${v} `); } });
+       openDialog('picker');
+      setPickerSelected(0);
+      return;
+    }
+    if (key.tab && suggestion) { setInput(suggestion); setSuggestion(null); return; }
     if (settingsOpen) {
       if (key.escape) {
         if (settingsTab === 'config' && settingsQuery) { setSettingsQuery(''); return; }
@@ -1020,9 +1102,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
             <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>{picker.title}</Text>
             {picker.items.map((it, i) => (
-              <Text key={i}>{i + 1}. {it.label}</Text>
+              <Text key={i} color={screenReader ? undefined : (i === pickerSelected ? 'cyan' : undefined)} bold={screenReader ? false : (i === pickerSelected)}>{i === pickerSelected ? '› ' : '  '}{i + 1}. {it.label}</Text>
             ))}
-            <Text dimColor={!screenReader}>type a number to select, Esc to cancel</Text>
+            <Text dimColor={!screenReader}>↑/↓ navigate · Enter select · Esc cancel</Text>
           </Box>
         ) : null}
         {focusedDialog === 'historySearch' ? (
