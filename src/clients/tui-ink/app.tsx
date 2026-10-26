@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useWindowSize, useStdin, useIsScreenReaderEnabled } from 'ink';
 import { buildAutoItems, highlightSpans, truncateDescription, type AutoItem } from './autocomplete.ts';
+import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
 import { PermissionDialog, permissionDialogFor, toolLabel } from './permission-dialogs.tsx';
@@ -1017,7 +1018,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           } catch { /* fall through */ }
         }
         if (input === ' ') {
-          // Space toggles a boolean setting immediately.
+          // Space toggles a boolean setting immediately; otherwise it is swallowed.
           try {
             const pp = join(cediaHome(), 'settings.json');
             const raw = readSettings(pp) as Record<string, unknown>;
@@ -1028,9 +1029,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               raw[target] = !raw[target];
               fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
               push({ role: 'system', text: `setting ${target} = ${String(raw[target])}` });
-              return;
             }
-          } catch { /* fall through to filter typing */ }
+          } catch { /* ignore */ }
+          return;
         }
         if (key.upArrow) {
           setConfigSelected((s) => Math.max(0, s - 1));
@@ -1288,13 +1289,20 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             </Box>
             {settingsTab === 'status' ? (
               <Box flexDirection="column">
-                <Text>model: {args.model ?? 'auto'}</Text>
-                <Text>permission: {args.permission ?? 'auto'}</Text>
-                <Text>thread: {thread ?? 'new'}</Text>
-                <Text>context: {context} tokens</Text>
-                <Text>spent: ${spent.toFixed(4)}</Text>
-                <Text>vimMode: {vimMode}</Text>
-                <Text>running: {running ? 'working' : 'idle'}</Text>
+                {[
+                  ['Model', args.model ?? 'auto'],
+                  ['Permission', args.permission ?? 'auto'],
+                  ['Thread', thread ?? 'new'],
+                  ['Context', `${context} tokens`],
+                  ['Spent', `$${spent.toFixed(4)}`],
+                  ['Vim mode', vimMode],
+                  ['State', running ? 'working' : 'idle'],
+                ].map(([k, v]) => (
+                  <Text key={k!}>
+                    <Text>{k!.padEnd(11)}  </Text>
+                    <Text dimColor={!screenReader}>{v}</Text>
+                  </Text>
+                ))}
               </Box>
             ) : null}
             {settingsTab === 'config' ? (
@@ -1303,7 +1311,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                   <Text dimColor={!screenReader}>{settingsQuery ? settingsQuery : '⌕ Search settings...'}</Text>
                 </Box>
                 {editingKey ? (
-                  <Text>edit {editingKey}: {editValue} (Enter saves · Esc cancels)</Text>
+                  <Text>edit {humanizeSettingKey(editingKey)}: {editValue} (Enter saves · Esc cancels)</Text>
                 ) : (() => {
                   try {
                     const raw = readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>;
@@ -1311,15 +1319,21 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                     const keys = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q));
                     if (!keys.length) return <Text dimColor={!screenReader}>no settings</Text>;
                     const sel = Math.min(configSelected, keys.length - 1);
-                    const w = Math.min(38, Math.max(...keys.map((k) => k.length)));
+                    const labels = keys.map(humanizeSettingKey);
+                    const w = Math.min(38, Math.max(...labels.map((l) => l.length)));
                     return (<>
                       {keys.map((k, i) => {
                         const v = raw[k];
-                        const shown = v !== null && typeof v === 'object' ? '›' : JSON.stringify(v);
+                        const { text: shown } = settingDisplayValue(v);
+                        const val = shown.length > 60 ? shown.slice(0, 59) + '…' : shown;
+                        const isBool = typeof v === 'boolean';
                         return (
                           <Text key={k}>
-                            <Text color={screenReader ? undefined : (i === sel ? 'cyan' : undefined)}>{i === sel ? '› ' : '  '}{k.padEnd(w)}  </Text>
-                            <Text dimColor={screenReader ? false : i !== sel}>{typeof shown === 'string' && shown.length > 60 ? shown.slice(0, 59) + '…' : shown}</Text>
+                            <Text color={screenReader ? undefined : (i === sel ? 'cyan' : undefined)}>{i === sel ? '› ' : '  '}{labels[i]!.padEnd(w)}  </Text>
+                            <Text
+                              color={screenReader ? undefined : (isBool ? (v ? 'cyan' : undefined) : (i === sel ? 'cyan' : undefined))}
+                              dimColor={screenReader ? false : (isBool ? !v : i !== sel)}
+                            >{val}</Text>
                           </Text>
                         );
                       })}
