@@ -225,6 +225,31 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
   const push = (m: Msg) => setMessages((prev) => [...prev, m]);
 
+  // Auto-show command/skill picker as the user types '/' (like pi-tui autocomplete).
+  useEffect(() => {
+    const t = input.trim();
+    if (t.startsWith('/') && !running && focusedDialog !== 'historySearch' && focusedDialog !== 'messageSelector') {
+      const q = t.slice(1).toLowerCase();
+      const cmds = INK_COMMANDS.filter((c) => c.name.toLowerCase().startsWith(q));
+      const skills = loadSkills(args.cwd, cediaHome());
+      const skillItems = skills.filter((s) => s.name.toLowerCase().startsWith(q)).map((s) => ({ value: s.name, label: `${s.name}  ${s.description}` }));
+      const cmdItems = cmds.map((c) => ({ value: c.name, label: `/${c.name}  ${c.description}` }));
+      const items = [...cmdItems, ...skillItems];
+      if (items.length > 0 && items.length <= 20) {
+        setPicker({ title: 'commands', items, onPick: (v) => { setInput(`/${v} `); } });
+         openDialog('picker');
+        setPickerSelected(0);
+        return;
+      }
+    }
+    // Close picker if input no longer starts with '/'
+    if (picker && !t.startsWith('/') && focusedDialog === 'picker') {
+      closeDialog('picker');
+      setPicker(null);
+      setPickerSelected(0);
+    }
+  }, [input, running, focusedDialog, picker]);
+
   const handleCommand = useCallback((line: string) => {
     const [name = '', ...rest] = line.trim().split(/\s+/);
     const say = (t: string) => push({ role: 'system', text: t });
