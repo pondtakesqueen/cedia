@@ -159,7 +159,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const inputRef = useRef(input);
-  const submitRef = useRef<any>(null);
   useEffect(() => { inputRef.current = input; }, [input]);
   const [activity, setActivity] = useState('');
   const [context, setContext] = useState(0);
@@ -169,6 +168,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const lastCostThresholdRef = useRef(0);
   const lastActivityRef = useRef(Date.now());
   const [thread, setThread] = useState<string | undefined>(args.thread);
+  const [permission, setPermission] = useState<string | undefined>(args.permission);
   const [goal, setGoal] = useState<string | undefined>(args.goal);
   const [vimMode, setVimMode] = useState<'insert' | 'normal'>('insert');
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -206,6 +206,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const projectUsageStats = settingsTab === 'stats' ? projectUsage : null;
   const settingsOpenRef = useRef(settingsOpen);
   useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
+  // Sub-thread count for the status bar (memoized: ThreadStore.list hits disk).
+  const agentCount = React.useMemo(() => {
+    try {
+      return store.list().filter((t) => !t.archived && (thread ? t.parent === thread : true)).length;
+    } catch { return 0; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread, messages.length]);
   const stopRef = useRef<AbortController | null>(null);
   const pendingRef = useRef<{ what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined>(undefined);
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -283,7 +290,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         say(`context: ${context} tokens${context ? ` (~${Math.round(context / 1000)}k)` : ''}`);
         return;
       case 'status':
-        say(`${args.model ?? 'auto'} · ${args.permission ?? 'auto'} · ${thread ?? 'new thread'} · ${running ? 'working' : 'idle'}`);
+        say(`${args.model ?? 'auto'} · ${permission ?? 'auto'} · ${thread ?? 'new thread'} · ${running ? 'working' : 'idle'}`);
         return;
       case 'transcript': {
         const next = !transcriptExpanded;
@@ -494,14 +501,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'permission': {
-        if (rest[0]) { say(`permission: ${rest[0]}`); return; }
+        if (rest[0]) { setPermission(rest[0]); say(`permission: ${rest[0]}`); return; }
         const items = [
           { value: 'auto', label: 'auto' },
           { value: 'read-only', label: 'read-only' },
           { value: 'plan', label: 'plan' },
           { value: 'workspace', label: 'workspace' },
         ];
-        setPicker({ title: 'permission', items, onPick: (v) => { push({ role: "system", text: `permission: ${v}` }); } });
+        setPicker({ title: 'permission', items, onPick: (v) => { setPermission(v); push({ role: "system", text: `permission: ${v}` }); } });
          openDialog('picker');
         return;
       }
@@ -651,7 +658,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       case 'statusline': {
         const cmd = rest.join(' ').trim();
         if (!cmd) { say('usage: /statusline <command>'); return; }
-        const out = runStatusLineCommand(cmd, { model: args.model ?? 'auto', workspace: args.cwd, costUsd: spent, contextWindow: context, permissionMode: args.permission, vimMode });
+        const out = runStatusLineCommand(cmd, { model: args.model ?? 'auto', workspace: args.cwd, costUsd: spent, contextWindow: context, permissionMode: permission, vimMode });
         say(out || '(no output)');
         return;
       }
@@ -747,7 +754,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     let resultCost = 0;
     try {
       const result = await runHeadless(
-        { ...args, cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
+        { ...args, permission: permission ?? args.permission, cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
         handleChunk,
       );
       setThread(result.thread ?? thread);
@@ -776,38 +783,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       lastActivityRef.current = Date.now();
     }
-  }, [args, running, thread, handleCommand, goal, picker, closeDialog]);
+  }, [args, running, thread, handleCommand, goal, picker, closeDialog, permission]);
 
 
 
-  useEffect(() => {
-    const stdin = process.stdin;
-    try { stdin.setRawMode(true); } catch {}
-    const handler = (data: Buffer) => {
-      if (settingsOpenRef.current) return;
-      require('fs').appendFileSync('/tmp/manual.log', 'DATA ' + JSON.stringify(data.toString()) + '\n');
-      const str = data.toString();
-      if (str === '\u0003') { exit(); return; } // Ctrl+C
-      if (str.startsWith('\x1b')) return; // escape/mouse
-      let cur = inputRef.current;
-      let toSubmit: string | null = null;
-      for (let i = 0; i < str.length; i++) {
-        const ch = str[i] as string;
-        if (ch === '\r' || ch === '\n') { toSubmit = cur; cur = ''; }
-        else if (ch === '\x7f' || ch === '\b') { cur = cur.slice(0, -1); }
-        else if (ch >= ' ') { cur += ch; }
-      }
-      inputRef.current = cur;
-      setInput(cur);
-      if (toSubmit !== null && toSubmit.trim()) {
-        inputRef.current = '';
-        setInput('');
-        submitRef.current?.(toSubmit);
-      }
-    };
-    stdin.on('data', handler);
-    return () => { stdin.off('data', handler); };
-  }, []);
   const { stdin } = useStdin();
   React.useEffect(() => {
     if (process.env.CEDIA_MDM_URL) void fetchMdmSettings().then((d) => { if (Object.keys(d).length) { /* cached by server; reload not needed */ } }).catch(() => {});
@@ -906,9 +885,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       else if (raw?.statusLine && typeof (raw.statusLine as { command?: unknown }).command === 'string') cmd = (raw.statusLine as { command: string }).command;
     } catch {}
     if (!cmd) { setStatusLineOutput(''); return; }
-    const out = runStatusLineCommand(cmd, { model: args.model ?? 'auto', workspace: args.cwd, costUsd: spent, contextWindow: context, permissionMode: args.permission, vimMode });
+    const out = runStatusLineCommand(cmd, { model: args.model ?? 'auto', workspace: args.cwd, costUsd: spent, contextWindow: context, permissionMode: permission, vimMode });
     setStatusLineOutput(out);
-  }, [spent, context, thread, args.model, args.cwd, args.permission, vimMode]);
+  }, [spent, context, thread, args.model, args.cwd, permission, vimMode]);
   const { columns, rows } = useWindowSize();
   // Rows reserved for input, status, dividers and margins — overlays are capped
   // to this budget so the chat box always stays on screen (like cc's modals).
@@ -929,8 +908,25 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
   useInput((input, key) => {
+    // Ctrl+C owns the lifecycle (ink's exitOnCtrlC is off): abort a turn,
+    // else clear the editor, else leave — like pi-tui.
+    if (key.ctrl && input === 'c') {
+      if (running) { stopRef.current?.abort(); setActivity('stopping…'); return; }
+      if (focusedDialog || permissionDialog || settingsOpen) return;
+      if (inputRef.current) { setInput(''); inputRef.current = ''; return; }
+      exit();
+      return;
+    }
     if (permissionDialog) {
       if (key.escape || key.return) { setPermissionDialog(null); return; }
+      return;
+    }
+    // Shift+Tab cycles the permission mode, like cc's mode switcher hint.
+    if (key.tab && key.shift && !running) {
+      const modes = ['auto', 'plan', 'read-only', 'workspace'];
+      const next = modes[(modes.indexOf(permission ?? 'auto') + 1) % modes.length]!;
+      setPermission(next);
+      push({ role: 'system', text: `permission mode: ${next}` });
       return;
     }
     if (focusedDialog === 'picker' && picker) {
@@ -1161,9 +1157,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       return;
     }
+    // Esc aborts a running turn (dialogs above have their own Esc handling).
+    if (key.escape && running) { stopRef.current?.abort(); setActivity('stopping…'); return; }
     if (key.ctrl && (input === 'r' || input === 'R')) {
       setHistorySearch({ open: true, query: '', selected: 0 });
       openDialog('historySearch');
+      return;
     }
     if (key.ctrl && (input === 'o' || input === 'O')) {
       if (!thread) { push({ role: 'system', text: 'no thread yet' }); return; }
@@ -1324,7 +1323,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               <Box flexDirection="column">
                 {[
                   ['Model', args.model ?? 'auto'],
-                  ['Permission', args.permission ?? 'auto'],
+                  ['Permission', permission ?? 'auto'],
                   ['Thread', thread ?? 'new'],
                   ['Context', `${context} tokens`],
                   ['Spent', `$${spent.toFixed(4)}`],
@@ -1449,7 +1448,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '' : '› '}</Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} />
         </Box>
-        <StatusBar thread={thread} model={args.model} permission={args.permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} agents={store.list().filter((t) => !t.archived && (thread ? t.parent === thread : true)).length} />
+        <StatusBar thread={thread} model={args.model} permission={permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} agents={agentCount} />
         {statusLineOutput ? <Text dimColor={!screenReader}>{statusLineOutput}</Text> : null}
       </Box>
       {showSidebar ? (
