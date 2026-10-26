@@ -40,6 +40,8 @@ import { forkThread } from '../../core/project/fork.ts';
 import { ThreadStore, threadsDir } from '../../core/project/threads.ts';
 import { projectKey } from '../../core/session/log.ts';
 import { join } from 'node:path';
+import { readFileSync as fsRead, writeFileSync as fsWrite, existsSync as fsExists, readdirSync as fsReaddir, statSync as fsStat } from 'node:fs';
+import { usageReport, readEventsLenient, isUsageEvent } from '../../core/session/usage.ts';
 
 type Msg = { role: 'user' | 'assistant' | 'tool' | 'system'; text: string; status?: 'running' | 'success' | 'error' };
 
@@ -155,6 +157,28 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'status' | 'config' | 'usage'>('status');
   const [settingsQuery, setSettingsQuery] = useState('');
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState('');
+
+  // Per-model spend for the Usage tab, from this project's recent session logs.
+  // Recomputed when the overlay opens or the tab is selected (not on every keystroke).
+  const projectUsage = React.useMemo(() => {
+    if (settingsTab !== 'usage') return null;
+    try {
+      const dir = join(cediaHome(), 'sessions', projectKey(args.cwd));
+      if (!fsExists(dir)) return null;
+      const files = fsReaddir(dir).filter((f) => f.endsWith('.jsonl'))
+        .map((f) => ({ p: join(dir, f), m: fsStat(join(dir, f)).mtimeMs }))
+        .sort((a, b) => b.m - a.m).slice(0, 20);
+      if (!files.length) return null;
+      const sessions = files.map((f) => ({ id: f.p.split('/').pop()!.replace(/\.jsonl$/, ''), events: readEventsLenient(fsRead(f.p, 'utf8')).filter(isUsageEvent) }));
+      const report = usageReport(sessions, {});
+      return { models: report.models, sessions: report.sessions };
+    } catch {
+      return null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsTab, settingsOpen]);
   const settingsOpenRef = useRef(settingsOpen);
   useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
   const stopRef = useRef<AbortController | null>(null);
@@ -910,6 +934,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     if (key.tab && suggestion) { setInput(suggestion); setSuggestion(null); return; }
     if (settingsOpen) {
       if (key.escape) {
+        if (editingKey) { setEditingKey(null); setEditValue(''); return; }
         if (settingsTab === 'config' && settingsQuery) { setSettingsQuery(''); return; }
         setSettingsOpen(false);
         setSettingsQuery('');
@@ -922,6 +947,40 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       if (settingsTab === 'config') {
+        if (editingKey) {
+          if (key.return) {
+            try {
+              const pp = join(cediaHome(), 'settings.json');
+              let raw: Record<string, unknown> = {};
+              try { raw = JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown>; } catch {}
+              let v: unknown = editValue;
+              try { v = JSON.parse(editValue); } catch { /* keep as string */ }
+              raw[editingKey] = v;
+              fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
+              push({ role: 'system', text: `setting ${editingKey} updated` });
+            } catch (e) { push({ role: 'system', text: `could not save settings: ${(e as Error).message}` }); }
+            setEditingKey(null); setEditValue(''); setSettingsQuery('');
+            return;
+          }
+          if (key.backspace || key.delete) { setEditValue((q) => q.slice(0, -1)); return; }
+          if (input && !key.ctrl && !key.meta && !key.return && input.length === 1 && input >= ' ') {
+            setEditValue((q) => q + input);
+            return;
+          }
+          return;
+        }
+        if (key.return) {
+          try {
+            const raw = readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>;
+            const q = settingsQuery.toLowerCase();
+            const keys = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q));
+            if (keys.length === 1) {
+              setEditingKey(keys[0]!);
+              setEditValue(JSON.stringify(raw[keys[0]!]) ?? '');
+              return;
+            }
+          } catch { /* fall through */ }
+        }
         if (key.backspace || key.delete) { setSettingsQuery((q) => q.slice(0, -1)); return; }
         if (input && !key.ctrl && !key.meta && !key.return && input.length === 1 && input >= ' ') {
           setSettingsQuery((q) => q + input);
@@ -1167,13 +1226,18 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             {settingsTab === 'config' ? (
               <Box flexDirection="column">
                 <Text dimColor={!screenReader}>search: {settingsQuery || '(type to filter)'}</Text>
-                {(() => {
+                {editingKey ? (
+                  <Text>edit {editingKey}: {editValue} (Enter saves · Esc cancels)</Text>
+                ) : (() => {
                   try {
                     const raw = readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>;
                     const q = settingsQuery.toLowerCase();
                     const keys = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q));
                     if (!keys.length) return <Text dimColor={!screenReader}>no settings</Text>;
-                    return keys.map((k) => <Text key={k}>{k}: {JSON.stringify(raw[k])}</Text>);
+                    return (<>
+                      {keys.map((k) => <Text key={k}>{k}: {JSON.stringify(raw[k])}</Text>)}
+                      {keys.length === 1 ? <Text dimColor={!screenReader}>Enter edits {keys[0]}</Text> : null}
+                    </>);
                   } catch (e) {
                     return <Text dimColor={!screenReader}>no settings</Text>;
                   }
@@ -1182,9 +1246,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             ) : null}
             {settingsTab === 'usage' ? (
               <Box flexDirection="column">
-                <Text>spent total: ${spent.toFixed(4)}</Text>
+                <Text>spent this session: ${spent.toFixed(4)}</Text>
                 <Text>context: {context} tokens</Text>
-                <Text dimColor={!screenReader}>per-model breakdown: (placeholder)</Text>
+                {projectUsage ? (
+                  <>
+                    <Text dimColor={!screenReader}>last {projectUsage.sessions} sessions, by model:</Text>
+                    {projectUsage.models.length ? projectUsage.models.map((m) => (
+                      <Text key={m.model}>{m.model}: ${m.costUsd.toFixed(4)} · {m.requests} req</Text>
+                    )) : <Text dimColor={!screenReader}>no priced requests yet</Text>}
+                  </>
+                ) : <Text dimColor={!screenReader}>no session logs yet</Text>}
               </Box>
             ) : null}
             <Text dimColor={!screenReader}>Tab/←/→ switch tabs · Esc close</Text>
