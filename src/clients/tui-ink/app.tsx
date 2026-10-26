@@ -4,10 +4,17 @@ import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
 import { StatusBar } from './status-bar.tsx';
 import { runHeadless } from '../headless/main.ts';
+import { runPrompt } from '../../core/loop/run.ts';
+import { SessionLog, sessionPath } from '../../core/session/log.ts';
+import { providerFor } from '../../core/providers/index.ts';
+import { resolveModel } from '../../core/providers/catalog.ts';
+import { systemFor } from '../../core/prompts.ts';
+import { CORE_TOOLS } from '../../core/tools/index.ts';
+import { askedReviewPrompt, fixPrompt, parseVerdict, type ReviewSubject } from '../../core/trust/review.ts';
 import { decode, type CoreMessage } from '../../protocol/index.ts';
 import type { TuiArgs } from '../tui/main.ts';
 import type { SessionEvent } from '../../core/types.ts';
-import { cediaHome, loadPromptSuggestions, loadRoles, isMode } from '../../core/config.ts';
+import { cediaHome, loadPromptSuggestions, loadRoles, isMode, loadPolicy, loadPrivacy } from '../../core/config.ts';
 import { loadTheme } from '../tui/theme.ts';
 import { versionInfo } from '../../protocol/version.ts';
 import { runStatusLineCommand } from '../tui/statusline.ts';
@@ -19,7 +26,7 @@ import { workingDiff } from '../../core/project/git.ts';
 import { MemoryStore, memoryPath } from '../../core/project/memory.ts';
 import { loadSkills } from '../../core/skills/skills.ts';
 import { listMcp } from '../../core/mcp/manage.ts';
-import { threadChanges, commitFiles, prBlocked, currentBranch, defaultBranch, pushAndOpenPr } from '../../core/project/commit.ts';
+import { threadChanges, commitFiles, prBlocked, currentBranch, defaultBranch, pushAndOpenPr, pullRequest } from '../../core/project/commit.ts';
 import { draftCommitMessage } from '../../core/project/draft.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
 import { restoreTurn } from '../../core/project/undo.ts';
@@ -175,6 +182,65 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           const r = await pushAndOpenPr(args.cwd, undefined, signal);
           say(r.ok ? r.out : r.out);
         } };
+        return;
+      }
+      case 'review': {
+        void (async () => {
+          let subject: ReviewSubject;
+          let patch: string;
+          const prNum = rest[0];
+          if (prNum) {
+            const got = await pullRequest(args.cwd, prNum.replace(/^#/, ''), undefined, new AbortController().signal);
+            if ('error' in got) { say(got.error); return; }
+            subject = { kind: 'pr', number: prNum.replace(/^#/, ''), title: got.title, body: got.body };
+            patch = got.patch;
+          } else {
+            const w = workingDiff(args.cwd);
+            if (!w) { say('not a git repository'); return; }
+            if (!w.patch && !w.untracked.length) { say('no changes to review'); return; }
+            subject = { kind: 'changes', untracked: w.untracked };
+            patch = w.patch;
+          }
+          const roles = loadRoles(args.model && !isMode(args.model) ? { code: args.model } : {});
+          const model = roles.review?.via === 'cedia' ? roles.review.model : resolveModel(args.model && !isMode(args.model) ? args.model : loadRoles({}).code.ref);
+          say(`reviewing ${subject.kind === 'pr' ? `pull request #${(subject as { number: string }).number}` : 'the uncommitted changes'} with ${model.ref}…`);
+          const id = crypto.randomUUID();
+          const log = SessionLog.create({ id, path: sessionPath(args.cwd, id) });
+          log.listeners.push((e) => {
+            if (e.kind === 'assistant') for (const b of (e as { blocks?: { type: string; text?: string }[] }).blocks ?? []) if (b.type === 'text' && b.text?.trim()) push({ role: 'assistant', text: (b.text as string) });
+            if (e.kind === 'tool_intent' || e.kind === 'tool_result' || e.kind === 'permission') {
+              // mirror pi-tui onEvent minimally
+              if (e.kind === 'tool_intent') push({ role: 'tool', text: `● ${(e as { tool: string }).tool} running`, status: 'running' });
+              if (e.kind === 'tool_result') push({ role: 'tool', text: `  ⎿ ${(e as { output: { text: string } }).output.text.split('\\n')[0]?.slice(0, 120) ?? ''}`, status: (e as { output: { isError?: boolean } }).output.isError ? 'error' : 'success' });
+              if (e.kind === 'permission' && (e as { decision: string }).decision === 'deny') push({ role: 'system', text: `✗ ${(e as { tool: string }).tool} denied: ${(e as { reason?: string }).reason ?? ''}` });
+            }
+            // no requestRender in ink; state update triggers render
+          });
+          const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(require('node:fs').readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
+          const r = await runPrompt(
+            {
+              log,
+              provider: providerFor(model, { fauxScript }),
+              model,
+              tools: CORE_TOOLS.filter((t) => t.effect !== 'write_workspace'),
+              system: systemFor(model),
+              cwd: args.cwd,
+              role: 'review',
+              permission: { ...loadPolicy(args.cwd, { allow: args.allow ?? [], deny: args.deny ?? [], unlock: args.unlock ?? [] }), mode: 'read-only' },
+              privacy: loadPrivacy(args.cwd, args.privacy),
+              maxTurns: 40,
+              signal: new AbortController().signal,
+            },
+            askedReviewPrompt(subject, patch),
+          );
+          setSpent((s) => s + r.costUsd);
+          say(`review ${r.subtype === 'success' ? 'done' : r.subtype} · ${r.numTurns} turn${r.numTurns === 1 ? '' : 's'} · $${r.costUsd.toFixed(4)}`);
+          if (r.subtype !== 'success') { if (r.result.trim()) say(r.result.trim()); return; }
+          const { verdict, findings } = parseVerdict(r.result);
+          if (verdict !== 'changes' || subject.kind !== 'changes' || !findings) return;
+          say(`send these findings to ${thread ? "this thread's writer" : 'a new thread'} to fix? y to send; n, or anything else you type, cancels`);
+          pendingRef.current = { what: 'sending the findings', yes: (signal) => submit(fixPrompt(model.ref, findings), undefined) };
+        })();
         return;
       }
       case 'undo': {
