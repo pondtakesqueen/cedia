@@ -13,7 +13,7 @@ import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
 import { acceptTrust, isComplete, loadOnboarding } from '../../clients/tui/onboarding.ts';
 import { workingDiff } from '../../core/project/git.ts';
-import { threadChanges, commitFiles } from '../../core/project/commit.ts';
+import { threadChanges, commitFiles, prBlocked, currentBranch, defaultBranch, pushAndOpenPr } from '../../core/project/commit.ts';
 import { draftCommitMessage } from '../../core/project/draft.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
 import { restoreTurn } from '../../core/project/undo.ts';
@@ -124,6 +124,18 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             say(r.ok ? (r.out.split('\\n')[0] ?? 'committed') : `git commit failed: ${r.out}`);
           } };
         })();
+        return;
+      }
+      case 'pr': {
+        const blocked = prBlocked(args.cwd);
+        if (blocked) { say(blocked); return; }
+        const branch = currentBranch(args.cwd);
+        const base = defaultBranch(args.cwd);
+        say(`push ${branch} to origin and open a pull request${base ? ` into ${base}` : ''}? y to go on; n, or anything else you type, cancels`);
+        pendingRef.current = { what: 'the push', yes: async (signal) => {
+          const r = await pushAndOpenPr(args.cwd, undefined, signal);
+          say(r.ok ? r.out : r.out);
+        } };
         return;
       }
       case 'undo': {
