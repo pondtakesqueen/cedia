@@ -754,7 +754,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     setStatusLineOutput(out);
   }, [spent, context, thread, args.model, args.cwd, args.permission, vimMode]);
   const { columns, rows } = useWindowSize();
-  const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1';
+  const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
   const showSidebar = !screenReader && columns >= 120;
   const displayMessages = transcriptExpanded ? messages : messages.filter((m) => m.role !== 'tool');
   const windowSize = Math.max(1, rows - 5);
@@ -890,6 +890,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const off = prefix.length;
             const sa = hasSel ? a + off : -1;
             const sb = hasSel ? b + off : -1;
+            if (screenReader) {
+              return (
+                <Box key={i} flexDirection="column">
+                  <Text wrap="wrap">{full}</Text>
+                </Box>
+              );
+            }
             return (
             <Box key={i} flexDirection="column">
               {m.role === 'assistant' ? (
@@ -914,7 +921,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           ) : null}
         </Box>
         {focusedDialog === 'picker' && picker ? (
-          <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
             <Text bold color="cyan">{picker.title}</Text>
             {picker.items.map((it, i) => (
               <Text key={i}>{i + 1}. {it.label}</Text>
@@ -923,7 +930,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           </Box>
         ) : null}
         {focusedDialog === 'historySearch' ? (
-          <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
             <Text bold color="cyan">history search: {historySearch.query || '(type to filter)'}</Text>
             {historyRef.current
               .filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()))
@@ -935,7 +942,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           </Box>
         ) : null}
         {focusedDialog === 'messageSelector' ? (
-          <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
             <Text bold color="cyan">message selector (rewind)</Text>
             {!thread ? (
               <Text dimColor>no thread yet</Text>
@@ -951,7 +958,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           </Box>
         ) : null}
         {suggestion ? <Text dimColor>💡 {suggestion} (Tab to accept)</Text> : null}
-        <Box borderStyle="single" borderColor="gray" paddingX={1}>
+        <Box borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "gray"} paddingX={1}>
           <Text color="cyan">› </Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} />
         </Box>
