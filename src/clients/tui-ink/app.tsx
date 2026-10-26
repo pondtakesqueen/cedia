@@ -44,6 +44,17 @@ type Msg = { role: 'user' | 'assistant' | 'tool' | 'system'; text: string; statu
 const colorFor = (role: Msg['role']) =>
   role === 'user' ? 'cyan' : role === 'assistant' ? 'white' : role === 'tool' ? 'gray' : 'yellow';
 
+export function toolLabel(tool: string): string {
+  const known = new Set([
+    'bash', 'edit', 'write', 'read', 'grep', 'glob', 'web_fetch', 'browser',
+    'ask_user', 'monitor', 'sleep', 'notebook_edit', 'notebookedit', 'tool_search',
+    'toolsearch', 'open_thread', 'openthread', 'spawn', 'todo', 'schedule',
+    'recall', 'threads', 'read_thread', 'message_thread', 'skill', 'webfetch',
+  ]);
+  const key = String(tool ?? '').toLowerCase();
+  return known.has(key) ? key : 'tool';
+}
+
 export type DialogKind = 'picker' | 'historySearch' | 'messageSelector' | null;
 
 const DIALOG_PRIORITY: Record<NonNullable<DialogKind>, number> = {
@@ -273,7 +284,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               // mirror pi-tui onEvent minimally
               if (e.kind === 'tool_intent') push({ role: 'tool', text: `● ${(e as { tool: string }).tool} running`, status: 'running' });
               if (e.kind === 'tool_result') push({ role: 'tool', text: `  ⎿ ${(e as { output: { text: string } }).output.text.split('\\n')[0]?.slice(0, 120) ?? ''}`, status: (e as { output: { isError?: boolean } }).output.isError ? 'error' : 'success' });
-              if (e.kind === 'permission' && (e as { decision: string }).decision === 'deny') push({ role: 'system', text: `✗ ${(e as { tool: string }).tool} denied: ${(e as { reason?: string }).reason ?? ''}` });
+              if (e.kind === 'permission' && (e as { decision: string }).decision === 'deny') push({ role: 'system', text: `✗ ${toolLabel((e as { tool: string }).tool)} denied by ${(e as { rule?: string }).rule ?? ''}${(e as { reason?: string }).reason ? `: ${(e as { reason?: string }).reason}` : ''}` });
             }
             // no requestRender in ink; state update triggers render
           });
@@ -592,7 +603,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             }
             if (e.kind === 'request') setActivity('waiting for model');
             if (e.kind === 'snapshot' && e.changed.length) setMessages((prev) => [...prev, { role: 'system', text: `changed ${e.changed.join(', ')}` }]);
-            if (e.kind === 'permission' && e.decision === 'deny') setMessages((prev) => [...prev, { role: 'system', text: `✗ ${e.tool} denied: ${e.reason ?? ''}` }]);
+            if (e.kind === 'permission' && e.decision === 'deny') setMessages((prev) => [...prev, { role: 'system', text: `✗ ${toolLabel(e.tool)} denied by ${e.rule}${e.reason ? `: ${e.reason}` : ''}` }]);
           }
         } catch {}
       }
