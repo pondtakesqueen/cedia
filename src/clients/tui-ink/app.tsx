@@ -41,6 +41,14 @@ type Msg = { role: 'user' | 'assistant' | 'tool' | 'system'; text: string; statu
 const colorFor = (role: Msg['role']) =>
   role === 'user' ? 'cyan' : role === 'assistant' ? 'white' : role === 'tool' ? 'gray' : 'yellow';
 
+export type DialogKind = 'picker' | 'historySearch' | 'messageSelector' | null;
+
+const DIALOG_PRIORITY: Record<NonNullable<DialogKind>, number> = {
+  messageSelector: 3,
+  picker: 2,
+  historySearch: 1,
+};
+
 export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const { exit } = useApp();
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -65,6 +73,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [historySearch, setHistorySearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
   const [messageSelector, setMessageSelector] = useState<{ open: boolean; selected: number }>({ open: false, selected: 0 });
   const [picker, setPicker] = useState<{ title: string; items: { value: string; label: string }[]; onPick: (v: string) => void } | null>(null);
+  const [focusedDialog, setFocusedDialog] = useState<DialogKind>(null);
+  const openDialog = useCallback((kind: NonNullable<DialogKind>) => {
+    setFocusedDialog((prev) => {
+      if (prev === null || DIALOG_PRIORITY[kind] > DIALOG_PRIORITY[prev]) return kind;
+      return prev;
+    });
+  }, []);
+  const closeDialog = useCallback((kind: NonNullable<DialogKind>) => {
+    setFocusedDialog((prev) => (prev === kind ? null : prev));
+  }, []);
   const [suggestion, setSuggestion] = useState<string | null>(null);
   const [selection, setSelection] = useState<{ aMsg: number; aCol: number; bMsg: number; bCol: number } | null>(null);
   const [selecting, setSelecting] = useState(false);
@@ -297,6 +315,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           const ml = modelList(roles.code.ref, process.env as any, undefined);
           const items = ml.models.map((m: any) => ({ value: m.ref, label: `${m.available ? ' ' : '-'} ${m.ref}  ${m.label}` }));
           setPicker({ title: 'models', items, onPick: (v) => { push({ role: "system", text: `model: ${v}` }); } });
+           openDialog('picker');
         } catch (e) { say('error: ' + (e as Error).message); }
         return;
       }
@@ -309,6 +328,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           { value: 'workspace', label: 'workspace' },
         ];
         setPicker({ title: 'permission', items, onPick: (v) => { push({ role: "system", text: `permission: ${v}` }); } });
+         openDialog('picker');
         return;
       }
       case 'output-style': {
@@ -318,6 +338,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           const cur = loadOutputStyleSetting(cediaHome());
           const items = styles.map((s: any) => ({ value: s.name, label: `${s.name === cur ? '*' : ' '} ${s.name}  ${s.description ?? ''}` }));
           setPicker({ title: 'output styles', items, onPick: (v) => { push({ role: "system", text: `output style: ${v}` }); } });
+         openDialog('picker');
         } catch (e) { say('error: ' + (e as Error).message); }
         return;
       }
@@ -467,6 +488,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (item) { picker.onPick(item.value); }
       else push({ role: 'system', text: 'invalid selection' });
       setPicker(null);
+       closeDialog('picker');
       setInput('');
       return;
     }
@@ -693,9 +715,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
   useInput((input, key) => {
-    if (messageSelector.open) {
+    if (focusedDialog === 'messageSelector') {
       const runs = thread ? runLines(store.read(thread)) : [];
-      if (key.escape) { setMessageSelector({ open: false, selected: 0 }); return; }
+      if (key.escape) { setMessageSelector({ open: false, selected: 0 });
+        closeDialog('messageSelector'); return; }
       if (key.upArrow) { setMessageSelector((m) => ({ ...m, selected: Math.max(0, m.selected - 1) })); return; }
       if (key.downArrow) {
         if (!runs.length) return;
@@ -703,19 +726,22 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       if (key.return) {
-        if (!thread) { push({ role: 'system', text: 'no thread yet' }); setMessageSelector({ open: false, selected: 0 }); return; }
+        if (!thread) { push({ role: 'system', text: 'no thread yet' }); setMessageSelector({ open: false, selected: 0 });
+        closeDialog('messageSelector'); return; }
         const n = messageSelector.selected + 1;
-        if (!runs.length) { push({ role: 'system', text: 'no runs to rewind to' }); setMessageSelector({ open: false, selected: 0 }); return; }
+        if (!runs.length) { push({ role: 'system', text: 'no runs to rewind to' }); setMessageSelector({ open: false, selected: 0 });
+        closeDialog('messageSelector'); return; }
         const r = rewindThread(store, thread, n, { open: (cwd) => workspaceSnapshots(cwd, cediaHome()), sessionFile: (c, sid) => `${c}/${sid}.jsonl` }, {});
         if ('error' in r) push({ role: 'system', text: 'error: ' + r.error });
         else { push({ role: 'system', text: rewoundText(r) }); setContext(0); }
         setMessageSelector({ open: false, selected: 0 });
+        closeDialog('messageSelector');
         return;
       }
       return;
     }
-    if (historySearch.open) {
-      if (key.escape) { setHistorySearch({ open: false, query: '', selected: 0 }); return; }
+    if (focusedDialog === 'historySearch') {
+      if (key.escape) { setHistorySearch({ open: false, query: '', selected: 0 }); closeDialog('historySearch'); return; }
       if (key.upArrow) { setHistorySearch((h) => ({ ...h, selected: Math.max(0, h.selected - 1) })); return; }
       if (key.downArrow) {
         const filtered = historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()));
@@ -727,6 +753,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         const filtered = historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()));
         const selected = filtered[historySearch.selected];
         setHistorySearch({ open: false, query: '', selected: 0 });
+        closeDialog('historySearch');
         if (selected !== undefined) submit(selected);
         return;
       }
@@ -742,10 +769,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     }
     if (key.ctrl && (input === 'r' || input === 'R')) {
       setHistorySearch({ open: true, query: '', selected: 0 });
+      openDialog('historySearch');
     }
     if (key.ctrl && (input === 'o' || input === 'O')) {
       if (!thread) { push({ role: 'system', text: 'no thread yet' }); return; }
       setMessageSelector({ open: true, selected: 0 });
+      openDialog('messageSelector');
     }
   });
   return (
@@ -799,7 +828,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <Text color="cyan">{screenReader ? '* ' : ''}{activity}</Text>
           ) : null}
         </Box>
-        {picker ? (
+        {focusedDialog === 'picker' && picker ? (
           <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
             <Text bold color="cyan">{picker.title}</Text>
             {picker.items.map((it, i) => (
@@ -808,7 +837,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <Text dimColor>type a number to select, Esc to cancel</Text>
           </Box>
         ) : null}
-        {historySearch.open ? (
+        {focusedDialog === 'historySearch' ? (
           <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
             <Text bold color="cyan">history search: {historySearch.query || '(type to filter)'}</Text>
             {historyRef.current
@@ -820,7 +849,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <Text dimColor>↑↓ navigate · Enter run · Esc close</Text>
           </Box>
         ) : null}
-        {messageSelector.open ? (
+        {focusedDialog === 'messageSelector' ? (
           <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
             <Text bold color="cyan">message selector (rewind)</Text>
             {!thread ? (
