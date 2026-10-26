@@ -213,13 +213,21 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const projectUsageStats = settingsTab === 'stats' ? projectUsage : null;
   const settingsOpenRef = useRef(settingsOpen);
   useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
-  // Sub-thread count for the status bar (memoized: ThreadStore.list hits disk).
-  const agentCount = React.useMemo(() => {
-    try {
-      return store.list().filter((t) => !t.archived && (thread ? t.parent === thread : true)).length;
-    } catch { return 0; }
+  // Open threads for the tab bar (memoized: ThreadStore.list hits disk).
+  const openThreads = React.useMemo(() => {
+    try { return store.list().filter((t) => !t.archived); }
+    catch { return []; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread, messages.length]);
+  // Effective model for display (status, receipts): explicit choice, else the code role default.
+  const effModel = React.useMemo(() => {
+    try {
+      const ref = model && !isMode(model) ? model : loadRoles({}).code.ref;
+      const m = resolveModel(ref);
+      return { ref, label: (m as { label?: string }).label ?? ref, provider: (m as { provider?: string }).provider, window: (m as { contextWindow?: number }).contextWindow };
+    } catch { return null; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model]);
   const stopRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
   const pendingRef = useRef<{ what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined>(undefined);
@@ -260,8 +268,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [selection, setSelection] = useState<{ aMsg: number; aCol: number; bMsg: number; bCol: number } | null>(null);
   const [selecting, setSelecting] = useState(false);
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
-  const teamStore = new TeamStore();
-  const [teams, setTeams] = useState(teamStore.list());
 
   const push = (m: Msg) => setMessages((prev) => [...prev, m]);
   const [notice, setNotice] = useState<string | null>(null);
@@ -708,8 +714,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'thread': {
         if (!rest[0]) {
-          const list = store.list().filter((t) => !t.archived).map((t) => `${t.id}  ${t.title}`);
-          say(list.length ? list.join('\n') : 'no threads');
+          const list = store.list().filter((t) => !t.archived);
+          say(list.length ? list.map((t, i) => `${i + 1}. ${t.id}  ${t.title}`).join('\n') : 'no threads');
+          return;
+        }
+        if (/^\d+$/.test(rest[0])) {
+          const pick = store.list().filter((t) => !t.archived)[Number(rest[0]) - 1];
+          if (!pick) { say(`no thread #${rest[0]}`); return; }
+          switchThread(pick.id);
+          say(`going on with ${pick.id}`);
           return;
         }
         if (!store.has(rest[0])) { say(`no thread ${rest[0]}`); return; }
@@ -979,7 +992,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (typeof result.peakContext === 'number') setContext(result.peakContext);
       resultCost = result.costUsd ?? 0;
       setSpent((prev) => prev + resultCost);
-      setMessages((m) => [...m, { role: 'system', dim: true, text: `✳ done · ${result.numTurns} turn${result.numTurns === 1 ? '' : 's'} · $${result.costUsd.toFixed(4)} · ${((Date.now() - turnStart) / 1000).toFixed(1)}s` }]);
+      setMessages((m) => [...m, { role: 'system', dim: true, text: `✳ done · ${result.numTurns} turn${result.numTurns === 1 ? '' : 's'} · ${effModel?.label ?? model ?? 'auto'} · ${((Date.now() - turnStart) / 1000).toFixed(1)}s${typeof result.timing?.outputTokPerSec === 'number' ? ` · ${Math.round(result.timing.outputTokPerSec)} tok/s` : ''} · $${result.costUsd.toFixed(4)}` }]);
       if (loadPromptSuggestions(args.promptSuggestions)) {
         void (async () => {
           try {
@@ -1002,15 +1015,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       lastActivityRef.current = Date.now();
     }
-  }, [args, running, thread, handleCommand, goal, picker, closeDialog, permission, model, effort]);
+  }, [args, running, thread, handleCommand, goal, picker, closeDialog, permission, model, effort, effModel]);
 
 
 
   const { stdin } = useStdin();
   React.useEffect(() => {
     if (process.env.CEDIA_MDM_URL) void fetchMdmSettings().then((d) => { if (Object.keys(d).length) { /* cached by server; reload not needed */ } }).catch(() => {});
-    const t = setInterval(() => setTeams(teamStore.list()), 5000);
-    return () => clearInterval(t);
   }, []);
   React.useEffect(() => {
     setLoadedKeybindings(loadKeybindings(cediaHome()));
@@ -1112,7 +1123,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // to this budget so the chat box always stays on screen (like cc's modals).
   const overlayBudget = Math.max(4, rows - 12);
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
-  const showSidebar = !screenReader && process.env.CEDIA_SIDEBAR === '1';
+  const showSidebar = !screenReader && columns >= 100;
   const displayMessages = transcriptExpanded ? messages.filter((m) => showThinking || !m.dim) : messages.filter((m) => m.role !== 'tool' && (showThinking || !m.dim));
   const windowSize = Math.max(5, rows - 6);
   React.useEffect(() => {
@@ -1488,6 +1499,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       setTranscriptSearch({ open: true, query: '', selected: 0 });
       return;
     }
+    if (key.ctrl && (input === 'p' || input === 'P') && !running && !focusedDialog && !settingsOpen && !permissionDialog) {
+      handleCommand('palette');
+      return;
+    }
     if (key.ctrl && (input === 'r' || input === 'R')) {
       if (transcriptSearch.open) return;
       setHistorySearch({ open: true, query: '', selected: 0 });
@@ -1540,6 +1555,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   return (
     <Box flexDirection="row" height={screenReader ? undefined : termRows}>
       <Box flexDirection="column" flexGrow={1} height={screenReader ? undefined : termRows}>
+        {!screenReader && openThreads.length > 0 ? (
+          <Box flexDirection="row" paddingX={1}>
+            {openThreads.slice(0, 8).map((t) => (
+              <Text key={t.id} backgroundColor={t.id === thread ? T.selectedBg : undefined} dimColor={t.id !== thread}> {t.title.slice(0, 14) || t.id} </Text>
+            ))}
+            {openThreads.length > 8 ? <Text dimColor> +{openThreads.length - 8}</Text> : null}
+            <Text dimColor> +</Text>
+          </Box>
+        ) : null}
         <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
           <Box flexDirection="row">
             <Box flexDirection="column" marginRight={1}>
@@ -1569,20 +1593,21 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               }
             }
             const hasSel = a >= 0 && b > a;
-            // cc highlights the whole user-prompt row; ink only paints
-            // background behind actual characters, so pad to full width.
+            // opencode-style user row: full-width highlight with a left accent
+            // bar. ink only paints background behind actual characters, so pad
+            // each visual line to the full content width.
             const isUserRow = m.role === 'user' && !hasSel;
             const isToolError = m.role === 'tool' && m.status === 'error';
-            const prefix = m.role === 'user' ? '› ' : '';
-            const rawFull = prefix + m.text;
+            const rawFull = m.text;
             // Hard cap like cc: a pasted file must not make every frame rewrap megabytes.
             const capped = truncateLongText(rawFull);
-            const full = isUserRow
-              ? capped.split('\n').map((ln) => ln.padEnd(Math.max(ln.length, Math.max(10, columns - 2)))).join('\n')
-              : capped;
-            const off = prefix.length;
-            const sa = hasSel ? a + off : -1;
-            const sb = hasSel ? b + off : -1;
+            const contentWidth = Math.max(10, columns - 2 - (isUserRow && !screenReader ? 2 : 0));
+            const userLines = isUserRow && !screenReader
+              ? capped.split('\n').map((ln) => ln.padEnd(Math.max(ln.length, contentWidth)))
+              : null;
+            const full = capped;
+            const sa = hasSel ? a : -1;
+            const sb = hasSel ? b : -1;
             if (screenReader) {
               return (
                 <Box key={globalIdx} flexDirection="column">
@@ -1608,8 +1633,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                   })}
                   {full.split('\n').length > 12 ? <Text dimColor={!screenReader}>…{full.split('\n').length - 12} more lines</Text> : null}
                 </Box>
+              ) : isUserRow && !screenReader ? (
+                <>{(userLines ?? [capped]).map((ln, li) => (
+                  <Text key={li} wrap="wrap" backgroundColor={T.userRowBg}>
+                    <Text color={T.primary}>▏ </Text>{ln}
+                  </Text>
+                ))}</>
               ) : (
-                <Text color={isUserRow || screenReader ? undefined : isToolError ? T.error : m.tone === 'red' ? T.error : m.dim ? undefined : themedColorFor(T, m.role)} dimColor={screenReader ? false : !!m.dim && !isUserRow} wrap="wrap">{full}</Text>
+                <Text color={screenReader ? undefined : isToolError ? T.error : m.tone === 'red' ? T.error : m.dim ? undefined : themedColorFor(T, m.role)} dimColor={screenReader ? false : !!m.dim} wrap="wrap">{full}</Text>
               )}
             </Box>
             );
@@ -1901,22 +1932,26 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <Text color={screenReader ? undefined : T.primary}>{screenReader ? '' : '› '}</Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={inputCaptured} />
         </Box>
+        {effModel || effort ? (
+          <Box paddingX={1}>
+            <Text>
+              {effModel ? <Text>{effModel.label}</Text> : null}
+              {effModel?.provider ? <Text dimColor={!screenReader}> {effModel.provider}</Text> : null}
+              {effort ? <Text color={screenReader ? undefined : T.warning}>  ◐ {effort}</Text> : null}
+            </Text>
+          </Box>
+        ) : null}
         <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, columns))}</Text>
-        <StatusBar thread={thread} model={model} permission={permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} agents={agentCount} accent={T.primary} />
+        <StatusBar cwd={shortCwd(args.cwd)} tokens={context || undefined} windowSize={effModel?.window} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} running={running} hint="ctrl+p commands" />
         {statusLineOutput ? <Text dimColor={!screenReader}>{statusLineOutput}</Text> : null}
       </Box>
       {showSidebar ? (
-        <Box flexDirection="column" width={28} borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "gray"} paddingX={1}>
-          <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>sidebar</Text>
-          <Text dimColor={!screenReader}>thread: {thread ?? 'new'}</Text>
-          <Text dimColor={!screenReader}>model: {model ?? 'auto'}</Text>
-          <Text dimColor={!screenReader}>{running ? 'working' : 'idle'}</Text>
-          <Text dimColor={!screenReader}>scroll: {scrollOffset}</Text>
-          <Text dimColor={!screenReader}>msgs: {messages.length}</Text>
-          {teams.length ? <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>teams</Text> : null}
-          {teams.slice(0, 3).map((t) => (
-            <Text key={t.id} dimColor={!screenReader}>{t.name}: {t.tasks.filter((x) => x.status === 'done').length}/{t.tasks.length}</Text>
-          ))}
+        <Box flexDirection="column" width={30} paddingX={1}>
+          <Text bold={screenReader ? false : true}>{(thread && openThreads.find((t) => t.id === thread)?.title) || 'new thread'}</Text>
+          <Text dimColor={!screenReader}>Context</Text>
+          <Text dimColor={!screenReader}>{context >= 1000 ? `${(context / 1000).toFixed(1)}K` : `${context}`} tokens</Text>
+          <Text dimColor={!screenReader}>{effModel?.window ? `${Math.min(99, Math.round((context / effModel.window) * 100))}% used` : '— used'}</Text>
+          <Text dimColor={!screenReader}>${spent.toFixed(2)} spent</Text>
         </Box>
       ) : null}
     </Box>
