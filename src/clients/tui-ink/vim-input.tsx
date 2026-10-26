@@ -12,15 +12,12 @@ type Props = {
 
 export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setVimMode }: Props): React.ReactElement {
   const [cursor, setCursor] = useState(0);
-  const [pendingOp, setPendingOp] = useState<'d' | 'c' | 'y' | null>(null);
-  const [count, setCount] = useState<number | null>(null);
 
   const clamp = (n: number) => Math.max(0, Math.min(n, value.length));
 
   useInput((input, key) => {
-    const n = count ?? 1;
     if (vimMode === 'insert') {
-      if (key.escape) { setVimMode('normal'); return; }
+      // Esc is handled by App (abort when running, else normal mode).
       // Batched input handling
       if (input && (input.includes('\r') || input.includes('\n')) && !key.ctrl && !key.meta) {
         const nl = input.search(/[\r\n]/);
