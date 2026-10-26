@@ -661,12 +661,25 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const { columns } = useWindowSize();
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1';
   const showSidebar = !screenReader && columns >= 120;
+  const windowSize = 40;
+  const windowStart = Math.max(0, messages.length - windowSize - scrollOffset);
+  const windowEnd = scrollOffset > 0 ? messages.length - scrollOffset : messages.length;
+  const renderStart = Math.max(0, windowStart - 5);
+  const renderEnd = windowEnd;
+  const visibleMessages = messages.slice(renderStart, renderEnd);
+  const aboveHidden = renderStart;
+  const belowHidden = Math.max(0, messages.length - renderEnd);
   return (
     <Box flexDirection="row" height="100%">
       <Box flexDirection="column" flexGrow={1}>
         <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
-          {messages.slice(Math.max(0, messages.length - 40 - scrollOffset), messages.length - scrollOffset || undefined).map((m, i) => {
-            const globalIdx = Math.max(0, messages.length - 40 - scrollOffset) + i;
+          {messages.length === 0 ? (
+            <Text dimColor>no messages yet</Text>
+          ) : (
+            <>
+              {aboveHidden > 0 ? <Text dimColor>↑ {aboveHidden} more</Text> : null}
+              {visibleMessages.map((m, i) => {
+            const globalIdx = renderStart + i;
             let a = -1, b = -1;
             if (selection) {
               const lo = Math.min(selection.aMsg, selection.bMsg);
@@ -700,6 +713,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             </Box>
             );
           })}
+                {belowHidden > 0 ? <Text dimColor>↓ {belowHidden} more</Text> : null}
+              </>
+          )}
           {running && activity ? (
             <Text color="cyan">{screenReader ? '* ' : ''}{activity}</Text>
           ) : null}
