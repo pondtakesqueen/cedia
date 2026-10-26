@@ -1,8 +1,6 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useWindowSize, useStdin, useIsScreenReaderEnabled } from 'ink';
-import TextInput from 'ink-text-input';
 import { VimInput } from './vim-input.tsx';
-import Spinner from 'ink-spinner';
 import Markdown from './markdown.tsx';
 import { StatusBar } from './status-bar.tsx';
 import { runHeadless } from '../headless/main.ts';
@@ -13,10 +11,10 @@ import { cediaHome, loadPromptSuggestions } from '../../core/config.ts';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
-import { acceptTrust, markStep, isComplete, loadOnboarding } from '../../clients/tui/onboarding.ts';
+import { acceptTrust, isComplete, loadOnboarding } from '../../clients/tui/onboarding.ts';
 import { workingDiff } from '../../core/project/git.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
-import { restoredText, restoreTurn } from '../../core/project/undo.ts';
+import { restoreTurn } from '../../core/project/undo.ts';
 import { rewindThread, rewoundText, runLines } from '../../core/project/rewind.ts';
 import { forkThread } from '../../core/project/fork.ts';
 import { ThreadStore, threadsDir } from '../../core/project/threads.ts';
@@ -32,6 +30,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
+  const inputRef = useRef(input);
+  const submitRef = useRef<any>(null);
+  useEffect(() => { inputRef.current = input; }, [input]);
   const [activity, setActivity] = useState('');
   const [context, setContext] = useState(0);
   const [spent, setSpent] = useState(0);
@@ -64,10 +65,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         exit();
         return;
       case 'cost':
-        say(`spent (this session) · context ${0} tokens`);
+        say(`spent $${spent.toFixed(4)} · context ${context} tokens · rate 0 tok/s`);
         return;
       case 'context':
-        say(`context: see status line`);
+        say(`context: ${context} tokens${context ? ` (~${Math.round(context / 1000)}k)` : ''}`);
         return;
       case 'status':
         say(`${args.model ?? 'auto'} · ${args.permission ?? 'auto'} · ${thread ?? 'new thread'} · ${running ? 'working' : 'idle'}`);
@@ -192,7 +193,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       default:
         say(`unknown command /${name}; /help lists them`);
     }
-  }, [args, messages, running, store, thread, exit]);
+  }, [args, messages, running, store, thread, exit, spent, context]);
 
   const submit = useCallback(async (text: string) => {
     if (!text.trim() || running) return;
@@ -284,33 +285,35 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     }
   }, [args, running, thread, handleCommand]);
 
-  useInput((input, key) => {
-    if (key.ctrl && input === 'c') exit();
-    if (key.escape) { if (picker) { setPicker(null); return; } if (running) { stopRef.current?.abort(); setActivity('stopping…'); return; } setVimMode('normal'); }
-    if (vimMode === 'normal' && input === 'i') setVimMode('insert');
-    if (key.pageUp) setScrollOffset((o) => Math.min(o + 10, Math.max(0, messages.length - 40)));
-    if (key.pageDown) setScrollOffset((o) => Math.max(0, o - 10));
-    if (key.tab && suggestion) { setInput(suggestion); setSuggestion(null); }
-    if (key.ctrl && input === 'v') {
-      void (async () => {
-        push({ role: 'system', text: 'recording 5s…' });
-        const r = await voiceInput(5);
-        if (r.error) push({ role: 'system', text: `voice error: ${r.error}` });
-        else if (r.text) setInput((prev) => (prev ? prev + ' ' : '') + r.text);
-      })();
-      return;
-    }
-    if (key.ctrl && input === 'y') {
-      const last = [...messages].reverse().find((m) => m.role === 'assistant');
-      if (last) {
-        try {
-          const proc = Bun.spawn(['pbcopy'], { stdin: new TextEncoder().encode(last.text) });
-          void proc.exited;
-        } catch {}
-      }
-    }
-  });
 
+
+  useEffect(() => {
+    const stdin = process.stdin;
+    try { stdin.setRawMode(true); } catch {}
+    const handler = (data: Buffer) => {
+      require('fs').appendFileSync('/tmp/manual.log', 'DATA ' + JSON.stringify(data.toString()) + '\n');
+      const str = data.toString();
+      if (str === '\u0003') { exit(); return; } // Ctrl+C
+      if (str.startsWith('\x1b')) return; // escape/mouse
+      let cur = inputRef.current;
+      let toSubmit: string | null = null;
+      for (let i = 0; i < str.length; i++) {
+        const ch = str[i] as string;
+        if (ch === '\r' || ch === '\n') { toSubmit = cur; cur = ''; }
+        else if (ch === '\x7f' || ch === '\b') { cur = cur.slice(0, -1); }
+        else if (ch >= ' ') { cur += ch; }
+      }
+      inputRef.current = cur;
+      setInput(cur);
+      if (toSubmit !== null && toSubmit.trim()) {
+        inputRef.current = '';
+        setInput('');
+        submitRef.current?.(toSubmit);
+      }
+    };
+    stdin.on('data', handler);
+    return () => { stdin.off('data', handler); };
+  }, []);
   const { stdin } = useStdin();
   React.useEffect(() => {
     if (process.env.CEDIA_MDM_URL) void fetchMdmSettings().then((d) => { if (Object.keys(d).length) { /* cached by server; reload not needed */ } }).catch(() => {});
@@ -320,6 +323,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   React.useEffect(() => {
     if (!stdin) return;
     const handler = (data: Buffer) => {
+      require('fs').appendFileSync('/tmp/manual.log', 'DATA ' + JSON.stringify(data.toString()) + '\n');
       const s = data.toString();
       // wheel
       if (/\x1b\[<64;/.test(s)) setScrollOffset((o) => Math.min(o + 3, Math.max(0, messages.length - 40)));
