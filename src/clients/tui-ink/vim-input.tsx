@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 
 type Props = {
@@ -10,9 +10,11 @@ type Props = {
   setVimMode: (m: 'insert' | 'normal' | 'visual') => void;
   /** When an overlay owns the keyboard, ignore all keys. */
   captured?: boolean;
+  /** The app consumed Enter itself (accepting a dropdown item): don't submit the stale text. */
+  suppressSubmit?: boolean;
 };
 
-export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setVimMode, captured }: Props): React.ReactElement {
+export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setVimMode, captured, suppressSubmit }: Props): React.ReactElement {
   const [cursor, setCursor] = useState(0);
   const [anchor, setAnchor] = useState<number | null>(null);
   const [undoStack, setUndoStack] = useState<string[]>([]);
@@ -51,6 +53,7 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
         const before = nl >= 0 ? input.slice(0, nl) : input;
         const v = value.slice(0, cursor) + before + value.slice(cursor);
         onChange(v);
+        if (suppressSubmit && nl >= 0 && input[nl] === '\r') { setCursor(cursor + before.length); return; }
         if (nl >= 0) {
           const atEnd = cursor + before.length >= v.length;
           // Trailing backslash + Enter inserts a newline instead of submitting.
@@ -62,7 +65,7 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
         } else setCursor(cursor + before.length);
         return;
       }
-      if (key.return) {
+      if (key.return && !suppressSubmit) {
         // Trailing backslash + Enter inserts a newline instead of submitting.
         if (value.endsWith('\\') && cursor === value.length) {
           onChange(value.slice(0, -1) + '\n');
@@ -110,7 +113,7 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
     if (input === 'i') { if (vimMode === 'visual') { setAnchor(null); } setVimMode('insert'); return; }
     if (input === 'a' && vimMode !== 'visual') { setCursor(Math.min(cursor + 1, value.length)); setVimMode('insert'); return; }
     if (input === 'v' && vimMode === 'normal') { setAnchor(cursor); setVimMode('visual'); return; }
-    if (key.return) { onSubmit(value); return; }
+    if (key.return && !suppressSubmit) { onSubmit(value); return; }
     // motions
     const move = (fn: (c: number) => number) => {
       let nc = cursor;
@@ -141,7 +144,17 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
     if (input === 'w') { move(nextWord); return; }
     if (input === 'b') { move(prevWord); return; }
     if (input === 'e') { move(endWord); return; }
-    if (input === '0') { setCursor(0); return; }
+    if (input === '0') { if (count) setCount(count * 10); else setCursor(0); return; }
+    if (input === 'j' || input === 'k') {
+      const pos0 = locate(cursor);
+      const nr = pos0.row + (input === 'j' ? n : -n);
+      if (nr >= 0 && nr < pos0.lines.length) {
+        let acc = 0;
+        for (let i = 0; i < nr; i++) acc += pos0.lines[i]!.length + 1;
+        setCursor(acc + Math.min(pos0.col, pos0.lines[nr]!.length));
+      } else setCursor(input === 'j' ? value.length : 0);
+      return;
+    }
     if (input === '$') { setCursor(Math.max(0, value.length - 1)); return; }
     if (input === 'd' || input === 'c' || input === 'y') {
       // store pending operator in a ref-like via closure? Use state via setPendingOp
@@ -185,6 +198,8 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
       return;
     }
     if (input === 'x') { onChange(value.slice(0, cursor) + value.slice(cursor + 1)); return; }
+    // Anything unhandled clears a stale operator (d/c/y followed by nothing).
+    if (pendingOp) setPendingOp(null);
   });
 
   // Map a flat offset to row/col for multiline values.

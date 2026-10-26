@@ -90,6 +90,7 @@ const INK_COMMANDS: { name: string; description: string }[] = [
   { name: 'export', description: 'export this thread to a file' },
   { name: 'btw', description: 'ask a side question' },
   { name: 'theme', description: 'the current theme' },
+  { name: 'color', description: 'alias for /theme' },
   { name: 'doctor', description: 'versions, settings, MCP, sandbox' },
   { name: 'permission', description: 'permission mode' },
   { name: 'vim', description: 'toggle vim mode' },
@@ -166,6 +167,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [activity, setActivity] = useState('');
   const [context, setContext] = useState(0);
   const [spent, setSpent] = useState(0);
+  const [lastRate, setLastRate] = useState(0);
   const [statusLineOutput, setStatusLineOutput] = useState('');
   const [loadedKeybindings, setLoadedKeybindings] = useState(() => loadKeybindings(cediaHome()));
   const lastCostThresholdRef = useRef(0);
@@ -213,8 +215,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsTab, settingsOpen]);
   const projectUsageStats = settingsTab === 'stats' ? projectUsage : null;
-  const settingsOpenRef = useRef(settingsOpen);
-  useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
   // Open threads for the tab bar (memoized: ThreadStore.list hits disk).
   const openThreads = React.useMemo(() => {
     try {
@@ -302,19 +302,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     } catch { return ''; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadedKeybindings]);
-  // Draft stash per thread (opencode-style): switching threads parks the
-  // current input and restores the other thread's parked draft.
-  const draftsRef = useRef<Record<string, string>>({});
-  const switchThread = (id: string | undefined) => {
-    const key = thread ?? 'new';
-    if (input.trim()) draftsRef.current[key] = input;
-    else delete draftsRef.current[key];
+  // Thread switches always arrive as submitted commands (editor already
+  // committed), so just reset per-thread view state. Stable per render.
+  const switchThread = useCallback((id: string | undefined) => {
     setThread(id);
-    const draft = draftsRef.current[id ?? 'new'] ?? '';
-    setInput(draft);
-    inputRef.current = draft;
     setContext(0);
-  };
+    setScrollOffset(0);
+    setInput('');
+    inputRef.current = '';
+  }, []);
   const ago = (iso: string): string => {
     const ms = Date.now() - new Date(iso).getTime();
     if (!isFinite(ms) || ms < 0) return '';
@@ -429,7 +425,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         exit();
         return;
       case 'cost':
-        say(`spent $${spent.toFixed(4)} · context ${context} tokens · rate 0 tok/s`);
+        say(`spent $${spent.toFixed(4)} · context ${context} tokens · rate ${lastRate > 0 ? `${Math.round(lastRate)} tok/s` : '—'}`);
         return;
       case 'context':
         say(`context: ${context} tokens${context ? ` (~${Math.round(context / 1000)}k)` : ''}`);
@@ -451,7 +447,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'actions': {
-        say('actions: /copy /rewind /fork /clear');
+        const items = [
+          { value: 'copy', label: 'copy — copy the last reply' },
+          { value: 'rewind', label: 'rewind — go back to before a run' },
+          { value: 'fork', label: 'fork — fork this thread' },
+          { value: 'clear', label: 'clear — clear the chat view' },
+        ];
+        setPicker({ title: 'message actions', items, onPick: (v) => { setInput(''); inputRef.current = ''; handleCommand(v); } });
+        openDialog('picker');
+        setPickerSelected(0);
         return;
       }
       case 'memory': {
@@ -486,7 +490,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       case 'quick': {
         const prompt = rest.join(' ').trim();
         if (!prompt) { say(`/${name} <prompt>`); return; }
-        push({ role: 'user', text: line.trim() });
         submit(prompt, name === 'plan' ? 'always' : 'never');
         return;
       }
@@ -502,7 +505,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         const files = threadChanges(store, thread, args.cwd, snaps);
         if (!files.length) { say('nothing this thread changed differs from HEAD'); return; }
         const own = rest.join(' ').trim();
+        busyRef.current = true;
         void (async () => {
+          try {
           let message = own;
           if (!message) {
             try {
@@ -518,6 +523,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const r = commitFiles(args.cwd, files, message);
             say(r.ok ? (r.out.split('\\n')[0] ?? 'committed') : `git commit failed: ${r.out}`, r.ok ? undefined : 'red');
           } };
+          } finally { busyRef.current = false; }
         })();
         return;
       }
@@ -528,13 +534,18 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         const base = defaultBranch(args.cwd);
         say(`push ${branch} to origin and open a pull request${base ? ` into ${base}` : ''}? y to go on; n, or anything else you type, cancels`);
         pendingRef.current = { what: 'the push', yes: async (signal) => {
-          const r = await pushAndOpenPr(args.cwd, undefined, signal);
-          say(r.ok ? r.out : r.out);
+          busyRef.current = true;
+          try {
+            const r = await pushAndOpenPr(args.cwd, undefined, signal);
+            say(r.ok ? r.out : r.out, r.ok ? undefined : 'red');
+          } finally { busyRef.current = false; }
         } };
         return;
       }
       case 'review': {
+        busyRef.current = true;
         void (async () => {
+          try {
           let subject: ReviewSubject;
           let patch: string;
           const prNum = rest[0];
@@ -592,6 +603,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           if (verdict !== 'changes' || subject.kind !== 'changes' || !findings) return;
           say(`send these findings to ${thread ? "this thread's writer" : 'a new thread'} to fix? y to send; n, or anything else you type, cancels`);
           pendingRef.current = { what: 'sending the findings', yes: (signal) => submit(fixPrompt(reviewModel.ref, findings), undefined) };
+          } finally { busyRef.current = false; }
         })();
         return;
       }
@@ -632,6 +644,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'model': {
         if (rest[0]) {
+          if (isMode(rest[0])) { say(`${rest[0]} is a mode, not a model: pick a model ref from /model`, 'red'); return; }
+          try { resolveModel(rest[0]); } catch { say(`unknown model: ${rest[0]} (see /model for choices)`, 'red'); return; }
           setModel(rest[0]);
           say(`the next turn runs on ${rest[0]}`);
           return;
@@ -641,20 +655,27 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           const roles = loadRoles({});
           const ml = modelList(roles.code.ref, process.env as any, undefined);
           const items = ml.models.map((m: any) => ({ value: m.ref, label: `${m.available ? ' ' : '-'} ${m.ref}  ${m.label}` }));
-          setPicker({ title: 'models', items, onPick: (v) => { setModel(v); push({ role: "system", text: `the next turn runs on ${v}` }); } });
+          setPicker({ title: 'models', items, onPick: (v) => {
+            const picked = ml.models.find((m: any) => m.ref === v);
+            if (picked && !picked.available) { push({ role: "system", text: `${v} is unavailable: ${picked.reason ?? 'no key'}` }); return; }
+            setModel(v); push({ role: "system", text: `the next turn runs on ${v}` }); setInput(''); inputRef.current = '';
+          } });
            openDialog('picker');
         } catch (e) { say('error: ' + (e as Error).message); }
         return;
       }
       case 'permission': {
-        if (rest[0]) { setPermission(rest[0]); say(`permission: ${rest[0]}`); return; }
+        if (rest[0]) {
+          if (!['auto', 'read-only', 'plan', 'workspace'].includes(rest[0])) { say(`unknown mode: ${rest[0]} (auto | read-only | plan | workspace)`, 'red'); return; }
+          setPermission(rest[0]); say(`permission: ${rest[0]}`); return;
+        }
         const items = [
           { value: 'auto', label: 'auto' },
           { value: 'read-only', label: 'read-only' },
           { value: 'plan', label: 'plan' },
           { value: 'workspace', label: 'workspace' },
         ];
-        setPicker({ title: 'permission', items, onPick: (v) => { setPermission(v); push({ role: "system", text: `permission: ${v}` }); } });
+        setPicker({ title: 'permission', items, onPick: (v) => { setPermission(v); push({ role: "system", text: `permission: ${v}` }); setInput(''); inputRef.current = ''; } });
          openDialog('picker');
         return;
       }
@@ -680,6 +701,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'suggest': {
         say('asking for a suggestion…');
+        busyRef.current = true;
+        void (async () => {
+          try {
+            const { generateSuggestion } = await import('../../core/suggestions/prompt-suggestion.ts');
+            const sug = await generateSuggestion({ cwd: args.cwd, model: model ?? args.model, lastResult: 'continue' });
+            if (sug) { setSuggestion(sug.text); say(`suggestion: ${sug.text} (Tab to accept)`); }
+            else say('no suggestion right now', 'red');
+          } catch (e) { say(`suggestion failed: ${(e as Error).message}`, 'red'); }
+          finally { busyRef.current = false; }
+        })();
         return;
       }
       case 'trust': {
@@ -778,6 +809,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         submit(`By the way, a side question (do not derail the main task): ${q}`);
         return;
       }
+      case 'color':
       case 'theme': {
         const t = rest[0];
         if (t && t !== 'dark' && t !== 'light') { say(`unknown theme: ${t} (dark | light)`); return; }
@@ -803,7 +835,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'hooks': {
-        say('hooks: see ~/.cedia/settings.json');
+        try {
+          const raw = readSettings(join(cediaHome(), 'settings.json')) as { hooks?: Record<string, unknown[]> };
+          const hooks = raw.hooks ?? {};
+          const kinds = ['preToolUse', 'postToolUse', 'stop'];
+          const lines = kinds.map((k) => `${k}: ${Array.isArray(hooks[k]) ? (hooks[k] as unknown[]).length : 0}`);
+          say(`hooks (${join(cediaHome(), 'settings.json')}):\n` + lines.join('\n'));
+        } catch (e) { say(`hooks: ${(e as Error).message}`, 'red'); }
         return;
       }
       case 'effort': {
@@ -825,7 +863,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'fast': {
-        say('fast mode toggled (settings.json)');
+        try {
+          const pp = join(cediaHome(), 'settings.json');
+          let raw: Record<string, unknown> = {};
+          try { raw = JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown>; } catch {}
+          const cur = raw.fast === true;
+          raw.fast = !cur;
+          fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
+          say(`fast mode: ${raw.fast ? 'on' : 'off'}`);
+        } catch (e) { say(`fast mode: ${(e as Error).message}`, 'red'); }
         return;
       }
       case 'export': {
@@ -848,7 +894,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'palette': {
-        say('commands: /help lists them; use /<name>');
+        const cmdItems = INK_COMMANDS.map((c) => ({ value: c.name, label: `/${c.name}  ${c.description}` }));
+        const skills = (() => { try { return loadSkills(args.cwd, cediaHome()); } catch { return []; } })();
+        const items = [...cmdItems, ...skills.map((sk) => ({ value: sk.name, label: `${sk.name}  ${sk.description}` }))];
+        setPicker({ title: 'commands', items, onPick: (v) => { setInput(`/${v} `); inputRef.current = `/${v} `; } });
+        openDialog('picker');
+        setPickerSelected(0);
         return;
       }
       case 'doctor': {
@@ -882,7 +933,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       default:
         say(`unknown command /${name}; /help lists them`);
     }
-  }, [args, messages, running, store, thread, exit, spent, context, goal, transcriptExpanded, openDialog, model, permission, effort]);
+  }, [args, messages, running, store, thread, exit, spent, context, goal, transcriptExpanded, openDialog, model, permission, effort, switchThread, vimMode]);
 
   const submit = useCallback(async (text: string, planWhen?: 'always' | 'never') => {
     if (!text.trim()) return;
@@ -907,13 +958,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       const p = pendingRef.current;
       pendingRef.current = undefined;
       const stop = new AbortController();
+      setInput('');
+      inputRef.current = '';
       if (/^(y|yes)$/i.test(trimmedText)) { void p.yes(stop.signal); return; }
       push({ role: 'system', text: `not done: ${p.what}` });
-      if (/^(n|no)$/i.test(trimmedText)) { setInput(''); return; }
+      if (/^(n|no)$/i.test(trimmedText)) return;
       // anything else falls through as a new prompt/command
     }
     if (text.trim().startsWith('/')) {
       push({ role: 'user', text });
+      setInput('');
+      inputRef.current = '';
       handleCommand(trimmedText.slice(1));
       return;
     }
@@ -1005,6 +1060,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (typeof result.peakContext === 'number') setContext(result.peakContext);
       resultCost = result.costUsd ?? 0;
       setSpent((prev) => prev + resultCost);
+      if (typeof result.timing?.outputTokPerSec === 'number') setLastRate(result.timing.outputTokPerSec);
       setMessages((m) => [...m, { role: 'system', dim: true, text: `✳ done · ${result.numTurns} turn${result.numTurns === 1 ? '' : 's'} · ${effModel?.label ?? model ?? 'auto'} · ${((Date.now() - turnStart) / 1000).toFixed(1)}s${typeof result.timing?.outputTokPerSec === 'number' ? ` · ${Math.round(result.timing.outputTokPerSec)} tok/s` : ''} · $${result.costUsd.toFixed(4)}` }]);
       if (loadPromptSuggestions(args.promptSuggestions)) {
         void (async () => {
@@ -1042,7 +1098,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   React.useEffect(() => {
     if (!stdin) return;
     const handler = (data: Buffer) => {
-      require('fs').appendFileSync('/tmp/manual.log', 'DATA ' + JSON.stringify(data.toString()) + '\n');
       const s = data.toString();
       // wheel
       if (/\x1b\[<64;/.test(s)) setScrollOffset((o) => Math.min(o + 3, Math.max(0, messages.length - Math.max(5, rows - 6))));
@@ -1165,8 +1220,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // ignore keys (otherwise typing in the overlay also types into the editor).
   // The autocomplete/mention/picker dropdowns filter on the editor text itself,
   // so they are NOT captured here.
-  const inputCaptured = permissionDialog !== null || messageSelector.open
-    || historySearch.open || settingsOpen || transcriptSearch.open;
+  // Every overlay that consumes Enter must capture the editor too: otherwise
+  // VimInput's own Enter handler submits the stale editor text alongside the
+  // overlay action (double submit with two different texts).
+  const inputCaptured = permissionDialog !== null || messageSelector.open || trustOpen
+    || historySearch.open || settingsOpen || transcriptSearch.open
+    || (focusedDialog === 'picker' && picker !== null) || autoOpen || mentionOpen;
   const visibleMessages = displayMessages.slice(renderStart, renderEnd);
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
@@ -1217,6 +1276,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       exit();
       return;
     }
+    // Ctrl+D with an empty editor leaves (like pi-tui).
+    if (key.ctrl && input === 'd' && !running && !inputRef.current && !focusedDialog && !permissionDialog && !settingsOpen) {
+      exit();
+      return;
+    }
     if (permissionDialog) {
       if (key.escape || key.return) { setPermissionDialog(null); return; }
       return;
@@ -1234,9 +1298,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (key.upArrow) { setPickerSelected((s) => Math.max(0, s - 1)); return; }
       if (key.downArrow) { setPickerSelected((s) => Math.min(picker.items.length - 1, s + 1)); return; }
       if (key.return) {
+        const before = inputRef.current;
         const item = picker.items[pickerSelected];
         if (item) { picker.onPick(item.value); }
-        closeDialog('picker'); setPicker(null); setPickerSelected(0); setInput('');
+        closeDialog('picker'); setPicker(null); setPickerSelected(0);
+        if (inputRef.current === before) { setInput(''); inputRef.current = ''; }
         return;
       }
       return;
@@ -1585,7 +1651,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             </Box>
             <Box flexDirection="column">
               <Text bold={screenReader ? false : true}>cedia {versionInfo().version}</Text>
-              <Text dimColor={!screenReader}>{model ?? 'auto'} · {shortCwd(args.cwd)}</Text>
+              <Text dimColor={!screenReader}>{effModel?.label ?? model ?? 'auto'} · {shortCwd(args.cwd)}</Text>
               {displayMessages.length === 0 ? <Text dimColor={!screenReader}>/help for commands · Esc stops a turn</Text> : null}
             </Box>
           </Box>
@@ -1943,7 +2009,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, columns))}</Text>
         <Box>
           <Text color={screenReader ? undefined : T.primary}>{screenReader ? '' : '› '}</Text>
-          <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={inputCaptured} />
+          <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={inputCaptured} suppressSubmit={autoOpen || mentionOpen} />
         </Box>
         {effModel || effort ? (
           <Box paddingX={1}>
