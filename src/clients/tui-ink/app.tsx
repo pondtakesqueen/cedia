@@ -20,6 +20,7 @@ import { decode, type CoreMessage } from '../../protocol/index.ts';
 import type { TuiArgs } from '../tui/main.ts';
 import type { SessionEvent } from '../../core/types.ts';
 import { cediaHome, loadPromptSuggestions, loadRoles, isMode, loadPolicy, loadPrivacy, readSettings } from '../../core/config.ts';
+import { modelLabel } from '../../core/providers/models.ts';
 import { versionInfo } from '../../protocol/version.ts';
 import { runStatusLineCommand } from '../tui/statusline.ts';
 import { loadKeybindings } from '../tui/keybindings/loader.ts';
@@ -111,8 +112,9 @@ const INPUT_PLACEHOLDERS = [
 
 const shortCwd = (cwd: string): string => {
   try {
-    const home = cediaHome();
-    return cwd.startsWith(home) ? `~${cwd.slice(home.length)}` || '~' : cwd;
+    const home = process.env.HOME ?? '';
+    if (home && (cwd === home || cwd.startsWith(home + '/'))) return `~${cwd.slice(home.length)}` || '~';
+    return cwd;
   } catch { return cwd; }
 };
 
@@ -215,8 +217,19 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
   // Open threads for the tab bar (memoized: ThreadStore.list hits disk).
   const openThreads = React.useMemo(() => {
-    try { return store.list().filter((t) => !t.archived); }
-    catch { return []; }
+    try {
+      const all = store.list();
+      const open = all.filter((t) => !t.archived);
+      if (!open.length && thread) {
+        try { const t = store.read(thread); if (!t.archived) return [t]; } catch {}
+      }
+      return open;
+    } catch {
+      if (thread) {
+        try { const t = store.read(thread); if (!t.archived) return [t]; } catch {}
+      }
+      return [];
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread, messages.length]);
   // Effective model for display (status, receipts): explicit choice, else the code role default.
@@ -224,7 +237,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     try {
       const ref = model && !isMode(model) ? model : loadRoles({}).code.ref;
       const m = resolveModel(ref);
-      return { ref, label: (m as { label?: string }).label ?? ref, provider: (m as { provider?: string }).provider, window: (m as { contextWindow?: number }).contextWindow };
+      return { ref, label: modelLabel(m), provider: m.ref.split('/')[0] ?? m.ref, window: m.caps?.contextWindow };
     } catch { return null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model]);
@@ -1636,7 +1649,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               ) : isUserRow && !screenReader ? (
                 <>{(userLines ?? [capped]).map((ln, li) => (
                   <Text key={li} wrap="wrap" backgroundColor={T.userRowBg}>
-                    <Text color={T.primary}>▏ </Text>{ln}
+                    <Text color={T.primary}>│ </Text>{ln}
                   </Text>
                 ))}</>
               ) : (
