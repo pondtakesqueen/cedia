@@ -887,7 +887,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (typeof result.peakContext === 'number') setContext(result.peakContext);
       resultCost = result.costUsd ?? 0;
       setSpent((prev) => prev + resultCost);
-      setMessages((m) => [...m, { role: 'system', text: `✳ done · ${result.numTurns} turn${result.numTurns === 1 ? '' : 's'} · $${result.costUsd.toFixed(4)} · ${((Date.now() - turnStart) / 1000).toFixed(1)}s` }]);
+      setMessages((m) => [...m, { role: 'system', dim: true, text: `✳ done · ${result.numTurns} turn${result.numTurns === 1 ? '' : 's'} · $${result.costUsd.toFixed(4)} · ${((Date.now() - turnStart) / 1000).toFixed(1)}s` }]);
       if (loadPromptSuggestions(args.promptSuggestions)) {
         void (async () => {
           try {
@@ -1390,19 +1390,18 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     <Box flexDirection="row" height={screenReader ? undefined : termRows}>
       <Box flexDirection="column" flexGrow={1} height={screenReader ? undefined : termRows}>
         <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
-          {displayMessages.length === 0 ? (
-            <Box flexDirection="row">
-              <Box flexDirection="column" marginRight={1}>
-                <Text>▄▀▄</Text>
-                <Text>▀▄▀</Text>
-              </Box>
-              <Box flexDirection="column">
-                <Text bold={screenReader ? false : true}>cedia {versionInfo().version}</Text>
-                <Text dimColor={!screenReader}>{model ?? 'auto'} · {shortCwd(args.cwd)}</Text>
-                <Text dimColor={!screenReader}>/help for commands · Esc stops a turn</Text>
-              </Box>
+          <Box flexDirection="row">
+            <Box flexDirection="column" marginRight={1}>
+              <Text>▄▀▄</Text>
+              <Text>▀▄▀</Text>
             </Box>
-          ) : (
+            <Box flexDirection="column">
+              <Text bold={screenReader ? false : true}>cedia {versionInfo().version}</Text>
+              <Text dimColor={!screenReader}>{model ?? 'auto'} · {shortCwd(args.cwd)}</Text>
+              {displayMessages.length === 0 ? <Text dimColor={!screenReader}>/help for commands · Esc stops a turn</Text> : null}
+            </Box>
+          </Box>
+          {displayMessages.length === 0 ? null : (
             <>
               {scrollOffset > 0 || aboveHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↑ '}{aboveHidden} more above</Text> : null}
               {visibleMessages.map((m, i) => {
@@ -1419,6 +1418,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               }
             }
             const hasSel = a >= 0 && b > a;
+            // cc highlights the whole user-prompt row; tool errors render red.
+            const isUserRow = m.role === 'user' && !hasSel;
+            const isToolError = m.role === 'tool' && m.status === 'error';
             const prefix = m.role === 'user' ? '› ' : '';
             const full = prefix + m.text;
             const off = prefix.length;
@@ -1432,7 +1434,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               );
             }
               return (
-            <Box key={globalIdx} flexDirection="column">
+            <Box key={globalIdx} flexDirection="column" backgroundColor={!screenReader && isUserRow ? 'gray' : undefined}>
               {m.role === 'assistant' ? (
                 <Markdown>{m.text}</Markdown>
               ) : hasSel ? (
@@ -1442,7 +1444,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                   <Text color={colorFor(m.role)}>{full.slice(sb)}</Text>
                 </Text>
               ) : (
-                <Text color={m.tone === 'red' && !screenReader ? 'red' : (m.dim ? undefined : colorFor(m.role))} dimColor={screenReader ? false : !!m.dim} wrap="wrap">{full}</Text>
+                <Text color={isUserRow || screenReader ? undefined : isToolError ? 'red' : m.tone === 'red' ? 'red' : m.dim ? undefined : colorFor(m.role)} dimColor={screenReader ? false : !!m.dim && !isUserRow} wrap="wrap">{full}</Text>
               )}
             </Box>
             );
