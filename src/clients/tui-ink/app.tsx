@@ -33,6 +33,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const [activity, setActivity] = useState('');
+  const [context, setContext] = useState(0);
+  const [spent, setSpent] = useState(0);
   const [thread, setThread] = useState<string | undefined>(args.thread);
   const [vimMode, setVimMode] = useState<'insert' | 'normal'>('insert');
   const stopRef = useRef<AbortController | null>(null);
@@ -262,6 +264,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         handleChunk,
       );
       setThread(result.thread ?? thread);
+      if (typeof result.peakContext === 'number') setContext(result.peakContext);
+      setSpent((prev) => prev + (result.costUsd ?? 0));
       setMessages((m) => [...m, { role: 'system', text: `done · ${result.numTurns} turns · $${result.costUsd.toFixed(4)}` }]);
       if (loadPromptSuggestions(args.promptSuggestions)) {
         void (async () => {
@@ -282,7 +286,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') exit();
-    if (input === '\x1b') { if (picker) { setPicker(null); return; } if (running) { stopRef.current?.abort(); setActivity('stopping…'); return; } setVimMode('normal'); }
+    if (key.escape) { if (picker) { setPicker(null); return; } if (running) { stopRef.current?.abort(); setActivity('stopping…'); return; } setVimMode('normal'); }
     if (vimMode === 'normal' && input === 'i') setVimMode('insert');
     if (key.pageUp) setScrollOffset((o) => Math.min(o + 10, Math.max(0, messages.length - 40)));
     if (key.pageDown) setScrollOffset((o) => Math.max(0, o - 10));
@@ -449,7 +453,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <Text color="cyan">› </Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} />
         </Box>
-        <StatusBar thread={thread} model={args.model} permission={args.permission} running={running} context={0} />
+        <StatusBar thread={thread} model={args.model} permission={args.permission} running={running} context={context} spend={spent > 0 ? spent : undefined} />
         <Text dimColor>vim:{vimMode}</Text>
       </Box>
       {showSidebar ? (
