@@ -963,10 +963,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       <Box flexDirection="column" flexGrow={1}>
         <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
           {displayMessages.length === 0 ? (
-            <Text dimColor>no messages yet</Text>
+            <Text dimColor={screenReader ? false : true}>no messages yet</Text>
           ) : (
             <>
-              {scrollOffset > 0 || aboveHidden > 0 ? <Text dimColor>↑ {aboveHidden} more above</Text> : null}
+              {scrollOffset > 0 || aboveHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↑ '}{aboveHidden} more above</Text> : null}
               {visibleMessages.map((m, i) => {
             const globalIdx = renderStart + i;
             let a = -1, b = -1;
@@ -989,7 +989,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             if (screenReader) {
               return (
                 <Box key={i} flexDirection="column">
-                  <Text wrap="wrap">{full}</Text>
+                  <Text wrap="wrap">{m.role}: {m.text}</Text>
                 </Box>
               );
             }
@@ -1009,56 +1009,56 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             </Box>
             );
           })}
-                {end < displayMessages.length || belowHidden > 0 ? <Text dimColor>↓ {belowHidden} more below</Text> : null}
+                {end < displayMessages.length || belowHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↓ '}{belowHidden} more below</Text> : null}
               </>
           )}
           {running && activity ? (
-            <Text color="cyan">{screenReader ? '* ' : ''}{activity}</Text>
+            <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '* ' : ''}{activity}</Text>
           ) : null}
         </Box>
         {focusedDialog === 'picker' && picker ? (
           <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
-            <Text bold color="cyan">{picker.title}</Text>
+            <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>{picker.title}</Text>
             {picker.items.map((it, i) => (
               <Text key={i}>{i + 1}. {it.label}</Text>
             ))}
-            <Text dimColor>type a number to select, Esc to cancel</Text>
+            <Text dimColor={!screenReader}>type a number to select, Esc to cancel</Text>
           </Box>
         ) : null}
         {focusedDialog === 'historySearch' ? (
           <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
-            <Text bold color="cyan">history search: {historySearch.query || '(type to filter)'}</Text>
+            <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>history search: {historySearch.query || '(type to filter)'}</Text>
             {historyRef.current
               .filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()))
               .map((h, i) => (
-                <Text key={i} color={i === historySearch.selected ? 'black' : undefined} backgroundColor={i === historySearch.selected ? 'cyan' : undefined}>{h}</Text>
+                <Text key={i} color={screenReader ? undefined : (i === historySearch.selected ? 'black' : undefined)} backgroundColor={screenReader ? undefined : (i === historySearch.selected ? 'cyan' : undefined)}>{h}</Text>
               ))}
-            {historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase())).length === 0 ? <Text dimColor>no matches</Text> : null}
-            <Text dimColor>↑↓ navigate · Enter run · Esc close</Text>
+            {historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase())).length === 0 ? <Text dimColor={!screenReader}>no matches</Text> : null}
+            <Text dimColor={!screenReader}>↑↓ navigate · Enter run · Esc close</Text>
           </Box>
         ) : null}
         {focusedDialog === 'messageSelector' ? (
           <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
-            <Text bold color="cyan">message selector (rewind)</Text>
+            <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>message selector (rewind)</Text>
             {!thread ? (
-              <Text dimColor>no thread yet</Text>
+              <Text dimColor={!screenReader}>no thread yet</Text>
             ) : (
               <>
                 {runLines(store.read(thread)).map((r, i) => (
-                  <Text key={i} color={i === messageSelector.selected ? 'black' : undefined} backgroundColor={i === messageSelector.selected ? 'cyan' : undefined}>{r}</Text>
+                  <Text key={i} color={screenReader ? undefined : (i === messageSelector.selected ? 'black' : undefined)} backgroundColor={screenReader ? undefined : (i === messageSelector.selected ? 'cyan' : undefined)}>{r}</Text>
                 ))}
-                {runLines(store.read(thread)).length === 0 ? <Text dimColor>no runs to rewind to</Text> : null}
+                {runLines(store.read(thread)).length === 0 ? <Text dimColor={!screenReader}>no runs to rewind to</Text> : null}
               </>
             )}
-            <Text dimColor>↑↓ navigate · Enter rewind · Esc close</Text>
+            <Text dimColor={!screenReader}>↑↓ navigate · Enter rewind · Esc close</Text>
           </Box>
         ) : null}
         {settingsOpen ? (
           <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
-            <Text bold color="cyan">settings</Text>
+            <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>settings</Text>
             <Box>
               {(['status', 'config', 'usage'] as const).map((t) => (
-                <Text key={t} color={t === settingsTab ? 'black' : undefined} backgroundColor={t === settingsTab ? 'cyan' : undefined}> {t} </Text>
+                <Text key={t} color={screenReader ? undefined : (t === settingsTab ? 'black' : undefined)} backgroundColor={screenReader ? undefined : (t === settingsTab ? 'cyan' : undefined)}> {t} </Text>
               ))}
             </Box>
             {settingsTab === 'status' ? (
@@ -1074,16 +1074,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             ) : null}
             {settingsTab === 'config' ? (
               <Box flexDirection="column">
-                <Text dimColor>search: {settingsQuery || '(type to filter)'}</Text>
+                <Text dimColor={!screenReader}>search: {settingsQuery || '(type to filter)'}</Text>
                 {(() => {
                   try {
                     const raw = readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>;
                     const q = settingsQuery.toLowerCase();
                     const keys = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q));
-                    if (!keys.length) return <Text dimColor>no settings</Text>;
+                    if (!keys.length) return <Text dimColor={!screenReader}>no settings</Text>;
                     return keys.map((k) => <Text key={k}>{k}: {JSON.stringify(raw[k])}</Text>);
                   } catch (e) {
-                    return <Text dimColor>no settings</Text>;
+                    return <Text dimColor={!screenReader}>no settings</Text>;
                   }
                 })()}
               </Box>
@@ -1092,31 +1092,31 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               <Box flexDirection="column">
                 <Text>spent total: ${spent.toFixed(4)}</Text>
                 <Text>context: {context} tokens</Text>
-                <Text dimColor>per-model breakdown: (placeholder)</Text>
+                <Text dimColor={!screenReader}>per-model breakdown: (placeholder)</Text>
               </Box>
             ) : null}
-            <Text dimColor>Tab/←/→ switch tabs · Esc close</Text>
+            <Text dimColor={!screenReader}>Tab/←/→ switch tabs · Esc close</Text>
           </Box>
         ) : null}
-        {suggestion ? <Text dimColor>💡 {suggestion} (Tab to accept)</Text> : null}
+        {suggestion ? <Text dimColor={!screenReader}>💡 {suggestion} (Tab to accept)</Text> : null}
         <Box borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "gray"} paddingX={1}>
-          <Text color="cyan">› </Text>
+          <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '' : '› '}</Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} />
         </Box>
         <StatusBar thread={thread} model={args.model} permission={args.permission} running={running} context={context} spend={spent > 0 ? spent : undefined} />
-        {statusLineOutput ? <Text>{statusLineOutput}</Text> : <Text dimColor>vim:{vimMode}</Text>}
+        {statusLineOutput ? <Text>{statusLineOutput}</Text> : <Text dimColor={!screenReader}>vim:{vimMode}</Text>}
       </Box>
       {showSidebar ? (
-        <Box flexDirection="column" width={28} borderStyle="single" borderColor="gray" paddingX={1}>
-          <Text bold color="cyan">sidebar</Text>
-          <Text dimColor>thread: {thread ?? 'new'}</Text>
-          <Text dimColor>model: {args.model ?? 'auto'}</Text>
-          <Text dimColor>{running ? 'working' : 'idle'}</Text>
-          <Text dimColor>scroll: {scrollOffset}</Text>
-          <Text dimColor>msgs: {messages.length}</Text>
-          {teams.length ? <Text bold color="cyan">teams</Text> : null}
+        <Box flexDirection="column" width={28} borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "gray"} paddingX={1}>
+          <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>sidebar</Text>
+          <Text dimColor={!screenReader}>thread: {thread ?? 'new'}</Text>
+          <Text dimColor={!screenReader}>model: {args.model ?? 'auto'}</Text>
+          <Text dimColor={!screenReader}>{running ? 'working' : 'idle'}</Text>
+          <Text dimColor={!screenReader}>scroll: {scrollOffset}</Text>
+          <Text dimColor={!screenReader}>msgs: {messages.length}</Text>
+          {teams.length ? <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>teams</Text> : null}
           {teams.slice(0, 3).map((t) => (
-            <Text key={t.id} dimColor>{t.name}: {t.tasks.filter((x) => x.status === 'done').length}/{t.tasks.length}</Text>
+            <Text key={t.id} dimColor={!screenReader}>{t.name}: {t.tasks.filter((x) => x.status === 'done').length}/{t.tasks.length}</Text>
           ))}
         </Box>
       ) : null}
