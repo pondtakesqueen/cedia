@@ -133,14 +133,26 @@ export class CediaController {
   }
 
   command(line: string): void {
-    const name = line.trim().split(/\s+/)[0] ?? '';
+    const trimmed = line.trim();
+    const name = trimmed.split(/\s+/)[0] ?? '';
     if (name === 'new') { this.thread = undefined; this.messages = []; this.onState?.(); return; }
     if (name === 'goal') {
-      const cond = line.trim().slice('goal'.length).trim();
+      const cond = trimmed.slice('goal'.length).trim();
       if (cond === 'off') { this.goal = undefined; } else if (cond) { this.goal = cond; }
       this.onState?.();
       return;
     }
+    if (name === 'thread') {
+      const id = trimmed.slice('thread'.length).trim();
+      if (id) { this.thread = id; this.messages = []; this.onState?.(); }
+      return;
+    }
+    if (name === 'model') {
+      const ref = trimmed.slice('model'.length).trim();
+      if (ref) this.applyModel(ref);
+      return;
+    }
+    if (name === 'quit' || name === 'exit') { this.quit(); return; }
     // Other commands are view-specific; fire a callback for the view to handle.
     this.onCommand?.(line);
   }
