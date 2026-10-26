@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useWindowSize, useStdin, useIsScreenReaderEnabled } from 'ink';
+import { buildAutoItems, highlightSpans, truncateDescription, type AutoItem } from './autocomplete.ts';
 import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
 import { PermissionDialog, permissionDialogFor, toolLabel } from './permission-dialogs.tsx';
@@ -211,30 +212,29 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
   const push = (m: Msg) => setMessages((prev) => [...prev, m]);
 
-  // Auto-show command/skill picker as the user types '/' (like pi-tui autocomplete).
-  useEffect(() => {
-    const t = input.trim();
-    if (t.startsWith('/') && !running && focusedDialog !== 'historySearch' && focusedDialog !== 'messageSelector') {
-      const q = t.slice(1).toLowerCase();
-      const cmds = INK_COMMANDS.filter((c) => c.name.toLowerCase().startsWith(q));
-      const skills = loadSkills(args.cwd, cediaHome());
-      const skillItems = skills.filter((s) => s.name.toLowerCase().startsWith(q)).map((s) => ({ value: s.name, label: `${s.name}  ${s.description}` }));
-      const cmdItems = cmds.map((c) => ({ value: c.name, label: `/${c.name}  ${c.description}` }));
-      const items = [...cmdItems, ...skillItems];
-      if (items.length > 0 && items.length <= 20) {
-        setPicker({ title: 'commands', items, onPick: (v) => { setInput(`/${v} `); } });
-         openDialog('picker');
-        setPickerSelected(0);
-        return;
-      }
-    }
-    // Close picker if input no longer starts with '/'
-    if (picker && !t.startsWith('/') && focusedDialog === 'picker') {
-      closeDialog('picker');
-      setPicker(null);
-      setPickerSelected(0);
-    }
-  }, [input, running, focusedDialog, picker]);
+  // Autocomplete dropdown state (derived during render, never set in an effect —
+  // setting picker state from an effect on picker itself caused an update loop).
+  const [autoSelected, setAutoSelected] = useState(0);
+  const [autoNonce, setAutoNonce] = useState(0);
+  const autoDismissedFor = useRef<string | null>(null);
+  const skillsList = React.useMemo(() => {
+    try { return loadSkills(args.cwd, cediaHome()); } catch { return []; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [args.cwd]);
+  const autoQuery = input.trim().startsWith('/') && !running ? input.trim().slice(1).toLowerCase() : null;
+  const autoItems = React.useMemo(() => {
+    if (autoQuery === null) return [];
+    const cmds: AutoItem[] = INK_COMMANDS.map((c) => ({ value: c.name, name: `/${c.name}`, description: c.description }));
+    const skills: AutoItem[] = skillsList.map((s) => ({ value: s.name, name: s.name, description: String(s.description).split('\n')[0] ?? '' }));
+    return buildAutoItems(cmds, skills, autoQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoQuery, skillsList]);
+  // Reset autocomplete selection whenever the query changes (string dep: no loop).
+  useEffect(() => { setAutoSelected(0); autoDismissedFor.current = null; }, [autoQuery]);
+  // Read during render so bumping it forces a re-render (used by Tab re-open).
+  const autoOpen = autoQuery !== null && autoItems.length > 0
+    && !focusedDialog && !settingsOpen && !permissionDialog && !picker
+    && autoDismissedFor.current !== input.trim() && autoNonce >= 0;
 
   const handleCommand = useCallback((line: string) => {
     const [name = '', ...rest] = line.trim().split(/\s+/);
@@ -916,19 +916,23 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       return;
     }
-    // Tab autocomplete for commands/skills
-    if (key.tab && !running && input.trim().startsWith('/')) {
-      const q = input.trim().slice(1).toLowerCase();
-      const cmds = INK_COMMANDS.filter((c) => c.name.toLowerCase().startsWith(q));
-      const skills = loadSkills(args.cwd, cediaHome());
-      const skillItems = skills.filter((s) => s.name.toLowerCase().startsWith(q)).map((s) => ({ value: s.name, label: `${s.name}  ${s.description}` }));
-      const cmdItems = cmds.map((c) => ({ value: c.name, label: `/${c.name}  ${c.description}` }));
-      const items = [...cmdItems, ...skillItems];
-      if (items.length === 0) return;
-      if (items.length === 1) { setInput(`/${items[0]!.value} `); return; }
-      setPicker({ title: 'commands', items, onPick: (v) => { setInput(`/${v} `); } });
-       openDialog('picker');
-      setPickerSelected(0);
+    // Compact autocomplete dropdown (like cc): ↑/↓ navigate, Enter/Tab accept, Esc dismiss.
+    if (autoOpen) {
+      const sel = Math.min(autoSelected, autoItems.length - 1);
+      if (key.escape) { autoDismissedFor.current = input.trim(); return; }
+      if (key.upArrow) { setAutoSelected((s) => Math.max(0, s - 1)); return; }
+      if (key.downArrow) { setAutoSelected((s) => Math.min(autoItems.length - 1, s + 1)); return; }
+      if (key.return || key.tab) {
+        const item = autoItems[sel];
+        if (item) { setInput(`/${item.value} `); autoDismissedFor.current = `/${item.value} `; }
+        return;
+      }
+      // Typing filters the list (handled by derivation); other keys fall through.
+    }
+    // Tab re-opens a dismissed dropdown.
+    if (key.tab && !running && input.trim().startsWith('/') && !autoOpen && !focusedDialog && !settingsOpen) {
+      autoDismissedFor.current = null;
+      setAutoNonce((n) => n + 1);
       return;
     }
     if (key.tab && suggestion) { setInput(suggestion); setSuggestion(null); return; }
@@ -1262,6 +1266,26 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           </Box>
         ) : null}
         {suggestion ? <Text dimColor={!screenReader}>💡 {suggestion} (Tab to accept)</Text> : null}
+        {autoOpen ? (
+          <Box flexDirection="column" paddingX={1}>
+            {autoItems.slice(0, 7).map((it, i) => {
+              const sel = i === Math.min(autoSelected, autoItems.length - 1);
+              const maxDesc = Math.max(10, columns - it.name.length - 8);
+              const plain = it.name.startsWith('/') ? it.name.slice(1) : it.name;
+              return (
+                <Text key={`${it.name}::${i}`} wrap="truncate">
+                  <Text color={screenReader ? undefined : (sel ? 'cyan' : undefined)}>{sel ? '› ' : '  '}</Text>
+                  {it.name.startsWith('/') ? <Text dimColor={!screenReader}>/</Text> : null}
+                  {highlightSpans(plain, it.hits).map((sp, si) => (
+                    <Text key={si} color={screenReader ? undefined : (sp.hit ? 'cyan' : undefined)} bold={screenReader ? false : sp.hit}>{sp.text}</Text>
+                  ))}
+                  <Text dimColor={!screenReader}>  {truncateDescription(it.description, maxDesc)}</Text>
+                </Text>
+              );
+            })}
+            {autoItems.length > 7 ? <Text dimColor={!screenReader}>  {autoItems.length - 7} more…</Text> : null}
+          </Box>
+        ) : null}
         <Box borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "gray"} paddingX={1}>
           <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '' : '› '}</Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} />
