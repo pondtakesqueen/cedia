@@ -416,7 +416,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'resume': {
-        if (!rest[0]) { const list = store.list().filter((t) => !t.archived).map((t) => `${t.id}  ${t.title}`); say(list.length ? list.join('\\n') : 'no threads'); return; }
+        if (!rest[0]) {
+          const threads = store.list().filter((t) => !t.archived);
+          if (!threads.length) { say('no threads'); return; }
+          const items = threads.map((t) => ({ value: t.id, label: `${t.id}  ${t.title}` }));
+          setPicker({ title: 'resume', items, onPick: (v) => { setThread(v); push({ role: 'system', text: `going on with ${v}` }); } });
+          openDialog('picker');
+          return;
+        }
         if (!store.has(rest[0])) { say(`no thread ${rest[0]}`); return; }
         setThread(rest[0]); say(`going on with ${rest[0]}`); return;
       }
@@ -507,7 +514,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       default:
         say(`unknown command /${name}; /help lists them`);
     }
-  }, [args, messages, running, store, thread, exit, spent, context, goal, transcriptExpanded]);
+  }, [args, messages, running, store, thread, exit, spent, context, goal, transcriptExpanded, openDialog]);
 
   const submit = useCallback(async (text: string, planWhen?: 'always' | 'never') => {
     if (!text.trim() || running) return;
@@ -621,7 +628,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       lastActivityRef.current = Date.now();
     }
-  }, [args, running, thread, handleCommand, goal]);
+  }, [args, running, thread, handleCommand, goal, picker, closeDialog]);
 
 
 
