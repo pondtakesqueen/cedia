@@ -904,6 +904,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'doctor': {
         const lines = [`cedia doctor`, `version: ${versionInfo().version} · bun ${Bun.version}`];
+        try {
+          const g = Bun.spawnSync(['git', 'rev-parse', '--short', 'HEAD'], { cwd: args.cwd });
+          const sha = g.stdout.toString().trim();
+          if (sha) lines.push(`build: ${sha}`);
+        } catch { /* not a git checkout */ }
         lines.push(`cwd: ${args.cwd}`);
         try {
           JSON.parse(fsRead(join(cediaHome(), 'settings.json'), 'utf8'));
