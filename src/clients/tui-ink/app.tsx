@@ -1634,9 +1634,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   return (
     <Box flexDirection="row" height={screenReader ? undefined : termRows}>
       <Box flexDirection="column" flexGrow={1} height={screenReader ? undefined : termRows}>
-        {!screenReader && openThreads.length > 0 ? (
+        {!screenReader && (openThreads.length > 0 || thread) ? (
           <Box flexDirection="row" paddingX={1}>
-            {openThreads.slice(0, 8).map((t) => (
+            {(openThreads.length ? openThreads : [{ id: thread ?? 'new', title: 'new thread' }]).slice(0, 8).map((t) => (
               <Text key={t.id} backgroundColor={t.id === thread ? T.selectedBg : undefined} dimColor={t.id !== thread}> {t.title.slice(0, 14) || t.id} </Text>
             ))}
             {openThreads.length > 8 ? <Text dimColor> +{openThreads.length - 8}</Text> : null}
@@ -2006,8 +2006,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             </Text>
           </Box>
         ) : null}
-        <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, columns))}</Text>
-        <Box>
+        <Box paddingX={1}>
           <Text color={screenReader ? undefined : T.primary}>{screenReader ? '' : '› '}</Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={inputCaptured} suppressSubmit={autoOpen || mentionOpen} />
         </Box>
@@ -2020,8 +2019,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             </Text>
           </Box>
         ) : null}
-        <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, columns))}</Text>
-        <StatusBar cwd={shortCwd(args.cwd)} tokens={context || undefined} windowSize={effModel?.window} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} running={running} hint="ctrl+p commands" />
+        <StatusBar cwd={shortCwd(args.cwd)} tokens={context} windowSize={effModel?.window} spend={spent} vimMode={vimMode} activity={activity} running={running} hint="ctrl+p commands" />
         {statusLineOutput ? <Text dimColor={!screenReader}>{statusLineOutput}</Text> : null}
       </Box>
       {showSidebar ? (
