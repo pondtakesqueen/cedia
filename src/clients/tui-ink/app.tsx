@@ -4,6 +4,7 @@ import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
 import { StatusBar } from './status-bar.tsx';
 import { runHeadless } from '../headless/main.ts';
+
 import { runPrompt } from '../../core/loop/run.ts';
 import { SessionLog, sessionPath } from '../../core/session/log.ts';
 import { providerFor } from '../../core/providers/index.ts';
@@ -689,7 +690,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       require('fs').appendFileSync('/tmp/manual.log', 'DATA ' + JSON.stringify(data.toString()) + '\n');
       const s = data.toString();
       // wheel
-      if (/\x1b\[<64;/.test(s)) setScrollOffset((o) => Math.min(o + 3, Math.max(0, messages.length - Math.max(1, rows - 5))));
+      if (/\x1b\[<64;/.test(s)) setScrollOffset((o) => Math.min(o + 3, Math.max(0, messages.length - Math.max(5, rows - 6))));
       if (/\x1b\[<65;/.test(s)) setScrollOffset((o) => Math.max(0, o - 3));
       // left button press: \x1b[<0;COL;ROW M  ; drag (motion): \x1b[<32;COL;ROW M ; release: ...m
       const press = /\x1b\[<0;(\d+);(\d+)M/.exec(s);
@@ -779,15 +780,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
   const showSidebar = !screenReader && columns >= 120;
   const displayMessages = transcriptExpanded ? messages : messages.filter((m) => m.role !== 'tool');
-  const windowSize = Math.max(1, rows - 5);
+  const windowSize = Math.max(5, rows - 6);
   React.useEffect(() => {
     const max = Math.max(0, displayMessages.length - windowSize);
     setScrollOffset((o) => (o > max ? max : o));
-  }, [columns, rows]);
-  const windowStart = Math.max(0, displayMessages.length - windowSize - scrollOffset);
-  const windowEnd = scrollOffset > 0 ? displayMessages.length - scrollOffset : displayMessages.length;
-  const renderStart = Math.max(0, windowStart - 5);
-  const renderEnd = windowEnd;
+  }, [columns, rows, displayMessages.length]);
+  const start = Math.max(0, displayMessages.length - windowSize - scrollOffset);
+  const end = displayMessages.length - scrollOffset;
+  const renderStart = Math.max(0, start - 5);
+  const renderEnd = Math.min(displayMessages.length, end + 5);
   const visibleMessages = displayMessages.slice(renderStart, renderEnd);
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
@@ -809,6 +810,22 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         else setSettingsTab((t) => tabs[(tabs.indexOf(t) - 1 + tabs.length) % tabs.length]!);
         return;
       }
+      return;
+    }
+    if (key.home) {
+      setScrollOffset(Math.max(0, displayMessages.length - windowSize));
+      return;
+    }
+    if (key.end) {
+      setScrollOffset(0);
+      return;
+    }
+    if (key.pageUp) {
+      setScrollOffset((o) => Math.min(Math.max(0, displayMessages.length - windowSize), o + windowSize));
+      return;
+    }
+    if (key.pageDown) {
+      setScrollOffset((o) => Math.max(0, o - windowSize));
       return;
     }
     if (key.escape && !running) {
@@ -911,7 +928,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <Text dimColor>no messages yet</Text>
           ) : (
             <>
-              {aboveHidden > 0 ? <Text dimColor>↑ {aboveHidden} more</Text> : null}
+              {scrollOffset > 0 || aboveHidden > 0 ? <Text dimColor>↑ {aboveHidden} more above</Text> : null}
               {visibleMessages.map((m, i) => {
             const globalIdx = renderStart + i;
             let a = -1, b = -1;
@@ -954,7 +971,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             </Box>
             );
           })}
-                {belowHidden > 0 ? <Text dimColor>↓ {belowHidden} more</Text> : null}
+                {end < displayMessages.length || belowHidden > 0 ? <Text dimColor>↓ {belowHidden} more below</Text> : null}
               </>
           )}
           {running && activity ? (
