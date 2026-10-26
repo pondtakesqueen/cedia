@@ -1754,12 +1754,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <Text color={screenReader ? undefined : 'yellow'}>{notice}</Text>
           </Box>
         ) : null}
-        <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, Math.min(columns - 2, 120)))}</Text>
+        <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, columns))}</Text>
         <Box>
           <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '' : '› '}</Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={inputCaptured} />
         </Box>
-        <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, Math.min(columns - 2, 120)))}</Text>
+        <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, columns))}</Text>
         <StatusBar thread={thread} model={model} permission={permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} agents={agentCount} />
         {statusLineOutput ? <Text dimColor={!screenReader}>{statusLineOutput}</Text> : null}
       </Box>
