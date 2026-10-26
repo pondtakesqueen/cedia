@@ -2,6 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useWindowSize, useStdin, useIsScreenReaderEnabled } from 'ink';
 import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
+import { PermissionDialog, permissionDialogFor, toolLabel } from './permission-dialogs.tsx';
 import { StatusBar } from './status-bar.tsx';
 import { runHeadless } from '../headless/main.ts';
 
@@ -98,47 +99,6 @@ const INK_COMMANDS: { name: string; description: string }[] = [
 const colorFor = (role: Msg['role']) =>
   role === 'user' ? 'cyan' : role === 'assistant' ? 'white' : role === 'tool' ? 'gray' : 'yellow';
 
-export function toolLabel(tool: string): string {
-  const raw = String(tool ?? '').trim();
-  const key = raw.toLowerCase().replace(/[\s_-]+/g, '');
-  // Canonical labels for the tools a deny message names.
-  switch (key) {
-    case 'bash': return 'bash';
-    case 'edit': return 'edit';
-    case 'write':
-    case 'filewrite':
-      return 'write';
-    case 'read':
-    case 'fileread':
-      return 'read';
-    case 'grep': return 'grep';
-    case 'glob': return 'glob';
-    case 'webfetch':
-      return 'web_fetch';
-    case 'browser': return 'browser';
-    case 'skill': return 'skill';
-    case 'enterplanmode':
-    case 'exitplanmode':
-    case 'planmode':
-    case 'plan':
-      return 'plan mode';
-    case 'filesystem':
-    case 'fs':
-      return 'filesystem';
-    case 'sed': return 'sed';
-    case 'fallback': return 'fallback';
-    default: break;
-  }
-  const known = new Set([
-    'bash', 'edit', 'write', 'read', 'grep', 'glob', 'web_fetch', 'browser',
-    'ask_user', 'monitor', 'sleep', 'notebook_edit', 'notebookedit', 'tool_search',
-    'toolsearch', 'open_thread', 'openthread', 'spawn', 'todo', 'schedule',
-    'recall', 'threads', 'read_thread', 'message_thread', 'skill', 'webfetch',
-  ]);
-  const lower = raw.toLowerCase();
-  return known.has(lower) ? lower : 'tool';
-}
-
 export type DialogKind = 'picker' | 'historySearch' | 'messageSelector' | null;
 
 const DIALOG_PRIORITY: Record<NonNullable<DialogKind>, number> = {
@@ -206,6 +166,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [messageSelector, setMessageSelector] = useState<{ open: boolean; selected: number }>({ open: false, selected: 0 });
   const [picker, setPicker] = useState<{ title: string; items: { value: string; label: string }[]; onPick: (v: string) => void } | null>(null);
   const [pickerSelected, setPickerSelected] = useState(0);
+  const [permissionDialog, setPermissionDialog] = useState<{ tool: string; input?: unknown; reason?: string; rule?: string } | null>(null);
+  const toolInputByCallRef = useRef<Record<string, unknown>>({});
   const [focusedDialog, setFocusedDialog] = useState<DialogKind>(null);
   const openDialog = useCallback((kind: NonNullable<DialogKind>) => {
     setFocusedDialog((prev) => {
@@ -397,7 +359,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               // mirror pi-tui onEvent minimally
               if (e.kind === 'tool_intent') push({ role: 'tool', text: `● ${(e as { tool: string }).tool} running`, status: 'running' });
               if (e.kind === 'tool_result') push({ role: 'tool', text: `  ⎿ ${(e as { output: { text: string } }).output.text.split('\\n')[0]?.slice(0, 120) ?? ''}`, status: (e as { output: { isError?: boolean } }).output.isError ? 'error' : 'success' });
-              if (e.kind === 'permission' && (e as { decision: string }).decision === 'deny') push({ role: 'system', text: `✗ ${toolLabel((e as { tool: string }).tool)} denied by ${(e as { rule?: string }).rule ?? ''}${(e as { reason?: string }).reason ? `: ${(e as { reason?: string }).reason}` : ''}` });
+              if (e.kind === 'permission' && (e as { decision: string }).decision === 'deny') {
+                setPermissionDialog({ tool: (e as { tool: string }).tool, input: undefined, reason: (e as { reason?: string }).reason, rule: (e as { rule?: string }).rule });
+                push({ role: 'system', text: `✗ ${toolLabel((e as { tool: string }).tool)} denied by ${(e as { rule?: string }).rule ?? ''}${(e as { reason?: string }).reason ? `: ${(e as { reason?: string }).reason}` : ''}` });
+              }
             }
             // no requestRender in ink; state update triggers render
           });
@@ -708,6 +673,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           } else if (m.type === 'event') {
             const e = m.event as SessionEvent;
             if (e.kind === 'tool_intent') {
+              toolInputByCallRef.current[e.callId] = e.input;
               setMessages((prev) => [...prev, { role: 'tool', text: `● ${e.tool} ${String(e.input?.command ?? e.input?.path ?? '').slice(0, 80)}`, status: 'running' }]);
               setActivity(`running ${e.tool}`);
             }
@@ -718,7 +684,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             }
             if (e.kind === 'request') setActivity('waiting for model');
             if (e.kind === 'snapshot' && e.changed.length) setMessages((prev) => [...prev, { role: 'system', text: `changed ${e.changed.join(', ')}` }]);
-            if (e.kind === 'permission' && e.decision === 'deny') setMessages((prev) => [...prev, { role: 'system', text: `✗ ${toolLabel(e.tool)} denied by ${e.rule}${e.reason ? `: ${e.reason}` : ''}` }]);
+            if (e.kind === 'permission' && e.decision === 'deny') {
+              setPermissionDialog({ tool: e.tool, input: toolInputByCallRef.current[e.callId], reason: e.reason, rule: e.rule });
+              setMessages((prev) => [...prev, { role: 'system', text: `✗ ${toolLabel(e.tool)} denied by ${e.rule}${e.reason ? `: ${e.reason}` : ''}` }]);
+            }
           }
         } catch {}
       }
@@ -907,6 +876,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
   useInput((input, key) => {
+    if (permissionDialog) {
+      if (key.escape || key.return) { setPermissionDialog(null); return; }
+      return;
+    }
     if (focusedDialog === 'picker' && picker) {
       if (key.escape) { closeDialog('picker'); setPicker(null); setPickerSelected(0); return; }
       if (key.upArrow) { setPickerSelected((s) => Math.max(0, s - 1)); return; }
@@ -1159,6 +1132,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             )}
             <Text dimColor={!screenReader}>↑↓ navigate · Enter rewind · Esc close</Text>
           </Box>
+        ) : null}
+        {permissionDialog ? (
+          (() => {
+            const Dialog = permissionDialogFor(permissionDialog.tool);
+            return <Dialog tool={permissionDialog.tool} input={permissionDialog.input} reason={permissionDialog.reason} rule={permissionDialog.rule} />;
+          })()
         ) : null}
         {settingsOpen ? (
           <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
