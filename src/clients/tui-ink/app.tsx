@@ -24,7 +24,7 @@ import { matchesKey } from '@mariozechner/pi-tui';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
-import { acceptTrust, isComplete, loadOnboarding } from '../../clients/tui/onboarding.ts';
+import { acceptTrust, isComplete, loadOnboarding, ONBOARDING_STEPS } from '../../clients/tui/onboarding.ts';
 import { workingDiff } from '../../core/project/git.ts';
 import { MemoryStore, memoryPath } from '../../core/project/memory.ts';
 import { loadSkills } from '../../core/skills/skills.ts';
@@ -384,6 +384,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'onboarding': {
+        if (rest[0] === 'accept') { acceptTrust(cediaHome()); push({ role: 'system', text: 'trust accepted' }); return; }
         const s = loadOnboarding(cediaHome());
         push({ role: 'system', text: `completed: ${s.completed.join(', ') || '(none)'}; trust: ${s.hasTrustDialogAccepted ? 'accepted' : 'pending'}; complete: ${isComplete(cediaHome())}` });
         return;
@@ -732,9 +733,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
   React.useEffect(() => {
     try {
-      const { loadOnboarding, isComplete, ONBOARDING_STEPS } = require('../../clients/tui/onboarding.ts');
       if (!isComplete()) {
         push({ role: 'system', text: `onboarding pending: ${ONBOARDING_STEPS.filter((x: string) => !loadOnboarding().completed.includes(x)).join(', ')}` });
+      }
+      if (!loadOnboarding().hasTrustDialogAccepted) {
+        push({ role: 'system', text: 'trust dialog: type y to accept, n to decline' });
+        pendingRef.current = { what: 'the trust dialog', yes: () => { acceptTrust(cediaHome()); push({ role: 'system', text: 'trust accepted' }); } };
       }
     } catch {}
   }, []);
