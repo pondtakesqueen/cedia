@@ -1350,9 +1350,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       openDialog('messageSelector');
     }
   });
+  // Definite terminal height pins the chat box to the bottom (cc-style).
+  // height="100%" does NOT work in ink: Yoga treats a percent of an
+  // indefinite parent as auto, which top-packs the whole tree.
+  const termRows = Math.max(10, rows || 24);
   return (
-    <Box flexDirection="row" height="100%">
-      <Box flexDirection="column" flexGrow={1}>
+    <Box flexDirection="row" height={screenReader ? undefined : termRows}>
+      <Box flexDirection="column" flexGrow={1} height={screenReader ? undefined : termRows}>
         <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
           {displayMessages.length === 0 ? (
             <Box flexDirection="row">
@@ -1675,6 +1679,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '' : '› '}</Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={inputCaptured} />
         </Box>
+        <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, Math.min(columns - 2, 120)))}</Text>
         <StatusBar thread={thread} model={model} permission={permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} agents={agentCount} />
         {statusLineOutput ? <Text dimColor={!screenReader}>{statusLineOutput}</Text> : null}
       </Box>
