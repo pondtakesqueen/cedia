@@ -952,7 +952,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     }
     if (!running && !focusedDialog) {
       const id = inkKeyId(input, key);
-      const resolved = resolveBindings(loadedKeybindings);
+      // Active context follows the open dialog (specific first, Global always applies).
+      const activeContext: string = permissionDialog ? 'Confirmation'
+        : settingsOpen ? 'Settings'
+        : 'Chat';
+      const resolved = resolveBindings(loadedKeybindings).filter(
+        (b) => !b.context || b.context === 'Global' || b.context === activeContext,
+      );
       for (const b of resolved) {
         const match = (id !== undefined && id === b.key.toLowerCase()) || matchesKey(input, b.key as any);
         if (!match) continue;
