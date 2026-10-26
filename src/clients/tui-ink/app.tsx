@@ -216,10 +216,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread, messages.length]);
   const stopRef = useRef<AbortController | null>(null);
+  const busyRef = useRef(false);
   const pendingRef = useRef<{ what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined>(undefined);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
   const historyRef = useRef<string[]>([]);
+  const histPos = useRef(-1);
   const [historySearch, setHistorySearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
   const [transcriptSearch, setTranscriptSearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
   const [messageSelector, setMessageSelector] = useState<{ open: boolean; selected: number }>({ open: false, selected: 0 });
@@ -319,6 +321,24 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         const byName = new Map(INK_COMMANDS.map((c) => [c.name, c.description]));
         say(groups.map(([g, names]) => `${g}: ${names.map((n) => `${n} — ${byName.get(n.slice(1)) ?? ''}`).join(' · ')}`).join('\n'));
         say('keys: Esc stops a turn · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Tab completes · Shift+Tab permission · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · \\+Enter newline');
+        return;
+      }
+      case 'historyUp':
+      case 'historySearchUp': {
+        const h = historyRef.current;
+        if (!h.length) return;
+        const p = histPos.current === -1 ? h.length - 1 : Math.max(0, histPos.current - 1);
+        histPos.current = p;
+        setInput(h[p] ?? '');
+        return;
+      }
+      case 'historyDown':
+      case 'historySearchDown': {
+        const h = historyRef.current;
+        if (histPos.current === -1) return;
+        const p = histPos.current + 1;
+        if (p >= h.length) { histPos.current = -1; setInput(''); }
+        else { histPos.current = p; setInput(h[p] ?? ''); }
         return;
       }
       case 'clear':
@@ -777,7 +797,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   }, [args, messages, running, store, thread, exit, spent, context, goal, transcriptExpanded, openDialog, model, permission, effort]);
 
   const submit = useCallback(async (text: string, planWhen?: 'always' | 'never') => {
-    if (!text.trim() || running) return;
+    if (!text.trim()) return;
+    if (busyRef.current) return; // same-tick double fire (VimInput + keybinding both submit Enter)
+    if (running) { push({ role: 'system', text: 'a turn is running: wait for it, or stop it with Esc' }); return; }
     if (Date.now() - lastActivityRef.current > 5 * 60 * 1000) {
       push({ role: 'system', text: 'resumed after idle' });
     }
@@ -802,14 +824,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (/^(n|no)$/i.test(trimmedText)) { setInput(''); return; }
       // anything else falls through as a new prompt/command
     }
-    if (trimmedText.startsWith('/')) {
+    if (text.trim().startsWith('/')) {
       push({ role: 'user', text });
       handleCommand(trimmedText.slice(1));
       return;
     }
+    busyRef.current = true;
     setMessages((m) => [...m, { role: 'user', text }]);
     setInput('');
     historyRef.current.push(text);
+    histPos.current = -1;
     setRunning(true);
     setActivity('starting');
     setThinkingText('');
@@ -900,6 +924,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     } catch (e) {
       setMessages((m) => [...m, { role: 'system', text: `✗ error: ${(e as Error).message}`, tone: 'red' }]);
     } finally {
+      busyRef.current = false;
       setRunning(false);
       setActivity('');
       const newSpent = spent + resultCost;
@@ -1392,8 +1417,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
           <Box flexDirection="row">
             <Box flexDirection="column" marginRight={1}>
-              <Text>▄▀▄</Text>
-              <Text>▀▄▀</Text>
+              <Text>██</Text>
+              <Text>██</Text>
             </Box>
             <Box flexDirection="column">
               <Text bold={screenReader ? false : true}>cedia {versionInfo().version}</Text>
@@ -1418,11 +1443,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               }
             }
             const hasSel = a >= 0 && b > a;
-            // cc highlights the whole user-prompt row; tool errors render red.
+            // cc highlights the whole user-prompt row; ink only paints
+            // background behind actual characters, so pad to full width.
             const isUserRow = m.role === 'user' && !hasSel;
             const isToolError = m.role === 'tool' && m.status === 'error';
             const prefix = m.role === 'user' ? '› ' : '';
-            const full = prefix + m.text;
+            const rawFull = prefix + m.text;
+            const full = isUserRow
+              ? rawFull.split('\n').map((ln) => ln.padEnd(Math.max(ln.length, Math.max(10, columns - 2)))).join('\n')
+              : rawFull;
             const off = prefix.length;
             const sa = hasSel ? a + off : -1;
             const sb = hasSel ? b + off : -1;
@@ -1500,8 +1529,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>history search: {historySearch.query || '(type to filter)'}</Text>
             {hVisible.map((h, i) => {
               const gi = hStart + i;
+              const sel = gi === historySearch.selected;
+              const padded = sel && !screenReader ? h + ' '.repeat(Math.max(0, columns - 4 - h.length)) : h;
               return (
-              <Text key={gi} color={screenReader ? undefined : (gi === historySearch.selected ? 'black' : undefined)} backgroundColor={screenReader ? undefined : (gi === historySearch.selected ? 'cyan' : undefined)}>{h}</Text>
+              <Text key={gi} color={screenReader ? undefined : (sel ? 'black' : undefined)} backgroundColor={screenReader ? undefined : (sel ? 'cyan' : undefined)}>{padded}</Text>
               );
             })}
             {filtered.length === 0 ? <Text dimColor={!screenReader}>no matches</Text> : null}
@@ -1548,8 +1579,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               <>
                 {mVisible.map((r, i) => {
                   const gi = mStart + i;
+                  const sel = gi === messageSelector.selected;
+                  const padded = sel && !screenReader ? r + ' '.repeat(Math.max(0, columns - 4 - r.length)) : r;
                   return (
-                  <Text key={gi} color={screenReader ? undefined : (gi === messageSelector.selected ? 'black' : undefined)} backgroundColor={screenReader ? undefined : (gi === messageSelector.selected ? 'cyan' : undefined)}>{r}</Text>
+                  <Text key={gi} color={screenReader ? undefined : (sel ? 'black' : undefined)} backgroundColor={screenReader ? undefined : (sel ? 'cyan' : undefined)}>{padded}</Text>
                   );
                 })}
                 {runs.length === 0 ? <Text dimColor={!screenReader}>no runs to rewind to</Text> : null}
