@@ -60,6 +60,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [scrollOffset, setScrollOffset] = useState(0);
   const historyRef = useRef<string[]>([]);
   const [historySearch, setHistorySearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
+  const [messageSelector, setMessageSelector] = useState<{ open: boolean; selected: number }>({ open: false, selected: 0 });
   const [picker, setPicker] = useState<{ title: string; items: { value: string; label: string }[]; onPick: (v: string) => void } | null>(null);
   const [suggestion, setSuggestion] = useState<string | null>(null);
   const [selection, setSelection] = useState<{ aMsg: number; aCol: number; bMsg: number; bCol: number } | null>(null);
@@ -673,6 +674,27 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, messages.length - renderEnd);
   useInput((input, key) => {
+    if (messageSelector.open) {
+      const runs = thread ? runLines(store.read(thread)) : [];
+      if (key.escape) { setMessageSelector({ open: false, selected: 0 }); return; }
+      if (key.upArrow) { setMessageSelector((m) => ({ ...m, selected: Math.max(0, m.selected - 1) })); return; }
+      if (key.downArrow) {
+        if (!runs.length) return;
+        setMessageSelector((m) => ({ ...m, selected: Math.min(runs.length - 1, m.selected + 1) }));
+        return;
+      }
+      if (key.return) {
+        if (!thread) { push({ role: 'system', text: 'no thread yet' }); setMessageSelector({ open: false, selected: 0 }); return; }
+        const n = messageSelector.selected + 1;
+        if (!runs.length) { push({ role: 'system', text: 'no runs to rewind to' }); setMessageSelector({ open: false, selected: 0 }); return; }
+        const r = rewindThread(store, thread, n, { open: (cwd) => workspaceSnapshots(cwd, cediaHome()), sessionFile: (c, sid) => `${c}/${sid}.jsonl` }, {});
+        if ('error' in r) push({ role: 'system', text: 'error: ' + r.error });
+        else { push({ role: 'system', text: rewoundText(r) }); setContext(0); }
+        setMessageSelector({ open: false, selected: 0 });
+        return;
+      }
+      return;
+    }
     if (historySearch.open) {
       if (key.escape) { setHistorySearch({ open: false, query: '', selected: 0 }); return; }
       if (key.upArrow) { setHistorySearch((h) => ({ ...h, selected: Math.max(0, h.selected - 1) })); return; }
@@ -701,6 +723,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     }
     if (key.ctrl && (input === 'r' || input === 'R')) {
       setHistorySearch({ open: true, query: '', selected: 0 });
+    }
+    if (key.ctrl && (input === 'o' || input === 'O')) {
+      if (!thread) { push({ role: 'system', text: 'no thread yet' }); return; }
+      setMessageSelector({ open: true, selected: 0 });
     }
   });
   return (
@@ -773,6 +799,22 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               ))}
             {historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase())).length === 0 ? <Text dimColor>no matches</Text> : null}
             <Text dimColor>↑↓ navigate · Enter run · Esc close</Text>
+          </Box>
+        ) : null}
+        {messageSelector.open ? (
+          <Box flexDirection="column" borderStyle="single" borderColor="cyan" paddingX={1}>
+            <Text bold color="cyan">message selector (rewind)</Text>
+            {!thread ? (
+              <Text dimColor>no thread yet</Text>
+            ) : (
+              <>
+                {runLines(store.read(thread)).map((r, i) => (
+                  <Text key={i} color={i === messageSelector.selected ? 'black' : undefined} backgroundColor={i === messageSelector.selected ? 'cyan' : undefined}>{r}</Text>
+                ))}
+                {runLines(store.read(thread)).length === 0 ? <Text dimColor>no runs to rewind to</Text> : null}
+              </>
+            )}
+            <Text dimColor>↑↓ navigate · Enter rewind · Esc close</Text>
           </Box>
         ) : null}
         {suggestion ? <Text dimColor>💡 {suggestion} (Tab to accept)</Text> : null}
