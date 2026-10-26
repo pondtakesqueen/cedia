@@ -52,6 +52,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [activity, setActivity] = useState('');
   const [context, setContext] = useState(0);
   const [spent, setSpent] = useState(0);
+  const lastCostThresholdRef = useRef(0);
+  const lastActivityRef = useRef(Date.now());
   const [thread, setThread] = useState<string | undefined>(args.thread);
   const [goal, setGoal] = useState<string | undefined>(args.goal);
   const [vimMode, setVimMode] = useState<'insert' | 'normal'>('insert');
@@ -455,6 +457,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
   const submit = useCallback(async (text: string, planWhen?: 'always' | 'never') => {
     if (!text.trim() || running) return;
+    if (Date.now() - lastActivityRef.current > 5 * 60 * 1000) {
+      push({ role: 'system', text: 'resumed after idle' });
+    }
+    lastActivityRef.current = Date.now();
     if (picker) {
       const n = Number(text.trim());
       const item = Number.isInteger(n) ? picker.items[n - 1] : picker.items.find((i) => i.value === text.trim());
@@ -528,6 +534,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     };
     const stop = new AbortController();
     stopRef.current = stop;
+    let resultCost = 0;
     try {
       const result = await runHeadless(
         { ...args, cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
@@ -535,7 +542,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       );
       setThread(result.thread ?? thread);
       if (typeof result.peakContext === 'number') setContext(result.peakContext);
-      setSpent((prev) => prev + (result.costUsd ?? 0));
+      resultCost = result.costUsd ?? 0;
+      setSpent((prev) => prev + resultCost);
       setMessages((m) => [...m, { role: 'system', text: `done · ${result.numTurns} turns · $${result.costUsd.toFixed(4)}` }]);
       if (loadPromptSuggestions(args.promptSuggestions)) {
         void (async () => {
@@ -551,6 +559,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     } finally {
       setRunning(false);
       setActivity('');
+      const newSpent = spent + resultCost;
+      if (newSpent >= lastCostThresholdRef.current + 1) {
+        push({ role: 'system', text: `cost threshold crossed: $${Math.floor(newSpent)}` });
+        lastCostThresholdRef.current = Math.floor(newSpent);
+      }
+      lastActivityRef.current = Date.now();
     }
   }, [args, running, thread, handleCommand, goal]);
 
