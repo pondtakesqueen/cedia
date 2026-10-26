@@ -18,6 +18,9 @@ import { cediaHome, loadPromptSuggestions, loadRoles, isMode, loadPolicy, loadPr
 import { loadTheme } from '../tui/theme.ts';
 import { versionInfo } from '../../protocol/version.ts';
 import { runStatusLineCommand } from '../tui/statusline.ts';
+import { loadKeybindings } from '../tui/keybindings/loader.ts';
+import { resolveBindings } from '../tui/keybindings/resolver.ts';
+import { matchesKey } from '@mariozechner/pi-tui';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
@@ -49,6 +52,33 @@ const DIALOG_PRIORITY: Record<NonNullable<DialogKind>, number> = {
   historySearch: 1,
 };
 
+function inkKeyId(input: string, key: any): string | undefined {
+  const mods: string[] = [];
+  if (key?.shift) mods.push('shift');
+  if (key?.ctrl) mods.push('ctrl');
+  if (key?.meta || key?.alt) mods.push('alt');
+  if (key?.super) mods.push('super');
+  let name = '';
+  if (key?.upArrow) name = 'up';
+  else if (key?.downArrow) name = 'down';
+  else if (key?.leftArrow) name = 'left';
+  else if (key?.rightArrow) name = 'right';
+  else if (key?.pageUp) name = 'pageUp';
+  else if (key?.pageDown) name = 'pageDown';
+  else if (key?.home) name = 'home';
+  else if (key?.end) name = 'end';
+  else if (key?.return) name = 'enter';
+  else if (key?.escape) name = 'escape';
+  else if (key?.tab) name = 'tab';
+  else if (key?.backspace) name = 'backspace';
+  else if (key?.delete) name = 'delete';
+  else if (input === ' ') name = 'space';
+  else if (input && input.length === 1) name = input.toLowerCase();
+  else if (input) name = input.toLowerCase();
+  if (!name) return undefined;
+  return mods.length ? `${mods.join('+')}+${name}` : name;
+}
+
 export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const { exit } = useApp();
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -61,6 +91,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [context, setContext] = useState(0);
   const [spent, setSpent] = useState(0);
   const [statusLineOutput, setStatusLineOutput] = useState('');
+  const [loadedKeybindings, setLoadedKeybindings] = useState(() => loadKeybindings(cediaHome()));
   const lastCostThresholdRef = useRef(0);
   const lastActivityRef = useRef(Date.now());
   const [thread, setThread] = useState<string | undefined>(args.thread);
@@ -627,6 +658,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     return () => clearInterval(t);
   }, []);
   React.useEffect(() => {
+    setLoadedKeybindings(loadKeybindings(cediaHome()));
+  }, []);
+  React.useEffect(() => {
     if (!stdin) return;
     const handler = (data: Buffer) => {
       require('fs').appendFileSync('/tmp/manual.log', 'DATA ' + JSON.stringify(data.toString()) + '\n');
@@ -727,6 +761,32 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
   useInput((input, key) => {
+    if (!running && !focusedDialog) {
+      const id = inkKeyId(input, key);
+      const resolved = resolveBindings(loadedKeybindings);
+      for (const b of resolved) {
+        const match = (id !== undefined && id === b.key.toLowerCase()) || matchesKey(input, b.key as any);
+        if (!match) continue;
+        const cmd = b.command;
+        if (cmd === 'cancel') {
+          setInput('');
+          inputRef.current = '';
+          return;
+        }
+        if (cmd === 'submit') {
+          const t = inputRef.current;
+          if (t.trim()) submit(t);
+          return;
+        }
+        if (cmd === 'historySearch') {
+          setHistorySearch({ open: true, query: '', selected: 0 });
+          openDialog('historySearch');
+          return;
+        }
+        handleCommand(cmd);
+        return;
+      }
+    }
     if (focusedDialog === 'messageSelector') {
       const runs = thread ? runLines(store.read(thread)) : [];
       if (key.escape) { setMessageSelector({ open: false, selected: 0 });
