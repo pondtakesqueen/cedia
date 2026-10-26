@@ -37,6 +37,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [context, setContext] = useState(0);
   const [spent, setSpent] = useState(0);
   const [thread, setThread] = useState<string | undefined>(args.thread);
+  const [goal, setGoal] = useState<string | undefined>(args.goal);
   const [vimMode, setVimMode] = useState<'insert' | 'normal'>('insert');
   const stopRef = useRef<AbortController | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -179,6 +180,21 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         push({ role: 'system', text: `completed: ${s.completed.join(', ') || '(none)'}; trust: ${s.hasTrustDialogAccepted ? 'accepted' : 'pending'}; complete: ${isComplete(cediaHome())}` });
         return;
       }
+      case 'goal': {
+        const condition = rest.join(' ').trim();
+        if (!condition) {
+          push({ role: 'system', text: goal ? `each turn goes on until a judge finds this holds:\n${goal}` : 'no goal: /goal <condition> sets one' });
+          return;
+        }
+        if (condition === 'off') {
+          push({ role: 'system', text: goal ? 'goal ended: a turn is done when the done gate passes' : 'no goal to end' });
+          setGoal(undefined);
+          return;
+        }
+        setGoal(condition);
+        push({ role: 'system', text: 'from the next turn on, a separate judge checks this after each claim of done, and sends the writer back (at most 3 times) while it does not hold' });
+        return;
+      }
       case 'thread': {
         if (!rest[0]) {
           const list = store.list().filter((t) => !t.archived).map((t) => `${t.id}  ${t.title}`);
@@ -193,7 +209,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       default:
         say(`unknown command /${name}; /help lists them`);
     }
-  }, [args, messages, running, store, thread, exit, spent, context]);
+  }, [args, messages, running, store, thread, exit, spent, context, goal]);
 
   const submit = useCallback(async (text: string) => {
     if (!text.trim() || running) return;
@@ -261,7 +277,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     stopRef.current = stop;
     try {
       const result = await runHeadless(
-        { ...args, cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', ...(thread ? { thread } : {}), signal: stop.signal },
+        { ...args, cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), signal: stop.signal },
         handleChunk,
       );
       setThread(result.thread ?? thread);
@@ -283,7 +299,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       setRunning(false);
       setActivity('');
     }
-  }, [args, running, thread, handleCommand]);
+  }, [args, running, thread, handleCommand, goal]);
 
 
 
