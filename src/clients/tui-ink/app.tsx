@@ -1068,13 +1068,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const sb = hasSel ? b + off : -1;
             if (screenReader) {
               return (
-                <Box key={i} flexDirection="column">
+                <Box key={globalIdx} flexDirection="column">
                   <Text wrap="wrap">{m.role}: {m.text}</Text>
                 </Box>
               );
             }
             return (
-            <Box key={i} flexDirection="column">
+            <Box key={globalIdx} flexDirection="column">
               {m.role === 'assistant' ? (
                 <Markdown>{m.text}</Markdown>
               ) : hasSel ? (
