@@ -14,7 +14,7 @@ import { askedReviewPrompt, fixPrompt, parseVerdict, type ReviewSubject } from '
 import { decode, type CoreMessage } from '../../protocol/index.ts';
 import type { TuiArgs } from '../tui/main.ts';
 import type { SessionEvent } from '../../core/types.ts';
-import { cediaHome, loadPromptSuggestions, loadRoles, isMode, loadPolicy, loadPrivacy } from '../../core/config.ts';
+import { cediaHome, loadPromptSuggestions, loadRoles, isMode, loadPolicy, loadPrivacy, readSettings } from '../../core/config.ts';
 import { loadTheme } from '../tui/theme.ts';
 import { versionInfo } from '../../protocol/version.ts';
 import { runStatusLineCommand } from '../tui/statusline.ts';
@@ -97,6 +97,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [thread, setThread] = useState<string | undefined>(args.thread);
   const [goal, setGoal] = useState<string | undefined>(args.goal);
   const [vimMode, setVimMode] = useState<'insert' | 'normal'>('insert');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'status' | 'config' | 'usage'>('status');
   const stopRef = useRef<AbortController | null>(null);
   const pendingRef = useRef<{ what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined>(undefined);
   const [scrollOffset, setScrollOffset] = useState(0);
@@ -456,7 +458,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'settings':
       case 'config': {
-        say(`settings: model=${args.model ?? 'auto'} permission=${args.permission ?? 'auto'} thread=${thread ?? 'new'}`);
+        setSettingsTab('status');
+        setSettingsOpen(true);
         return;
       }
       case 'hooks': {
@@ -777,6 +780,25 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
   useInput((input, key) => {
+    if (settingsOpen) {
+      if (key.escape) { setSettingsOpen(false); return; }
+      const tabs: Array<'status' | 'config' | 'usage'> = ['status', 'config', 'usage'];
+      if (key.tab || key.rightArrow) {
+        setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
+        return;
+      }
+      if (key.leftArrow) {
+        setSettingsTab((t) => tabs[(tabs.indexOf(t) - 1 + tabs.length) % tabs.length]!);
+        return;
+      }
+      if (key.upArrow || key.downArrow) {
+        // allow tab switching via arrows too
+        if (key.downArrow || key.rightArrow) setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
+        else setSettingsTab((t) => tabs[(tabs.indexOf(t) - 1 + tabs.length) % tabs.length]!);
+        return;
+      }
+      return;
+    }
     if (key.escape && !running) {
       setSelection(null);
       setSelecting(false);
@@ -962,6 +984,49 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               </>
             )}
             <Text dimColor>↑↓ navigate · Enter rewind · Esc close</Text>
+          </Box>
+        ) : null}
+        {settingsOpen ? (
+          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
+            <Text bold color="cyan">settings</Text>
+            <Box>
+              {(['status', 'config', 'usage'] as const).map((t) => (
+                <Text key={t} color={t === settingsTab ? 'black' : undefined} backgroundColor={t === settingsTab ? 'cyan' : undefined}> {t} </Text>
+              ))}
+            </Box>
+            {settingsTab === 'status' ? (
+              <Box flexDirection="column">
+                <Text>model: {args.model ?? 'auto'}</Text>
+                <Text>permission: {args.permission ?? 'auto'}</Text>
+                <Text>thread: {thread ?? 'new'}</Text>
+                <Text>context: {context} tokens</Text>
+                <Text>spent: ${spent.toFixed(4)}</Text>
+                <Text>vimMode: {vimMode}</Text>
+                <Text>running: {running ? 'working' : 'idle'}</Text>
+              </Box>
+            ) : null}
+            {settingsTab === 'config' ? (
+              <Box flexDirection="column">
+                {(() => {
+                  try {
+                    const raw = readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>;
+                    const keys = Object.keys(raw);
+                    if (!keys.length) return <Text dimColor>no settings</Text>;
+                    return keys.map((k) => <Text key={k}>{k}: {JSON.stringify(raw[k])}</Text>);
+                  } catch (e) {
+                    return <Text dimColor>no settings</Text>;
+                  }
+                })()}
+              </Box>
+            ) : null}
+            {settingsTab === 'usage' ? (
+              <Box flexDirection="column">
+                <Text>spent total: ${spent.toFixed(4)}</Text>
+                <Text>context: {context} tokens</Text>
+                <Text dimColor>per-model breakdown: (placeholder)</Text>
+              </Box>
+            ) : null}
+            <Text dimColor>Tab/←/→ switch tabs · Esc close</Text>
           </Box>
         ) : null}
         {suggestion ? <Text dimColor>💡 {suggestion} (Tab to accept)</Text> : null}
