@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 
 type Props = {
@@ -15,6 +15,16 @@ type Props = {
 export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setVimMode, captured }: Props): React.ReactElement {
   const [cursor, setCursor] = useState(0);
   const [anchor, setAnchor] = useState<number | null>(null);
+  const [undoStack, setUndoStack] = useState<string[]>([]);
+  const lastVal = useRef(value);
+  // Record each discrete value for text undo (ctrl+_).
+  useEffect(() => {
+    if (lastVal.current !== value) {
+      const prev = lastVal.current;
+      lastVal.current = value;
+      setUndoStack((s) => (s[s.length - 1] === prev ? s : [...s.slice(-49), prev]));
+    }
+  }, [value]);
   const [pendingOp, setPendingOp] = useState<'d' | 'c' | 'y' | null>(null);
   const [count, setCount] = useState<number | null>(null);
 
@@ -22,6 +32,17 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
 
   useInput((input, key) => {
     if (captured) return;
+    // Text undo (like readline ctrl+_ / ctrl+shift+-).
+    if (key.ctrl && (input === '_' || input === '\x1f' || (input === '-' && key.shift))) {
+      setUndoStack((s) => {
+        const top = s[s.length - 1];
+        if (top === undefined) return s;
+        onChange(top);
+        setCursor(Math.min(cursor, Math.max(0, top.length)));
+        return s.slice(0, -1);
+      });
+      return;
+    }
     if (vimMode === 'insert') {
       // Esc is handled by App (abort when running, else normal mode).
       // Batched input handling

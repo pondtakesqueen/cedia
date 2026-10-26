@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useWindowSize, useStdin, useIsScreenReaderEnabled } from 'ink';
-import { buildAutoItems, highlightSpans, truncateDescription, type AutoItem } from './autocomplete.ts';
+import { buildAutoItems, highlightSpans, truncateDescription, truncateLongText, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
@@ -243,6 +243,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   }, []);
   const [suggestion, setSuggestion] = useState<string | null>(null);
   const [thinkingText, setThinkingText] = useState('');
+  const [showThinking, setShowThinking] = useState(true);
   const [selection, setSelection] = useState<{ aMsg: number; aCol: number; bMsg: number; bCol: number } | null>(null);
   const [selecting, setSelecting] = useState(false);
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
@@ -1045,7 +1046,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const overlayBudget = Math.max(4, rows - 12);
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
   const showSidebar = !screenReader && process.env.CEDIA_SIDEBAR === '1';
-  const displayMessages = transcriptExpanded ? messages : messages.filter((m) => m.role !== 'tool');
+  const displayMessages = transcriptExpanded ? messages.filter((m) => showThinking || !m.dim) : messages.filter((m) => m.role !== 'tool' && (showThinking || !m.dim));
   const windowSize = Math.max(5, rows - 6);
   React.useEffect(() => {
     const max = Math.max(0, displayMessages.length - windowSize);
@@ -1316,6 +1317,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
     }
+    // cc-style global shortcuts: palette, global search, model picker, fast mode, thinking toggle.
+    if (key.ctrl && key.shift && (input === 'p' || input === 'P')) { handleCommand('palette'); return; }
+    if (key.ctrl && key.shift && (input === 'f' || input === 'F')) { setTranscriptSearch({ open: true, query: '', selected: 0 }); return; }
+    if (key.meta && (input === 'p' || input === 'P')) { handleCommand('model'); return; }
+    if (key.meta && (input === 'o' || input === 'O')) { handleCommand('fast'); return; }
+    if (key.meta && (input === 't' || input === 'T')) {
+      const next = !showThinking;
+      setShowThinking(next);
+      push({ role: 'system', text: `thinking ${next ? 'shown' : 'hidden'}` });
+      return;
+    }
     if (focusedDialog === 'messageSelector') {
       const runs = thread ? runLines(store.read(thread)) : [];
       if (key.escape) { setMessageSelector({ open: false, selected: 0 });
@@ -1449,9 +1461,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const isToolError = m.role === 'tool' && m.status === 'error';
             const prefix = m.role === 'user' ? '› ' : '';
             const rawFull = prefix + m.text;
+            // Hard cap like cc: a pasted file must not make every frame rewrap megabytes.
+            const capped = truncateLongText(rawFull);
             const full = isUserRow
-              ? rawFull.split('\n').map((ln) => ln.padEnd(Math.max(ln.length, Math.max(10, columns - 2)))).join('\n')
-              : rawFull;
+              ? capped.split('\n').map((ln) => ln.padEnd(Math.max(ln.length, Math.max(10, columns - 2)))).join('\n')
+              : capped;
             const off = prefix.length;
             const sa = hasSel ? a + off : -1;
             const sb = hasSel ? b + off : -1;
@@ -1481,7 +1495,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 {end < displayMessages.length || belowHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↓ '}{belowHidden} more below</Text> : null}
               </>
           )}
-          {thinkingText ? <Text dimColor={!screenReader} wrap="wrap">{thinkingText.slice(-500)}</Text> : null}
+          {thinkingText && showThinking ? <Text dimColor={!screenReader} wrap="wrap">{thinkingText.slice(-500)}</Text> : null}
           {running && activity ? (
             <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '* ' : ''}{activity}</Text>
           ) : null}

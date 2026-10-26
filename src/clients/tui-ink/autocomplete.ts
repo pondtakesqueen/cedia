@@ -54,3 +54,13 @@ export function truncateDescription(desc: string, max: number): string {
   if (max <= 1) return '…';
   return desc.slice(0, max - 1) + '…';
 }
+
+// Hard cap for huge pasted text: head + hidden-line count + tail, so one
+// giant message never makes every frame rewrap megabytes.
+export function truncateLongText(text: string, max = 10000, head = 2500, tail = 2500): string {
+  if (text.length <= max) return text;
+  const headPart = text.slice(0, head);
+  const tailPart = text.slice(-tail);
+  const hidden = (text.match(/\n/g) || []).length - (tailPart.match(/\n/g) || []).length;
+  return `${headPart}\n… +${Math.max(0, hidden)} lines …\n${tailPart}`;
+}
