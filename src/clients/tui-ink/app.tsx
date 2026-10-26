@@ -28,7 +28,7 @@ import { matchesKey } from '@mariozechner/pi-tui';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
-import { acceptTrust, isComplete, loadOnboarding, ONBOARDING_STEPS } from '../../clients/tui/onboarding.ts';
+import { acceptTrust, isComplete, loadOnboarding, markStep, ONBOARDING_STEPS } from '../../clients/tui/onboarding.ts';
 import { workingDiff } from '../../core/project/git.ts';
 import { MemoryStore, memoryPath } from '../../core/project/memory.ts';
 import { loadSkills } from '../../core/skills/skills.ts';
@@ -45,7 +45,7 @@ import { join } from 'node:path';
 import { readFileSync as fsRead, writeFileSync as fsWrite, existsSync as fsExists, readdirSync as fsReaddir, statSync as fsStat } from 'node:fs';
 import { usageReport, readEventsLenient, isUsageEvent } from '../../core/session/usage.ts';
 
-type Msg = { role: 'user' | 'assistant' | 'tool' | 'system'; text: string; status?: 'running' | 'success' | 'error' };
+type Msg = { role: 'user' | 'assistant' | 'tool' | 'system'; text: string; status?: 'running' | 'success' | 'error'; dim?: boolean };
 
 const INK_COMMANDS: { name: string; description: string }[] = [
   { name: 'help', description: 'these commands and keys' },
@@ -172,7 +172,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [model, setModel] = useState<string | undefined>(args.model);
   const [effort, setEffort] = useState<'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined>(undefined);
   const [goal, setGoal] = useState<string | undefined>(args.goal);
-  const [vimMode, setVimMode] = useState<'insert' | 'normal'>('insert');
+  const [vimMode, setVimMode] = useState<'insert' | 'normal' | 'visual'>('insert');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'status' | 'config' | 'usage' | 'stats'>('status');
   const [configSelected, setConfigSelected] = useState(0);
@@ -221,11 +221,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
   const historyRef = useRef<string[]>([]);
   const [historySearch, setHistorySearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
+  const [transcriptSearch, setTranscriptSearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
   const [messageSelector, setMessageSelector] = useState<{ open: boolean; selected: number }>({ open: false, selected: 0 });
   const [picker, setPicker] = useState<{ title: string; items: { value: string; label: string }[]; onPick: (v: string) => void } | null>(null);
   const [pickerSelected, setPickerSelected] = useState(0);
   const [permissionDialog, setPermissionDialog] = useState<{ tool: string; input?: unknown; reason?: string; rule?: string } | null>(null);
   const toolInputByCallRef = useRef<Record<string, unknown>>({});
+  const toolStartByCallRef = useRef<Record<string, number>>({});
+  const thinkingRef = useRef('');
   const [focusedDialog, setFocusedDialog] = useState<DialogKind>(null);
   const openDialog = useCallback((kind: NonNullable<DialogKind>) => {
     setFocusedDialog((prev) => {
@@ -237,6 +240,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     setFocusedDialog((prev) => (prev === kind ? null : prev));
   }, []);
   const [suggestion, setSuggestion] = useState<string | null>(null);
+  const [thinkingText, setThinkingText] = useState('');
   const [selection, setSelection] = useState<{ aMsg: number; aCol: number; bMsg: number; bCol: number } | null>(null);
   const [selecting, setSelecting] = useState(false);
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
@@ -245,6 +249,33 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
   const push = (m: Msg) => setMessages((prev) => [...prev, m]);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // @-file mentions (like cc): file paths from the working tree, fuzzy-matched.
+  const [mentionSelected, setMentionSelected] = useState(0);
+  const mentionDismissedFor = useRef<string | null>(null);
+  const fileList = React.useMemo(() => {
+    try {
+      const glob = new Bun.Glob('**/*');
+      const out: string[] = [];
+      for (const f of glob.scanSync({ cwd: args.cwd, onlyFiles: true, dot: false }) as Iterable<string>) {
+        if (f.startsWith('node_modules/') || f.startsWith('.git/') || f.startsWith('.superpowers/') || f.startsWith('dist/')) continue;
+        out.push(f);
+        if (out.length >= 300) break;
+      }
+      return out.sort();
+    } catch { return []; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [args.cwd]);
+  const mentionQuery = !running ? (/((?:^|\s)@([\w./-]*))$/.exec(input)?.[2] ?? null) : null;
+  const mentionItems = React.useMemo(() => {
+    if (mentionQuery === null) return [];
+    return buildAutoItems([], fileList.map((f) => ({ value: f, name: f, description: 'file' })), mentionQuery);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mentionQuery, fileList]);
+  useEffect(() => { setMentionSelected(0); mentionDismissedFor.current = null; }, [mentionQuery]);
+  const mentionOpen = mentionQuery !== null && mentionItems.length > 0
+    && !focusedDialog && !settingsOpen && !permissionDialog && !picker && !transcriptSearch.open
+    && mentionDismissedFor.current !== input;
 
   // Autocomplete dropdown state (derived during render, never set in an effect —
   // setting picker state from an effect on picker itself caused an update loop).
@@ -267,17 +298,27 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   useEffect(() => { setAutoSelected(0); autoDismissedFor.current = null; }, [autoQuery]);
   useEffect(() => { setConfigSelected(0); }, [settingsQuery, settingsTab]);
   // Read during render so bumping it forces a re-render (used by Tab re-open).
-  const autoOpen = autoQuery !== null && autoItems.length > 0
-    && !focusedDialog && !settingsOpen && !permissionDialog && !picker
+  const autoOpen = autoQuery !== null && mentionQuery === null && autoItems.length > 0
+    && !focusedDialog && !settingsOpen && !permissionDialog && !picker && !transcriptSearch.open
     && autoDismissedFor.current !== input.trim() && autoNonce >= 0;
 
   const handleCommand = useCallback((line: string) => {
     const [name = '', ...rest] = line.trim().split(/\s+/);
     const say = (t: string) => push({ role: 'system', text: t });
     switch (name) {
-      case 'help':
-        say('commands: /diff /undo /redo /rewind /fork /new /thread /model /cost /context /status /transcript /search /actions /clear /quit');
+      case 'help': {
+        const groups: [string, string[]][] = [
+          ['thread', ['/new', '/thread', '/resume', '/rename', '/fork', '/rewind', '/undo', '/redo', '/diff']],
+          ['run', ['/plan', '/quick', '/model', '/goal', '/effort', '/permission']],
+          ['project', ['/commit', '/pr', '/review', '/memory', '/skills', '/mcp']],
+          ['view', ['/clear', '/transcript', '/search', '/settings', '/doctor', '/theme', '/palette', '/actions', '/copy', '/export', '/compact', '/tasks', '/agents', '/branch', '/status', '/cost', '/context']],
+          ['other', ['/help', '/quit', '/vim', '/hooks', '/btw', '/suggest', '/trust', '/onboarding', '/statusline', '/output-style', '/config']],
+        ];
+        const byName = new Map(INK_COMMANDS.map((c) => [c.name, c.description]));
+        say(groups.map(([g, names]) => `${g}: ${names.map((n) => `${n} — ${byName.get(n.slice(1)) ?? ''}`).join(' · ')}`).join('\n'));
+        say('keys: Esc stops a turn · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Tab completes · Shift+Tab permission · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · \\+Enter newline');
         return;
+      }
       case 'clear':
         setMessages([]);
         return;
@@ -546,8 +587,25 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'onboarding': {
         if (rest[0] === 'accept') { acceptTrust(cediaHome()); setNotice(null); push({ role: 'system', text: 'trust accepted' }); return; }
-        const s = loadOnboarding(cediaHome());
-        push({ role: 'system', text: `completed: ${s.completed.join(', ') || '(none)'}; trust: ${s.hasTrustDialogAccepted ? 'accepted' : 'pending'}; complete: ${isComplete(cediaHome())}` });
+        if (rest[0] && rest[0] !== 'accept') {
+          try { markStep(rest[0]); } catch {}
+          setNotice(null);
+        }
+        try {
+          const s = loadOnboarding(cediaHome());
+          const done = new Set(s.completed);
+          const theme = (() => { try { return String((readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>)?.theme ?? '(not set)'); } catch { return '(unreadable)'; } })();
+          const keyNames = ['ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'].filter((k) => !!process.env[k]);
+          const detail: Record<string, string> = {
+            preflight: `bun ${Bun.version} · ${process.platform}`,
+            theme: String(theme),
+            apiKey: keyNames.length ? keyNames.join(', ') : 'none in env',
+            trust: s.hasTrustDialogAccepted ? 'accepted' : 'pending — /onboarding accept',
+            terminal: `${process.env.TERM ?? '?'} · ${process.env.COLORTERM ?? 'no truecolor'}`,
+          };
+          const rows = ONBOARDING_STEPS.map((st) => `${done.has(st) || (st === 'trust' && s.hasTrustDialogAccepted) ? '✓' : '○'} ${st} — ${detail[st] ?? ''}`);
+          push({ role: 'system', text: ['onboarding:', ...rows, isComplete(cediaHome()) ? 'complete' : 'use /onboarding <step> to mark one done'].join('\n') });
+        } catch (e) { push({ role: 'system', text: `onboarding: ${(e as Error).message}` }); }
         return;
       }
       case 'goal': {
@@ -676,7 +734,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'vim': {
         setVimMode((m) => (m === 'insert' ? 'normal' : 'insert'));
-        say(`vim mode: ${vimMode === 'insert' ? 'normal' : 'insert'}`);
+        say(`vim mode: ${vimMode === 'insert' ? 'normal' : 'insert'} (v for visual)`);
         return;
       }
       case 'palette': {
@@ -684,7 +742,24 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'doctor': {
-        say(`cedia doctor\\nversion: ${versionInfo().version}\\ncwd: ${args.cwd}\\nmcp: ${listMcp().servers.length}\\nvim: ${vimMode}`);
+        const lines = [`cedia doctor`, `version: ${versionInfo().version} · bun ${Bun.version}`];
+        lines.push(`cwd: ${args.cwd}`);
+        try {
+          JSON.parse(fsRead(join(cediaHome(), 'settings.json'), 'utf8'));
+          lines.push(`settings: ok`);
+        } catch (e) { lines.push(`settings: unreadable (${(e as Error).message})`); }
+        lines.push(`keybindings: ${loadedKeybindings.length} loaded`);
+        try {
+          const { servers } = listMcp();
+          lines.push(`mcp: ${servers.length ? servers.map((s) => s.name).join(', ') : 'none configured'}`);
+        } catch (e) { lines.push(`mcp: error (${(e as Error).message})`); }
+        const sandbox = Bun.which('bwrap') ?? Bun.which('sandbox-exec');
+        lines.push(`sandbox: ${sandbox ?? 'unavailable'}`);
+        const keys = ['ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'].filter((k) => !!process.env[k]);
+        lines.push(`api keys: ${keys.length ? keys.join(', ') : 'none in env'} (names only)`);
+        lines.push(`onboarding: ${isComplete(cediaHome()) ? 'complete' : 'pending'}`);
+        lines.push(`terminal: ${process.env.TERM ?? '?'} ${columns}x${rows}`);
+        say(lines.join('\n'));
         return;
       }
       case 'statusline': {
@@ -735,6 +810,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     historyRef.current.push(text);
     setRunning(true);
     setActivity('starting');
+    setThinkingText('');
+    thinkingRef.current = '';
     let buffer = '';
     const handleChunk = (chunk: string) => {
       buffer += chunk;
@@ -758,18 +835,32 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               setActivity('writing');
             } else if (e.type === 'thinking_start') {
               setActivity('thinking');
+              thinkingRef.current = '';
+              setThinkingText('');
+            } else if (e.type === 'thinking_delta') {
+              thinkingRef.current = (thinkingRef.current + e.delta).slice(-2000);
+              setThinkingText(thinkingRef.current);
+            } else if (e.type === 'thinking_end') {
+              const t = thinkingRef.current.trim();
+              thinkingRef.current = '';
+              setThinkingText('');
+              if (t) push({ role: 'system', text: t, dim: true });
             }
           } else if (m.type === 'event') {
             const e = m.event as SessionEvent;
             if (e.kind === 'tool_intent') {
               toolInputByCallRef.current[e.callId] = e.input;
+              toolStartByCallRef.current[e.callId] = Date.now();
               setMessages((prev) => [...prev, { role: 'tool', text: `● ${e.tool} ${String(e.input?.command ?? e.input?.path ?? '').slice(0, 80)}`, status: 'running' }]);
               setActivity(`running ${e.tool}`);
             }
             if (e.kind === 'tool_result') {
               const first = e.output.text.split('\n').find((l) => l.trim()) ?? '';
               const exit = e.output.exitCode !== undefined ? ` exit=${e.output.exitCode}` : '';
-              setMessages((prev) => [...prev, { role: 'tool', text: `  ⎿ ${e.output.isError ? 'ERR ' : ''}${first.slice(0, 120)}${exit}`, status: e.output.isError ? 'error' : 'success' }]);
+              const started = toolStartByCallRef.current[e.callId];
+              const took = started !== undefined ? ` · ${((Date.now() - started) / 1000).toFixed(1)}s` : '';
+              delete toolStartByCallRef.current[e.callId];
+              setMessages((prev) => [...prev, { role: 'tool', text: `  ⎿ ${e.output.isError ? 'ERR ' : ''}${first.slice(0, 120)}${exit}${took}`, status: e.output.isError ? 'error' : 'success' }]);
             }
             if (e.kind === 'request') setActivity('waiting for model');
             if (e.kind === 'snapshot' && e.changed.length) setMessages((prev) => [...prev, { role: 'system', text: `changed ${e.changed.join(', ')}` }]);
@@ -936,9 +1027,23 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const end = displayMessages.length - scrollOffset;
   const renderStart = Math.max(0, start - 5);
   const renderEnd = Math.min(displayMessages.length, end + 5);
+  // While an overlay with its own text state owns the keyboard, VimInput must
+  // ignore keys (otherwise typing in the overlay also types into the editor).
+  // The autocomplete/mention/picker dropdowns filter on the editor text itself,
+  // so they are NOT captured here.
+  const inputCaptured = permissionDialog !== null || messageSelector.open
+    || historySearch.open || settingsOpen || transcriptSearch.open;
   const visibleMessages = displayMessages.slice(renderStart, renderEnd);
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
+  // Transcript search hits (derived): global indices into displayMessages.
+  const searchHits: number[] = (() => {
+    const q = transcriptSearch.query.trim().toLowerCase();
+    if (!transcriptSearch.open || !q) return [];
+    const out: number[] = [];
+    displayMessages.forEach((m, i) => { if (m.text.toLowerCase().includes(q)) out.push(i); });
+    return out;
+  })();
   useInput((input, key) => {
     // Ctrl+C owns the lifecycle (ink's exitOnCtrlC is off): abort a turn,
     // else clear the editor, else leave — like pi-tui.
@@ -973,6 +1078,23 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       return;
     }
+    // @-file mentions (like cc): ↑/↓ navigate, Enter/Tab accept, Esc dismiss.
+    if (mentionOpen) {
+      const sel = Math.min(mentionSelected, mentionItems.length - 1);
+      if (key.escape) { mentionDismissedFor.current = input; return; }
+      if (key.upArrow) { setMentionSelected((s) => Math.max(0, s - 1)); return; }
+      if (key.downArrow) { setMentionSelected((s) => Math.min(mentionItems.length - 1, s + 1)); return; }
+      if (key.return || key.tab) {
+        const item = mentionItems[sel];
+        if (item) {
+          const next = input.replace(/@[\w./-]*$/, `${item.value} `);
+          setInput(next);
+          mentionDismissedFor.current = next;
+        }
+        return;
+      }
+      // Typing filters the list (handled by derivation); other keys fall through.
+    }
     // Compact autocomplete dropdown (like cc): ↑/↓ navigate, Enter/Tab accept, Esc dismiss.
     if (autoOpen) {
       const sel = Math.min(autoSelected, autoItems.length - 1);
@@ -987,7 +1109,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       // Typing filters the list (handled by derivation); other keys fall through.
     }
     // Tab re-opens a dismissed dropdown.
-    if (key.tab && !running && input.trim().startsWith('/') && !autoOpen && !focusedDialog && !settingsOpen) {
+    if (key.tab && !running && input.trim().startsWith('/') && !autoOpen && !mentionOpen && !focusedDialog && !settingsOpen) {
       autoDismissedFor.current = null;
       setAutoNonce((n) => n + 1);
       return;
@@ -1191,12 +1313,38 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     }
     // Esc aborts a running turn (dialogs above have their own Esc handling).
     if (key.escape && running) { stopRef.current?.abort(); setActivity('stopping…'); return; }
+    // Transcript search UI (like cc's in-chat find): ↑/↓ navigate matches, Enter jumps, Esc closes.
+    if (transcriptSearch.open) {
+      if (key.escape) { setTranscriptSearch({ open: false, query: '', selected: 0 }); return; }
+      if (key.upArrow) { setTranscriptSearch((h) => ({ ...h, selected: Math.max(0, h.selected - 1) })); return; }
+      if (key.downArrow) { setTranscriptSearch((h) => ({ ...h, selected: Math.min(Math.max(0, searchHits.length - 1), h.selected + 1) })); return; }
+      if (key.return) {
+        const gi = searchHits[transcriptSearch.selected];
+        if (gi !== undefined) {
+          const maxOff = Math.max(0, displayMessages.length - windowSize);
+          setScrollOffset(Math.min(maxOff, Math.max(0, displayMessages.length - 1 - gi - Math.floor(windowSize / 2))));
+          push({ role: 'system', text: `jumped to match ${transcriptSearch.selected + 1}/${searchHits.length}` });
+        }
+        setTranscriptSearch({ open: false, query: '', selected: 0 });
+        return;
+      }
+      if (key.backspace || key.delete) { setTranscriptSearch((h) => ({ ...h, query: h.query.slice(0, -1), selected: 0 })); return; }
+      if (input && !key.ctrl && !key.meta) { setTranscriptSearch((h) => ({ ...h, query: h.query + input, selected: 0 })); return; }
+      return;
+    }
+    if (key.ctrl && (input === 'f' || input === 'F')) {
+      if (historySearch.open || focusedDialog) return;
+      setTranscriptSearch({ open: true, query: '', selected: 0 });
+      return;
+    }
     if (key.ctrl && (input === 'r' || input === 'R')) {
+      if (transcriptSearch.open) return;
       setHistorySearch({ open: true, query: '', selected: 0 });
       openDialog('historySearch');
       return;
     }
     if (key.ctrl && (input === 'o' || input === 'O')) {
+      if (transcriptSearch.open || historySearch.open) return;
       if (!thread) { push({ role: 'system', text: 'no thread yet' }); return; }
       setMessageSelector({ open: true, selected: 0 });
       openDialog('messageSelector');
@@ -1258,7 +1406,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                   <Text color={colorFor(m.role)}>{full.slice(sb)}</Text>
                 </Text>
               ) : (
-                <Text color={colorFor(m.role)} wrap="wrap">{full}</Text>
+                <Text color={m.dim ? undefined : colorFor(m.role)} dimColor={screenReader ? false : !!m.dim} wrap="wrap">{full}</Text>
               )}
             </Box>
             );
@@ -1266,6 +1414,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 {end < displayMessages.length || belowHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↓ '}{belowHidden} more below</Text> : null}
               </>
           )}
+          {thinkingText ? <Text dimColor={!screenReader} wrap="wrap">{thinkingText.slice(-500)}</Text> : null}
           {running && activity ? (
             <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '* ' : ''}{activity}</Text>
           ) : null}
@@ -1307,6 +1456,29 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             {filtered.length === 0 ? <Text dimColor={!screenReader}>no matches</Text> : null}
             {hStart + hVisible.length < filtered.length ? <Text dimColor={!screenReader}>…{filtered.length - hStart - hVisible.length} more below</Text> : null}
             <Text dimColor={!screenReader}>↑↓ navigate · Enter run · Esc close</Text>
+          </Box>
+            );
+          })()
+        ) : null}
+        {transcriptSearch.open ? (
+          (() => {
+            const maxRows = Math.max(3, Math.min(7, overlayBudget));
+            const sStart = Math.max(0, Math.min(transcriptSearch.selected - maxRows + 2, Math.max(0, searchHits.length - maxRows)));
+            const sVisible = searchHits.slice(sStart, sStart + maxRows);
+            return (
+          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
+            <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>search transcript: {transcriptSearch.query || '(type to filter)'}</Text>
+            {sVisible.map((gi, i) => {
+              const m = displayMessages[gi];
+              const sel = sStart + i === Math.min(transcriptSearch.selected, Math.max(0, searchHits.length - 1));
+              const snippet = m ? `${m.role}: ${m.text.split('\n')[0] ?? ''}` : '';
+              return (
+              <Text key={gi} wrap="truncate" color={screenReader ? undefined : (sel ? 'black' : undefined)} backgroundColor={screenReader ? undefined : (sel ? 'cyan' : undefined)}>{snippet.slice(0, Math.max(20, columns - 6))}</Text>
+              );
+            })}
+            {searchHits.length === 0 ? <Text dimColor={!screenReader}>no matches</Text> : null}
+            {sStart + sVisible.length < searchHits.length ? <Text dimColor={!screenReader}>…{searchHits.length - sStart - sVisible.length} more below</Text> : null}
+            <Text dimColor={!screenReader}>↑↓ navigate · Enter jump · Esc close</Text>
           </Box>
             );
           })()
@@ -1444,6 +1616,29 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           </Box>
         ) : null}
         {suggestion ? <Text dimColor={!screenReader}>💡 {suggestion} (Tab to accept)</Text> : null}
+        {mentionOpen ? (
+          <Box flexDirection="column" paddingX={1}>
+            {(() => {
+              const maxRows = Math.max(3, Math.min(7, overlayBudget));
+              const shown = mentionItems.slice(0, maxRows);
+              return (<>
+              {shown.map((it, i) => {
+              const sel = i === Math.min(mentionSelected, mentionItems.length - 1);
+              return (
+                <Text key={`${it.name}::${i}`} wrap="truncate">
+                  <Text color={screenReader ? undefined : (sel ? 'cyan' : undefined)}>{sel ? '› ' : '  '}</Text>
+                  {highlightSpans(it.name, it.hits).map((sp, si) => (
+                    <Text key={si} color={screenReader ? undefined : (sp.hit ? 'cyan' : undefined)} bold={screenReader ? false : sp.hit}>{sp.text}</Text>
+                  ))}
+                  <Text dimColor={!screenReader}>  file</Text>
+                </Text>
+              );
+              })}
+              {mentionItems.length > maxRows ? <Text dimColor={!screenReader}>  {mentionItems.length - maxRows} more…</Text> : null}
+              </>);
+            })()}
+          </Box>
+        ) : null}
         {autoOpen ? (
           <Box flexDirection="column" paddingX={1}>
             {(() => {
@@ -1478,7 +1673,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, Math.min(columns - 2, 120)))}</Text>
         <Box>
           <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '' : '› '}</Text>
-          <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} />
+          <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={inputCaptured} />
         </Box>
         <StatusBar thread={thread} model={model} permission={permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} agents={agentCount} />
         {statusLineOutput ? <Text dimColor={!screenReader}>{statusLineOutput}</Text> : null}
