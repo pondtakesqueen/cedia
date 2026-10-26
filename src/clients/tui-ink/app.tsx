@@ -46,14 +46,44 @@ const colorFor = (role: Msg['role']) =>
   role === 'user' ? 'cyan' : role === 'assistant' ? 'white' : role === 'tool' ? 'gray' : 'yellow';
 
 export function toolLabel(tool: string): string {
+  const raw = String(tool ?? '').trim();
+  const key = raw.toLowerCase().replace(/[\s_-]+/g, '');
+  // Canonical labels for the tools a deny message names.
+  switch (key) {
+    case 'bash': return 'bash';
+    case 'edit': return 'edit';
+    case 'write':
+    case 'filewrite':
+      return 'write';
+    case 'read':
+    case 'fileread':
+      return 'read';
+    case 'grep': return 'grep';
+    case 'glob': return 'glob';
+    case 'webfetch':
+      return 'web_fetch';
+    case 'browser': return 'browser';
+    case 'skill': return 'skill';
+    case 'enterplanmode':
+    case 'exitplanmode':
+    case 'planmode':
+    case 'plan':
+      return 'plan mode';
+    case 'filesystem':
+    case 'fs':
+      return 'filesystem';
+    case 'sed': return 'sed';
+    case 'fallback': return 'fallback';
+    default: break;
+  }
   const known = new Set([
     'bash', 'edit', 'write', 'read', 'grep', 'glob', 'web_fetch', 'browser',
     'ask_user', 'monitor', 'sleep', 'notebook_edit', 'notebookedit', 'tool_search',
     'toolsearch', 'open_thread', 'openthread', 'spawn', 'todo', 'schedule',
     'recall', 'threads', 'read_thread', 'message_thread', 'skill', 'webfetch',
   ]);
-  const key = String(tool ?? '').toLowerCase();
-  return known.has(key) ? key : 'tool';
+  const lower = raw.toLowerCase();
+  return known.has(lower) ? lower : 'tool';
 }
 
 export type DialogKind = 'picker' | 'historySearch' | 'messageSelector' | null;
