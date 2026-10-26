@@ -4,6 +4,7 @@ import { buildAutoItems, highlightSpans, truncateDescription, truncateLongText, 
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
+import { inkTheme } from './theme-tokens.ts';
 import { PermissionDialog, permissionDialogFor, toolLabel } from './permission-dialogs.tsx';
 import { StatusBar } from './status-bar.tsx';
 import { runHeadless } from '../headless/main.ts';
@@ -19,7 +20,6 @@ import { decode, type CoreMessage } from '../../protocol/index.ts';
 import type { TuiArgs } from '../tui/main.ts';
 import type { SessionEvent } from '../../core/types.ts';
 import { cediaHome, loadPromptSuggestions, loadRoles, isMode, loadPolicy, loadPrivacy, readSettings } from '../../core/config.ts';
-import { loadTheme } from '../tui/theme.ts';
 import { versionInfo } from '../../protocol/version.ts';
 import { runStatusLineCommand } from '../tui/statusline.ts';
 import { loadKeybindings } from '../tui/keybindings/loader.ts';
@@ -116,8 +116,8 @@ const shortCwd = (cwd: string): string => {
   } catch { return cwd; }
 };
 
-const colorFor = (role: Msg['role']) =>
-  role === 'user' ? 'cyan' : role === 'assistant' ? 'white' : role === 'tool' ? 'gray' : 'yellow';
+const colorFor = (role: Msg['role']): string | undefined =>
+  role === 'user' ? undefined : role === 'assistant' ? 'white' : role === 'tool' ? 'gray' : 'yellow';
 
 export type DialogKind = 'picker' | 'historySearch' | 'messageSelector' | null;
 
@@ -170,6 +170,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const lastActivityRef = useRef(Date.now());
   const [thread, setThread] = useState<string | undefined>(args.thread);
   const [permission, setPermission] = useState<string | undefined>(args.permission);
+  // Theme tokens (opencode-style design tokens, cedia's own values).
+  // Bumped when /theme writes, so the whole TUI repaints immediately.
+  const [themeTick, setThemeTick] = useState(0);
+  const { name: themeName, tokens: T } = React.useMemo(() => inkTheme(cediaHome()), [themeTick]);
   const [model, setModel] = useState<string | undefined>(args.model);
   const [effort, setEffort] = useState<'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined>(undefined);
   const [goal, setGoal] = useState<string | undefined>(args.goal);
@@ -751,10 +755,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             raw.theme = t;
             fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
           } catch { /* ignore */ }
-          say(`theme: ${t} (applies to the pi-tui; ink follows the terminal)`);
+          setThemeTick((n) => n + 1);
+          say(`theme: ${t}`);
           return;
         }
-        say(`theme: ${loadTheme()} (ink follows the terminal)`);
+        say(`theme: ${themeName} (dark | light)`);
         return;
       }
       case 'settings':
@@ -1579,7 +1584,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               );
             }
               return (
-            <Box key={globalIdx} flexDirection="column" backgroundColor={!screenReader && isUserRow ? 'gray' : undefined}>
+            <Box key={globalIdx} flexDirection="column" backgroundColor={!screenReader && isUserRow ? T.userRowBg : undefined}>
               {m.role === 'assistant' ? (
                 <Markdown>{m.text}</Markdown>
               ) : hasSel ? (
@@ -1591,13 +1596,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               ) : m.role === 'tool' && !isToolError && full.split('\n').some((l) => /^[+-]/.test(l)) ? (
                 <Box flexDirection="column">
                   {full.split('\n').slice(0, 12).map((ln, li) => {
-                    const diff = /^[+](?![+][+])/.test(ln) ? 'green' : /^-(?!--)/.test(ln) ? 'red' : undefined;
+                    const diff = /^[+](?![+][+])/.test(ln) ? T.diffAdded : /^-(?!--)/.test(ln) ? T.diffRemoved : undefined;
                     return <Text key={li} wrap="truncate" color={screenReader ? undefined : diff} dimColor={screenReader ? false : (!diff && li > 0)}>{ln.slice(0, Math.max(20, columns - 6))}</Text>;
                   })}
                   {full.split('\n').length > 12 ? <Text dimColor={!screenReader}>…{full.split('\n').length - 12} more lines</Text> : null}
                 </Box>
               ) : (
-                <Text color={isUserRow || screenReader ? undefined : isToolError ? 'red' : m.tone === 'red' ? 'red' : m.dim ? undefined : colorFor(m.role)} dimColor={screenReader ? false : !!m.dim && !isUserRow} wrap="wrap">{full}</Text>
+                <Text color={isUserRow || screenReader ? undefined : isToolError ? T.error : m.tone === 'red' ? T.error : m.dim ? undefined : colorFor(m.role)} dimColor={screenReader ? false : !!m.dim && !isUserRow} wrap="wrap">{full}</Text>
               )}
             </Box>
             );
@@ -1607,18 +1612,18 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           )}
           {thinkingText && showThinking ? <Text dimColor={!screenReader} wrap="wrap">{thinkingText.slice(-500)}</Text> : null}
           {running && activity ? (
-            <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '* ' : ''}{activity}</Text>
+            <Text color={screenReader ? undefined : T.primary}>{screenReader ? '* ' : ''}{activity}</Text>
           ) : null}
         </Box>
         {trustOpen ? (
           <Box flexDirection="column" paddingX={1}>
-            <Text color={screenReader ? undefined : 'yellow'} bold={!screenReader}>Accessing workspace:</Text>
+            <Text color={screenReader ? undefined : T.warning} bold={!screenReader}>Accessing workspace:</Text>
             <Text>{shortCwd(args.cwd)}</Text>
             <Text wrap="wrap">Quick safety check: is this a project you created or one you trust? If not, take a moment to review what is in this folder first.</Text>
             <Text wrap="wrap">cedia will be able to read, edit, and execute files here.</Text>
             <Text dimColor={!screenReader}>Security guide: least privilege · deny-list enforced · snapshots can undo edits</Text>
             {(["No, exit", "Yes, I trust this folder"] as const).map((label, i) => (
-              <Text key={label} color={screenReader ? undefined : (i === trustSelected ? 'cyan' : undefined)}>{i === trustSelected ? '› ' : '  '}{label}</Text>
+              <Text key={label} color={screenReader ? undefined : (i === trustSelected ? T.primary : undefined)}>{i === trustSelected ? '› ' : '  '}{label}</Text>
             ))}
             <Text dimColor={!screenReader}>Enter to confirm · Esc to cancel</Text>
           </Box>
@@ -1628,13 +1633,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const pStart = Math.max(0, Math.min(pickerSelected - overlayBudget + 2, Math.max(0, picker.items.length - overlayBudget)));
             const pVisible = picker.items.slice(pStart, pStart + overlayBudget);
             return (
-          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
-            <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>{picker.title}</Text>
+          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : T.borderActive} paddingX={1}>
+            <Text bold={screenReader ? false : true} color={screenReader ? undefined : T.primary}>{picker.title}</Text>
             {pStart > 0 ? <Text dimColor={!screenReader}>…{pStart} more above</Text> : null}
             {pVisible.map((it, i) => {
               const gi = pStart + i;
               return (
-              <Text key={gi} color={screenReader ? undefined : (gi === pickerSelected ? 'cyan' : undefined)} bold={screenReader ? false : (gi === pickerSelected)}>{gi === pickerSelected ? '› ' : '  '}{gi + 1}. {it.label}</Text>
+              <Text key={gi} color={screenReader ? undefined : (gi === pickerSelected ? T.primary : undefined)} bold={screenReader ? false : (gi === pickerSelected)}>{gi === pickerSelected ? '› ' : '  '}{gi + 1}. {it.label}</Text>
               );
             })}
             {pStart + pVisible.length < picker.items.length ? <Text dimColor={!screenReader}>…{picker.items.length - pStart - pVisible.length} more below</Text> : null}
@@ -1649,14 +1654,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const hStart = Math.max(0, Math.min(historySearch.selected - overlayBudget + 2, Math.max(0, filtered.length - overlayBudget)));
             const hVisible = filtered.slice(hStart, hStart + overlayBudget);
             return (
-          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
-            <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>history search: {historySearch.query || '(type to filter)'}</Text>
+          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : T.borderActive} paddingX={1}>
+            <Text bold={screenReader ? false : true} color={screenReader ? undefined : T.primary}>history search: {historySearch.query || '(type to filter)'}</Text>
             {hVisible.map((h, i) => {
               const gi = hStart + i;
               const sel = gi === historySearch.selected;
               const padded = sel && !screenReader ? h + ' '.repeat(Math.max(0, columns - 4 - h.length)) : h;
               return (
-              <Text key={gi} color={screenReader ? undefined : (sel ? 'black' : undefined)} backgroundColor={screenReader ? undefined : (sel ? 'cyan' : undefined)}>{padded}</Text>
+              <Text key={gi} backgroundColor={screenReader ? undefined : (sel ? T.selectedBg : undefined)}>{padded}</Text>
               );
             })}
             {filtered.length === 0 ? <Text dimColor={!screenReader}>no matches</Text> : null}
@@ -1672,8 +1677,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const sStart = Math.max(0, Math.min(transcriptSearch.selected - maxRows + 2, Math.max(0, searchHits.length - maxRows)));
             const sVisible = searchHits.slice(sStart, sStart + maxRows);
             return (
-          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
-            <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>search transcript: {transcriptSearch.query || '(type to filter)'}</Text>
+          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : T.borderActive} paddingX={1}>
+            <Text bold={screenReader ? false : true} color={screenReader ? undefined : T.primary}>search transcript: {transcriptSearch.query || '(type to filter)'}</Text>
             {sVisible.map((gi, i) => {
               const m = displayMessages[gi];
               const sel = sStart + i === Math.min(transcriptSearch.selected, Math.max(0, searchHits.length - 1));
@@ -1695,8 +1700,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const mStart = Math.max(0, Math.min(messageSelector.selected - overlayBudget + 2, Math.max(0, runs.length - overlayBudget)));
             const mVisible = runs.slice(mStart, mStart + overlayBudget);
             return (
-          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
-            <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>message selector (rewind)</Text>
+          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : T.borderActive} paddingX={1}>
+            <Text bold={screenReader ? false : true} color={screenReader ? undefined : T.primary}>message selector (rewind)</Text>
             {!thread ? (
               <Text dimColor={!screenReader}>no thread yet</Text>
             ) : (
@@ -1706,7 +1711,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                   const sel = gi === messageSelector.selected;
                   const padded = sel && !screenReader ? r + ' '.repeat(Math.max(0, columns - 4 - r.length)) : r;
                   return (
-                  <Text key={gi} color={screenReader ? undefined : (sel ? 'black' : undefined)} backgroundColor={screenReader ? undefined : (sel ? 'cyan' : undefined)}>{padded}</Text>
+                  <Text key={gi} backgroundColor={screenReader ? undefined : (sel ? T.selectedBg : undefined)}>{padded}</Text>
                   );
                 })}
                 {runs.length === 0 ? <Text dimColor={!screenReader}>no runs to rewind to</Text> : null}
@@ -1726,9 +1731,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         {settingsOpen ? (
           <Box flexDirection="column" paddingX={1}>
             <Box>
-              <Text bold={screenReader ? false : true} color={screenReader ? undefined : 'cyan'}>Settings </Text>
+              <Text bold={screenReader ? false : true} color={screenReader ? undefined : T.primary}>Settings </Text>
               {(['status', 'config', 'usage', 'stats'] as const).map((t) => (
-                <Text key={t} color={screenReader ? undefined : (t === settingsTab ? 'black' : undefined)} backgroundColor={screenReader ? undefined : (t === settingsTab ? 'cyan' : undefined)}> {t} </Text>
+                <Text key={t} color={screenReader ? undefined : (t === settingsTab ? undefined : undefined)} backgroundColor={screenReader ? undefined : (t === settingsTab ? T.selectedBg : undefined)}> {t} </Text>
               ))}
             </Box>
             {settingsTab === 'status' ? (
@@ -1751,7 +1756,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             ) : null}
             {settingsTab === 'config' ? (
               <Box flexDirection="column">
-                <Box borderStyle={screenReader ? undefined : 'round'} borderColor={screenReader ? undefined : 'gray'} paddingX={1}>
+                <Box borderStyle={screenReader ? undefined : 'round'} borderColor={screenReader ? undefined : T.border} paddingX={1}>
                   <Text dimColor={!screenReader}>{settingsQuery ? settingsQuery : '⌕ Search settings...'}</Text>
                 </Box>
                 {editingKey ? (
@@ -1777,9 +1782,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                         const isBool = typeof v === 'boolean';
                         return (
                           <Text key={k}>
-                            <Text color={screenReader ? undefined : (gi === sel ? 'cyan' : undefined)}>{gi === sel ? '› ' : '  '}{labels[i]!.padEnd(w)}  </Text>
+                            <Text color={screenReader ? undefined : (gi === sel ? T.primary : undefined)}>{gi === sel ? '› ' : '  '}{labels[i]!.padEnd(w)}  </Text>
                             <Text
-                              color={screenReader ? undefined : (isBool ? (v ? 'cyan' : undefined) : (gi === sel ? 'cyan' : undefined))}
+                              color={screenReader ? undefined : (isBool ? (v ? T.success : undefined) : (gi === sel ? T.primary : undefined))}
                               dimColor={screenReader ? false : (isBool ? !v : gi !== sel)}
                             >{val}</Text>
                           </Text>
@@ -1834,9 +1839,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               const sel = i === Math.min(mentionSelected, mentionItems.length - 1);
               return (
                 <Text key={`${it.name}::${i}`} wrap="truncate">
-                  <Text color={screenReader ? undefined : (sel ? 'cyan' : undefined)}>{sel ? '› ' : '  '}</Text>
+                  <Text color={screenReader ? undefined : (sel ? T.primary : undefined)}>{sel ? '› ' : '  '}</Text>
                   {highlightSpans(it.name, it.hits).map((sp, si) => (
-                    <Text key={si} color={screenReader ? undefined : (sp.hit ? 'cyan' : undefined)} bold={screenReader ? false : sp.hit}>{sp.text}</Text>
+                    <Text key={si} color={screenReader ? undefined : (sp.hit ? T.primary : undefined)} bold={screenReader ? false : sp.hit}>{sp.text}</Text>
                   ))}
                   <Text dimColor={!screenReader}>  file</Text>
                 </Text>
@@ -1859,10 +1864,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               const plain = it.name.startsWith('/') ? it.name.slice(1) : it.name;
               return (
                 <Text key={`${it.name}::${i}`} wrap="truncate">
-                  <Text color={screenReader ? undefined : (sel ? 'cyan' : undefined)}>{sel ? '› ' : '  '}</Text>
+                  <Text color={screenReader ? undefined : (sel ? T.primary : undefined)}>{sel ? '› ' : '  '}</Text>
                   {it.name.startsWith('/') ? <Text dimColor={!screenReader}>/</Text> : null}
                   {highlightSpans(plain, it.hits).map((sp, si) => (
-                    <Text key={si} color={screenReader ? undefined : (sp.hit ? 'cyan' : undefined)} bold={screenReader ? false : sp.hit}>{sp.text}</Text>
+                    <Text key={si} color={screenReader ? undefined : (sp.hit ? T.primary : undefined)} bold={screenReader ? false : sp.hit}>{sp.text}</Text>
                   ))}
                   <Text dimColor={!screenReader}>  {truncateDescription(it.description, maxDesc)}</Text>
                 </Text>
@@ -1875,16 +1880,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         ) : null}
         {notice ? (
           <Box justifyContent="flex-end" paddingX={1}>
-            <Text color={screenReader ? undefined : 'yellow'}>{notice}</Text>
+            <Text color={screenReader ? undefined : T.warning}>{notice}</Text>
           </Box>
         ) : null}
         <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, columns))}</Text>
         <Box>
-          <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '' : '› '}</Text>
+          <Text color={screenReader ? undefined : T.primary}>{screenReader ? '' : '› '}</Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={inputCaptured} />
         </Box>
         <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, columns))}</Text>
-        <StatusBar thread={thread} model={model} permission={permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} agents={agentCount} />
+        <StatusBar thread={thread} model={model} permission={permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} agents={agentCount} accent={T.primary} />
         {statusLineOutput ? <Text dimColor={!screenReader}>{statusLineOutput}</Text> : null}
       </Box>
       {showSidebar ? (

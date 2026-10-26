@@ -11,8 +11,10 @@ export function StatusBar(props: {
   vimMode?: string;
   activity?: string;
   agents?: number;
+  /** Accent color for the ▶▶ marker (theme primary). */
+  accent?: string;
 }): React.ReactElement {
-  const { model, permission, running, context, spend, activity, agents } = props;
+  const { model, permission, running, context, spend, activity, agents, accent } = props;
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
   const modeLabel =
     permission === 'workspace' ? 'workspace mode on'
@@ -26,10 +28,12 @@ export function StatusBar(props: {
     context ? `ctx ${Math.round(context / 1000)}k` : null,
     typeof spend === 'number' ? `$${spend.toFixed(4)}` : null,
   ].filter((p): p is string => !!p);
-  const line = `▶▶ ${activity && running ? `${activity} · ` : ''}${modeLabel}${extra.length ? ` · ${extra.join(' · ')}` : ''}`;
+  const line = `${activity && running ? `${activity} · ` : ''}${modeLabel}${extra.length ? ` · ${extra.join(' · ')}` : ''}`;
+
   return React.createElement(
     Text,
     { dimColor: !screenReader, wrap: 'truncate' },
+    React.createElement(Text, { color: screenReader ? undefined : (accent ?? 'yellow') }, '▶▶ '),
     line,
   );
 }

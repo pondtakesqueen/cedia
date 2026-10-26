@@ -1,5 +1,7 @@
 import React from 'react';
 import { Box, Text, useIsScreenReaderEnabled } from 'ink';
+import { inkTheme } from './theme-tokens.ts';
+import { cediaHome } from '../../core/config.ts';
 
 export type PermissionDialogProps = {
   tool: string;
@@ -72,13 +74,14 @@ export function PermissionDialog(props: PermissionDialogProps): React.ReactEleme
   const { tool, input, reason, rule } = props;
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
   const label = toolLabel(tool);
+  const T = inkTheme(cediaHome()).tokens;
   return React.createElement(
     Box,
-    { flexDirection: 'column', borderStyle: screenReader ? undefined : 'single', borderColor: screenReader ? undefined : 'yellow', paddingX: 1 },
-    React.createElement(Text, { bold: !screenReader, color: screenReader ? undefined : 'yellow' }, `${label} permission`),
+    { flexDirection: 'column', borderStyle: screenReader ? undefined : 'single', borderColor: screenReader ? undefined : T.borderActive, paddingX: 1 },
+    React.createElement(Text, { bold: !screenReader, color: screenReader ? undefined : T.accent }, `${label} permission`),
     React.createElement(Text, {}, `tool: ${tool || label}`),
     React.createElement(Text, { dimColor: !screenReader }, `input: ${previewInput(input)}`),
-    reason ? React.createElement(Text, { color: screenReader ? undefined : 'red' }, `denied: ${reason}`) : null,
+    reason ? React.createElement(Text, { color: screenReader ? undefined : T.error }, `denied: ${reason}`) : null,
     rule ? React.createElement(Text, { dimColor: !screenReader }, `rule: ${rule}`) : null,
     React.createElement(Text, { dimColor: !screenReader }, '[Allow] [Deny]'),
   );
@@ -120,15 +123,16 @@ function Specialized(props: PermissionDialogProps & { kind: string }): React.Rea
   const { kind, tool, input, reason, rule } = props;
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
   const label = toolLabel(tool);
+  const T = inkTheme(cediaHome()).tokens;
   const detail = detailFor(kind, input);
   return React.createElement(
     Box,
-    { flexDirection: 'column', borderStyle: screenReader ? undefined : 'single', borderColor: screenReader ? undefined : 'yellow', paddingX: 1 },
-    React.createElement(Text, { bold: !screenReader, color: screenReader ? undefined : 'yellow' }, `${label} permission`),
+    { flexDirection: 'column', borderStyle: screenReader ? undefined : 'single', borderColor: screenReader ? undefined : T.borderActive, paddingX: 1 },
+    React.createElement(Text, { bold: !screenReader, color: screenReader ? undefined : T.accent }, `${label} permission`),
     React.createElement(Text, {}, `tool: ${tool || label}`),
     detail ? React.createElement(Text, {}, detail) : null,
     React.createElement(Text, { dimColor: !screenReader }, `input: ${previewInput(input)}`),
-    reason ? React.createElement(Text, { color: screenReader ? undefined : 'red' }, `denied: ${reason}`) : null,
+    reason ? React.createElement(Text, { color: screenReader ? undefined : T.error }, `denied: ${reason}`) : null,
     rule ? React.createElement(Text, { dimColor: !screenReader }, `rule: ${rule}`) : null,
     React.createElement(Text, { dimColor: !screenReader }, '[Allow] [Deny]'),
   );
