@@ -885,7 +885,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   }, [spent, context, thread, args.model, args.cwd, args.permission, vimMode]);
   const { columns, rows } = useWindowSize();
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
-  const showSidebar = !screenReader && columns >= 120;
+  const showSidebar = !screenReader && process.env.CEDIA_SIDEBAR === '1';
   const displayMessages = transcriptExpanded ? messages : messages.filter((m) => m.role !== 'tool');
   const windowSize = Math.max(5, rows - 6);
   React.useEffect(() => {
@@ -1112,7 +1112,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       <Box flexDirection="column" flexGrow={1}>
         <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
           {displayMessages.length === 0 ? (
-            <Text dimColor={screenReader ? false : true}>no messages yet</Text>
+            <Box flexDirection="column">
+              <Text bold={screenReader ? false : true}>cedia {versionInfo().version}</Text>
+              <Text dimColor={!screenReader}>{args.model ?? 'auto'} · {args.cwd}</Text>
+              <Text dimColor={!screenReader}>/help for commands · Esc stops a turn</Text>
+            </Box>
           ) : (
             <>
               {scrollOffset > 0 || aboveHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↑ '}{aboveHidden} more above</Text> : null}
@@ -1286,12 +1290,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             {autoItems.length > 7 ? <Text dimColor={!screenReader}>  {autoItems.length - 7} more…</Text> : null}
           </Box>
         ) : null}
-        <Box borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "gray"} paddingX={1}>
+        <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, Math.min(columns - 2, 120)))}</Text>
+        <Box>
           <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '' : '› '}</Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} />
         </Box>
-        <StatusBar thread={thread} model={args.model} permission={args.permission} running={running} context={context} spend={spent > 0 ? spent : undefined} />
-        {statusLineOutput ? <Text>{statusLineOutput}</Text> : <Text dimColor={!screenReader}>vim:{vimMode}</Text>}
+        <StatusBar thread={thread} model={args.model} permission={args.permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} />
+        {statusLineOutput ? <Text dimColor={!screenReader}>{statusLineOutput}</Text> : null}
       </Box>
       {showSidebar ? (
         <Box flexDirection="column" width={28} borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "gray"} paddingX={1}>
