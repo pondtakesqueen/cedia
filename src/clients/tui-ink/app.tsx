@@ -99,6 +99,21 @@ const INK_COMMANDS: { name: string; description: string }[] = [
   { name: 'statusline', description: 'run a status line command' },
 ];
 
+const INPUT_PLACEHOLDERS = [
+  'Try "explain how auth works here"',
+  'Try "/review the uncommitted changes"',
+  'Try "add a test for the parser"',
+  'Try "/commit this work"',
+  'Try "where is the retry logic?"',
+];
+
+const shortCwd = (cwd: string): string => {
+  try {
+    const home = cediaHome();
+    return cwd.startsWith(home) ? `~${cwd.slice(home.length)}` || '~' : cwd;
+  } catch { return cwd; }
+};
+
 const colorFor = (role: Msg['role']) =>
   role === 'user' ? 'cyan' : role === 'assistant' ? 'white' : role === 'tool' ? 'gray' : 'yellow';
 
@@ -156,7 +171,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [goal, setGoal] = useState<string | undefined>(args.goal);
   const [vimMode, setVimMode] = useState<'insert' | 'normal'>('insert');
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'status' | 'config' | 'usage'>('status');
+  const [settingsTab, setSettingsTab] = useState<'status' | 'config' | 'usage' | 'stats'>('status');
+  const [configSelected, setConfigSelected] = useState(0);
   const [settingsQuery, setSettingsQuery] = useState('');
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -164,7 +180,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // Per-model spend for the Usage tab, from this project's recent session logs.
   // Recomputed when the overlay opens or the tab is selected (not on every keystroke).
   const projectUsage = React.useMemo(() => {
-    if (settingsTab !== 'usage') return null;
+    if (settingsTab !== 'usage' && settingsTab !== 'stats') return null;
     try {
       const dir = join(cediaHome(), 'sessions', projectKey(args.cwd));
       if (!fsExists(dir)) return null;
@@ -174,12 +190,19 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (!files.length) return null;
       const sessions = files.map((f) => ({ id: f.p.split('/').pop()!.replace(/\.jsonl$/, ''), events: readEventsLenient(fsRead(f.p, 'utf8')).filter(isUsageEvent) }));
       const report = usageReport(sessions, {});
-      return { models: report.models, sessions: report.sessions };
+      return {
+        models: report.models,
+        sessions: report.sessions,
+        requests: report.requests,
+        tokens: { in: report.tokens.input, cache: report.tokens.cacheRead, out: report.tokens.output },
+        handoffs: report.handoffs,
+      };
     } catch {
       return null;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsTab, settingsOpen]);
+  const projectUsageStats = settingsTab === 'stats' ? projectUsage : null;
   const settingsOpenRef = useRef(settingsOpen);
   useEffect(() => { settingsOpenRef.current = settingsOpen; }, [settingsOpen]);
   const stopRef = useRef<AbortController | null>(null);
@@ -211,6 +234,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [teams, setTeams] = useState(teamStore.list());
 
   const push = (m: Msg) => setMessages((prev) => [...prev, m]);
+  const [notice, setNotice] = useState<string | null>(null);
 
   // Autocomplete dropdown state (derived during render, never set in an effect —
   // setting picker state from an effect on picker itself caused an update loop).
@@ -231,6 +255,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   }, [autoQuery, skillsList]);
   // Reset autocomplete selection whenever the query changes (string dep: no loop).
   useEffect(() => { setAutoSelected(0); autoDismissedFor.current = null; }, [autoQuery]);
+  useEffect(() => { setConfigSelected(0); }, [settingsQuery, settingsTab]);
   // Read during render so bumping it forces a re-render (used by Tab re-open).
   const autoOpen = autoQuery !== null && autoItems.length > 0
     && !focusedDialog && !settingsOpen && !permissionDialog && !picker
@@ -500,7 +525,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'onboarding': {
-        if (rest[0] === 'accept') { acceptTrust(cediaHome()); push({ role: 'system', text: 'trust accepted' }); return; }
+        if (rest[0] === 'accept') { acceptTrust(cediaHome()); setNotice(null); push({ role: 'system', text: 'trust accepted' }); return; }
         const s = loadOnboarding(cediaHome());
         push({ role: 'system', text: `completed: ${s.completed.join(', ') || '(none)'}; trust: ${s.hasTrustDialogAccepted ? 'accepted' : 'pending'}; complete: ${isComplete(cediaHome())}` });
         return;
@@ -863,12 +888,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
   React.useEffect(() => {
     try {
-      if (!isComplete()) {
-        push({ role: 'system', text: `onboarding pending: ${ONBOARDING_STEPS.filter((x: string) => !loadOnboarding().completed.includes(x)).join(', ')}` });
-      }
+      const pending = ONBOARDING_STEPS.filter((x: string) => !loadOnboarding().completed.includes(x));
       if (!loadOnboarding().hasTrustDialogAccepted) {
-        push({ role: 'system', text: 'trust dialog: type y to accept, n to decline' });
-        pendingRef.current = { what: 'the trust dialog', yes: () => { acceptTrust(cediaHome()); push({ role: 'system', text: 'trust accepted' }); } };
+        setNotice('trust: type y to accept, n to decline');
+        pendingRef.current = { what: 'the trust dialog', yes: () => { acceptTrust(cediaHome()); setNotice(null); push({ role: 'system', text: 'trust accepted' }); } };
+      } else if (pending.length) {
+        setNotice(`onboarding: ${pending.join(', ')} pending — /onboarding accept`);
       }
     } catch {}
   }, []);
@@ -944,9 +969,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         setSettingsQuery('');
         return;
       }
-      const tabs: Array<'status' | 'config' | 'usage'> = ['status', 'config', 'usage'];
-      if (key.tab || key.rightArrow || key.leftArrow || key.upArrow || key.downArrow) {
-        if (key.tab || key.rightArrow || key.downArrow) setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
+      const tabs: Array<'status' | 'config' | 'usage' | 'stats'> = ['status', 'config', 'usage', 'stats'];
+      if (key.tab) {
+        setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
+        setConfigSelected(0);
+        return;
+      }
+      if ((key.leftArrow || key.rightArrow) && settingsTab !== 'config') {
+        if (key.rightArrow) setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
         else setSettingsTab((t) => tabs[(tabs.indexOf(t) - 1 + tabs.length) % tabs.length]!);
         return;
       }
@@ -978,12 +1008,42 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const raw = readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>;
             const q = settingsQuery.toLowerCase();
             const keys = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q));
-            if (keys.length === 1) {
-              setEditingKey(keys[0]!);
-              setEditValue(JSON.stringify(raw[keys[0]!]) ?? '');
+            const target = keys[Math.min(configSelected, Math.max(0, keys.length - 1))];
+            if (target && (keys.length === 1 || configSelected < keys.length)) {
+              setEditingKey(target);
+              setEditValue(JSON.stringify(raw[target]) ?? '');
               return;
             }
           } catch { /* fall through */ }
+        }
+        if (input === ' ') {
+          // Space toggles a boolean setting immediately.
+          try {
+            const pp = join(cediaHome(), 'settings.json');
+            const raw = readSettings(pp) as Record<string, unknown>;
+            const q = settingsQuery.toLowerCase();
+            const keys = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q));
+            const target = keys[Math.min(configSelected, Math.max(0, keys.length - 1))];
+            if (target && typeof raw[target] === 'boolean') {
+              raw[target] = !raw[target];
+              fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
+              push({ role: 'system', text: `setting ${target} = ${String(raw[target])}` });
+              return;
+            }
+          } catch { /* fall through to filter typing */ }
+        }
+        if (key.upArrow) {
+          setConfigSelected((s) => Math.max(0, s - 1));
+          return;
+        }
+        if (key.downArrow) {
+          try {
+            const raw = readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>;
+            const q = settingsQuery.toLowerCase();
+            const n = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q)).length;
+            setConfigSelected((s) => Math.min(Math.max(0, n - 1), s + 1));
+          } catch { setConfigSelected((s) => s + 1); }
+          return;
         }
         if (key.backspace || key.delete) { setSettingsQuery((q) => q.slice(0, -1)); return; }
         if (input && !key.ctrl && !key.meta && !key.return && input.length === 1 && input >= ' ') {
@@ -1112,10 +1172,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       <Box flexDirection="column" flexGrow={1}>
         <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
           {displayMessages.length === 0 ? (
-            <Box flexDirection="column">
-              <Text bold={screenReader ? false : true}>cedia {versionInfo().version}</Text>
-              <Text dimColor={!screenReader}>{args.model ?? 'auto'} · {args.cwd}</Text>
-              <Text dimColor={!screenReader}>/help for commands · Esc stops a turn</Text>
+            <Box flexDirection="row">
+              <Box flexDirection="column" marginRight={1}>
+                <Text>▄▀▄</Text>
+                <Text>▀▄▀</Text>
+              </Box>
+              <Box flexDirection="column">
+                <Text bold={screenReader ? false : true}>cedia {versionInfo().version}</Text>
+                <Text dimColor={!screenReader}>{args.model ?? 'auto'} · {shortCwd(args.cwd)}</Text>
+                <Text dimColor={!screenReader}>/help for commands · Esc stops a turn</Text>
+              </Box>
             </Box>
           ) : (
             <>
@@ -1213,10 +1279,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           })()
         ) : null}
         {settingsOpen ? (
-          <Box flexDirection="column" borderStyle={screenReader ? undefined : "single"} borderColor={screenReader ? undefined : "cyan"} paddingX={1}>
-            <Text bold={screenReader ? false : true} color={screenReader ? undefined : "cyan"}>settings</Text>
+          <Box flexDirection="column" paddingX={1}>
             <Box>
-              {(['status', 'config', 'usage'] as const).map((t) => (
+              <Text bold={screenReader ? false : true} color={screenReader ? undefined : 'cyan'}>Settings </Text>
+              {(['status', 'config', 'usage', 'stats'] as const).map((t) => (
                 <Text key={t} color={screenReader ? undefined : (t === settingsTab ? 'black' : undefined)} backgroundColor={screenReader ? undefined : (t === settingsTab ? 'cyan' : undefined)}> {t} </Text>
               ))}
             </Box>
@@ -1233,7 +1299,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             ) : null}
             {settingsTab === 'config' ? (
               <Box flexDirection="column">
-                <Text dimColor={!screenReader}>search: {settingsQuery || '(type to filter)'}</Text>
+                <Box borderStyle={screenReader ? undefined : 'round'} borderColor={screenReader ? undefined : 'gray'} paddingX={1}>
+                  <Text dimColor={!screenReader}>{settingsQuery ? settingsQuery : '⌕ Search settings...'}</Text>
+                </Box>
                 {editingKey ? (
                   <Text>edit {editingKey}: {editValue} (Enter saves · Esc cancels)</Text>
                 ) : (() => {
@@ -1242,9 +1310,19 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                     const q = settingsQuery.toLowerCase();
                     const keys = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q));
                     if (!keys.length) return <Text dimColor={!screenReader}>no settings</Text>;
+                    const sel = Math.min(configSelected, keys.length - 1);
+                    const w = Math.min(38, Math.max(...keys.map((k) => k.length)));
                     return (<>
-                      {keys.map((k) => <Text key={k}>{k}: {JSON.stringify(raw[k])}</Text>)}
-                      {keys.length === 1 ? <Text dimColor={!screenReader}>Enter edits {keys[0]}</Text> : null}
+                      {keys.map((k, i) => {
+                        const v = raw[k];
+                        const shown = v !== null && typeof v === 'object' ? '›' : JSON.stringify(v);
+                        return (
+                          <Text key={k}>
+                            <Text color={screenReader ? undefined : (i === sel ? 'cyan' : undefined)}>{i === sel ? '› ' : '  '}{k.padEnd(w)}  </Text>
+                            <Text dimColor={screenReader ? false : i !== sel}>{typeof shown === 'string' && shown.length > 60 ? shown.slice(0, 59) + '…' : shown}</Text>
+                          </Text>
+                        );
+                      })}
                     </>);
                   } catch (e) {
                     return <Text dimColor={!screenReader}>no settings</Text>;
@@ -1266,7 +1344,19 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 ) : <Text dimColor={!screenReader}>no session logs yet</Text>}
               </Box>
             ) : null}
-            <Text dimColor={!screenReader}>Tab/←/→ switch tabs · Esc close</Text>
+            {settingsTab === 'stats' ? (
+              <Box flexDirection="column">
+                {projectUsageStats ? (
+                  <>
+                    <Text>sessions: {projectUsageStats.sessions}</Text>
+                    <Text>requests: {projectUsageStats.requests}</Text>
+                    <Text>tokens: {projectUsageStats.tokens.in.toLocaleString()} in · {projectUsageStats.tokens.cache.toLocaleString()} cache read · {projectUsageStats.tokens.out.toLocaleString()} out</Text>
+                    <Text>handoffs: {projectUsageStats.handoffs}</Text>
+                  </>
+                ) : <Text dimColor={!screenReader}>no session logs yet</Text>}
+              </Box>
+            ) : null}
+            <Text dimColor={!screenReader}>Enter/Space to change · / to search · Esc to close</Text>
           </Box>
         ) : null}
         {suggestion ? <Text dimColor={!screenReader}>💡 {suggestion} (Tab to accept)</Text> : null}
@@ -1290,12 +1380,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             {autoItems.length > 7 ? <Text dimColor={!screenReader}>  {autoItems.length - 7} more…</Text> : null}
           </Box>
         ) : null}
+        {notice ? (
+          <Box justifyContent="flex-end" paddingX={1}>
+            <Text color={screenReader ? undefined : 'yellow'}>{notice}</Text>
+          </Box>
+        ) : null}
         <Text dimColor={!screenReader}>{screenReader ? '' : '─'.repeat(Math.max(10, Math.min(columns - 2, 120)))}</Text>
         <Box>
           <Text color={screenReader ? undefined : 'cyan'}>{screenReader ? '' : '› '}</Text>
-          <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} />
+          <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} />
         </Box>
-        <StatusBar thread={thread} model={args.model} permission={args.permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} />
+        <StatusBar thread={thread} model={args.model} permission={args.permission} running={running} context={context} spend={spent > 0 ? spent : undefined} vimMode={vimMode} activity={activity} agents={store.list().filter((t) => !t.archived && (thread ? t.parent === thread : true)).length} />
         {statusLineOutput ? <Text dimColor={!screenReader}>{statusLineOutput}</Text> : null}
       </Box>
       {showSidebar ? (

@@ -130,6 +130,14 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
   });
 
   if (vimMode === 'insert') {
+    if (!value && placeholder) {
+      return (
+        <Box>
+          <Text dimColor>{placeholder}</Text>
+          <Text inverse> </Text>
+        </Box>
+      );
+    }
     return (
       <Box>
         <Text>{value.slice(0, cursor)}</Text>

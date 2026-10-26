@@ -10,22 +10,25 @@ export function StatusBar(props: {
   spend?: number;
   vimMode?: string;
   activity?: string;
+  agents?: number;
 }): React.ReactElement {
-  const { thread, model, permission, running, context, spend, vimMode, activity } = props;
+  const { model, permission, running, context, spend, activity, agents } = props;
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
-  // One subtle line, like cc's bottom status row (no boxes, no segments).
-  const parts = [
-    activity && running ? activity : null,
-    model ?? 'auto',
-    permission ?? 'auto',
-    thread ?? 'new thread',
+  const modeLabel =
+    permission === 'workspace' ? 'workspace mode on'
+    : permission === 'read-only' ? 'read-only mode on'
+    : permission === 'plan' ? 'plan mode on'
+    : 'auto mode on';
+  const agentN = agents ?? 0;
+  const extra = [
+    model && model !== 'auto' ? model : null,
     context ? `ctx ${Math.round(context / 1000)}k` : null,
     typeof spend === 'number' ? `$${spend.toFixed(4)}` : null,
-    vimMode && vimMode !== 'insert' ? `vim:${vimMode}` : null,
   ].filter((p): p is string => !!p);
+  const line = `▶▶ ${activity && running ? `${activity} · ` : ''}${modeLabel}${extra.length ? ` · ${extra.join(' · ')}` : ''} · ← ${agentN} agent${agentN === 1 ? '' : 's'}`;
   return React.createElement(
     Text,
     { dimColor: !screenReader, wrap: 'truncate' },
-    running ? `● ${parts.join(' · ')}` : parts.join(' · '),
+    line,
   );
 }
