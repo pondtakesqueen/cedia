@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { fuzzyMatch, buildAutoItems, highlightSpans, truncateDescription, truncateLongText, type AutoItem } from '../src/clients/tui-ink/autocomplete.ts';
+import { fuzzyMatch, buildAutoItems, highlightSpans, truncateDescription, truncateLongText, estimateLines, type AutoItem } from '../src/clients/tui-ink/autocomplete.ts';
 
 const cmds = (names: string[]): AutoItem[] => names.map((n) => ({ value: n, name: `/${n}`, description: `${n} does things` }));
 
@@ -51,6 +51,14 @@ describe('autocomplete', () => {
   test('truncateDescription truncates with ellipsis', () => {
     expect(truncateDescription('hello world', 20)).toBe('hello world');
     expect(truncateDescription('hello world', 5)).toBe('hell…');
+  });
+
+  test('estimateLines counts wrapped rows', () => {
+    expect(estimateLines('hi', 80)).toBe(1);
+    expect(estimateLines('a'.repeat(80), 80)).toBe(1);
+    expect(estimateLines('a'.repeat(81), 80)).toBe(2);
+    expect(estimateLines('a\nb\nc', 80)).toBe(3);
+    expect(estimateLines('', 80)).toBe(1);
   });
 
   test('truncateLongText caps huge pastes with head/tail', () => {

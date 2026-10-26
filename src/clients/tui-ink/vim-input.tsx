@@ -86,7 +86,8 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
       }
       return;
     }
-    // normal mode
+    // normal mode (app-level ctrl/meta shortcuts take precedence)
+    if (key.ctrl || key.meta) return;
     if (/^[1-9]$/.test(input)) { setCount((c) => (c ?? 0) * 10 + Number(input)); return; }
     const n = count ?? 1;
     setCount(null);

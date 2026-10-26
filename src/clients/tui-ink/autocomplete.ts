@@ -64,3 +64,12 @@ export function truncateLongText(text: string, max = 10000, head = 2500, tail = 
   const hidden = (text.match(/\n/g) || []).length - (tailPart.match(/\n/g) || []).length;
   return `${headPart}\n… +${Math.max(0, hidden)} lines …\n${tailPart}`;
 }
+
+// Estimated wrapped-row count for virtualized windowing (like cc's height cache,
+// but computed instead of measured: each visual line costs one row).
+export function estimateLines(text: string, width: number): number {
+  const w = Math.max(10, width);
+  let n = 0;
+  for (const ln of text.split('\n')) n += Math.max(1, Math.ceil(ln.length / w));
+  return n;
+}

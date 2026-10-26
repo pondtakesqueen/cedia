@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useWindowSize, useStdin, useIsScreenReaderEnabled } from 'ink';
-import { buildAutoItems, highlightSpans, truncateDescription, truncateLongText, type AutoItem } from './autocomplete.ts';
+import { buildAutoItems, highlightSpans, truncateDescription, truncateLongText, estimateLines, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
@@ -42,7 +42,8 @@ import { forkThread } from '../../core/project/fork.ts';
 import { ThreadStore, threadsDir } from '../../core/project/threads.ts';
 import { projectKey } from '../../core/session/log.ts';
 import { join } from 'node:path';
-import { readFileSync as fsRead, writeFileSync as fsWrite, existsSync as fsExists, readdirSync as fsReaddir, statSync as fsStat } from 'node:fs';
+import { readFileSync as fsRead, writeFileSync as fsWrite, existsSync as fsExists, readdirSync as fsReaddir, statSync as fsStat, unlinkSync as fsUnlink } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { usageReport, readEventsLenient, isUsageEvent } from '../../core/session/usage.ts';
 
 type Msg = { role: 'user' | 'assistant' | 'tool' | 'system'; text: string; status?: 'running' | 'success' | 'error'; dim?: boolean; tone?: 'red' };
@@ -321,7 +322,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         ];
         const byName = new Map(INK_COMMANDS.map((c) => [c.name, c.description]));
         say(groups.map(([g, names]) => `${g}: ${names.map((n) => `${n} — ${byName.get(n.slice(1)) ?? ''}`).join(' · ')}`).join('\n'));
-        say('keys: Esc stops a turn · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Tab completes · Shift+Tab permission · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · \\+Enter newline');
+        say('keys: Esc stops a turn · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Ctrl+G external editor · Tab completes · Shift+Tab permission · Meta+P model · Meta+O fast · Meta+T thinking · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · \\+Enter newline');
         return;
       }
       case 'historyUp':
@@ -1052,10 +1053,24 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     const max = Math.max(0, displayMessages.length - windowSize);
     setScrollOffset((o) => (o > max ? max : o));
   }, [columns, rows, displayMessages.length]);
-  const start = Math.max(0, displayMessages.length - windowSize - scrollOffset);
-  const end = displayMessages.length - scrollOffset;
-  const renderStart = Math.max(0, start - 5);
-  const renderEnd = Math.min(displayMessages.length, end + 5);
+  // Height-budgeted window (like cc's virtual list): walk back from the bottom
+  // accumulating estimated wrapped heights, so long wrapped messages are
+  // measured instead of counted. windowSize stays as the PgUp/PgDn step.
+  const heightBudget = Math.max(5, rows - 6);
+  const heightEnd = displayMessages.length - scrollOffset;
+  let heightStart = heightEnd;
+  {
+    let used = 0;
+    const w = Math.max(10, columns - 2);
+    while (heightStart > 0) {
+      const h = estimateLines(displayMessages[heightStart - 1]?.text ?? '', w);
+      if (used + h > heightBudget && heightStart < heightEnd) break;
+      used += h;
+      heightStart--;
+    }
+  }
+  const renderStart = Math.max(0, heightStart - 1);
+  const renderEnd = heightEnd;
   // While an overlay with its own text state owns the keyboard, VimInput must
   // ignore keys (otherwise typing in the overlay also types into the editor).
   // The autocomplete/mention/picker dropdowns filter on the editor text itself,
@@ -1417,6 +1432,33 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (!thread) { push({ role: 'system', text: 'no thread yet' }); return; }
       setMessageSelector({ open: true, selected: 0 });
       openDialog('messageSelector');
+      return;
+    }
+    // External editor (like cc's ctrl+g): edit the prompt in $EDITOR.
+    // Leaves the alternate screen while editing so the editor owns the terminal.
+    if (key.ctrl && (input === 'g' || input === 'G')) {
+      if (running) return;
+      const editor = process.env.VISUAL || process.env.EDITOR;
+      if (!editor) { push({ role: 'system', text: 'no $VISUAL or $EDITOR set' }); return; }
+      const tmp = join(tmpdir(), `cedia-prompt-${Date.now()}.md`);
+      try {
+        fsWrite(tmp, inputRef.current);
+        process.stdout.write('\x1b[?1049l');
+        try {
+          Bun.spawnSync([editor, tmp], { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' });
+        } finally {
+          process.stdout.write('\x1b[?1049h');
+          process.stdout.write('\x1b[?1000h\x1b[?1006h');
+        }
+        const edited = fsRead(tmp, 'utf8').replace(/\n+$/, '');
+        setInput(edited);
+        inputRef.current = edited;
+      } catch (e) {
+        push({ role: 'system', text: `editor failed: ${(e as Error).message}`, tone: 'red' });
+      } finally {
+        try { fsUnlink(tmp); } catch {}
+      }
+      return;
     }
   });
   // Definite terminal height pins the chat box to the bottom (cc-style).
@@ -1492,7 +1534,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             </Box>
             );
           })}
-                {end < displayMessages.length || belowHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↓ '}{belowHidden} more below</Text> : null}
+                {heightEnd < displayMessages.length || belowHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↓ '}{belowHidden} more below</Text> : null}
               </>
           )}
           {thinkingText && showThinking ? <Text dimColor={!screenReader} wrap="wrap">{thinkingText.slice(-500)}</Text> : null}
