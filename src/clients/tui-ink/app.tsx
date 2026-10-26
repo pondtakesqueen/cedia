@@ -60,6 +60,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [activity, setActivity] = useState('');
   const [context, setContext] = useState(0);
   const [spent, setSpent] = useState(0);
+  const [statusLineOutput, setStatusLineOutput] = useState('');
   const lastCostThresholdRef = useRef(0);
   const lastActivityRef = useRef(Date.now());
   const [thread, setThread] = useState<string | undefined>(args.thread);
@@ -702,6 +703,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
     } catch {}
   }, []);
+  React.useEffect(() => {
+    let cmd: string | undefined;
+    try {
+      const raw = JSON.parse(require('node:fs').readFileSync(join(cediaHome(), 'settings.json'), 'utf8')) as { statusLine?: unknown };
+      if (typeof raw?.statusLine === 'string') cmd = raw.statusLine;
+      else if (raw?.statusLine && typeof (raw.statusLine as { command?: unknown }).command === 'string') cmd = (raw.statusLine as { command: string }).command;
+    } catch {}
+    if (!cmd) { setStatusLineOutput(''); return; }
+    const out = runStatusLineCommand(cmd, { model: args.model ?? 'auto', workspace: args.cwd, costUsd: spent, contextWindow: context, permissionMode: args.permission, vimMode });
+    setStatusLineOutput(out);
+  }, [spent, context, thread, args.model, args.cwd, args.permission, vimMode]);
   const { columns } = useWindowSize();
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1';
   const showSidebar = !screenReader && columns >= 120;
@@ -871,7 +883,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} />
         </Box>
         <StatusBar thread={thread} model={args.model} permission={args.permission} running={running} context={context} spend={spent > 0 ? spent : undefined} />
-        <Text dimColor>vim:{vimMode}</Text>
+        {statusLineOutput ? <Text>{statusLineOutput}</Text> : <Text dimColor>vim:{vimMode}</Text>}
       </Box>
       {showSidebar ? (
         <Box flexDirection="column" width={28} borderStyle="single" borderColor="gray" paddingX={1}>
