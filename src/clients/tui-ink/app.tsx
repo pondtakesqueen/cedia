@@ -337,6 +337,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         const r = rewindThread(store, thread, n, { open: (cwd) => workspaceSnapshots(cwd, cediaHome()), sessionFile: (c, sid) => `${c}/${sid}.jsonl` }, { force: rest[1] === 'force' });
         if ('error' in r) { say('error: ' + r.error); return; }
         say(rewoundText(r));
+        setContext(0);
         return;
       }
       case 'fork': {
