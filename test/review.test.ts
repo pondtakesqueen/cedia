@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { askedReviewPrompt, changedLines, fixPrompt, MAX_REVIEW_DIFF, parseVerdict, reviewPrompt } from '../src/core/trust/review.ts';
+import { askedReviewPrompt, changedLines, findingRef, fixPrompt, MAX_REVIEW_DIFF, parseVerdict, patchFiles, reviewPrompt, verifyFindings } from '../src/core/trust/review.ts';
 
 describe('review', () => {
   test('the verdict is the last VERDICT line; anything else is unclear', () => {
@@ -57,5 +57,25 @@ describe('review', () => {
 
   test('changedLines counts added and removed lines, not the file headers', () => {
     expect(changedLines('--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+new\n context')).toBe(2);
+  });
+
+  test('finding positions verify against the diff: drift is dropped, the rest stays', () => {
+    const patch = '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,2 +1,3 @@\n ctx\n+new\n ctx\n--- a/old.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n';
+    expect(patchFiles(patch)).toEqual(new Set(['src/a.ts', 'old.ts']));
+    expect(findingRef('FINDING: src/a.ts:2 leaks')).toEqual({ path: 'src/a.ts', line: 2 });
+    expect(findingRef('no location here')).toBeUndefined();
+    const r = verifyFindings(
+      ['FINDING: src/a.ts:2 leaks the handle.', 'FINDING: src/ghost.ts:9 is wrong.', 'FINDING: vague unease, no location.', 'Just a note.'].join('\n'),
+      patch,
+    );
+    expect(r.kept).toContain('src/a.ts:2');
+    expect(r.kept).toContain('vague unease');
+    expect(r.kept).toContain('Just a note.');
+    expect(r.kept).not.toContain('ghost.ts');
+    expect(r.dropped).toEqual([{ ref: 'src/ghost.ts:9', reason: 'not in the diff' }]);
+    // A bare filename matches its path in the diff; deleted files count as touched.
+    expect(verifyFindings('FINDING: a.ts:1 x.', patch).dropped).toEqual([]);
+    expect(verifyFindings('FINDING: old.ts:1 x.', patch).dropped).toEqual([]);
+    expect(verifyFindings('', patch)).toEqual({ kept: '', dropped: [] });
   });
 });

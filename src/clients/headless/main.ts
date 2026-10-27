@@ -46,7 +46,7 @@ import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
 import { ADVISOR_SYSTEM, adviceOf, advicePrompt, adviceReminder, turnDigest } from '../../core/trust/advisor.ts';
 import { callText, CLASSIFIER_SYSTEM, classifyPrompt, MAX_INPUT, namedFiles, verdictOf, type Verdict } from '../../core/trust/classifier.ts';
-import { changedLines, fixPrompt, parseVerdict, reviewPrompt, SMALL_CHANGE_LINES, type ReviewOutcome } from '../../core/trust/review.ts';
+import { changedLines, fixPrompt, parseVerdict, reviewPrompt, SMALL_CHANGE_LINES, verifyFindings, type ReviewOutcome } from '../../core/trust/review.ts';
 import { existingTests, leavesTestsAlone, PROTECTED_TEST_REASON } from '../../core/trust/tests.ts';
 import { goalContinuePrompt, goalPlanPrompt, goalPrompt, judgeWithPlan, MAX_GOAL_ROUNDS, parseCriteria, parseGoal, strategistPrompt, withCriteria, type GoalRound } from '../../core/trust/goal.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type JsonObject, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
@@ -1019,15 +1019,20 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       const r = await side('review', roles.review, reviewPrompt(args.prompt, result.evidence, patch));
       // A review cut off by a stop said nothing about the change: it was interrupted, not without a verdict.
       const { verdict, findings, overruled } = r.ok ? parseVerdict(r.text) : { verdict: ac.signal.aborted ? ('interrupted' as const) : ('unclear' as const), findings: '', overruled: undefined };
-      review = { ...r.step, verdict, fixed: false };
-      if (verdict === 'interrupted') say(`cedia: the review by ${r.step.model} was interrupted before it gave a verdict; the change is as the writer left it\n`);
-      if (overruled) say(`cedia: the review by ${r.step.model} approved but named a file and line; sending it back as changes\n`);
-      if (verdict === 'changes') {
+      // Findings outside the diff were not reviewed: drop them with names, so the fix chases only placed ones.
+      const placed = patch ? verifyFindings(findings, patch) : { kept: findings, dropped: [] as { ref: string; reason: string }[] };
+      const verdictNow = verdict === 'changes' && !placed.kept ? 'approve' as const : verdict;
+      if (placed.dropped.length)
+        say(`cedia: the review named ${placed.dropped.length} file${placed.dropped.length === 1 ? '' : 's'} outside the change (${placed.dropped.map((d) => d.ref).join(', ')}); ${verdictNow === 'changes' ? 'fixing the findings that remain' : 'keeping the change as it is'}\n`);
+      review = { ...r.step, verdict: verdictNow, fixed: false };
+      if (verdictNow === 'interrupted') say(`cedia: the review by ${r.step.model} was interrupted before it gave a verdict; the change is as the writer left it\n`);
+      if (overruled && verdictNow === 'changes') say(`cedia: the review by ${r.step.model} approved but named a file and line; sending it back as changes\n`);
+      if (verdictNow === 'changes') {
         const t0 = Date.now();
-        result = await recover(await write(writer.model, writer.log, fixPrompt(r.step.model, findings)));
+        result = await recover(await write(writer.model, writer.log, fixPrompt(r.step.model, placed.kept)));
         review.fixed = true;
         review.fixMs = Date.now() - t0;
-      } else if (verdict === 'unclear') say(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
+      } else if (verdictNow === 'unclear') say(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
     }
     // Goal: a separate judge decides whether the condition holds; while it does not, the writer goes on in its
     // own session with what the judge found missing, up to MAX_GOAL_ROUNDS more passes.

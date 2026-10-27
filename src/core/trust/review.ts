@@ -19,7 +19,7 @@ export const changedLines = (patch: string): number =>
   patch.split('\n').filter((l) => (l.startsWith('+') || l.startsWith('-')) && !l.startsWith('+++') && !l.startsWith('---')).length;
 
 // How every review ends, the one the run asks for and the one the user does.
-const VERDICT_ASK = `End with your findings, each on its own line that starts \`FINDING:\` and names a file and line, or the line \`FINDINGS: none\` when there is none. Then one last line on its own: \`VERDICT: approve\` when there is no finding, or \`VERDICT: changes\` when there is one. Files and lines you cite as evidence elsewhere are fine; a FINDING line sends the change back to be fixed, whatever the verdict says.`;
+const VERDICT_ASK = `End with your findings, each on its own line that starts \`FINDING:\` and names a file and line, or the line \`FINDINGS: none\` when there is none. Then one last line on its own: \`VERDICT: approve\` when there is no finding, or \`VERDICT: changes\` when there is one. Files and lines you cite as evidence elsewhere are fine; a FINDING line sends the change back to be fixed, whatever the verdict says. Name only files in the diff above: a FINDING on any other file is dropped without review.`;
 
 export function reviewPrompt(task: string, ev: Evidence | undefined, patch: string | undefined): string {
   const changed = ev?.changed.length ? ev.changed.join(', ') : 'none recorded';
@@ -63,6 +63,55 @@ ${VERDICT_ASK}`;
 const FILE_LINE = /(?:^|[\s`'"(\[*])[\w./-]*\w\.[A-Za-z]\w*:\d+\b/m;
 const FINDING_LINE = /^\W*FINDING:/im;
 const NO_FINDINGS = /^\W*FINDINGS:\s*none\b/im;
+
+// The path and line a finding cites, if it cites one.
+const FILE_LINE_AT = /(?:^|[\s`'"(\[*])([\w./-]*\w\.[A-Za-z]\w*):(\d+)\b/m;
+export function findingRef(line: string): { path: string; line: number } | undefined {
+  const m = FILE_LINE_AT.exec(line);
+  if (!m) return undefined;
+  return { path: m[1]!, line: Number(m[2]!) };
+}
+
+// The files a unified diff touches, from its `+++ b/` lines (deleted files keep their `--- a/` one).
+export function patchFiles(patch: string): Set<string> {
+  const files = new Set<string>();
+  for (const line of patch.split('\n')) {
+    const added = /^\+{3} b\/(.+)$/.exec(line.trimEnd());
+    if (added && added[1] !== '/dev/null') files.add(added[1]!);
+    else {
+      const removed = /^-{3} a\/(.+)$/.exec(line.trimEnd());
+      if (removed && removed[1] !== '/dev/null' && ![...files].some((f) => f === removed[1])) files.add(removed[1]!);
+    }
+  }
+  return files;
+}
+
+// A finding that names no file in the diff was not reviewed: the reviewer drifted, and the fix step would
+// chase it. Drop those lines (saying which), keep the rest; a finding with no file:line at all is kept, since
+// the format, not the substance, is what it lacks. Line numbers are not checked: the prompt sends the reviewer
+// into the change's callers, where a real defect lives outside any hunk.
+export function verifyFindings(findings: string, patch: string): { kept: string; dropped: { ref: string; reason: string }[] } {
+  const files = patchFiles(patch);
+  const kept: string[] = [];
+  const dropped: { ref: string; reason: string }[] = [];
+  for (const line of findings.split('\n')) {
+    if (!FINDING_LINE.test(line)) {
+      kept.push(line);
+      continue;
+    }
+    const ref = findingRef(line);
+    if (!ref) {
+      kept.push(line);
+      continue;
+    }
+    if (![...files].some((f) => f === ref.path || f.endsWith(`/${ref.path}`) || ref.path.endsWith(`/${f}`))) {
+      dropped.push({ ref: `${ref.path}:${ref.line}`, reason: 'not in the diff' });
+      continue;
+    }
+    kept.push(line);
+  }
+  return { kept: kept.join('\n').trim(), dropped };
+}
 
 // The last VERDICT line decides, except that an approval with a finding counts as changes: a reviewer at medium
 // effort often named the defect and approved all the same (evals/results/README.md). A FINDING line is a finding;
