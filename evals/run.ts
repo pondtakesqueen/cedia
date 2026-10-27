@@ -114,8 +114,13 @@ export function workDiff(base: string, cwd: string): string {
 type Invocation = { bin: string; args: string[]; env?: Record<string, string> };
 
 export const HARNESSES: Record<string, (task: Task, cwd: string, model: string | null) => Invocation> = {
-  cedia: (task, _cwd, model) => ({
+  cedia: (task, cwd, model) => ({
     bin: process.env.CEDIA_EVAL_CEDIA_BIN ?? resolve(import.meta.dir, "../bin/cedia"),
+    // An isolated home, cleaned with the task's directory: evals measure the harness and the task, not the user's
+    // own settings (their MCP servers would join every request's tools, their roles would add plan/review steps,
+    // their memory would leak across tasks). Keys still come from the environment and the Keychain, which live
+    // outside CEDIA_HOME.
+    env: { CEDIA_HOME: join(cwd, ".home") },
     args: [
       "-p", task.prompt,
       "--output-format", "json",
