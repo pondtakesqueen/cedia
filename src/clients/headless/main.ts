@@ -97,6 +97,8 @@ export type HeadlessArgs = {
   noMcp?: boolean;
   // A named set of defaults under the flags (core/profiles.ts); a thread goes on with the profile it was opened with.
   profile?: string;
+  // Output style by name (core/output-styles): flag beats the settings file.
+  outputStyle?: string;
   // "fallback" or "wait:<minutes>": what a spent quota does.
   onQuota?: string;
   // Reviews the change once the writer's claim passes the done gate.
@@ -367,7 +369,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       return '';
     }
   };
-  const styleName = loadOutputStyleSetting(cediaHome());
+  const styleName = args.outputStyle ?? loadOutputStyleSetting(cediaHome());
   const style = getStyle(styleName, cediaHome());
   const styleModifier = style?.promptModifier ?? '';
   const remember = store ? rememberTool(memory, threadId ?? 'cedia') : undefined;

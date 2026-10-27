@@ -617,3 +617,31 @@ describe('--no-mcp (offline, faux)', () => {
     expect(toolNames(true).filter((n) => n.startsWith('mcp__'))).toEqual([]);
   });
 });
+
+describe('review position check (offline, faux)', () => {
+  test('a finding outside the diff is dropped with names; with nothing placed left the change is kept', () => {
+    const write = { blocks: [{ type: 'tool_use', id: 'w1', name: 'write', input: { path: 'f.txt', content: 'good\n' } }] };
+    const reviewText = { blocks: [{ type: 'text', text: 'FINDING: src/ghost.ts:9 drifts off the change.\nVERDICT: changes' }] };
+    const args = ['-p', 'make f.txt say good', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -s f.txt', '--review', 'faux'];
+    const r = cedia([write, call('c1', 'test -s f.txt'), reply('wrote it'), reviewText], args);
+    expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success', review: { verdict: 'approve', fixed: false } });
+    expect(r.err).toContain('src/ghost.ts:9');
+    expect(r.err).toContain('outside the change');
+  });
+});
+
+describe('output style flag (offline, faux)', () => {
+  const preambleOf = (extra: string[]) => {
+    const r = cedia([{ blocks: [{ type: 'text', text: 'done' }] }], ['-p', 'say hi', '--sandbox', 'off', ...extra]);
+    expect(r.code).toBe(0);
+    const [slug] = readdirSync(join(r.home, 'sessions'));
+    const [file] = readdirSync(join(r.home, 'sessions', slug!));
+    const events = SessionLog.load(join(r.home, 'sessions', slug!, file!)).events;
+    return events.find((e) => e.kind === 'reminder') as { text?: string } | undefined;
+  };
+
+  test('--output-style terse puts its modifier in the preamble; default leaves it out', () => {
+    expect(preambleOf(['--output-style', 'terse'])?.text).toContain('character for character');
+    expect(preambleOf([])?.text ?? '').not.toContain('character for character');
+  });
+});

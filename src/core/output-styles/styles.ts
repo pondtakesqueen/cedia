@@ -8,6 +8,12 @@ const BUILTIN: OutputStyle[] = [
   { name: 'default', description: 'Default coding assistant', promptModifier: '' },
   { name: 'explanatory', description: 'Explain reasoning and tradeoffs', promptModifier: 'Explain your reasoning and the tradeoffs behind each change.' },
   { name: 'learning', description: 'Teach as you go', promptModifier: 'Teach the concepts as you make changes; highlight why.' },
+  {
+    name: 'terse',
+    description: 'Short reports, exact payloads',
+    promptModifier:
+      'Answer first, one idea per sentence, no greeting or recap. Code, commands, paths, numbers and error messages stay exact, character for character. Never drop not, never, no or only. Handoff notes, summaries and review findings keep full detail: terseness is for reports and chatter, never for what the next session or a fix needs to read.',
+  },
 ];
 
 export function stylesDir(home = cediaHome()) { return join(home, 'output-styles'); }

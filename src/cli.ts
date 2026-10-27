@@ -82,6 +82,7 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                message is work a plan helps, so a greeting or a question skips the planner
                                ("planWhen" in settings)
       --triage <ref>           the model that decides (default: the code model; roles.triage in settings)
+      --output-style <name>    report style by name (default, explanatory, learning, terse; settings, cedia output-style)
       --cache-ttl <5m|1h>      how long the writer's cached prompt lasts on Claude API models between requests.
                                Default 5m for -p, 1h in the TUI (writes cost 2x input instead of 1.25x)
       --lsp <on|off>           after each edit, add the file's errors from a language server when one is installed
@@ -242,6 +243,7 @@ export async function main(argv: string[]): Promise<number> {
       lsp: { type: 'string' },
       'cache-ttl': { type: 'string' },
       'plan-when': { type: 'string' },
+      'output-style': { type: 'string' },
       triage: { type: 'string' },
       ask: { type: 'string' },
       todo: { type: 'string' },
@@ -306,6 +308,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.lsp ? { lsp: values.lsp } : {}),
     ...(values['cache-ttl'] ? { cacheTtl: values['cache-ttl'] } : {}),
     ...(values['plan-when'] ? { planWhen: values['plan-when'] } : {}),
+    ...(values['output-style'] ? { outputStyle: values['output-style'] } : {}),
     ...(values.triage ? { triage: values.triage } : {}),
     ...(values.ask ? { ask: values.ask } : {}),
     ...(values.todo ? { todo: values.todo } : {}),
