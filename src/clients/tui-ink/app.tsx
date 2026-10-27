@@ -124,7 +124,6 @@ const shortCwd = (cwd: string): string => {
 const themedColorFor = (T: ThemeTokens, role: Msg['role']): string | undefined =>
   role === 'user' ? undefined : role === 'assistant' ? T.text : role === 'tool' ? T.textMuted : T.warning;
 
-// User rows paint a two-column bar before the text. The wrap width and the hit column both count it.
 function paintedWidth(role: Msg['role'] | undefined, columns: number, screenReader: boolean): number {
   const bar = role === 'user' && !screenReader ? 2 : 0;
   return Math.max(10, columns - 2 - bar);
@@ -170,7 +169,6 @@ function inkKeyId(input: string, key: any): string | undefined {
   return mods.length ? `${mods.join('+')}+${name}` : name;
 }
 
-// inkKeyId always emits shift, ctrl, alt, super. A custom file may not.
 function normKey(id: string): string {
   const parts = id.toLowerCase().split('+').filter((p) => p.length > 0);
   const name = parts.pop() ?? '';
@@ -1129,7 +1127,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   React.useEffect(() => {
     if (!stdin) return;
     const pointer = (termCol: number, termRow: number) => {
-      // SGR rows and columns are 1-based. rowAt counts from 0 at the top of this frame.
       const hit = rowMapRef.current.rowAt(termRow - 1);
       if (!hit) return;
       const msg = displayRef.current[hit.index];
@@ -1373,7 +1370,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     exit();
   };
   useInput((input, key) => {
-    // Trust stays in front of every overlay. ctrl+c here still does nothing.
     if (trustOpen) {
       if (key.upArrow || key.downArrow) { setTrustSelected((s) => (s === 0 ? 1 : 0)); return; }
       if (input === 'y' || input === 'Y') {
@@ -1410,7 +1406,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }));
       return;
     }
-    // Mention wins over the slash list. Any other key is left for VimInput.
     if (ctx === 'Autocomplete') {
       if (mentionOpen) {
         const sel = Math.min(mentionSelected, mentionItems.length - 1);
@@ -1484,7 +1479,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 let raw: Record<string, unknown> = {};
                 try { raw = JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown>; } catch {}
                 let v: unknown = editValue;
-                try { v = JSON.parse(editValue); } catch { /* keep as string */ }
+                try { v = JSON.parse(editValue); } catch {}
                 raw[editingKey] = v;
                 fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
                 push({ role: 'system', text: `setting ${editingKey} updated` });
@@ -1510,7 +1505,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 setEditValue(JSON.stringify(raw[target]) ?? '');
                 return;
               }
-            } catch { /* fall through */ }
+            } catch {}
           }
           if (input === ' ') {
             try {
@@ -1524,7 +1519,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
                 push({ role: 'system', text: `setting ${target} = ${String(raw[target])}` });
               }
-            } catch { /* ignore */ }
+            } catch {}
             return;
           }
           if (key.upArrow) {
@@ -1780,7 +1775,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const queryHit = q.length > 0 && capped.toLowerCase().includes(q.toLowerCase());
             const bounds = selection ? selectionBounds(selection, globalIdx, capped.length) : undefined;
             const hasSel = !!bounds && bounds.end > bounds.start;
-            // ink only paints background behind actual characters, so pad each user line.
             const isUserRow = m.role === 'user' && !hasSel && !queryHit;
             const isToolError = m.role === 'tool' && m.status === 'error';
             const contentWidth = paintedWidth(m.role, columns, screenReader);

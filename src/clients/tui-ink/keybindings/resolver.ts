@@ -1,6 +1,5 @@
 import type { Binding, Context } from './types.ts';
 
-/** Booleans the ink shell already has. activeContext does not read React state. */
 export type OverlayState = {
   permissionNotice: boolean;
   picker: boolean;
@@ -11,13 +10,6 @@ export type OverlayState = {
   autocomplete: boolean;
 };
 
-/**
- * Idle is the Chat residual. Tests spread this and flip one field.
- * First true field in ORDER wins. Permission, then picker, then settings,
- * then message selector, then history search, then transcript search,
- * then autocomplete. Chat only when every field is false.
- * Settings beats autocomplete so a slash draft cannot take Enter from the panel.
- */
 export const IDLE_OVERLAY: OverlayState = {
   permissionNotice: false,
   picker: false,
@@ -43,7 +35,6 @@ const _orderCoversOverlayState: [Exclude<keyof OverlayState, OrderedKey>] extend
 
 export type LiveContext = (typeof ORDER)[number][1] | 'Chat';
 
-/** First ORDER row whose field is true, otherwise Chat. */
 export function activeContext(state: OverlayState): LiveContext {
   void _orderCoversOverlayState;
   for (const [field, ctx] of ORDER) {
@@ -54,13 +45,6 @@ export function activeContext(state: OverlayState): LiveContext {
 
 export type VimGate = { captured: boolean; suppressSubmit: boolean };
 
-/**
- * Trust captures the editor.
- * Any LiveContext other than Chat or Autocomplete captures it.
- * Autocomplete leaves captured false and sets suppressSubmit, so VimInput types
- * the draft and does not submit on Enter.
- * Chat leaves both false.
- */
 export function vimInputGate(ctx: LiveContext, trustOpen: boolean): VimGate {
   if (trustOpen) return { captured: true, suppressSubmit: false };
   if (ctx === 'Autocomplete') return { captured: false, suppressSubmit: true };

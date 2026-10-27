@@ -75,11 +75,6 @@ export function frecencyBonus(map: FrecencyMap, value: string): number {
 // Split a name into highlighted / plain runs for the dropdown.
 export type TextRun = { text: string; hit: boolean };
 
-/**
- * Literal substring, case-insensitive, via indexOf. Not a regular expression.
- * Empty query, or no hit, returns one run of the whole text with hit false.
- * Adjacent hit characters merge into one run.
- */
 export function highlightQuery(text: string, query: string): TextRun[] {
   if (!query) return [{ text, hit: false }];
   const lower = text.toLowerCase();
@@ -144,11 +139,6 @@ export function estimateLines(text: string, width: number): number {
   return n;
 }
 
-/**
- * Character offset of a pointer on a wrapped message.
- * Same split as estimateLines. Width below 10 is 10.
- * Col past the row clamps to the end of that row. A row past the text clamps to text.length.
- */
 export function offsetAt(text: string, width: number, rowInSpan: number, col: number): number {
   const w = Math.max(10, width);
   const safeRow = Math.max(0, rowInSpan);

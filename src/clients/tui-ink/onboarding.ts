@@ -17,7 +17,6 @@ export function saveOnboarding(state: OnboardingState, home = cediaHome()) {
 export const ONBOARDING_STEPS = ['preflight', 'theme', 'apiKey', 'trust', 'terminal'] as const;
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 
-/** Names in completed, plus trust when hasTrustDialogAccepted is set. */
 export function completedNames(state: OnboardingState): ReadonlySet<OnboardingStep> {
   const known = new Set<string>(ONBOARDING_STEPS);
   const names = new Set<OnboardingStep>();
@@ -33,7 +32,6 @@ export function isComplete(home = cediaHome()): boolean {
   return ONBOARDING_STEPS.every((step) => names.has(step));
 }
 
-/** Add-only. False and omitted facts remove nothing. Does not write disk. */
 export function reconcileOnboarding(
   state: OnboardingState,
   facts: Partial<Record<OnboardingStep, boolean>>,

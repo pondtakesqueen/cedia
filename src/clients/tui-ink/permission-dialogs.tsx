@@ -60,7 +60,6 @@ export const NOTICE_FIELDS: Record<string, readonly string[]> = {
   skill: ['name', 'file'],
 };
 
-/** Footer under every denial notice. */
 export const DISMISS_NOTE = 'Esc or Enter closes this notice. The call was already denied.';
 
 const CAP = 200;
