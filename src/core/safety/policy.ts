@@ -97,6 +97,15 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
 
 const deny = (rule: string, reason: string): Decision => ({ decision: 'deny', rule, reason });
 
+// Whether a `tool(pattern)` rule covers a call named by its tool and one line of text (a command line
+// or an MCP tool name): what `suggest` uses to skip calls a deny rule already holds.
+export function rulePatternMatches(rule: string, tool: string, text: string): boolean {
+  const m = /^([\w-]+)(?:\((.*)\))?$/.exec(rule.trim());
+  if (!m || m[1] !== tool) return false;
+  if (m[2] === undefined) return true;
+  return glob(m[2]!).test(text);
+}
+
 // Whether a call matches a rule the way a deny rule does: any simple command of a bash call, or the call's path.
 export function ruleMatches(rule: string, spec: ToolSpec, input: JsonObject, cwd: string): boolean {
   const commands = spec.name === 'bash' ? simpleCommands(String(input.command ?? '')) : undefined;

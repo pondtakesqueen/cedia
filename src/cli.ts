@@ -5,7 +5,8 @@ import { runHeadless } from './clients/headless/main.ts';
 import type { TuiArgs } from './clients/tui/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
 import { GUARDS, PERMISSION_ENTRIES, type PermissionList } from './core/safety/policy.ts';
-import { cediaHome, loadPermissionSetting, loadRoles, loadManagedSettings, loadResolvedSettings, loadPolicyLimits, savePolicyLimits } from './core/config.ts';
+import { applyAllowRules, suggestAllowRules } from './core/safety/suggest.ts';
+import { cediaHome, loadPermissionSetting, loadPolicy, loadRoles, loadManagedSettings, loadResolvedSettings, loadPolicyLimits, savePolicyLimits } from './core/config.ts';
 import { processKeychain } from './core/providers/keychain.ts';
 import { modelLine, modelList } from './core/providers/models.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
@@ -30,6 +31,7 @@ import { workspaceSnapshots } from './core/safety/snapshot.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
 import { formatUsage, isUsageEvent, readEventsLenient, sinceOf, usageReport, type SessionInput } from './core/session/usage.ts';
+import { selectSessions } from './core/session/select.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
 import { doctorReport } from './core/doctor.ts';
 import { selfSpawnArgs } from './core/self.ts';
@@ -160,6 +162,10 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia models [--json]                the models a session may use, which of them have a key here, and the
                                             one the code role takes now (marked *)
        cedia permissions [--json]           the permission modes a run may take (--permission) and the default
+       cedia permissions suggest [<file>...] [--thread <id>] [--last <n>] [--apply] [--json]
+                                            propose allow rules from calls past runs stopped (read-only
+                                            commands and exact MCP tools only); --apply adds them to the
+                                            user's allow list
        cedia mcp [list] [--json]            the MCP servers in ~/.cedia/settings.json (env and header names only)
        cedia mcp check <name> [--json]      start one as a run would and list its tools
        cedia mcp add <name> (--command <cmd> [--arg <a>]... [--env K=V]... | --url <url> [--header K=V]...)
@@ -747,6 +753,12 @@ async function pr(argv: string[]): Promise<number> {
 }
 
 function permissions(argv: string[]): number {
+  const [sub, ...rest] = argv;
+  if (sub === 'suggest') return suggest(rest);
+  if (sub !== undefined && !sub.startsWith('-')) {
+    console.error('usage: cedia permissions [--json] | suggest [<file.jsonl>...] [--thread <id>] [--last <n>] [--apply] [--json] [--cwd <dir>]');
+    return 2;
+  }
   let parsed;
   try {
     parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' } } });
@@ -762,6 +774,51 @@ function permissions(argv: string[]): number {
     return 1;
   }
   console.log(parsed.values.json ? JSON.stringify(list) : list.modes.map((m) => `${m.mode === list.default ? '*' : ' '} ${m.mode.padEnd(10)} ${m.description}`).join('\n'));
+  return 0;
+}
+
+// `cedia permissions suggest`: propose allow rules from calls past runs stopped, and with --apply add the
+// missing ones to the user's allow list (a repository's settings can only tighten, never grant).
+function suggest(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' }, thread: { type: 'string' }, last: { type: 'string' }, apply: { type: 'boolean' }, json: { type: 'boolean' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const cwd = resolve(parsed.values.cwd ?? process.cwd());
+  const home = cediaHome();
+  const sessions = selectSessions({ cwd, home, ...(parsed.values.thread ? { thread: parsed.values.thread } : {}), ...(parsed.values.last ? { last: Number(parsed.values.last) } : {}), ...(parsed.positionals.length ? { files: parsed.positionals } : {}) });
+  if (!sessions.length) {
+    console.error('cedia: no session logs to read');
+    return 1;
+  }
+  let policy;
+  try {
+    policy = loadPolicy(cwd);
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 1;
+  }
+  const r = suggestAllowRules(sessions, { allow: policy.allow, deny: policy.deny });
+  if (parsed.values.apply) {
+    let added: string[];
+    try {
+      added = applyAllowRules(home, r.suggestions.map((s) => s.rule)).added;
+    } catch (e) {
+      console.error(`cedia: ${(e as Error).message}`);
+      return 1;
+    }
+    if (parsed.values.json) console.log(JSON.stringify({ ...r, added }));
+    else console.log(added.length ? `added to ~/.cedia/settings.json: ${added.join(', ')}` : 'nothing new to add: every suggestion is already allowed');
+    return 0;
+  }
+  if (parsed.values.json) console.log(JSON.stringify(r));
+  else {
+    console.log(r.suggestions.length ? r.suggestions.map((s) => `${s.rule}  (${s.hits} run${s.hits === 1 ? '' : 's'} stopped; e.g. ${s.example})`).join('\n') : 'no suggestions: nothing safely pre-approvable was stopped');
+    if (r.skippedDeny || r.skippedUnsafe) console.log(`left out: ${r.skippedDeny} held by a deny rule or guard, ${r.skippedUnsafe} unsafe to pre-approve`);
+  }
   return 0;
 }
 
