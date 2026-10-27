@@ -18,6 +18,7 @@ import { memoryBlock, memoryPath, MemoryStore, rememberTool } from '../../core/p
 import { loadSkills, skillCommand, skillsBlock, skillTool } from '../../core/skills/skills.ts';
 import { getStyle, loadOutputStyleSetting } from '../../core/output-styles/styles.ts';
 import { mcpStub, startMcp, type McpServers } from '../../core/mcp/tools.ts';
+import { clearDeferred, registerDeferred } from '../../core/tools/tool-search.ts';
 import { webFetchTool } from '../../core/tools/web.ts';
 import { runTurn } from '../../core/project/undo.ts';
 import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
@@ -898,6 +899,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const servers = loadMcp();
     if (Object.keys(servers).length) {
       mcp = await startMcp(servers);
+      // Stripped MCP tools stay searchable: one registry per run (sub-threads share it; separate runs are
+      // separate processes, so no run reads another's index).
+      clearDeferred();
+      for (const t of mcp.index) registerDeferred(t);
       for (const n of mcp.notes) say(n + '\n');
     }
     // Plan: a stronger model reads the repo and writes the plan the writer gets with the task.

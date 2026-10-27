@@ -15,7 +15,7 @@ import { McpClient, type McpCallResult, type McpServerConfig, type McpTool } fro
 const MAX_DESCRIPTION = 2_000;
 const MAX_NAME = 64;
 
-export type McpServers = { clients: McpClient[]; tools: ToolSpec[]; notes: string[]; close(): Promise<void> };
+export type McpServers = { clients: McpClient[]; tools: ToolSpec[]; index: { name: string; description: string }[]; notes: string[]; close(): Promise<void> };
 
 const part = (s: string) => s.replace(/[^A-Za-z0-9_-]/g, '_');
 
@@ -85,6 +85,35 @@ export async function connectWithRetry(client: McpClient, remote: boolean, sleep
   }
 }
 
+// Definition budget: past this many characters of MCP tool definitions, tools after it go out stripped
+// (name, first line of description, open schema) with their full text searchable through ToolSearch, instead
+// of every tool of a big server riding each request's cached prefix (208 tools of one server were ~400k
+// characters a request). Under the budget everything stays full, exactly as before. The split walks servers
+// then tools, both already sorted, so the list stays fixed for the run; calls still resolve by name, so the
+// loop, the linter and the session shape need no change.
+export const MCP_DEF_BUDGET = 32_000;
+const DEFERRED_DESC = 160;
+
+const defChars = (spec: ToolSpec) => JSON.stringify({ name: spec.name, description: spec.description, schema: spec.schema }).length;
+
+export function budgetMcpTools(specs: ToolSpec[]): { tools: ToolSpec[]; index: { name: string; description: string }[] } {
+  let used = 0;
+  const tools: ToolSpec[] = [];
+  const index: { name: string; description: string }[] = [];
+  for (const spec of specs) {
+    const chars = defChars(spec);
+    if (used + chars <= MCP_DEF_BUDGET) {
+      used += chars;
+      tools.push(spec);
+      continue;
+    }
+    const first = spec.description.split('\n')[0]!.slice(0, DEFERRED_DESC);
+    tools.push({ ...spec, description: `${first} (full usage: search ToolSearch for ${spec.name})`, schema: { type: 'object', additionalProperties: true } });
+    index.push({ name: spec.name, description: spec.description });
+  }
+  return { tools, index };
+}
+
 // A resumed session's tool whose server is not connected now: it keeps the definition the session was cached
 // with, and a call says why it cannot run.
 export function mcpStub(def: ToolDef): ToolSpec {
@@ -131,5 +160,6 @@ export async function startMcp(servers: Record<string, McpServerConfig>, sleep: 
     }
   }
   const clients = started.flatMap((s) => (s ? [s.client] : []));
-  return { clients, tools, notes, close: async () => void (await Promise.all(clients.map((c) => c.close()))) };
+  const { tools: budgeted, index } = budgetMcpTools(tools);
+  return { clients, tools: budgeted, index, notes, close: async () => void (await Promise.all(clients.map((c) => c.close()))) };
 }
