@@ -31,6 +31,7 @@ import { lintSession } from './core/session/lint.ts';
 import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
 import { formatUsage, isUsageEvent, readEventsLenient, sinceOf, usageReport, type SessionInput } from './core/session/usage.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
+import { doctorReport } from './core/doctor.ts';
 import { selfSpawnArgs } from './core/self.ts';
 import { versionInfo } from './protocol/version.ts';
 
@@ -879,57 +880,30 @@ function doctor(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 2;
   }
-  const info = versionInfo();
   const home = cediaHome();
   const cwd = parsed.values.cwd ?? process.cwd();
-  const diagnostics: Record<string, unknown> = {
-    version: info.version,
-    protocol: info.protocol,
-    capabilities: info.capabilities,
-    home,
-    cwd,
-    sandbox: { available: false },
-    settings: {},
-    keybindings: {},
-    mcp: {},
-  };
-  // try loadResolvedSettings
+  const r = doctorReport(cwd, home);
+  // Keybindings live client-side (core never imports clients), so they join the report here.
+  const keybindings: Record<string, unknown> = {};
   try {
-    loadResolvedSettings();
-    (diagnostics.settings as Record<string, unknown>).resolved = 'ok';
+    keybindings.count = loadKeybindings(home).length;
   } catch (e) {
-    (diagnostics.settings as Record<string, unknown>).resolvedError = (e as Error).message;
+    keybindings.error = (e as Error).message;
   }
-  // sandbox
-  const bunWhich = Bun.which('bwrap') || Bun.which('sandbox-exec');
-  (diagnostics.sandbox as Record<string, unknown>).available = !!bunWhich;
-  (diagnostics.sandbox as Record<string, unknown>).tool = bunWhich ?? null;
-  // keybindings
-  try {
-    const kb = loadKeybindings(home);
-    (diagnostics.keybindings as Record<string, unknown>).count = kb.length;
-    (diagnostics.keybindings as Record<string, unknown>).ok = true;
-  } catch (e) {
-    (diagnostics.keybindings as Record<string, unknown>).error = (e as Error).message;
-  }
-  // mcp
-  try {
-    const m = listMcp();
-    (diagnostics.mcp as Record<string, unknown>).servers = m.servers.length;
-    (diagnostics.mcp as Record<string, unknown>).ok = true;
-  } catch (e) {
-    (diagnostics.mcp as Record<string, unknown>).error = (e as Error).message;
-  }
-  if (parsed.values.json) console.log(JSON.stringify(diagnostics));
+  const tier = (t: { present: boolean; ok: boolean; error?: string }) => (!t.present ? 'absent' : t.ok ? 'ok' : `error: ${t.error}`);
+  // MCP servers that failed validation, by name.
+  const bad = r.mcp.servers.filter((s) => s.error);
+  if (parsed.values.json) console.log(JSON.stringify({ ...r, keybindings }));
   else {
     console.log(`cedia doctor`);
-    console.log(`version: ${info.version}`);
+    console.log(`version: ${r.version} · bun ${r.bun}`);
     console.log(`home: ${home}`);
     console.log(`cwd: ${cwd}`);
-    console.log(`sandbox: ${(diagnostics.sandbox as any).available ? 'available' : 'unavailable'} (${(diagnostics.sandbox as any).tool ?? 'no tool'})`);
-    console.log(`settings: ${(diagnostics.settings as any).resolvedError ?? (diagnostics.settings as any).resolved ?? 'unknown'}`);
-    console.log(`keybindings: ${(diagnostics.keybindings as any).count ?? 0}`);
-    console.log(`mcp servers: ${(diagnostics.mcp as any).servers ?? 0}`);
+    console.log(`sandbox: ${r.sandbox.available ? 'available' : 'unavailable'} (${r.sandbox.tool ?? 'no tool'})`);
+    console.log(`settings: user ${tier(r.settings.user)}, managed ${tier(r.settings.managed)}, mdm ${tier(r.settings.mdm)}, resolved ${r.settings.resolved}`);
+    console.log(`mdm: ${r.mdm.url ? 'url set' : 'no url'}, cache ${r.mdm.cache}`);
+    console.log(`keybindings: ${keybindings.count ?? keybindings.error ?? 0}`);
+    console.log(`mcp servers: ${r.mcp.servers.length ? r.mcp.servers.map((s) => s.name).join(', ') : 'none'}${bad.length ? ` (invalid: ${bad.map((s) => `${s.name}: ${s.error}`).join('; ')})` : ''}`);
   }
   return 0;
 }
