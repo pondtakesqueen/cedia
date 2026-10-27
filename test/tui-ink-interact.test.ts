@@ -6,8 +6,8 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { App } from '../src/clients/tui-ink/app.tsx';
-import { acceptTrust } from '../src/clients/tui/onboarding.ts';
-import type { TuiArgs } from '../src/clients/tui/main.ts';
+import { acceptTrust } from '../src/clients/tui-ink/onboarding.ts';
+import type { TuiArgs } from '../src/clients/tui-ink/args.ts';
 
 const strip = (s: string) =>
   s

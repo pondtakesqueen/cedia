@@ -4,10 +4,10 @@ import { join } from 'node:path';
 import { cediaHome, isMode, loadPolicy, loadPrivacy, loadRoles, MODES } from '../../core/config.ts';
 import { loadSkills } from '../../core/skills/skills.ts';
 import { listMcp } from '../../core/mcp/manage.ts';
-import { loadKeybindings, watchKeybindings } from './keybindings/loader.ts';
+import { loadKeybindings, watchKeybindings } from '../tui-ink/keybindings/loader.ts';
 import { toggleVim, toInsert } from './vim/transitions.ts';
-import { findCommand } from './keybindings/resolver.ts';
-import { resolveBindings } from './keybindings/resolver.ts';
+import { findCommand } from '../tui-ink/keybindings/resolver.ts';
+import { resolveBindings } from '../tui-ink/keybindings/resolver.ts';
 import { loadOutputStyles, loadOutputStyleSetting } from '../../core/output-styles/styles.ts';
 import { versionInfo } from '../../protocol/version.ts';
 import { modelList } from '../../core/providers/models.ts';
@@ -42,7 +42,7 @@ import { filterCommands, CommandPicker } from './command-picker.ts';
 import { groupByProvider, ModelPicker } from './model-picker.ts';
 import { PermissionPicker } from './permission-picker.ts';
 import { SettingsScreen } from './settings-screen.ts';
-import { loadOnboarding, isComplete, ONBOARDING_STEPS, acceptTrust, markStep } from './onboarding.ts';
+import { loadOnboarding, isComplete, ONBOARDING_STEPS, acceptTrust, markStep } from '../tui-ink/onboarding.ts';
 import { runStatusLineCommand } from './statusline.ts';
 
 // The interactive client. Each prompt is one headless run of the current thread (`--thread`), streamed as

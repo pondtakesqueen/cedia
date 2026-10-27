@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { resolveBindings, findCommand } from '../src/clients/tui/keybindings/resolver.ts';
-import { ChordInterceptor } from '../src/clients/tui/keybindings/chord.ts';
+import { resolveBindings, findCommand } from '../src/clients/tui-ink/keybindings/resolver.ts';
+import { ChordInterceptor } from '../src/clients/tui-ink/keybindings/chord.ts';
 import { handleNormalKey, toInsert, toNormal } from '../src/clients/tui/vim/transitions.ts';
 import { buildStatusLineInput, runStatusLineCommand } from '../src/clients/tui/statusline.ts';
 
