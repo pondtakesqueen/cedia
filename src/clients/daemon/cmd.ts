@@ -52,7 +52,7 @@ export async function daemonCmd(argv: string[]): Promise<number> {
   const show = (prefix: string, tick: { reaped: string[]; started: { bg: string; thread: string }[]; fired: { schedule: string; thread: string; bg: string }[]; running: number }) =>
     console.log(parsed.values.json ? JSON.stringify({ daemon: prefix, ...tick }) : `${prefix}: ${tick.started.length} started, ${tick.fired.length} fired, ${tick.reaped.length} reaped, ${tick.running} running`);
   if (parsed.values.once) {
-    show('once', pumpDaemon({ home, slug, cwd, maxRuns, spawn: spawnDetached }));
+    show('once', await pumpDaemon({ home, slug, cwd, maxRuns, spawn: spawnDetached }));
     return 0;
   }
   daemonStart();
@@ -64,7 +64,7 @@ export async function daemonCmd(argv: string[]): Promise<number> {
   process.once('SIGTERM', stop);
   try {
     for (;;) {
-      show('tick', pumpDaemon({ home, slug, cwd, maxRuns, spawn: spawnDetached }));
+      show('tick', await pumpDaemon({ home, slug, cwd, maxRuns, spawn: spawnDetached }));
       for (let waited = 0; waited < interval && !stopped; waited++) await Bun.sleep(1000);
       if (stopped) break;
     }
