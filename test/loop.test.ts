@@ -668,3 +668,32 @@ describe('beta-gated gateway fallback', () => {
     expect(plain.state.callCount).toBe(1);
   });
 });
+
+describe('repeat checks', () => {
+  test('a declared check that passed does not run again until a write', async () => {
+    const { log, opts } = setup(
+      [{ blocks: [toolUse('c1', 'bash', { command: 'true' })] }, { blocks: [toolUse('c2', 'bash', { command: 'true' })] }, { blocks: [text('done')] }],
+      { checks: ['true'], permission: { mode: 'workspace', allow: [], deny: [] } },
+    );
+    const r = await runPrompt(opts, 'check twice');
+    expect(r.subtype).toBe('success');
+    const results = of(log.events, 'tool_result');
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({ status: 'completed' });
+    expect(results[1]).toMatchObject({ status: 'denied' });
+    expect(results[1]!.output.text).toContain('already passed with nothing written since');
+    expect(of(log.events, 'permission').filter((p) => p.decision === 'deny').map((p) => p.rule)).toEqual(['repeat-check']);
+    expectPaired(log.events);
+  });
+
+  test('a failed check always reruns, and a write re-arms a passed one', async () => {
+    const { log, opts } = setup(
+      [{ blocks: [toolUse('c1', 'bash', { command: 'false' })] }, { blocks: [toolUse('c2', 'bash', { command: 'false' })] }, { blocks: [text('done')] }],
+      { checks: ['false'], permission: { mode: 'workspace', allow: [], deny: [] } },
+    );
+    await runPrompt(opts, 'failing check twice');
+    const results = of(log.events, 'tool_result');
+    expect(results.map((r) => r.status)).toEqual(['failed', 'failed']);
+    expectPaired(log.events);
+  });
+});

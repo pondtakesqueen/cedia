@@ -196,3 +196,26 @@ describe('blocked calls', () => {
     expect(formatUsage(r)).toContain('blocked calls: 2 deny:bash(rm *), 1 classifier, 1 hook:no-curl');
   });
 });
+
+describe('daily spend warn', () => {
+  const rich = (id: string, at: string): SessionEvent[] => [
+    { id: `${id}-0`, at, kind: 'session', cwd: '/x', role: 'code', model: 'anthropic/claude-haiku-5-5', system: '', tools: [] },
+    { id: `${id}-1`, at, kind: 'assistant', wire: 'anthropic', model: 'anthropic/claude-haiku-5-5', blocks: [{ type: 'text', text: 'x' }], stop: 'end_turn', usage: { uncached: 300_000_000, cacheRead: 0, cacheWrite: 0, output: 0 } },
+  ] as unknown as SessionEvent[];
+  test('daySpendUsd totals today only, and stays silent on an empty home', async () => {
+    const { daySpendUsd } = await import('../src/core/session/select.ts');
+    const { projectKey } = await import('../src/core/session/log.ts');
+    const home = mkdtempSync(join(tmpdir(), 'cedia-spend-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'cedia-spend-ws-'));
+    expect(daySpendUsd(home, cwd)).toBe(0);
+    const dir = join(home, 'sessions', projectKey(cwd));
+    mkdirSync(dir, { recursive: true });
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12).toISOString();
+    const old = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 2, 12).toISOString();
+    writeFileSync(join(dir, 'today.jsonl'), rich('t', today).map((e) => JSON.stringify(e)).join('\n'));
+    writeFileSync(join(dir, 'old.jsonl'), rich('o', old).map((e) => JSON.stringify(e)).join('\n'));
+    // 300M uncached Haiku is past its 100k long-context line: billed at the above-line price (0.5/M).
+    expect(daySpendUsd(home, cwd)).toBeCloseTo(150, 5);
+  });
+});

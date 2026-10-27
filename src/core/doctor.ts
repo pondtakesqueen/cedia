@@ -1,9 +1,9 @@
 // `cedia doctor`: one read-only pass over versions, settings tiers, MCP config, the managed cache and
 // the sandbox. Pure data out; cli.ts prints it (text and --json), and the TUIs can adopt it instead of
 // their inline copies. Nothing here starts a server or touches the network.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { cediaHome, loadMdmSettings, loadManagedSettings, loadResolvedSettings, managedDir, mdmDir, readSettings } from './config.ts';
+import { cediaHome, checkSettings, loadManagedSettings, loadResolvedSettings, managedDir } from './config.ts';
 import { listMcp } from './mcp/manage.ts';
 import { mdmCachePath, mdmCacheStale } from './project/mdm-remote.ts';
 import { versionInfo } from '../protocol/version.ts';
@@ -42,7 +42,21 @@ export function doctorReport(cwd: string, home = cediaHome()): DoctorReport {
     resolved = (e as Error).message;
   }
   const cache = mdmCachePath(home);
-  const mdmPresent = existsSync(mdmDir()) || existsSync(cache) || !!process.env.CEDIA_MDM_URL;
+  // The mdm payload is org-defined: readability counts, schema does not (config's mdm loader may accept
+  // more than user settings allow).
+  const readJson = (path: string): unknown => JSON.parse(readFileSync(path, 'utf8'));
+  const readUserSettings = () => {
+    const path = join(home, 'settings.json');
+    try {
+      return checkSettings(readJson(path));
+    } catch (e) {
+      throw new Error(`${path}: ${(e as Error).message}`);
+    }
+  };
+  const mdmPresent = existsSync(cache) || !!process.env.CEDIA_MDM_URL;
+  const readMdmCache = () => {
+    if (existsSync(cache)) readJson(cache);
+  };
   const tool = Bun.which('bwrap') ?? Bun.which('sandbox-exec') ?? null;
   let servers: DoctorReport['mcp']['servers'] = [];
   try {
@@ -57,9 +71,9 @@ export function doctorReport(cwd: string, home = cediaHome()): DoctorReport {
     home,
     cwd,
     settings: {
-      user: tier(existsSync(join(home, 'settings.json')), () => readSettings(join(home, 'settings.json'))),
+      user: tier(existsSync(join(home, 'settings.json')), readUserSettings),
       managed: tier(existsSync(join(managed, 'managed-settings.json')) || existsSync(join(managed, 'managed-settings.d')), loadManagedSettings),
-      mdm: tier(mdmPresent, loadMdmSettings),
+      mdm: tier(mdmPresent, readMdmCache),
       resolved,
     },
     mdm: { url: !!process.env.CEDIA_MDM_URL, cache: !existsSync(cache) ? 'missing' : mdmCacheStale(home) ? 'stale' : 'fresh' },

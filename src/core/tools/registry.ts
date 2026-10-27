@@ -41,6 +41,11 @@ export const effectOf = (spec: ToolSpec, input: JsonObject): ToolEffect => spec.
 
 export const MAX_OUTPUT_CHARS = 30_000;
 
+// Shell and search output is the bulk of resent context (test logs especially): it goes whole to the spill
+// file past this, and only this much reaches the model. File reads keep the full budget above: paging, not
+// clipping, is how a model reads a big file.
+export const MAX_SHELL_OUTPUT_CHARS = 8_000;
+
 export function clip(text: string, max = MAX_OUTPUT_CHARS): string {
   if (text.length <= max) return text;
   const head = text.slice(0, max / 2);

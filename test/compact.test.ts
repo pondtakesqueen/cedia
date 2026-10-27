@@ -223,11 +223,13 @@ describe('cedia --handoff compact (offline, faux)', () => {
   const BIN = join(import.meta.dir, '..', 'bin', 'cedia');
   test('the second session holds the summary and the kept turns, and the thread records the summary as its handoff', () => {
     const dir = tmp();
+    // Bulk through the read tool: the handoff measures what the context holds (bash output is capped).
+    const big = '/tmp/cedia-handoff-big.txt';
     const script = [
-      call('c1', 'echo good > f.txt && seq 1 6000'),
+      call('c1', `echo good > f.txt && seq 1 30000 > ${big} && echo wrote`),
+      tool('r1', 'read', { path: big }),
       summary,
       call('c2', 'grep -q good f.txt'),
-      call('c3', 'grep -q good f.txt'),
       reply('done, checked'),
     ];
     const scriptPath = join(dir, 'script.json');

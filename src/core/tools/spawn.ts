@@ -94,7 +94,7 @@ Write the task as a complete brief: the goal, the paths and facts it needs, and 
       properties: {
         task: { type: 'string', description: 'The complete brief for the sub-thread' },
         kind: { type: 'string', enum: SPAWN_KINDS, description: opts.worktrees ? 'explore: read-only, cheap, parallel. work: may edit files, in its own worktree, parallel' : 'explore: read-only, cheap, parallel. work: may edit files' },
-        effort: { type: 'string', description: 'Run this sub-thread at this effort level (low, medium, high, xhigh, max); default: the model it runs on takes its own' },
+        effort: { type: 'string', description: 'Run this sub-thread at this effort level (low, medium, high, xhigh, max); default: the model it runs on takes its own. A level the model does not take is reported and not applied' },
         ...(opts.worktrees ? { approaches: { type: 'array', items: { type: 'string' }, description: 'kind work only: 2 to 4 different ways to do the task; each is tried at once and the one that passes most checks is kept' } } : {}),
       },
       required: ['task', 'kind'],

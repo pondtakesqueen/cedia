@@ -560,6 +560,15 @@ describe('miss attribution', () => {
 });
 
 describe('spawn effort (offline, faux)', () => {
+  test('effort on a model that takes no levels is said once and not applied; the run goes on', () => {
+    const spawnCall = { blocks: [{ type: 'tool_use', id: 's1', name: 'spawn', input: { task: 'find the thing', kind: 'explore', effort: 'high' } }] };
+    const args = ['-p', 'find the thing, write it to f.txt, and check it', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -s f.txt', '--swarm', 'faux/fallback'];
+    const r = cedia([spawnCall, { ...reply('found it'), when: 'find the thing' }, call('w1', 'echo ok > f.txt'), call('w2', 'test -s f.txt'), reply('done')], args);
+    expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success' });
+    // faux/fallback takes no effort levels (like DeepSeek): said once, not applied, not fatal.
+    expect(r.err).toContain('explore sub-thread effort high will not apply on faux/fallback: it takes no effort levels');
+    expect(r.err.match(/will not apply/g)).toHaveLength(1);
+  });
   test("a sub-thread runs at the effort the spawn call names: the child's requests carry it", () => {
     const spawnCall = { blocks: [{ type: 'tool_use', id: 's1', name: 'spawn', input: { task: 'find the thing', kind: 'explore', effort: 'high' } }] };
     const args = ['-p', 'find the thing, write it to f.txt, and check it', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -s f.txt', '--swarm', 'faux/fallback'];

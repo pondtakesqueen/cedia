@@ -14,7 +14,7 @@ import { decide, READ_ONLY_POLICY, ruleMatches, type Policy } from '../safety/po
 import { redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
-import { evidence, ledgerEntries, matchCheck, verified } from '../trust/ledger.ts';
+import { evidence, ledgerEntries, matchCheck, repeatCheck, verified } from '../trust/ledger.ts';
 import type { Verdict } from '../trust/classifier.ts';
 import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
@@ -696,6 +696,11 @@ async function runTools(
       // decided again, so a hook can narrow a call but never get one past the policy.
       let input = fixed?.input ?? c.input;
       let d = decide(policy, spec, input, opts.cwd);
+      // A declared check that already passed with nothing written since does not run again.
+      if (d.decision === 'allow' && spec.name === 'bash') {
+        const again = repeatCheck(spec.name, String((input as { command?: unknown }).command ?? ''), log.events, opts.checks ?? [], opts.cwd);
+        if (again) d = { decision: 'deny', rule: 'repeat-check', reason: again };
+      }
       if (d.decision === 'allow') {
         const pre = await preHooks(opts, log, spec, callId, input);
         if (pre.decision === 'block') d = { decision: 'deny', rule: `hook:${pre.hook}`, reason: pre.reason };

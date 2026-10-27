@@ -39,7 +39,14 @@ export const SCENARIOS: Scenario[] = [
     name: 'handoff',
     what: 'a long session hands off to a second session of the same thread, which recalls and verifies',
     prompt: 'make f.txt say good',
-    script: [bash('c1', 'echo good > f.txt && seq 1 6000'), reply('Wrote f.txt. Next: run the check.'), bash('c2', 'grep -q good f.txt'), reply('done')],
+    // Bulk through the read tool: the handoff measures what the context holds (bash output is capped).
+    script: [
+      bash('c1', 'echo good > f.txt && seq 1 30000 > /tmp/cedia-handoff-big.txt && echo wrote'),
+      tool('r1', 'read', { path: '/tmp/cedia-handoff-big.txt' }),
+      reply('Wrote f.txt. Next: run the check.'),
+      bash('c2', 'grep -q good f.txt'),
+      reply('done'),
+    ],
     args: [...ws, '--check', 'grep -q good f.txt', '--handoff-at', '2000', '--handoff', 'note'],
   },
   {

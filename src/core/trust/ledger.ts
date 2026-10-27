@@ -71,3 +71,18 @@ export function verified(entries: LedgerEntry[], checks: string[]): boolean {
   if (lastWrite < 0) return true;
   return entries.some((e) => e.kind === 'check' && e.exitCode === 0 && e.at > lastWrite);
 }
+
+// A declared check that already passed with nothing written since need not run again: the gate still sees
+// the earlier pass. Returns the denial reason, or undefined to run. Only passed repeats are held; a failed
+// check always reruns, since the model may have fixed the cause outside the working tree.
+export function repeatCheck(tool: string, command: string | undefined, events: SessionEvent[], checks: string[], cwd?: string): string | undefined {
+  if (tool !== 'bash' || !command) return undefined;
+  const check = matchCheck(command, checks, cwd);
+  if (!check) return undefined;
+  const entries = ledgerEntries(events, checks, cwd);
+  const passes = entries.filter((e) => e.kind === 'check' && e.command === check && e.exitCode === 0);
+  if (!passes.length) return undefined;
+  const lastPass = Math.max(...passes.map((p) => p.at));
+  if (entries.some((e) => e.kind === 'write' && e.at > lastPass)) return undefined;
+  return `\`${check}\` already passed with nothing written since; run it again only after changing files. The done gate still sees the earlier pass.`;
+}

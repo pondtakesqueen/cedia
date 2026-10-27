@@ -7,6 +7,8 @@ import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
+import { DAILY_SPEND_WARN_USD, daySpendUsd } from '../../core/session/select.ts';
+import { dayOf } from '../../core/session/usage.ts';
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
 import { attachedNote, storeImage, type ImageRef } from '../../core/images.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
@@ -201,6 +203,17 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
 
 const withMode = ({ model: _, ...rest }: HeadlessArgs, mode: Mode): HeadlessArgs => ({ ...rest, ...modeFlags(mode, rest) });
 
+// Today's spend is warned about once per project per day, however many turns a client runs.
+const spendWarned = new Set<string>();
+function warnDaySpend(cwd: string, home: string, say: (text: string) => void) {
+  const day = dayOf(new Date());
+  const key = `${home}${cwd}${day}`;
+  if (spendWarned.has(key)) return;
+  spendWarned.add(key);
+  const usd = daySpendUsd(home, cwd);
+  if (usd > DAILY_SPEND_WARN_USD) say(`cedia: today's spend in this project is $${usd.toFixed(2)} (past $${DAILY_SPEND_WARN_USD})\n`);
+}
+
 export async function runHeadless(given: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
   // The profile named, else the one the thread was opened with; its defaults go under the flags.
   const recorded = () => {
@@ -213,6 +226,15 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   // `-m auto` and `-m oplan` pick the steps around the user's own writer (core/config.ts).
   const args: HeadlessArgs = isMode(profiled.model) ? withMode(profiled, profiled.model) : profiled;
   const say = args.note ?? ((text: string) => void process.stderr.write(text));
+  // Effort asked for a model that takes no levels is silently dropped on the wire (chat.ts): say so once,
+  // where the claim was made, instead of billing a no-op the owner thinks applies.
+  let effortWarned = false;
+  const warnEffort = (where: string, m: ModelSpec, effort: Effort | undefined) => {
+    if (effort !== undefined && !m.caps.effortLevels.includes(effort) && !effortWarned) {
+      effortWarned = true;
+      say(`cedia: ${where} effort ${effort} will not apply on ${m.ref}: it takes no effort levels\n`);
+    }
+  };
   const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}), ...(args.advisor ? { advisor: args.advisor } : {}), ...(args.classifier ? { classifier: args.classifier } : {}), ...(args.workers ? { workers: args.workers } : {}), ...(args.triage ? { triage: args.triage } : {}) });
   const spawnMode = loadSpawn(args.spawn);
   const spawnOn = spawnMode !== 'off';
@@ -621,6 +643,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       }
     : undefined;
   let writer = { model, log: undefined as unknown as SessionLog };
+  warnEffort('writer', model, args.effort);
   // A sub-thread: its own thread (archived once it succeeds) and session, on the model its kind calls for.
   // Explore runs on the swarm model unless privacy keeps that model out; work runs on the writer's model.
   const explorer = privacy === 'zdr' && roles.swarm.dataPolicy !== 'zdr' ? model : roles.swarm;
@@ -775,6 +798,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     return { ...first, costUsd: tries.reduce((sum, t) => sum + t.costUsd, 0), bestOf: { tries, ...(kept !== undefined ? { kept } : {}) } };
   };
   const spawner: Spawner = async (brief: string, kind: SpawnKind, ctx) => {
+    warnEffort(`${kind} sub-thread`, kind === 'explore' ? explorer : writer.model, ctx.effort);
     if (kind === 'work' && ctx.write && ctx.approaches) return race(brief, ctx.approaches, ctx);
     let wt: Worktree | undefined;
     if (kind === 'work' && ctx.write) {

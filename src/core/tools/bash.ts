@@ -1,4 +1,4 @@
-import { clip, MAX_OUTPUT_CHARS, preview, type ToolSpec } from './registry.ts';
+import { clip, MAX_SHELL_OUTPUT_CHARS, preview, type ToolSpec } from './registry.ts';
 
 // A command counts as read-only when every command in its pipeline or && chain is on this list and
 // nothing writes, substitutes or redirects. Read-only commands run in parallel and in read-only sessions;
@@ -208,10 +208,18 @@ export const bashTool: ToolSpec = {
     await Promise.race([Promise.all([out.done, err.done]), Bun.sleep(PIPE_GRACE_MS)]);
     const [o, e] = [out.stop(), err.stop()];
     const text = [o, e && `[stderr]\n${e}`].filter(Boolean).join('\n') || '(no output)';
-    const full = `${text}\n[exit ${code}${stopped ? `, ${stopped}` : ''}]${slowGrepNote(command, Date.now() - started)}`;
+    // A group that outlives its bash (a `&` job, nohup) is left running — killing it would end servers the
+    // run started on purpose — so the result says so instead, and the model can jobs or kill it itself.
+    // Recording it for `cedia agents` would need the thread, which tools never see: deferred.
+    let lingering = false;
+    try {
+      process.kill(-proc.pid, 0);
+      lingering = true;
+    } catch {}
+    const full = `${text}\n[exit ${code}${stopped ? `, ${stopped}` : ''}]${lingering ? ' (background jobs of this command are still running)' : ''}${slowGrepNote(command, Date.now() - started)}`;
     // A long output goes to a file whole, so the lines in the middle (often the failing test) are still there.
-    const path = full.length > MAX_OUTPUT_CHARS ? ctx.spill?.(full) : undefined;
-    if (path) return { text: preview(full, path), isError: code !== 0, exitCode: code, spillPath: path };
-    return { text: clip(full), isError: code !== 0, exitCode: code };
+    const path = full.length > MAX_SHELL_OUTPUT_CHARS ? ctx.spill?.(full) : undefined;
+    if (path) return { text: preview(full, path, MAX_SHELL_OUTPUT_CHARS), isError: code !== 0, exitCode: code, spillPath: path };
+    return { text: clip(full, MAX_SHELL_OUTPUT_CHARS), isError: code !== 0, exitCode: code };
   },
 };

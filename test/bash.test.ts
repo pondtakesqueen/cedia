@@ -106,6 +106,19 @@ describe('running a command', () => {
     process.kill(pid, 'SIGKILL');
   });
 
+  test('a command that leaves background jobs running says so in its result', async () => {
+    const r = await run('sleep 30 & echo $! > linger.pid; echo started');
+    expect(r.text).toContain('started');
+    expect(r.text).toContain('(background jobs of this command are still running)');
+    const pid = Number(await Bun.file(join(cwd, 'linger.pid')).text());
+    process.kill(pid, 'SIGKILL');
+  });
+
+  test('an ordinary command says nothing about background jobs', async () => {
+    const r = await run('echo hi');
+    expect(r.text).not.toContain('background jobs');
+  });
+
   test('exit codes come through', async () => {
     expect(await run('exit 3')).toMatchObject({ isError: true, exitCode: 3 });
     expect((await run('printf a; printf b >&2')).text).toBe('a\n[stderr]\nb\n[exit 0]');
