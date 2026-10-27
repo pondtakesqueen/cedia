@@ -29,6 +29,7 @@ import { lintSession } from './core/session/lint.ts';
 import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
 import { formatUsage, isUsageEvent, readEventsLenient, sinceOf, usageReport, type SessionInput } from './core/session/usage.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
+import { selfSpawnArgs } from './core/self.ts';
 import { versionInfo } from './protocol/version.ts';
 
 const USAGE = `usage: cedia [options]                 the TUI, at a terminal: each prompt is a turn of one thread
@@ -334,7 +335,7 @@ export async function main(argv: string[]): Promise<number> {
     const tid = store.open(prompt, {});
     const sid = crypto.randomUUID();
     const logPath = sessionPath(base.cwd ?? process.cwd(), sid);
-    const child = Bun.spawn([process.argv[0]!, process.argv[1]!, '-p', prompt, '--thread', tid, '--sandbox', base.sandbox ?? 'auto', '--output-format', 'json'], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
+    const child = Bun.spawn(selfSpawnArgs(['-p', prompt, '--thread', tid, '--sandbox', base.sandbox ?? 'auto', '--output-format', 'json']), { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
     // detach
     try { child.unref(); } catch {}
     const bgid = `bg-${crypto.randomUUID().slice(0, 8)}`;
@@ -1124,7 +1125,7 @@ function respawnCmd(argv: string[]): number {
     const sessions = listBgSessions(home, slug);
     const s = sessions.find((x) => x.id === id);
     if (!s) { console.error(`no session ${id}`); continue; }
-    const child = Bun.spawn([process.argv[0]!, process.argv[1]!, '-p', 'respawn', '--thread', s.thread], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
+    const child = Bun.spawn(selfSpawnArgs(['-p', 'respawn', '--thread', s.thread]), { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
     try { child.unref(); } catch {}
     const bgid = `bg-${crypto.randomUUID().slice(0, 8)}`;
     recordStart(home, slug, { id: bgid, thread: s.thread, pid: child.pid ?? 0, logPath: s.logPath });
