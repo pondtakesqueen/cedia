@@ -37,6 +37,8 @@ export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'drop
 
 // Rules look like `bash`, `bash(bun test*)` or `edit(src/*)`. `*` matches anything. A bash pattern is
 // matched against each simple command in the line, so `bun test && rm -rf x` needs both to be allowed.
+// A `tool(param:value)` rule matches the call's input value instead: `spawn(kind:work)`,
+// `bash(command:rm *)`. Only when the input has the param, so `C:/x` and URLs still match the classic way.
 // `secrets` are credential stores no tool may read or write (see secretPaths). `protect`: files no tool may change
 // for this run, and why: the tests a task said to leave alone (core/trust/tests.ts). They hold as edit deny rules
 // do, for commands too.
@@ -73,7 +75,7 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
   for (const rule of policy.deny) {
     // edit and write change a file the same way, so a deny rule naming either covers both.
     const tool = spec.name === 'write' && /^edit\b/.test(rule.trim()) ? 'edit' : spec.name === 'edit' && /^write\b/.test(rule.trim()) ? 'write' : spec.name;
-    if (matches(rule, tool, commands, path, cwd, 'any')) return deny(`deny:${rule}`, `matches the deny rule ${rule}`);
+    if (matches(rule, tool, commands, path, cwd, 'any', undefined, input)) return deny(`deny:${rule}`, `matches the deny rule ${rule}`);
     if (command !== undefined && commands && writesDenied(rule, command, commands, cwd))
       return deny(`deny:${rule}`, `may write a path the deny rule ${rule} covers; that rule holds for commands too`);
   }
@@ -88,7 +90,7 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
 
   if (effect === 'read' || effect === 'network') return { decision: 'allow', rule: 'effect:read' };
 
-  const allowRule = policy.allow.find((rule) => matches(rule, spec.name, commands, path, cwd, 'every', command));
+  const allowRule = policy.allow.find((rule) => matches(rule, spec.name, commands, path, cwd, 'every', command, input));
   if (effect === 'write_workspace' && path !== undefined && !insideWorkspace(path, cwd) && !allowRule)
     return deny('outside-workspace', `${path} is outside the working directory`);
   if (effect === 'write_workspace' && path !== undefined && protectedPath(path, cwd))
@@ -115,14 +117,22 @@ export function rulePatternMatches(rule: string, tool: string, text: string): bo
 // Whether a call matches a rule the way a deny rule does: any simple command of a bash call, or the call's path.
 export function ruleMatches(rule: string, spec: ToolSpec, input: JsonObject, cwd: string): boolean {
   const commands = spec.name === 'bash' ? simpleCommands(String(input.command ?? '')) : undefined;
-  return matches(rule, spec.name, commands, spec.pathOf?.(input), cwd, 'any');
+  return matches(rule, spec.name, commands, spec.pathOf?.(input), cwd, 'any', undefined, input);
 }
 
-function matches(rule: string, tool: string, commands: string[][] | null | undefined, path: string | undefined, cwd: string, mode: 'any' | 'every', command?: string): boolean {
+function matches(rule: string, tool: string, commands: string[][] | null | undefined, path: string | undefined, cwd: string, mode: 'any' | 'every', command?: string, input?: JsonObject): boolean {
   const m = /^([\w-]+)(?:\((.*)\))?$/.exec(rule.trim());
   if (!m || m[1] !== tool) return false;
   const pattern = m[2];
   if (pattern === undefined) return true;
+  // A `tool(param:value)` rule matches the call's input value for that param: `spawn(kind:work)`,
+  // `bash(command:rm *)`. Only when the input actually has the param, so a path with a colon in it
+  // (C:/x, a URL) still matches the classic way below.
+  const pm = /^([\w-]+):([\s\S]*)$/.exec(pattern);
+  if (pm && input !== undefined && Object.hasOwn(input, pm[1]!)) {
+    const v = (input as Record<string, unknown>)[pm[1]!];
+    return v !== undefined && v !== null && glob(pm[2]!).test(Array.isArray(v) ? v.join(' ') : String(v));
+  }
   const re = glob(pattern);
   if (commands) {
     const line = (argv: string[]) => argv.join(' ');

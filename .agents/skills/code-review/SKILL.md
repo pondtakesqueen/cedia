@@ -11,4 +11,5 @@ Review the change in front of you, not the codebase around it. Your time is scar
 3. Sort strictly: Important (wrong behavior, data loss, security hole, broken check — blocks), Nit (naming, dead comment, tiny cleanup — never blocks, cap at three), Pre-existing (outside the diff — one line, no discussion).
 4. Start the report with the count: `3 Important, 1 Nit, 0 Pre-existing`. Then each finding as: severity, file:line, what goes wrong, the exact evidence (command output, quoted code), and the smallest fix or check that would prove it.
 5. Style, diagnostics, and cleanup suggestions are out unless they change behavior. If the same complaint would repeat on every review, say so once and propose the lint rule, check, or instruction that kills the class instead of flagging the line.
+6. Redaction and parser edge cases get extra scrutiny: placeholders, bare lines, and trailing newlines each need a passing test, never a source tweak that hides a test defect.
 6. End with a verdict line, exactly one: `VERDICT: approve` (nothing Important left, or every Important answered with a fix or a reason), or `VERDICT: changes` (list what must change before merge).

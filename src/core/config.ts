@@ -9,6 +9,7 @@ import { FALLBACKS, resolveModel } from './providers/catalog.ts';
 import { secretPaths } from './safety/secrets.ts';
 import { checkHooks, type Hooks } from './hooks.ts';
 import type { Effort, ModelSpec, PrivacyLevel } from './types.ts';
+import { EFFORTS } from './types.ts';
 
 export type Settings = {
   permissions?: { mode?: PermissionSetting; allow?: string[]; deny?: string[]; unlock?: Guard[] };
@@ -63,6 +64,10 @@ export type Settings = {
   outputStyle?: string;
   // Prompt suggestions: predict next user prompt after each turn (default off).
   promptSuggestions?: boolean;
+  // A ceiling on effort everywhere the run sets one (writer, spawn children, plan/review steps, escalation):
+  // levels above it resolve down to it. Flags choose under it, never over. User settings only
+  // (or CEDIA_MAX_EFFORT).
+  maxEffort?: Effort;
 };
 
 // Every key cedia knows, with the keys allowed inside the objects it reads. A key that is not here is a typo or a
@@ -90,6 +95,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   autoDream: 'any',
   outputStyle: 'any',
   promptSuggestions: 'any',
+  maxEffort: 'any',
 };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -205,6 +211,25 @@ export function loadSpawn(flag?: string): SpawnMode {
   const s = readSettings(join(cediaHome(), 'settings.json')).spawn ?? true;
   if (s !== true && s !== false && s !== 'worktree') throw new Error(`spawn in settings.json must be true, false or "worktree": ${JSON.stringify(s)}`);
   return s === 'worktree' ? 'worktree' : s ? 'on' : 'off';
+}
+
+// A ceiling on effort: user settings, or CEDIA_MAX_EFFORT. Flags choose under it, never over: the loop
+// resolves the writer, spawn children, plan/review steps and escalation down to it.
+export function loadMaxEffort(env: Record<string, string | undefined> = process.env): Effort | undefined {
+  const raw = env.CEDIA_MAX_EFFORT ?? readSettings(join(cediaHome(), 'settings.json')).maxEffort;
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string' || !(EFFORTS as string[]).includes(raw))
+    throw new Error(`maxEffort must be one of ${EFFORTS.join(', ')}: ${JSON.stringify(raw)}`);
+  return raw as Effort;
+}
+
+// Resolve an effort under a ceiling: unknown levels pass through untouched (their owner validates them).
+export function capEffort(effort: Effort | undefined, cap: Effort | undefined): Effort | undefined {
+  if (!effort || !cap) return effort;
+  const a = EFFORTS.indexOf(effort);
+  const b = EFFORTS.indexOf(cap);
+  if (a < 0 || b < 0) return effort;
+  return EFFORTS[Math.min(a, b)]!;
 }
 
 // Language servers: flag (on|off) > user settings > the known ones that are installed.

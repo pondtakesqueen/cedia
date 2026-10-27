@@ -9,7 +9,7 @@ import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
 import { DAILY_SPEND_WARN_USD, daySpendUsd } from '../../core/session/select.ts';
 import { dayOf } from '../../core/session/usage.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadMaxEffort, capEffort, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
 import { attachedNote, storeImage, type ImageRef } from '../../core/images.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
@@ -558,13 +558,16 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   };
   const sideStep = async (role: 'plan' | 'review', choice: RoleChoice, prompt: string): Promise<{ ok: boolean; text: string; step: Step }> => {
     if (choice.via === 'claude-code') {
-      const step: Step = { model: `claude-code:${choice.model}@${choice.effort}`, via: 'claude-code', sessionId: '' };
+      // The claude-code path bypasses runPrompt, so the max-effort ceiling is applied here; the cedia path
+      // is capped centrally in runPrompt (writer, spawn children, plan/review steps, escalation).
+      const effort = capEffort(choice.effort, loadMaxEffort());
+      const step: Step = { model: `claude-code:${choice.model}@${effort}`, via: 'claude-code', sessionId: '' };
       if (privacy === 'zdr') {
         say(`cedia: privacy is zdr, so the ${role} step does not go to Claude Code\n`);
         return { ok: false, text: '', step };
       }
       const allowed = ['Read', 'Grep', 'Glob', ...(role === 'review' ? GIT_READS : []), ...checks.map((c) => `Bash(${c})`)];
-      const r = await runClaudeCode({ prompt, model: choice.model, effort: choice.effort, cwd: args.cwd, allowed, signal: ac.signal });
+      const r = await runClaudeCode({ prompt, model: choice.model, effort, cwd: args.cwd, allowed, signal: ac.signal });
       if (!r.ok && !ac.signal.aborted) say(`cedia: the ${role} step in Claude Code failed: ${r.error}\n`);
       return { ok: r.ok, text: r.text, step: { ...step, sessionId: r.sessionId, ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}), ...(r.turns !== undefined ? { requests: r.turns } : {}), ...(r.apiMs !== undefined ? { apiMs: r.apiMs } : {}) } };
     }

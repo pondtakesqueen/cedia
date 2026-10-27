@@ -9,6 +9,7 @@ import { hash } from '../hash.ts';
 import { MAX_IMAGES_PER_SESSION, type ImageRef } from '../images.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
+import { capEffort, loadMaxEffort } from '../config.ts';
 import { hookName, runHook, type Hooks } from '../hooks.ts';
 import { decide, READ_ONLY_POLICY, ruleMatches, type Policy } from '../safety/policy.ts';
 import { redactSecrets } from '../safety/secrets.ts';
@@ -307,7 +308,11 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const inFlight = () => (cmp.now && cmp.now !== 'off' ? cmp.now : undefined);
   let spawnNudged = log.events.some((e) => e.kind === 'reminder' && isSpawnNudge(e.text));
   // Soft checks were found, not declared: they never refuse a claim, so they never escalate either.
-  const escalateTo = opts.softChecks ? undefined : escalationTarget(model, opts.effort ?? model.defaultEffort, opts.escalate);
+  // A ceiling on effort from settings or the environment: the writer, spawn children, plan/review steps
+  // and escalation resolve under it, never over.
+  const cap = loadMaxEffort();
+  const startEffort = capEffort(opts.effort, cap);
+  const escalateTo = opts.softChecks ? undefined : escalationTarget(model, startEffort ?? model.defaultEffort, capEffort(opts.escalate, cap));
   // Escalation: logged right after the gate's reminder, the user turn that carries it, so the change applies from
   // that turn on (core/providers/anthropic.ts). Not on a failed check: a turn of tool results alone is not new
   // input, and the note that would carry it made Haiku at low effort give up sooner (SPEC.md, effort escalation).
@@ -442,7 +447,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       system: header.system,
       tools: header.tools,
       messages: buildMessages(log.events),
-      ...(opts.effort ? { effort: opts.effort } : {}),
+      ...(startEffort ? { effort: startEffort } : {}),
       maxTokens: model.maxOutput,
       ...(opts.ttl ? { ttl: opts.ttl } : {}),
     };
@@ -451,7 +456,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     const request = log.append({
       kind: 'request',
       model: model.ref,
-      ...(opts.effort ? { effort: opts.effort } : {}),
+      ...(startEffort ? { effort: startEffort } : {}),
       toolsHash: hash(header.tools),
       systemHash: hash(header.system),
       bodyHash: hash(provider.body(req)),
