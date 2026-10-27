@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { lintSession } from '../src/core/session/lint.ts';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { attributeMisses } from '../src/core/context/cache.ts';
@@ -595,5 +595,25 @@ describe('spawn effort (offline, faux)', () => {
     const logs = readdirSync(join(root, project!)).map((f) => SessionLog.load(join(root, project!, f)).events);
     expect(logs.some((l) => (l[0] as { role?: string }).role === 'explore')).toBe(true);
     for (const l of logs) expect(lintSession(l)).toEqual([]);
+  });
+});
+
+describe('--no-mcp (offline, faux)', () => {
+  const toolNames = (noMcp: boolean) => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-nomcp-'));
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'settings.json'), JSON.stringify({ mcpServers: { fake: { command: process.execPath, args: [join(import.meta.dir, 'mcp', 'server.ts')] } } }));
+    const r = cedia([{ blocks: [{ type: 'text', text: 'done' }] }], ['-p', 'say hi', '--sandbox', 'off', ...(noMcp ? ['--no-mcp'] : [])], undefined, { CEDIA_HOME: home });
+    expect(r.code).toBe(0);
+    const [slug] = readdirSync(join(home, 'sessions'));
+    const [file] = readdirSync(join(home, 'sessions', slug!));
+    const session = SessionLog.load(join(home, 'sessions', slug!, file!)).events.find((e) => e.kind === 'session');
+    return ((session as { tools?: { name: string }[] } | undefined)?.tools ?? []).map((t) => t.name);
+  };
+
+  test('without the flag the configured MCP tools join the session; with it they do not', () => {
+    expect(toolNames(false)).toContain('mcp__fake__echo');
+    expect(toolNames(true).filter((n) => n.startsWith('mcp__'))).toEqual([]);
   });
 });

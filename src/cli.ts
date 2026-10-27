@@ -110,6 +110,7 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --sandbox <s>            auto | on | off: OS sandbox for bash (default: $CEDIA_SANDBOX, settings, auto)
       --allow-domain <host>    let sandboxed commands reach this host; repeatable
       --no-session-file        keep the session log in memory only
+      --no-mcp                 start no MCP server: the run sees core tools only, at core-tools cost
 
        cedia lint-session <file.jsonl>...   check session logs against the trust invariants
        cedia usage [<file.jsonl>... | --thread <id> | --last <n> | --since <day|Nd>] [--all] [--json] [--cwd <dir>]
@@ -265,6 +266,8 @@ export async function main(argv: string[]): Promise<number> {
       sandbox: { type: 'string' },
       'allow-domain': { type: 'string', multiple: true },
       'no-session-file': { type: 'boolean' },
+      'no-mcp': { type: 'boolean' },
+      tui: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -290,6 +293,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.effort ? { effort: values.effort as Effort } : {}),
     ...(values.escalate ? { escalate: values.escalate } : {}),
     ...(values['no-session-file'] ? { noSessionFile: true } : {}),
+    ...(values['no-mcp'] ? { noMcp: true } : {}),
     ...(values.permission ? { permission: values.permission } : {}),
     ...(values.allow ? { allow: values.allow } : {}),
     ...(values.deny ? { deny: values.deny } : {}),

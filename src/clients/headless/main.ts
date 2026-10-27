@@ -93,6 +93,8 @@ export type HeadlessArgs = {
   // A Chromium's DevTools endpoint (core/tools/browser.ts): the writer gets the browser tool on its page. "off" or
   // none: no browser.
   browser?: string;
+  // Start no MCP server: core tools only, at core-tools cost. Evals use it; runs that need a server leave it off.
+  noMcp?: boolean;
   // A named set of defaults under the flags (core/profiles.ts); a thread goes on with the profile it was opened with.
   profile?: string;
   // "fallback" or "wait:<minutes>": what a spent quota does.
@@ -896,7 +898,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     store.append(threadId, { kind: 'run', id: runId, prompt: args.prompt.slice(0, 500), cwd: args.cwd, ...(tree ? { tree } : {}), ...(from ? { from } : {}), permission });
   }
   try {
-    const servers = loadMcp();
+    const servers = args.noMcp ? {} : loadMcp();
     if (Object.keys(servers).length) {
       mcp = await startMcp(servers);
       // Stripped MCP tools stay searchable: one registry per run (sub-threads share it; separate runs are
