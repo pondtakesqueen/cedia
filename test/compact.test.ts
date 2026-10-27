@@ -69,12 +69,23 @@ describe('handoff by compaction in the loop', () => {
     expect(lintSession(log.events)).toEqual([]);
   });
 
-  test('no summary: the note takes over at handoffAt', async () => {
-    const { r, log } = await run([write, tool('c1', 'big', {}), noSummary, tool('c2', 'big', {}), reply('the note')], { handoffAt: 12_000, compact });
+  test('no summary twice: the second miss hands the handoff to the note', async () => {
+    // A third miss is never asked for: the trailing noSummary stays unconsumed with exactly two requests sent.
+    const { r, log } = await run([write, tool('c1', 'big', {}), noSummary, tool('c2', 'big', {}), noSummary, tool('c3', 'big', {}), reply('the note'), noSummary], { handoffAt: 12_000, compact });
     expect(r).toMatchObject({ subtype: 'handoff', result: 'the note' });
     expect(r.compaction).toBeUndefined();
-    expect(of(log.events, 'compaction')).toMatchObject([{ stop: 'end_turn' }]);
+    expect(of(log.events, 'compact_request')).toHaveLength(2);
+    expect(of(log.events, 'compaction')).toMatchObject([{ stop: 'end_turn' }, { stop: 'end_turn' }]);
     expect(log.events.some((e) => e.kind === 'reminder' && e.text === HANDOFF_PROMPT)).toBe(true);
+    expect(lintSession(log.events)).toEqual([]);
+  });
+
+  test('one miss is asked once more: a summary on the retry hands off by compaction', async () => {
+    // Consumption order: t1 write, t2 big, C1 noSummary, t3 big, C2 summary, t4 big; t5 ends at the summary.
+    const { r, log } = await run([write, tool('c1', 'big', {}), noSummary, tool('c2', 'big', {}), summary, tool('c3', 'big', {})], { handoffAt: 12_000, compact });
+    expect(r).toMatchObject({ subtype: 'handoff', result: block.text, compaction: { block } });
+    expect(of(log.events, 'compact_request')).toHaveLength(2);
+    expect(log.events.some((e) => e.kind === 'reminder' && e.text === HANDOFF_PROMPT)).toBe(false);
     expect(lintSession(log.events)).toEqual([]);
   });
 
@@ -212,11 +223,13 @@ describe('cedia --handoff compact (offline, faux)', () => {
   const BIN = join(import.meta.dir, '..', 'bin', 'cedia');
   test('the second session holds the summary and the kept turns, and the thread records the summary as its handoff', () => {
     const dir = tmp();
+    // Bulk through the read tool: the handoff measures what the context holds (bash output is capped).
+    const big = '/tmp/cedia-handoff-big.txt';
     const script = [
-      call('c1', 'echo good > f.txt && seq 1 6000'),
+      call('c1', `echo good > f.txt && seq 1 30000 > ${big} && echo wrote`),
+      tool('r1', 'read', { path: big }),
       summary,
       call('c2', 'grep -q good f.txt'),
-      call('c3', 'grep -q good f.txt'),
       reply('done, checked'),
     ];
     const scriptPath = join(dir, 'script.json');

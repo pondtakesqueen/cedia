@@ -39,7 +39,14 @@ export const SCENARIOS: Scenario[] = [
     name: 'handoff',
     what: 'a long session hands off to a second session of the same thread, which recalls and verifies',
     prompt: 'make f.txt say good',
-    script: [bash('c1', 'echo good > f.txt && seq 1 6000'), reply('Wrote f.txt. Next: run the check.'), bash('c2', 'grep -q good f.txt'), reply('done')],
+    // Bulk through the read tool: the handoff measures what the context holds (bash output is capped).
+    script: [
+      bash('c1', 'echo good > f.txt && seq 1 30000 > /tmp/cedia-handoff-big.txt && echo wrote'),
+      tool('r1', 'read', { path: '/tmp/cedia-handoff-big.txt' }),
+      reply('Wrote f.txt. Next: run the check.'),
+      bash('c2', 'grep -q good f.txt'),
+      reply('done'),
+    ],
     args: [...ws, '--check', 'grep -q good f.txt', '--handoff-at', '2000', '--handoff', 'note'],
   },
   {
@@ -97,8 +104,10 @@ export function record(s: Scenario): Recording {
       for (const [id] of text.matchAll(/\bt-[0-9a-f]{8}\b/g)) if (!ids.has(id)) ids.set(id, `t-${String(ids.size + 1).padStart(8, '0')}`);
     const norm = (text: string) =>
       text.split(slug!).join('fixture-repo').split(repo).join('/fixture/repo').split(home).join('/fixture/home').split(dir).join('/fixture').replace(/\bt-[0-9a-f]{8}\b/g, (id) => ids.get(id) ?? id);
-    const filesIn = (d: string) => Object.fromEntries(readdirSync(d).sort().map((f) => [norm(f), norm(readFileSync(join(d, f), 'utf8'))]));
-    return { stream: norm(stream), threads: filesIn(threadsRoot), sessions: filesIn(join(home, 'sessions', slug!)) };
+    // The threads dir also holds per-thread `<id>.summary.md` sidecars (core/project/threads.ts): derived from
+    // the handoff events already in the .jsonl, covered by unit tests, and not part of the replay contract.
+    const filesIn = (d: string, only?: (f: string) => boolean) => Object.fromEntries(readdirSync(d).sort().filter((f) => !only || only(f)).map((f) => [norm(f), norm(readFileSync(join(d, f), 'utf8'))]));
+    return { stream: norm(stream), threads: filesIn(threadsRoot, (f) => f.endsWith('.jsonl')), sessions: filesIn(join(home, 'sessions', slug!)) };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

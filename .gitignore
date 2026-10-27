@@ -1,6 +1,9 @@
 node_modules/
 .DS_Store
 
+# single-file release binaries (rebuilt with bun run build:release)
+dist/
+
 # research corpus (re-download with research/mirror-docs.sh)
 research/docs/
 research/src/

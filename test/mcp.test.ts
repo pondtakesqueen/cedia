@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { loadMcp } from '../src/core/config.ts';
 import { addMcp, checkMcp, listMcp, removeMcp } from '../src/core/mcp/manage.ts';
 import { startMcp } from '../src/core/mcp/tools.ts';
+import type { SessionEvent } from '../src/core/types.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 import { SessionLog } from '../src/core/session/log.ts';
 
@@ -207,6 +208,136 @@ describe('MCP', () => {
       expect(await checkMcp('odd')).toMatchObject({ ok: false });
     } finally {
       process.env.CEDIA_HOME = saved;
+    }
+  });
+});
+
+describe('MCP reconnect', () => {
+  test('a remote server that answers late still makes the initial tool list (connect retried)', async () => {
+    let initializes = 0;
+    const sleeps: number[] = [];
+    const http = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        if (req.method === 'DELETE') return new Response(null, { status: 204 });
+        const m = (await req.json()) as { id?: number; method: string };
+        const json = (result: unknown) => Response.json({ jsonrpc: '2.0', id: m.id, result });
+        if (m.method === 'initialize') {
+          initializes++;
+          if (initializes < 3) return new Response('starting', { status: 503 });
+          return json({ protocolVersion: '2025-06-18', capabilities: {} });
+        }
+        if (m.method === 'tools/list') return json({ tools: [{ name: 'late', inputSchema: { type: 'object' } }] });
+        return new Response(null, { status: 202 });
+      },
+    });
+    try {
+      const m = await startMcp({ late: { url: `http://localhost:${http.port}/mcp`, timeoutSec: 5 } }, async (ms) => void sleeps.push(ms));
+      try {
+        expect(m.notes).toEqual([]);
+        expect(m.tools.map((t) => t.name)).toEqual(['mcp__late__late']);
+        expect(initializes).toBe(3);
+        expect(sleeps).toEqual([1000, 2000]);
+      } finally {
+        await m.close();
+      }
+    } finally {
+      http.stop(true);
+    }
+  });
+
+  test('a local server that cannot start fails fast, without retries', async () => {
+    const sleeps: number[] = [];
+    const m = await startMcp({ gone: { command: '/nonexistent/mcp-server' } }, async (ms) => void sleeps.push(ms));
+    try {
+      expect(m.notes).toHaveLength(1);
+      expect(sleeps).toEqual([]);
+    } finally {
+      await m.close();
+    }
+  });
+
+  test('past the definition budget, tools go out stripped with full text in the search index', async () => {
+    const { budgetMcpTools, MCP_DEF_BUDGET } = await import('../src/core/mcp/tools.ts');
+    const big = (i: number) => ({ name: `mcp__s__tool${i}`, description: `${`tool ${i} does things with binaries and symbols. `}x`.repeat(40), schema: { type: 'object', properties: { q: { type: 'string', description: 'a query'.repeat(20) } } }, effect: 'exec' as const, replay: 'unsafe' as const, run: async () => ({ text: 'ok', isError: false }) });
+    const specs = Array.from({ length: 30 }, (_, i) => big(i));
+    const { tools, index } = budgetMcpTools(specs);
+    expect(tools.map((t) => t.name)).toEqual(specs.map((t) => t.name));
+    const direct = tools.filter((t) => !index.some((d) => d.name === t.name));
+    expect(direct.length).toBeGreaterThan(0);
+    expect(direct.length).toBeLessThan(specs.length);
+    for (const t of direct) expect(t.description).toContain('tool');
+    const sent = JSON.stringify(tools.map((t) => ({ name: t.name, description: t.description, schema: t.schema }))).length;
+    const full = JSON.stringify(specs.map((t) => ({ name: t.name, description: t.description, schema: t.schema }))).length;
+    // Stripped names and one-liners still ride along, but the full weight does not.
+    expect(sent).toBeLessThan(full);
+    for (const d of index) {
+      const out = tools.find((t) => t.name === d.name)!;
+      expect(out.description).toContain(`search ToolSearch for ${d.name}`);
+      expect(out.description.length).toBeLessThanOrEqual(160 + 60);
+      expect(out.schema).toEqual({ type: 'object', additionalProperties: true });
+      expect(d.description.length).toBeGreaterThan(out.description.length);
+    }
+    // Deterministic: the same tools always split the same way.
+    expect(budgetMcpTools(specs).index.map((d) => d.name)).toEqual(index.map((d) => d.name));
+  });
+
+  test('under the budget everything stays full, exactly as before', async () => {
+    const { budgetMcpTools } = await import('../src/core/mcp/tools.ts');
+    const m = await startMcp({ fake: server });
+    try {
+      const { tools, index } = budgetMcpTools(m.tools);
+      expect(index).toEqual([]);
+      expect(tools).toEqual(m.tools);
+    } finally {
+      await m.close();
+    }
+  });
+
+  test('a stripped tool is found through ToolSearch and still runs by name', async () => {
+    const { budgetMcpTools } = await import('../src/core/mcp/tools.ts');
+    const { clearDeferred, registerDeferred, toolSearchTool } = await import('../src/core/tools/tool-search.ts');
+    const { fauxProvider, text, toolUse } = await import('../src/core/providers/faux.ts');
+    const { FAUX_MODEL } = await import('../src/core/providers/catalog.ts');
+    const { runPrompt } = await import('../src/core/loop/run.ts');
+    const { SessionLog } = await import('../src/core/session/log.ts');
+    const m = await startMcp({ fake: server });
+    try {
+      // Force the deferral: one near-budget sibling eats it first (itself just fits, the next does not).
+      const filler = { name: 'mcp__s__big', description: 'x'.repeat(31_800), schema: { type: 'object' }, effect: 'exec' as const, replay: 'unsafe' as const, run: async () => ({ text: 'big', isError: false }) };
+      const { tools, index } = budgetMcpTools([filler, ...m.tools]);
+      expect(index.map((d) => d.name)).toContain('mcp__fake__echo');
+      clearDeferred();
+      for (const d of index) registerDeferred(d);
+      const stripped = tools.filter((t) => index.some((d) => d.name === t.name));
+      const log = SessionLog.create();
+      const cwd = mkdtempSync(join(tmpdir(), 'cedia-mcp-defer-'));
+      const res = await runPrompt(
+        {
+          log,
+          provider: fauxProvider([
+            { blocks: [toolUse('q1', 'ToolSearch', { query: 'echo' })] },
+            { blocks: [toolUse('c1', 'mcp__fake__echo', { text: 'hi' })] },
+            { blocks: [text('done')] },
+          ]),
+          model: FAUX_MODEL,
+          tools: [toolSearchTool, ...stripped],
+          system: 'sys',
+          cwd,
+          permission: { mode: 'workspace', allow: [], deny: [] },
+        },
+        'say it back',
+      );
+      expect(res.subtype).toBe('success');
+      const found = log.events.find((e): e is Extract<SessionEvent, { kind: 'tool_result' }> => e.kind === 'tool_result' && e.callId === 'q1')!;
+      expect(found.output.text).toContain('mcp__fake__echo');
+      expect(found.output.text).toContain('Echo the text back');
+      expect(log.events.find((e): e is Extract<SessionEvent, { kind: 'tool_result' }> => e.kind === 'tool_result' && e.callId === 'c1')).toMatchObject({ status: 'completed', output: { text: 'echo: hi' } });
+      const { lintSession } = await import('../src/core/session/lint.ts');
+      expect(lintSession(log.events)).toEqual([]);
+    } finally {
+      clearDeferred();
+      await m.close();
     }
   });
 });

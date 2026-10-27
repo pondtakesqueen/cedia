@@ -1,4 +1,4 @@
-import type { JsonObject, ResultSubtype } from '../types.ts';
+import { EFFORTS, type Effort, type JsonObject, type ResultSubtype } from '../types.ts';
 import { clip, type ToolSpec } from './registry.ts';
 import { inert } from '../trust/frame.ts';
 import { approachesOf, bestOfReport, MAX_APPROACHES, type Try } from '../project/bestof.ts';
@@ -32,7 +32,7 @@ export type SpawnOutcome = {
   // the kept one's.
   bestOf?: { tries: Try[]; kept?: number };
 };
-export type Spawner = (task: string, kind: SpawnKind, ctx: { signal: AbortSignal; write?: <T>(fn: () => Promise<T> | T) => Promise<T>; approaches?: string[] }) => Promise<SpawnOutcome>;
+export type Spawner = (task: string, kind: SpawnKind, ctx: { signal: AbortSignal; write?: <T>(fn: () => Promise<T> | T) => Promise<T>; approaches?: string[]; effort?: Effort; handoffAt?: number }) => Promise<SpawnOutcome>;
 
 // What comes back to the parent, at most.
 export const MAX_REPORT = 4000;
@@ -94,6 +94,8 @@ Write the task as a complete brief: the goal, the paths and facts it needs, and 
       properties: {
         task: { type: 'string', description: 'The complete brief for the sub-thread' },
         kind: { type: 'string', enum: SPAWN_KINDS, description: opts.worktrees ? 'explore: read-only, cheap, parallel. work: may edit files, in its own worktree, parallel' : 'explore: read-only, cheap, parallel. work: may edit files' },
+        effort: { type: 'string', description: 'Run this sub-thread at this effort level (low, medium, high, xhigh, max); default: the model it runs on takes its own. A level the model does not take is reported and not applied' },
+        handoffAt: { type: 'number', description: 'Hand this sub-thread off to a new session once its context passes this many tokens (at least 1000); default: the run\'s own handoff point. A long exploration that would bloat the child compacts earlier' },
         ...(opts.worktrees ? { approaches: { type: 'array', items: { type: 'string' }, description: 'kind work only: 2 to 4 different ways to do the task; each is tried at once and the one that passes most checks is kept' } } : {}),
       },
       required: ['task', 'kind'],
@@ -110,6 +112,11 @@ Write the task as a complete brief: the goal, the paths and facts it needs, and 
       const kind = input.kind as SpawnKind;
       if (!task) return { text: 'task is required', isError: true };
       if (!SPAWN_KINDS.includes(kind)) return { text: `kind must be one of ${SPAWN_KINDS.join(', ')}`, isError: true };
+      const effort = input.effort === undefined ? undefined : String(input.effort);
+      if (effort !== undefined && !(EFFORTS as string[]).includes(effort)) return { text: `effort must be one of ${EFFORTS.join(', ')}`, isError: true };
+      const handoffAt = input.handoffAt === undefined ? undefined : Number(input.handoffAt);
+      if (handoffAt !== undefined && (!Number.isInteger(handoffAt) || handoffAt < 1000))
+        return { text: 'handoffAt must be a token count of at least 1000', isError: true };
       const approaches = opts.worktrees ? approachesOf(input.approaches) : undefined;
       if (approaches && 'error' in approaches) return { text: approaches.error, isError: true };
       if (approaches && kind !== 'work') return { text: 'approaches is for kind "work" only', isError: true };
@@ -123,7 +130,7 @@ Write the task as a complete brief: the goal, the paths and facts it needs, and 
       }
       try {
         // A best-of-N call takes one slot: its tries run beside each other inside it.
-        const o = await spawn(task, kind, { signal: ctx.signal, ...(ctx.write ? { write: ctx.write } : {}), ...(approaches ? { approaches } : {}) });
+        const o = await spawn(task, kind, { signal: ctx.signal, ...(ctx.write ? { write: ctx.write } : {}), ...(approaches ? { approaches } : {}), ...(effort ? { effort: effort as Effort } : {}), ...(handoffAt !== undefined ? { handoffAt } : {}) });
         return { text: spawnReport(kind, o), isError: o.subtype !== 'success' || !!o.worktree?.conflicts.length };
       } finally {
         if (slot) {

@@ -410,16 +410,19 @@ describe('--spawn worktree (offline, faux)', () => {
     expect(git(r.work, 'worktree', 'list').trim().split('\n')).toHaveLength(1);
   });
 
-  test("a file the parent may not write is left out; outside git a work sub-thread runs in place, alone", () => {
+  test("a file the parent may not write is stopped before it is written; outside git a work sub-thread runs in place, alone", () => {
     const r = repo();
+    // .vscode is sandbox-guarded: the policy stops the write in the child with protected-path, so there is
+    // nothing for the apply step to leave out. ok.txt still lands.
     const out = cedia(
       r.work,
-      [{ blocks: [spawnCall('s1', 'alpha-task: settings')] }, ...child('alpha-task', 'mkdir -p .vscode && echo {} > .vscode/settings.json && echo ok > ok.txt', 'alpha done'), call('p1', 'true'), reply('done')],
+      [{ blocks: [spawnCall('s1', 'alpha-task: settings')] }, call('alpha-1', 'mkdir -p .vscode && echo {} > .vscode/settings.json', 'alpha-task'), call('alpha-2', 'echo ok > ok.txt', 'alpha-task'), call('alpha-3', 'true', 'alpha-task'), reply('alpha done', 'alpha-task'), call('p1', 'true'), reply('done')],
       ['-p', 'settings', '--spawn', 'worktree'],
     );
     const text = report(out.result(), r.work, 's1');
     expect(text).toContain('Applied to your files: ok.txt');
-    expect(text).toContain('Not applied, since you may not write them: .vscode/settings.json');
+    expect(text).not.toContain('.vscode');
+    expect(readFileSync(join(r.work, 'ok.txt'), 'utf8')).toBe('ok\n');
     expect(existsSync(join(r.work, '.vscode'))).toBe(false);
 
     // The parent's own deny rules hold for what comes back, even for a write the rule could not see in the

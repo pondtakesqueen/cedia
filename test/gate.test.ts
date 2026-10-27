@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { baselinePath, compare, DEFAULT_SUITE, expectedCost, fisherLower, listCost, loadSuite, taskHash, type Baseline, type Thresholds } from "../evals/gate.ts";
-import type { Result, Task } from "../evals/run.ts";
+import { HARNESSES, type Result, type Task } from "../evals/run.ts";
 
 const th: Thresholds = { passP: 0.1, costRise: 0.15, timeRise: 0.2, totalRise: 0.4 };
 
@@ -185,5 +185,29 @@ describe("regression gate", () => {
     const p = Bun.spawnSync(["bun", "evals/gate.ts", "--suite", suitePath, "--baseline-dir", join(dir, "base")], { cwd: join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" });
     expect(p.exitCode).toBe(3);
     expect(p.stderr.toString()).toContain("pass --budget");
+  });
+
+  test("the cedia harness runs under an isolated home, so user settings never join an eval", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cedia-harness-iso-"));
+    const repo = join(dir, "repo");
+    mkdirSync(repo);
+    const inv = HARNESSES.cedia!({ id: "t", category: "c", prompt: "say hi" } as Task, repo, "faux");
+    // Inside the task dir, so the runner's cleanup takes it with the workspace.
+    expect(inv.env?.CEDIA_HOME).toBe(join(repo, ".home"));
+    const script = join(dir, "script.json");
+    writeFileSync(script, JSON.stringify([{ blocks: [{ type: "text", text: "done" }] }]));
+    const p = Bun.spawnSync(["bin/cedia", "-m", "faux", "--cwd", repo, "-p", "say hi", "--sandbox", "off"], {
+      cwd: join(import.meta.dir, ".."),
+      env: { ...process.env, CEDIA_FAUX_SCRIPT: script, ...inv.env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(p.exitCode).toBe(0);
+    const [slug] = readdirSync(join(repo, ".home", "sessions"));
+    const [file] = readdirSync(join(repo, ".home", "sessions", slug!));
+    const events = readFileSync(join(repo, ".home", "sessions", slug!, file!), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    const names = (events.find((e) => e.kind === "session")?.tools ?? []).map((t: { name: string }) => t.name);
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.filter((n: string) => n.startsWith("mcp__"))).toEqual([]);
   });
 });

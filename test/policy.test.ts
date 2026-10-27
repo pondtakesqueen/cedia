@@ -110,6 +110,15 @@ describe('deny list', () => {
     ['sh -ec "rm -rf /etc"', 'rm-outside'],
     ['env -S "rm -rf /"', 'rm-outside'],
     ['env --split-string="git reset --hard"', 'reset-hard'],
+    ['powershell -Command "git push --force"', 'force-push'],
+    ['pwsh -c "rm -rf /"', 'rm-outside'],
+    ['cmd /c "git reset --hard"', 'reset-hard'],
+    ['python3 -c "import os; os.system(\'rm -rf /\')"', 'rm-outside'],
+    ['python -c "import subprocess; subprocess.run(\'git push -f\', shell=True)"', 'force-push'],
+    ['git config user.name x', 'git-config'],
+    ['git config --add alias.x status', 'git-config'],
+    ['git config --global user.name x', 'git-config'],
+    ['git -C /tmp status', 'rm-outside'],
   ];
   for (const [command, name] of denied)
     test(`denies ${command}`, () => {
@@ -118,7 +127,13 @@ describe('deny list', () => {
       expect(d.rule).toBe(`deny-list:${name}`);
     });
 
-  const allowed = ['git push origin feature', 'git push -u origin feature', 'git reset --soft HEAD~1', 'git clean -n', 'rm -rf node_modules dist', 'rm -rf ./*', 'rm -r src/old', 'find . -name "*.tmp" -delete', 'rm /tmp/x.txt', 'npm test', 'bun run build', 'kubectl get pods', 'gh pr view 3', 'git stash', 'git stash pop', 'git stash list', 'git branch -d merged', 'git branch new', 'git reflog', 'git update-ref refs/heads/x HEAD', 'find -L . -name "*.tmp" -delete', 'find . -name "*.o" -exec rm -f {} +', 'find src -exec grep -l x {} \\;', 'git -c alias.st=status st', 'git -c core.pager=cat log', 'bash -lc "bun test"', 'env -S "bun test"'];
+  test('a command that may write cannot write git or cedia config, sandbox or not', () => {
+    for (const command of ['echo x > .cedia/settings.json', 'echo x > .git/hooks/pre-commit', 'cp signing.key .mcp.json']) {
+      expect(bash(WS, command).rule).toBe('protected-path');
+    }
+  });
+
+  const allowed = ['git push origin feature', 'git push -u origin feature', 'git reset --soft HEAD~1', 'git clean -n', 'rm -rf node_modules dist', 'rm -rf ./*', 'rm -r src/old', 'find . -name "*.tmp" -delete', 'rm /tmp/x.txt', 'npm test', 'bun run build', 'kubectl get pods', 'gh pr view 3', 'git stash', 'git stash pop', 'git stash list', 'git branch -d merged', 'git branch new', 'git reflog', 'git update-ref refs/heads/x HEAD', 'find -L . -name "*.tmp" -delete', 'find . -name "*.o" -exec rm -f {} +', 'find src -exec grep -l x {} \\;', 'git -c alias.st=status st', 'git -c core.pager=cat log', 'bash -lc "bun test"', 'env -S "bun test"', 'git config --list', 'git config user.name', 'git -C src status', 'cat .git/config', 'powershell -Command "Write-Host hi"', 'python3 -c "print(\'hi\')"', 'python3 -c "import os; os.system(\'echo hi\')"'];
   for (const command of allowed) test(`allows ${command}`, () => expect(bash(WS, command).decision).toBe('allow'));
 
   test('allow rules and modes cannot lift it', () => {
@@ -383,5 +398,16 @@ describe('settings keys', () => {
       if (prev === undefined) delete process.env.CEDIA_HOME;
       else process.env.CEDIA_HOME = prev;
     }
+  });
+});
+
+describe('deny beats allow (hard deny)', () => {
+  const both: Policy = { mode: 'workspace', allow: ['bash(*)'], deny: ['bash(rm *)'] };
+  test('a deny rule holds against a matching allow rule', () => {
+    expect(bash(both, 'rm -rf x').rule).toBe('deny:bash(rm *)');
+    expect(bash(both, 'bun test').rule).toBe('allow:bash(*)');
+  });
+  test('no allow rule lifts the deny list either', () => {
+    expect(bash(both, 'npm publish').rule).toBe('deny-list:deploy');
   });
 });

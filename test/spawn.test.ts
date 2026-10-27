@@ -74,3 +74,17 @@ test('best of N: approaches go to the spawner with worktrees on, count one sub-t
   const plain = spawnTool(spawner);
   expect(JSON.stringify(plain.schema)).not.toContain('approaches');
 });
+
+test('spawn takes an effort level for the sub-thread and refuses an unknown one', async () => {
+  const seen: (string | undefined)[] = [];
+  const spawner: Spawner = async (_task, _kind, c) => {
+    seen.push(c.effort);
+    return { model: 'm', subtype: 'success', result: 'ok', costUsd: 0, changed: [], unverified: [] };
+  };
+  const tool = spawnTool(spawner);
+  expect(JSON.stringify(tool.schema.properties)).toContain('effort');
+  expect((await tool.run({ kind: 'explore', task: 'x', effort: 'high' }, ctx)).isError).toBe(false);
+  expect((await tool.run({ kind: 'explore', task: 'x' }, ctx)).isError).toBe(false);
+  expect((await tool.run({ kind: 'explore', task: 'x', effort: 'ultra' }, ctx)).text).toBe('effort must be one of low, medium, high, xhigh, max');
+  expect(seen).toEqual(['high', undefined]);
+});

@@ -38,6 +38,7 @@ Write it for a capable engineer who has not seen this session:
 - The plan for what is left, in order, starting with the next step: for each step the file and the functions, types and signatures to add or change, concrete enough to carry out without designing it again.
 - The files and line ranges the next step needs, so it reads those instead of the whole codebase.
 - Facts that are costly to find again: exact error messages, paths, line numbers, commands that work.
+- The tools you called that worked (names and what each gave you), so the next session reuses them instead of rediscovering how.
 
 Be specific and brief. The next session can search this session's full log with the recall tool, so point to what is there instead of copying long output.`;
 
@@ -56,7 +57,7 @@ ${inert(note)}
 // smaller is always resumed, since losing its context costs more than re-reading it.
 export const COLD_RESUME_MIN = 30_000;
 
-export type ResumeChoice = { cold: boolean; idleMs: number; contextTokens: number; resumeUsd: number; freshUsd: number; fresh: boolean };
+export type ResumeChoice = { cold: boolean; stale: boolean; idleMs: number; contextTokens: number; resumeUsd: number; freshUsd: number; fresh: boolean };
 
 // What re-sending `tokens` of prompt costs when none of it is cached: a cache write where the provider prices one,
 // the input price where caching is automatic.
@@ -65,16 +66,19 @@ const coldUsd = (model: ModelSpec, tokens: number, at: Date) =>
 
 // Whether to resume a session or start a new one from the thread's note: new when the session's cache has expired,
 // its context is past COLD_RESUME_MIN, and re-reading it costs more than twice what the new session's start does
-// (the margin pays for what the new session reads again). `freshTokens` is that start: system prompt, tools,
-// preamble, note and task.
+// (the margin pays for what the new session reads again). Past 80% of the TTL the next request will likely land
+// after expiry, so the resume is priced as a re-read and a big session goes fresh now instead of resuming into a
+// certain cache miss. `freshTokens` is that start: system prompt, tools, preamble, note and task.
 export function resumeChoice(events: SessionEvent[], model: ModelSpec, freshTokens: number, now = new Date()): ResumeChoice | undefined {
   const reply = events.findLast((e): e is EventOf<'assistant'> => e.kind === 'assistant');
   const request = events.findLast((e): e is EventOf<'request'> => e.kind === 'request');
   if (!reply || !request) return undefined;
+  const ttlMs = request.ttl === '1h' ? 3_600_000 : 300_000;
   const idleMs = now.getTime() - Date.parse(reply.at);
-  const cold = idleMs > (request.ttl === '1h' ? 3_600_000 : 300_000);
+  const cold = idleMs > ttlMs;
+  const stale = idleMs > ttlMs * 0.8;
   const contextTokens = contextSize(reply.usage);
-  const resumeUsd = cold ? coldUsd(model, contextTokens, now) : costUsd(model, { uncached: 0, cacheRead: contextTokens, cacheWrite: 0, output: 0 }, now);
+  const resumeUsd = cold || stale ? coldUsd(model, contextTokens, now) : costUsd(model, { uncached: 0, cacheRead: contextTokens, cacheWrite: 0, output: 0 }, now);
   const freshUsd = coldUsd(model, freshTokens, now);
-  return { cold, idleMs, contextTokens, resumeUsd, freshUsd, fresh: cold && contextTokens >= COLD_RESUME_MIN && resumeUsd > 2 * freshUsd };
+  return { cold, stale, idleMs, contextTokens, resumeUsd, freshUsd, fresh: (cold || stale) && contextTokens >= COLD_RESUME_MIN && resumeUsd > 2 * freshUsd };
 }

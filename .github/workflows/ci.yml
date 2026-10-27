@@ -33,3 +33,5 @@ jobs:
       - run: bun test
         env:
           CEDIA_REQUIRE_SANDBOX: '1'
+      - run: bun run build:release
+      - run: ./dist/cedia --version --json

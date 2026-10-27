@@ -47,6 +47,35 @@ describe('cedia usage', () => {
     const text = formatUsage(r);
     expect(text).toContain('cache misses: 1 idle_over_ttl (4992 tokens)');
     expect(text).toContain("1 request past the model's long-context price line; 1 request at effort max; 1 handoff");
+    // The 10k bash result re-sent twice dominates resent input, so it earns a warning; always-on context does not.
+    expect(r.warnings).toEqual(['tool result bash c1 (10k chars x 2) is 98% of resent input; have the model summarize it instead of re-reading it']);
+    expect(text).toContain('warning: tool result bash c1 (10k chars x 2) is 98% of resent input');
+  });
+
+  test('attempts that wait 30s+ for the first byte count as slow starts', () => {
+    let n = 0;
+    const e = (body: Record<string, unknown>): SessionEvent => ({ id: `e${n++}`, at: at(n), ...body }) as unknown as SessionEvent;
+    const events = [
+      e({ kind: 'session', cwd: '/x', role: 'code', model: 'anthropic/claude-haiku-5-5', system: '', tools: [] }),
+      e({ kind: 'request', model: 'm', toolsHash: 't', systemHash: 's', bodyHash: 'b', headers: {} }),
+      e({ kind: 'attempt', requestId: 'q', n: 1, ttftMs: 45_000, ms: 46_000 }),
+      e({ kind: 'attempt', requestId: 'q', n: 2, ttftMs: 200, ms: 900 }),
+    ];
+    const r = usageReport([{ id: 's', events }]);
+    expect(r.slowStart).toBe(1);
+    expect(formatUsage(r)).toContain('1 attempt waited 30s+ for the first byte');
+  });
+
+  test('always-on context past a quarter of resent input earns a warning; one request never does', () => {
+    let n = 0;
+    const e = (body: Record<string, unknown>): SessionEvent => ({ id: `e${n++}`, at: at(n), ...body }) as unknown as SessionEvent;
+    const sys = 'S'.repeat(10_000);
+    const one = [{ id: 's', events: [e({ kind: 'session', cwd: '/x', role: 'code', model: 'anthropic/claude-haiku-5-5', system: sys, tools: [] }), e({ kind: 'user', text: 'hi' }), e({ kind: 'request', model: 'm', toolsHash: 't', systemHash: 's', bodyHash: 'b', headers: {} })] }];
+    expect(usageReport(one).warnings).toEqual([]);
+    const two = [{ id: 's', events: [...one[0]!.events, e({ kind: 'request', model: 'm', toolsHash: 't', systemHash: 's', bodyHash: 'b2', headers: {} })] }];
+    const r = usageReport(two);
+    expect(r.warnings).toEqual(['always-on context (system prompt and tools) is 100% of resent input across 2 requests; slim the prompt, tools, memory or instructions']);
+    expect(formatUsage(r)).toContain('warning: always-on context (system prompt and tools) is 100%');
   });
 
   test("counts thinking by the model's replay rule: DeepSeek sends it back only until the next user text", () => {
@@ -167,5 +196,55 @@ describe('cedia usage', () => {
     const empty = Bun.spawnSync([BIN, 'usage', '--all', '--since', '2099-01-01', '--json'], { env });
     expect(empty.exitCode).toBe(0);
     expect(JSON.parse(empty.stdout.toString())).toMatchObject({ sessions: 0, costUsd: 0, days: [] });
+  });
+});
+
+describe('blocked calls', () => {
+  test('denials and hook blocks count by rule; allows do not', () => {
+    let n = 0;
+    const e = (body: Record<string, unknown>): SessionEvent => ({ id: `e${n}`, at: at(n++), ...body }) as unknown as SessionEvent;
+    const m = 'anthropic/claude-haiku-5-5';
+    const r = usageReport([
+      {
+        id: 's',
+        events: [
+          e({ kind: 'session', cwd: '/x', role: 'code', model: m, system: '', tools: [] }),
+          e({ kind: 'permission', callId: 'c1', tool: 'bash', decision: 'deny', rule: 'deny:bash(rm *)' }),
+          e({ kind: 'permission', callId: 'c2', tool: 'bash', decision: 'deny', rule: 'deny:bash(rm *)' }),
+          e({ kind: 'permission', callId: 'c3', tool: 'bash', decision: 'deny', rule: 'classifier', reason: 'reaches past the project' }),
+          e({ kind: 'permission', callId: 'c4', tool: 'read', decision: 'allow', rule: 'effect:read' }),
+          e({ kind: 'hook', hook: 'no-curl', event: 'preToolUse', callId: 'c5', decision: 'block', ms: 3 }),
+        ],
+      },
+    ]);
+    expect(r.blocked).toEqual([
+      { rule: 'deny:bash(rm *)', count: 2 },
+      { rule: 'classifier', count: 1 },
+      { rule: 'hook:no-curl', count: 1 },
+    ]);
+    expect(formatUsage(r)).toContain('blocked calls: 2 deny:bash(rm *), 1 classifier, 1 hook:no-curl');
+  });
+});
+
+describe('daily spend warn', () => {
+  const rich = (id: string, at: string): SessionEvent[] => [
+    { id: `${id}-0`, at, kind: 'session', cwd: '/x', role: 'code', model: 'anthropic/claude-haiku-5-5', system: '', tools: [] },
+    { id: `${id}-1`, at, kind: 'assistant', wire: 'anthropic', model: 'anthropic/claude-haiku-5-5', blocks: [{ type: 'text', text: 'x' }], stop: 'end_turn', usage: { uncached: 300_000_000, cacheRead: 0, cacheWrite: 0, output: 0 } },
+  ] as unknown as SessionEvent[];
+  test('daySpendUsd totals today only, and stays silent on an empty home', async () => {
+    const { daySpendUsd } = await import('../src/core/session/select.ts');
+    const { projectKey } = await import('../src/core/session/log.ts');
+    const home = mkdtempSync(join(tmpdir(), 'cedia-spend-'));
+    const cwd = mkdtempSync(join(tmpdir(), 'cedia-spend-ws-'));
+    expect(daySpendUsd(home, cwd)).toBe(0);
+    const dir = join(home, 'sessions', projectKey(cwd));
+    mkdirSync(dir, { recursive: true });
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12).toISOString();
+    const old = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 2, 12).toISOString();
+    writeFileSync(join(dir, 'today.jsonl'), rich('t', today).map((e) => JSON.stringify(e)).join('\n'));
+    writeFileSync(join(dir, 'old.jsonl'), rich('o', old).map((e) => JSON.stringify(e)).join('\n'));
+    // 300M uncached Haiku is past its 100k long-context line: billed at the above-line price (0.5/M).
+    expect(daySpendUsd(home, cwd)).toBeCloseTo(150, 5);
   });
 });

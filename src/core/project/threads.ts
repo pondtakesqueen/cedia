@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { inert } from '../trust/frame.ts';
 import type { RunPermission } from '../safety/policy.ts';
@@ -134,8 +134,29 @@ export class ThreadStore {
   append(id: string, body: ThreadBody & { run?: string }, now = new Date()): void {
     mkdirSync(this.dir, { recursive: true });
     appendFileSync(this.path(id), JSON.stringify({ at: now.toISOString(), ...body }) + '\n');
+    // Per-session summary sidecar: the handoff note is what the next session starts from, so it is also
+    // written as `<id>.summary.md` beside the thread file; a rewind marks it. Readers get the note without
+    // parsing JSONL, and deleting the thread removes both.
+    if (body.kind === 'handoff') {
+      writeFileSync(this.summaryPath(id), `# ${id}\n\n${body.note.endsWith('\n') ? body.note : `${body.note}\n`}`);
+    } else if (body.kind === 'rewind') {
+      if (existsSync(this.summaryPath(id))) appendFileSync(this.summaryPath(id), `\n> Rewound to just before run ${body.run}.\n`);
+    }
+
   }
 
+  summaryPath(id: string): string {
+    if (!/^t-[0-9a-f]{8}$/.test(id)) throw new Error(`not a thread id: ${id}`);
+    return join(this.dir, `${id}.summary.md`);
+  }
+
+  summary(id: string): string | undefined {
+    try {
+      return readFileSync(this.summaryPath(id), 'utf8');
+    } catch {
+      return undefined;
+    }
+  }
   open(task: string, opts: { parent?: string; by?: string; profile?: string; title?: string; forkOf?: ForkOf; side?: boolean; now?: Date } = {}): string {
     const id = newThreadId();
     this.append(id, { kind: 'open', title: titleOf(opts.title || task), task, ...(opts.parent ? { parent: opts.parent } : {}), ...(opts.by ? { by: opts.by } : {}), ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.forkOf ? { forkOf: opts.forkOf } : {}), ...(opts.side ? { side: true } : {}) }, opts.now);
@@ -172,6 +193,7 @@ export class ThreadStore {
   // The thread's file, gone: only for deleting it (core/project/delete.ts), which also takes its sessions.
   remove(id: string): void {
     rmSync(this.path(id), { force: true });
+    rmSync(this.summaryPath(id), { force: true });
   }
 
   send(to: string, from: string, text: string, now = new Date()): string {

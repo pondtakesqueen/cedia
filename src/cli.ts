@@ -5,12 +5,15 @@ import { runHeadless } from './clients/headless/main.ts';
 import type { TuiArgs } from './clients/tui/main.ts';
 import { ALIASES } from './core/providers/catalog.ts';
 import { GUARDS, PERMISSION_ENTRIES, type PermissionList } from './core/safety/policy.ts';
-import { cediaHome, loadPermissionSetting, loadRoles, loadManagedSettings, loadResolvedSettings, loadPolicyLimits, savePolicyLimits } from './core/config.ts';
+import { applyAllowRules, suggestAllowRules } from './core/safety/suggest.ts';
+import { cediaHome, loadPermissionSetting, loadPolicy, loadRoles, loadManagedSettings, loadResolvedSettings, loadPolicyLimits, savePolicyLimits } from './core/config.ts';
 import { processKeychain } from './core/providers/keychain.ts';
 import { modelLine, modelList } from './core/providers/models.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
 import { loadKeybindings } from './clients/tui/keybindings/loader.ts';
+import { daemonCmd } from './clients/daemon/cmd.ts';
+import { loadOnboarding, saveOnboarding, acceptTrust, markStep, isComplete } from './clients/tui/onboarding.ts';
 import { loadOutputStyles, getStyle, stylesDir } from './core/output-styles/styles.ts';
 import { isAlive, listBgSessions, recordStart, recordStop, bgPath, daemonPidPath, readBgEvents } from './core/project/background.ts';
 import { installPlugin, uninstallPlugin, setPluginEnabled, updatePlugin, listInstalled, loadManifest, discoverPlugins, addMarketplace, removeMarketplace, updateMarketplace, loadMarketplaces } from './core/plugins/plugins.ts';
@@ -28,7 +31,10 @@ import { workspaceSnapshots } from './core/safety/snapshot.ts';
 import { lintSession } from './core/session/lint.ts';
 import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
 import { formatUsage, isUsageEvent, readEventsLenient, sinceOf, usageReport, type SessionInput } from './core/session/usage.ts';
+import { selectSessions } from './core/session/select.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
+import { doctorReport } from './core/doctor.ts';
+import { selfSpawnArgs } from './core/self.ts';
 import { versionInfo } from './protocol/version.ts';
 
 const USAGE = `usage: cedia [options]                 the TUI, at a terminal: each prompt is a turn of one thread
@@ -104,6 +110,7 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --sandbox <s>            auto | on | off: OS sandbox for bash (default: $CEDIA_SANDBOX, settings, auto)
       --allow-domain <host>    let sandboxed commands reach this host; repeatable
       --no-session-file        keep the session log in memory only
+      --no-mcp                 start no MCP server: the run sees core tools only, at core-tools cost
 
        cedia lint-session <file.jsonl>...   check session logs against the trust invariants
        cedia usage [<file.jsonl>... | --thread <id> | --last <n> | --since <day|Nd>] [--all] [--json] [--cwd <dir>]
@@ -146,12 +153,20 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia schedules add <when> <prompt> --thread <id> [--every <dur>]
                                             when: an ISO time or a delay (30m, 2h); every: 1h, 1d, 1w (at least 5m)
        cedia schedules cancel|pause|resume|fire <id>
+       cedia daemon [--once] [--interval <s>] [--max <n>] [--json] [--cwd <dir>]
+                                            run queued threads and due schedules in cedia processes of their
+                                            own; --once runs one pass (for cron), otherwise it loops until
+                                            stopped. cedia daemon stop|status controls it
        cedia memory [list | add <text> | forget <id> | consolidate]
                                             the project's memory: short facts every new session gets in its first
                                             turn; writer sessions add to it with the remember tool
        cedia models [--json]                the models a session may use, which of them have a key here, and the
                                             one the code role takes now (marked *)
        cedia permissions [--json]           the permission modes a run may take (--permission) and the default
+       cedia permissions suggest [<file>...] [--thread <id>] [--last <n>] [--apply] [--json]
+                                            propose allow rules from calls past runs stopped (read-only
+                                            commands and exact MCP tools only); --apply adds them to the
+                                            user's allow list
        cedia mcp [list] [--json]            the MCP servers in ~/.cedia/settings.json (env and header names only)
        cedia mcp check <name> [--json]      start one as a run would and list its tools
        cedia mcp add <name> (--command <cmd> [--arg <a>]... [--env K=V]... | --url <url> [--header K=V]...)
@@ -187,6 +202,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'agents') return agentsCmd(argv.slice(1));
   if (argv[0] === 'logs') return logsCmd(argv.slice(1));
   if (argv[0] === 'attach') return attachCmd(argv.slice(1));
+  if (argv[0] === 'daemon') return daemonCmd(argv.slice(1));
   if (argv[0] === 'stop' || argv[0] === 'kill') return stopCmd(argv.slice(1), argv[0] === 'kill');
   if (argv[0] === 'respawn') return respawnCmd(argv.slice(1));
   if (argv[0] === 'plugin') return plugin(argv.slice(1));
@@ -250,6 +266,8 @@ export async function main(argv: string[]): Promise<number> {
       sandbox: { type: 'string' },
       'allow-domain': { type: 'string', multiple: true },
       'no-session-file': { type: 'boolean' },
+      'no-mcp': { type: 'boolean' },
+      tui: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -275,6 +293,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.effort ? { effort: values.effort as Effort } : {}),
     ...(values.escalate ? { escalate: values.escalate } : {}),
     ...(values['no-session-file'] ? { noSessionFile: true } : {}),
+    ...(values['no-mcp'] ? { noMcp: true } : {}),
     ...(values.permission ? { permission: values.permission } : {}),
     ...(values.allow ? { allow: values.allow } : {}),
     ...(values.deny ? { deny: values.deny } : {}),
@@ -334,7 +353,7 @@ export async function main(argv: string[]): Promise<number> {
     const tid = store.open(prompt, {});
     const sid = crypto.randomUUID();
     const logPath = sessionPath(base.cwd ?? process.cwd(), sid);
-    const child = Bun.spawn([process.argv[0]!, process.argv[1]!, '-p', prompt, '--thread', tid, '--sandbox', base.sandbox ?? 'auto', '--output-format', 'json'], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
+    const child = Bun.spawn(selfSpawnArgs(['-p', prompt, '--thread', tid, '--sandbox', base.sandbox ?? 'auto', '--output-format', 'json']), { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
     // detach
     try { child.unref(); } catch {}
     const bgid = `bg-${crypto.randomUUID().slice(0, 8)}`;
@@ -738,6 +757,12 @@ async function pr(argv: string[]): Promise<number> {
 }
 
 function permissions(argv: string[]): number {
+  const [sub, ...rest] = argv;
+  if (sub === 'suggest') return suggest(rest);
+  if (sub !== undefined && !sub.startsWith('-')) {
+    console.error('usage: cedia permissions [--json] | suggest [<file.jsonl>...] [--thread <id>] [--last <n>] [--apply] [--json] [--cwd <dir>]');
+    return 2;
+  }
   let parsed;
   try {
     parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' } } });
@@ -753,6 +778,51 @@ function permissions(argv: string[]): number {
     return 1;
   }
   console.log(parsed.values.json ? JSON.stringify(list) : list.modes.map((m) => `${m.mode === list.default ? '*' : ' '} ${m.mode.padEnd(10)} ${m.description}`).join('\n'));
+  return 0;
+}
+
+// `cedia permissions suggest`: propose allow rules from calls past runs stopped, and with --apply add the
+// missing ones to the user's allow list (a repository's settings can only tighten, never grant).
+function suggest(argv: string[]): number {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' }, thread: { type: 'string' }, last: { type: 'string' }, apply: { type: 'boolean' }, json: { type: 'boolean' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const cwd = resolve(parsed.values.cwd ?? process.cwd());
+  const home = cediaHome();
+  const sessions = selectSessions({ cwd, home, ...(parsed.values.thread ? { thread: parsed.values.thread } : {}), ...(parsed.values.last ? { last: Number(parsed.values.last) } : {}), ...(parsed.positionals.length ? { files: parsed.positionals } : {}) });
+  if (!sessions.length) {
+    console.error('cedia: no session logs to read');
+    return 1;
+  }
+  let policy;
+  try {
+    policy = loadPolicy(cwd);
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 1;
+  }
+  const r = suggestAllowRules(sessions, { allow: policy.allow, deny: policy.deny });
+  if (parsed.values.apply) {
+    let added: string[];
+    try {
+      added = applyAllowRules(home, r.suggestions.map((s) => s.rule)).added;
+    } catch (e) {
+      console.error(`cedia: ${(e as Error).message}`);
+      return 1;
+    }
+    if (parsed.values.json) console.log(JSON.stringify({ ...r, added }));
+    else console.log(added.length ? `added to ~/.cedia/settings.json: ${added.join(', ')}` : 'nothing new to add: every suggestion is already allowed');
+    return 0;
+  }
+  if (parsed.values.json) console.log(JSON.stringify(r));
+  else {
+    console.log(r.suggestions.length ? r.suggestions.map((s) => `${s.rule}  (${s.hits} run${s.hits === 1 ? '' : 's'} stopped; e.g. ${s.example})`).join('\n') : 'no suggestions: nothing safely pre-approvable was stopped');
+    if (r.skippedDeny || r.skippedUnsafe) console.log(`left out: ${r.skippedDeny} held by a deny rule or guard, ${r.skippedUnsafe} unsafe to pre-approve`);
+  }
   return 0;
 }
 
@@ -871,57 +941,30 @@ function doctor(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 2;
   }
-  const info = versionInfo();
   const home = cediaHome();
   const cwd = parsed.values.cwd ?? process.cwd();
-  const diagnostics: Record<string, unknown> = {
-    version: info.version,
-    protocol: info.protocol,
-    capabilities: info.capabilities,
-    home,
-    cwd,
-    sandbox: { available: false },
-    settings: {},
-    keybindings: {},
-    mcp: {},
-  };
-  // try loadResolvedSettings
+  const r = doctorReport(cwd, home);
+  // Keybindings live client-side (core never imports clients), so they join the report here.
+  const keybindings: Record<string, unknown> = {};
   try {
-    loadResolvedSettings();
-    (diagnostics.settings as Record<string, unknown>).resolved = 'ok';
+    keybindings.count = loadKeybindings(home).length;
   } catch (e) {
-    (diagnostics.settings as Record<string, unknown>).resolvedError = (e as Error).message;
+    keybindings.error = (e as Error).message;
   }
-  // sandbox
-  const bunWhich = Bun.which('bwrap') || Bun.which('sandbox-exec');
-  (diagnostics.sandbox as Record<string, unknown>).available = !!bunWhich;
-  (diagnostics.sandbox as Record<string, unknown>).tool = bunWhich ?? null;
-  // keybindings
-  try {
-    const kb = loadKeybindings(home);
-    (diagnostics.keybindings as Record<string, unknown>).count = kb.length;
-    (diagnostics.keybindings as Record<string, unknown>).ok = true;
-  } catch (e) {
-    (diagnostics.keybindings as Record<string, unknown>).error = (e as Error).message;
-  }
-  // mcp
-  try {
-    const m = listMcp();
-    (diagnostics.mcp as Record<string, unknown>).servers = m.servers.length;
-    (diagnostics.mcp as Record<string, unknown>).ok = true;
-  } catch (e) {
-    (diagnostics.mcp as Record<string, unknown>).error = (e as Error).message;
-  }
-  if (parsed.values.json) console.log(JSON.stringify(diagnostics));
+  const tier = (t: { present: boolean; ok: boolean; error?: string }) => (!t.present ? 'absent' : t.ok ? 'ok' : `error: ${t.error}`);
+  // MCP servers that failed validation, by name.
+  const bad = r.mcp.servers.filter((s) => s.error);
+  if (parsed.values.json) console.log(JSON.stringify({ ...r, keybindings }));
   else {
     console.log(`cedia doctor`);
-    console.log(`version: ${info.version}`);
+    console.log(`version: ${r.version} · bun ${r.bun}`);
     console.log(`home: ${home}`);
     console.log(`cwd: ${cwd}`);
-    console.log(`sandbox: ${(diagnostics.sandbox as any).available ? 'available' : 'unavailable'} (${(diagnostics.sandbox as any).tool ?? 'no tool'})`);
-    console.log(`settings: ${(diagnostics.settings as any).resolvedError ?? (diagnostics.settings as any).resolved ?? 'unknown'}`);
-    console.log(`keybindings: ${(diagnostics.keybindings as any).count ?? 0}`);
-    console.log(`mcp servers: ${(diagnostics.mcp as any).servers ?? 0}`);
+    console.log(`sandbox: ${r.sandbox.available ? 'available' : 'unavailable'} (${r.sandbox.tool ?? 'no tool'})`);
+    console.log(`settings: user ${tier(r.settings.user)}, managed ${tier(r.settings.managed)}, mdm ${tier(r.settings.mdm)}, resolved ${r.settings.resolved}`);
+    console.log(`mdm: ${r.mdm.url ? 'url set' : 'no url'}, cache ${r.mdm.cache}`);
+    console.log(`keybindings: ${keybindings.count ?? keybindings.error ?? 0}`);
+    console.log(`mcp servers: ${r.mcp.servers.length ? r.mcp.servers.map((s) => s.name).join(', ') : 'none'}${bad.length ? ` (invalid: ${bad.map((s) => `${s.name}: ${s.error}`).join('; ')})` : ''}`);
   }
   return 0;
 }
@@ -1124,7 +1167,7 @@ function respawnCmd(argv: string[]): number {
     const sessions = listBgSessions(home, slug);
     const s = sessions.find((x) => x.id === id);
     if (!s) { console.error(`no session ${id}`); continue; }
-    const child = Bun.spawn([process.argv[0]!, process.argv[1]!, '-p', 'respawn', '--thread', s.thread], { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
+    const child = Bun.spawn(selfSpawnArgs(['-p', 'respawn', '--thread', s.thread]), { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
     try { child.unref(); } catch {}
     const bgid = `bg-${crypto.randomUUID().slice(0, 8)}`;
     recordStart(home, slug, { id: bgid, thread: s.thread, pid: child.pid ?? 0, logPath: s.logPath });

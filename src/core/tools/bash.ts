@@ -1,4 +1,4 @@
-import { clip, MAX_OUTPUT_CHARS, preview, type ToolSpec } from './registry.ts';
+import { clip, MAX_SHELL_OUTPUT_CHARS, preview, type ToolSpec } from './registry.ts';
 
 // A command counts as read-only when every command in its pipeline or && chain is on this list and
 // nothing writes, substitutes or redirects. Read-only commands run in parallel and in read-only sessions;
@@ -115,13 +115,17 @@ function splitTopLevel(command: string): string[] | null {
 }
 
 // Commands never see cedia's own credentials: provider keys and anything that looks like a secret stay out.
+// Shell startup files stay out too: bash is spawned --noprofile --norc, and the variables that would point it
+// at a startup file anyway (BASH_ENV, ENV, ZDOTDIR) are stripped, so a repository cannot run code before the
+// command by planting one (Claude Code 2.1.309 ran startup files outside the sandbox).
 // Git's environment config (GIT_CONFIG_COUNT with GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n) goes as one: a value
 // can be a credential header, and a count left without its keys makes every git command fail.
 const SECRET = /(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)($|_)/i;
+const SHELL_STARTUP = new Set(['BASH_ENV', 'ENV', 'ZDOTDIR']);
 const GIT_ENV_CONFIG = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/;
 export function scrubbedEnv(env: Record<string, string | undefined> = process.env): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined && !SECRET.test(e[0]) && !GIT_ENV_CONFIG.test(e[0]) && !e[0].startsWith('CEDIA_')),
+    Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined && !SECRET.test(e[0]) && !SHELL_STARTUP.has(e[0]) && !GIT_ENV_CONFIG.test(e[0]) && !e[0].startsWith('CEDIA_')),
   );
 }
 
@@ -178,7 +182,9 @@ export const bashTool: ToolSpec = {
     const script = ctx.wrap ? await ctx.wrap(command) : command;
     // Its own process group, so a timeout or an abort ends what the command started too, not only bash.
     const started = Date.now();
-    const proc = Bun.spawn(['bash', '-c', script], { cwd: ctx.cwd, env: scrubbedEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', detached: true });
+    // --noprofile --norc (with BASH_ENV/ENV/ZDOTDIR scrubbed above): no startup file runs, inside the
+    // sandbox or out, so a planted one cannot run code before the command.
+    const proc = Bun.spawn(['bash', '--noprofile', '--norc', '-c', script], { cwd: ctx.cwd, env: scrubbedEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', detached: true });
     let stopped = '';
     const kill = (why: string) => () => {
       stopped ||= why;
@@ -202,10 +208,18 @@ export const bashTool: ToolSpec = {
     await Promise.race([Promise.all([out.done, err.done]), Bun.sleep(PIPE_GRACE_MS)]);
     const [o, e] = [out.stop(), err.stop()];
     const text = [o, e && `[stderr]\n${e}`].filter(Boolean).join('\n') || '(no output)';
-    const full = `${text}\n[exit ${code}${stopped ? `, ${stopped}` : ''}]${slowGrepNote(command, Date.now() - started)}`;
+    // A group that outlives its bash (a `&` job, nohup) is left running — killing it would end servers the
+    // run started on purpose — so the result says so instead, and the model can jobs or kill it itself.
+    // Recording it for `cedia agents` would need the thread, which tools never see: deferred.
+    let lingering = false;
+    try {
+      process.kill(-proc.pid, 0);
+      lingering = true;
+    } catch {}
+    const full = `${text}\n[exit ${code}${stopped ? `, ${stopped}` : ''}]${lingering ? ' (background jobs of this command are still running)' : ''}${slowGrepNote(command, Date.now() - started)}`;
     // A long output goes to a file whole, so the lines in the middle (often the failing test) are still there.
-    const path = full.length > MAX_OUTPUT_CHARS ? ctx.spill?.(full) : undefined;
-    if (path) return { text: preview(full, path), isError: code !== 0, exitCode: code, spillPath: path };
-    return { text: clip(full), isError: code !== 0, exitCode: code };
+    const path = full.length > MAX_SHELL_OUTPUT_CHARS ? ctx.spill?.(full) : undefined;
+    if (path) return { text: preview(full, path, MAX_SHELL_OUTPUT_CHARS), isError: code !== 0, exitCode: code, spillPath: path };
+    return { text: clip(full, MAX_SHELL_OUTPUT_CHARS), isError: code !== 0, exitCode: code };
   },
 };

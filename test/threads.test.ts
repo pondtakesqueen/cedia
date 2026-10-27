@@ -350,9 +350,13 @@ describe('cedia threads (offline, faux)', () => {
 
   test('a long session hands off: the new session starts from the task and the note, can recall, and must still verify', () => {
     const dir = tmp();
-    const r = cedia(dir, [call('c1', 'echo good > f.txt && seq 1 6000'), reply('Wrote f.txt. Next: run the check.'), call('c2', 'grep -q good f.txt'), reply('done')], ['-p', 'make f.txt say good', ...base, '--handoff-at', '2000', '--handoff', 'note']);
+    // Bulk through the read tool (30k pages), not bash output (capped at 8k with the rest spilled to a
+    // file): the handoff measures what the context holds. big.txt lives outside the working directory so
+    // the thread's changes stay exactly f.txt.
+    const big = '/tmp/cedia-handoff-big.txt';
+    const r = cedia(dir, [call('c1', `echo good > f.txt && seq 1 30000 > ${big} && echo wrote`), tool('r1', 'read', { path: big }), reply('Wrote f.txt. Next: run the check.'), call('c2', 'grep -q good f.txt'), reply('done')], ['-p', 'make f.txt say good', ...base, '--handoff-at', '2000', '--handoff', 'note']);
     const result = JSON.parse(r.out);
-    expect(result).toMatchObject({ subtype: 'success', numTurns: 4, evidence: { changed: ['f.txt'], unverified: [] } });
+    expect(result).toMatchObject({ subtype: 'success', numTurns: 5, evidence: { changed: ['f.txt'], unverified: [] } });
     expect(result.sessions).toHaveLength(2);
     expect(r.err).toContain('handing off to a new session');
     const [first, second] = result.sessions.map((id: string) => sessionsOf(dir).find((l) => l.id === id)!);
@@ -393,9 +397,11 @@ describe('cedia threads (offline, faux)', () => {
 
   test('--thread on a session whose cache expired goes on in a new session when that is cheaper', () => {
     const dir = tmp();
-    // A first session that read a lot: about 50k tokens of context.
-    const reads = { blocks: Array.from({ length: 6 }, (_, i) => ({ type: 'tool_use', id: `r${i}`, name: 'bash', input: { command: `seq ${i} 9000` } })) };
-    const first = JSON.parse(cedia(dir, [call('c1', 'echo good > f.txt'), reads, call('c2', 'grep -q good f.txt'), reply('first done')], ['-p', 'make f.txt say good', ...base]).out);
+    // A first session that read a lot: about 50k tokens of context, through the read tool (bash output
+    // is capped with the rest spilled to a file; reads page whole).
+    const big = '/tmp/cedia-handoff-big.txt';
+    const reads = { blocks: Array.from({ length: 6 }, (_, i) => ({ type: 'tool_use', id: `r${i}`, name: 'read', input: { path: big, offset: i * 5000 + 1 } })) };
+    const first = JSON.parse(cedia(dir, [call('c1', `echo good > f.txt && seq 1 30000 > ${big} && echo wrote`), reads, call('c2', 'grep -q good f.txt'), reply('first done')], ['-p', 'make f.txt say good', ...base]).out);
     expect(first.peakContext).toBeGreaterThan(30_000);
     const path = sessionsOf(dir).find((l) => l.id === first.sessionId)!;
     const file = join(dir, 'home', 'sessions', readdirSync(join(dir, 'home', 'sessions'))[0]!, `${path.id}.jsonl`);
@@ -727,11 +733,13 @@ describe('sub-threads (offline, faux)', () => {
     const script = [
       tool('s1', 'spawn', { kind: 'work', task: 'Write good to f.txt, then run grep -q good f.txt.' }),
       call('c1', 'echo good > f.txt && seq 1 6000'),
+      call('c1b', 'seq 1 6000'),
       reply('Wrote f.txt. Next: run grep -q good f.txt.'),
       call('c2', 'grep -q good f.txt'),
       reply('Wrote good to f.txt; grep -q good f.txt passes.'),
       call('c3', 'grep -q good f.txt'),
       reply('done, checked'),
+      reply('done'),
     ];
     const run = cedia(dir, script, ['-p', 'make f.txt say good', ...ws, '--handoff-at', '2000', '--handoff', 'note']);
     const result = JSON.parse(run.out);
@@ -763,8 +771,9 @@ describe('sub-threads (offline, faux)', () => {
     for (const l of [parent, first!, second!]) expect(lintSession(l.events)).toEqual([]);
 
     // The new session inherits the first one's write, so its claim still needs a check after it.
+    // Own steps (not shared with the main flow above): small output, so no handoff fires here.
     const lazyDir = tmp();
-    const lazy = cedia(lazyDir, [script[0], script[1], script[2], reply('done'), reply('done'), call('c3', 'grep -q good f.txt'), reply('fixed it myself')], ['-p', 'make f.txt say good', ...ws, '--handoff-at', '2000', '--handoff', 'note']);
+    const lazy = cedia(lazyDir, [tool('s1', 'spawn', { kind: 'work', task: 'Write good to f.txt.' }), call('c1', 'echo good > f.txt'), reply('done'), reply('done'), call('c3', 'grep -q good f.txt'), reply('fixed it myself')], ['-p', 'make f.txt say good', ...ws, '--handoff-at', '2000', '--handoff', 'note']);
     const lazyResult = JSON.parse(lazy.out);
     expect(lazyResult.subtype).toBe('success');
     const lazyParent = sessionsOf(lazyDir).find((l) => l.id === lazyResult.sessionId)!;

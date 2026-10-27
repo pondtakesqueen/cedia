@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { lintSession } from '../src/core/session/lint.ts';
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { attributeMisses } from '../src/core/context/cache.ts';
@@ -556,5 +556,64 @@ describe('miss attribution', () => {
     const rows = attributeMisses([req(0), asst(1, 0, 723), req(2), asst(3, 640, 170), req(4), asst(5, 640, 856)], { blockTokens: 128 });
     expect(rows.map((r) => r.cause)).toEqual(['cold', undefined, 'provider']);
     expect(rows[1]!.reusable).toBe(640);
+  });
+});
+
+describe('spawn effort (offline, faux)', () => {
+  test('effort on a model that takes no levels is said once and not applied; the run goes on', () => {
+    const spawnCall = { blocks: [{ type: 'tool_use', id: 's1', name: 'spawn', input: { task: 'find the thing', kind: 'explore', effort: 'high' } }] };
+    const args = ['-p', 'find the thing, write it to f.txt, and check it', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -s f.txt', '--swarm', 'faux/fallback'];
+    const r = cedia([spawnCall, { ...reply('found it'), when: 'find the thing' }, call('w1', 'echo ok > f.txt'), call('w2', 'test -s f.txt'), reply('done')], args);
+    expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success' });
+    // faux/fallback takes no effort levels (like DeepSeek): said once, not applied, not fatal.
+    expect(r.err).toContain('explore sub-thread effort high will not apply on faux/fallback: it takes no effort levels');
+    expect(r.err.match(/will not apply/g)).toHaveLength(1);
+  });
+  test("a sub-thread runs at the effort the spawn call names: the child's requests carry it", () => {
+    const spawnCall = { blocks: [{ type: 'tool_use', id: 's1', name: 'spawn', input: { task: 'find the thing', kind: 'explore', effort: 'high' } }] };
+    const args = ['-p', 'find the thing, write it to f.txt, and check it', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -s f.txt', '--swarm', 'faux/fallback'];
+    const r = cedia([spawnCall, { ...reply('found it'), when: 'find the thing' }, call('w1', 'echo ok > f.txt'), call('w2', 'test -s f.txt'), reply('done')], args);
+    expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success' });
+    const root = join(r.home, 'sessions');
+    const [project] = readdirSync(root);
+    const logs = readdirSync(join(root, project!)).map((f) => SessionLog.load(join(root, project!, f)).events);
+    const child = logs.find((l) => (l[0] as { role?: string }).role === 'explore')!;
+    expect(child).toBeDefined();
+    const requests = child.filter((e): e is Extract<SessionEvent, { kind: 'request' }> => e.kind === 'request');
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every((q) => (q as { effort?: string }).effort === 'high')).toBe(true);
+    for (const l of logs) expect(lintSession(l)).toEqual([]);
+  });
+
+  test('a sub-thread takes the handoff window the spawn call names, and the run goes on', () => {
+    const spawnCall = { blocks: [{ type: 'tool_use', id: 's1', name: 'spawn', input: { task: 'find the thing', kind: 'explore', handoffAt: 100_000 } }] };
+    const args = ['-p', 'find the thing, write it to f.txt, and check it', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -s f.txt', '--swarm', 'faux/fallback'];
+    const r = cedia([spawnCall, { ...reply('found it'), when: 'find the thing' }, call('w1', 'echo ok > f.txt'), call('w2', 'test -s f.txt'), reply('done')], args);
+    expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success' });
+    const root = join(r.home, 'sessions');
+    const [project] = readdirSync(root);
+    const logs = readdirSync(join(root, project!)).map((f) => SessionLog.load(join(root, project!, f)).events);
+    expect(logs.some((l) => (l[0] as { role?: string }).role === 'explore')).toBe(true);
+    for (const l of logs) expect(lintSession(l)).toEqual([]);
+  });
+});
+
+describe('--no-mcp (offline, faux)', () => {
+  const toolNames = (noMcp: boolean) => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-nomcp-'));
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'settings.json'), JSON.stringify({ mcpServers: { fake: { command: process.execPath, args: [join(import.meta.dir, 'mcp', 'server.ts')] } } }));
+    const r = cedia([{ blocks: [{ type: 'text', text: 'done' }] }], ['-p', 'say hi', '--sandbox', 'off', ...(noMcp ? ['--no-mcp'] : [])], undefined, { CEDIA_HOME: home });
+    expect(r.code).toBe(0);
+    const [slug] = readdirSync(join(home, 'sessions'));
+    const [file] = readdirSync(join(home, 'sessions', slug!));
+    const session = SessionLog.load(join(home, 'sessions', slug!, file!)).events.find((e) => e.kind === 'session');
+    return ((session as { tools?: { name: string }[] } | undefined)?.tools ?? []).map((t) => t.name);
+  };
+
+  test('without the flag the configured MCP tools join the session; with it they do not', () => {
+    expect(toolNames(false)).toContain('mcp__fake__echo');
+    expect(toolNames(true).filter((n) => n.startsWith('mcp__'))).toEqual([]);
   });
 });

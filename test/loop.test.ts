@@ -13,7 +13,7 @@ import { bashTool } from '../src/core/tools/bash.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
 import { readTool } from '../src/core/tools/read.ts';
 import { MAX_OUTPUT_CHARS, preview } from '../src/core/tools/registry.ts';
-import { EFFORTS, type EventOf, type SessionEvent } from '../src/core/types.ts';
+import { EFFORTS, type EventOf, type SessionEvent, type WireRequest } from '../src/core/types.ts';
 import { hash } from '../src/core/hash.ts';
 
 const cwd = mkdtempSync(join(tmpdir(), 'cedia-loop-'));
@@ -224,19 +224,24 @@ describe('loop', () => {
     const MIN = 60_000;
     const spent = (retryAfterMs?: number): FauxStep => ({ error: { code: 'quota', status: 429, message: 'usage limit reached', ...(retryAfterMs ? { retryAfterMs } : {}) } });
     const waits: number[] = [];
-    const waited = setup([spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN, onQuotaWait: (ms) => void waits.push(ms) });
+    const waited = setup([spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN, onQuotaWait: (ms) => void waits.push(ms) });
     expect(await runPrompt(waited.opts, 'hi')).toMatchObject({ subtype: 'success', timing: { retryMs: 20 * MIN } });
-    expect(waited.sleeps).toEqual([20 * MIN]);
-    expect(waits).toEqual([20 * MIN]);
-    expect(of(waited.log.events, 'attempt').map((a) => a.error?.code)).toEqual(['quota', undefined]);
+    // Sliced into 5-minute rechecks (quotaRecheckMs): each slice ends in a fresh request, same total, heard per slice.
+    expect(waited.sleeps).toEqual([5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN]);
+    expect(waits).toEqual([5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN]);
+    expect(of(waited.log.events, 'attempt').map((a) => a.error?.code)).toEqual(['quota', 'quota', 'quota', 'quota', undefined]);
+    // A limit lifted before its reset ends the wait at the next slice, not at the reset.
+    const early = setup([spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN });
+    expect(await runPrompt(early.opts, 'hi')).toMatchObject({ subtype: 'success', timing: { retryMs: 5 * MIN } });
+    expect(early.sleeps).toEqual([5 * MIN]);
     // Without the option a spent quota ends the session, so the client can fall back.
     const plain = setup([spent(20 * MIN), { blocks: [text('ok')] }]);
     expect((await runPrompt(plain.opts, 'hi')).subtype).toBe('error_during_execution');
     expect(plain.sleeps).toEqual([]);
     // The ceiling is for the whole run: a second 20-minute wait would pass 30 minutes.
-    const twice = setup([spent(20 * MIN), spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN });
+    const twice = setup([spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN });
     expect((await runPrompt(twice.opts, 'hi')).subtype).toBe('error_during_execution');
-    expect(twice.sleeps).toEqual([20 * MIN]);
+    expect(twice.sleeps).toEqual([5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN]);
     // A spent balance says no time: waiting will not bring it back.
     const balance = setup([{ error: { code: 'quota', status: 402, message: 'Insufficient Balance' } }, { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN });
     expect((await runPrompt(balance.opts, 'hi')).subtype).toBe('error_during_execution');
@@ -641,6 +646,59 @@ describe('malformed turns', () => {
     const long: FauxStep = { blocks: [text('...')], stop: 'max_tokens' };
     const { log, opts } = setup([cut, long, cut, long, cut, long, cut, long], { maxTurns: 5 });
     expect(await runPrompt(opts, 'go')).toMatchObject({ subtype: 'error_max_turns', numTurns: 5 });
+    expectPaired(log.events);
+  });
+});
+
+describe('beta-gated gateway fallback', () => {
+  const betaError = { error: { code: 'bad_request', status: 400, message: 'invalid_request_error: the anthropic-beta header value is not supported by this gateway' } } as const;
+  test('one stripped resend on a beta rejection, then success; attempts show the rejection', async () => {
+    const base = fauxProvider((req, state) => (state.callCount > 1 ? { blocks: [text('done')] } : betaError));
+    let strips = 0;
+    const provider = { ...base, stripForGateway: (req: WireRequest) => { strips++; return { ...req }; } };
+    const { log, opts } = setup([], { provider });
+    const r = await runPrompt(opts, 'hi');
+    expect(r.subtype).toBe('success');
+    expect(r.result).toBe('done');
+    expect(strips).toBe(1);
+    expect(base.state.callCount).toBe(2);
+    expect(of(log.events, 'attempt')).toHaveLength(2);
+    expect(of(log.events, 'attempt')[0]).toMatchObject({ n: 1, error: { code: 'bad_request' } });
+    expectPaired(log.events);
+  });
+  test('a bad request that names no beta, or a strip that changes nothing, ends the run', async () => {
+    const plain = fauxProvider([{ error: { code: 'bad_request', status: 400, message: 'invalid_request_error: prompt is empty' } }]);
+    const s1 = setup([], { provider: { ...plain, stripForGateway: () => undefined } });
+    expect((await runPrompt(s1.opts, 'hi')).subtype).toBe('error_during_execution');
+    expect(plain.state.callCount).toBe(1);
+  });
+});
+
+describe('repeat checks', () => {
+  test('a declared check that passed does not run again until a write', async () => {
+    const { log, opts } = setup(
+      [{ blocks: [toolUse('c1', 'bash', { command: 'true' })] }, { blocks: [toolUse('c2', 'bash', { command: 'true' })] }, { blocks: [text('done')] }],
+      { checks: ['true'], permission: { mode: 'workspace', allow: [], deny: [] } },
+    );
+    const r = await runPrompt(opts, 'check twice');
+    expect(r.subtype).toBe('success');
+    const results = of(log.events, 'tool_result');
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({ status: 'completed' });
+    expect(results[1]).toMatchObject({ status: 'denied' });
+    expect(results[1]!.output.text).toContain('already passed with nothing written since');
+    expect(of(log.events, 'permission').filter((p) => p.decision === 'deny').map((p) => p.rule)).toEqual(['repeat-check']);
+    expectPaired(log.events);
+  });
+
+  test('a failed check always reruns, and a write re-arms a passed one', async () => {
+    const { log, opts } = setup(
+      [{ blocks: [toolUse('c1', 'bash', { command: 'false' })] }, { blocks: [toolUse('c2', 'bash', { command: 'false' })] }, { blocks: [text('done')] }],
+      { checks: ['false'], permission: { mode: 'workspace', allow: [], deny: [] } },
+    );
+    await runPrompt(opts, 'failing check twice');
+    const results = of(log.events, 'tool_result');
+    expect(results.map((r) => r.status)).toEqual(['failed', 'failed']);
     expectPaired(log.events);
   });
 });

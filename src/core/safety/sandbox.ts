@@ -57,15 +57,19 @@ export const sandboxGuarded = (rel: string) => MANDATORY_DENY.some((p) => rel ==
 export const NO_SANDBOX: Sandbox = { on: false, allowedDomains: [], placeholders: [], wrap: async (c) => c, within: () => async (c) => c, close: async () => {} };
 
 export function sandboxConfig(cwd: string, allowedDomains: string[], cediaHome: string, hooks = hooksDir(cwd)) {
+  // By real path throughout: the sandbox matches paths as the kernel resolves them, so a boundary written
+  // with a symlinked parent would not apply at the real location (Claude Code 2.1.309: macOS denyWrite globs
+  // bypassed through a symlinked folder).
+  const root = dereference(cwd);
   return {
     network: { allowedDomains, deniedDomains: [] },
     filesystem: {
       denyRead: secretPaths(cediaHome),
-      allowWrite: [cwd, tmpdir()],
+      allowWrite: [root, tmpdir()],
       // Files that run code outside the sandbox later (git hooks and config) or set cedia's own rules.
       // Only paths that exist: on Linux a deny on a missing path puts a placeholder in the workspace while the
       // sandbox is up. The permission policy keeps edit and write out of these paths either way.
-      denyWrite: [...new Set([join(cwd, '.git', 'hooks'), hooks ?? '', join(cwd, '.git', 'config'), join(cwd, '.cedia')])].filter((p) => p && existsSync(p)),
+      denyWrite: [...new Set([join(root, '.git', 'hooks'), hooks ? dereference(hooks) : '', join(root, '.git', 'config'), join(root, '.cedia')])].filter((p) => p && existsSync(p)),
     },
   };
 }
@@ -121,4 +125,13 @@ export async function openSandbox(
 const within = (path: string, dir: string) => {
   const rel = relative(dir, path);
   return rel !== '' && !rel.startsWith('..') && !rel.startsWith('/');
+};
+
+// realpathSync that tolerates missing paths: a path that does not exist (yet) stays as written.
+const dereference = (p: string) => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
 };

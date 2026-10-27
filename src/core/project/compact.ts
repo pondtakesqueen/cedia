@@ -28,7 +28,8 @@ Cover, specifically and briefly:
 - Decisions made and why, and approaches ruled out, so they are not retried.
 - The plan for what is left, in order, with the files, functions, types and signatures each step touches.
 - The files and line ranges the next steps need, so they are read instead of the whole codebase.
-- Facts that are costly to find again: exact error messages, paths, line numbers, commands that work.`;
+- Facts that are costly to find again: exact error messages, paths, line numbers, commands that work.
+- The tools called that the next steps still need (names), so they are reused, not rediscovered.`;
 
 // The request to summarize up to: the latest of the run's requests (from `from` on) whose reply saw at most
 // size - keepTokens of input, so at least keepTokens of the newest context is kept. Its reply must hold text or a

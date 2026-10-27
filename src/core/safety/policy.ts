@@ -6,7 +6,7 @@ import { effectOf, type ToolSpec } from '../tools/registry.ts';
 import type { JsonObject } from '../types.ts';
 import { REDACTED } from './secrets.ts';
 import { simpleCommands } from './shell.ts';
-import { hooksDir } from './sandbox.ts';
+import { hooksDir, sandboxGuarded } from './sandbox.ts';
 
 // read-only: reads and read-only commands run; writes and other commands need an allow rule.
 // workspace: writes inside the working directory and any command run, except the deny list.
@@ -32,11 +32,13 @@ export const PERMISSION_ENTRIES: PermissionEntry[] = [
 export type RunPermission = PermissionMode | 'plan';
 
 // Built-in guards. The user (never a repo or the model) may lift one with `unlock`; nothing else lifts them.
-export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'drop-refs' | 'rm-outside' | 'deploy' | 'secret-path' | 'secret-redaction' | 'slop-check';
-export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'drop-refs', 'rm-outside', 'deploy', 'secret-path', 'secret-redaction', 'slop-check'];
+export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'drop-refs' | 'rm-outside' | 'deploy' | 'git-config' | 'secret-path' | 'secret-redaction' | 'slop-check';
+export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'drop-refs', 'rm-outside', 'deploy', 'git-config', 'secret-path', 'secret-redaction', 'slop-check'];
 
 // Rules look like `bash`, `bash(bun test*)` or `edit(src/*)`. `*` matches anything. A bash pattern is
 // matched against each simple command in the line, so `bun test && rm -rf x` needs both to be allowed.
+// A `tool(param:value)` rule matches the call's input value instead: `spawn(kind:work)`,
+// `bash(command:rm *)`. Only when the input has the param, so `C:/x` and URLs still match the classic way.
 // `secrets` are credential stores no tool may read or write (see secretPaths). `protect`: files no tool may change
 // for this run, and why: the tests a task said to leave alone (core/trust/tests.ts). They hold as edit deny rules
 // do, for commands too.
@@ -57,6 +59,12 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
       const hit = denyListed(argv, cwd);
       if (hit && !unlocked(hit.name)) return deny(`deny-list:${hit.name}`, hit.reason);
     }
+    // A command that may write must not write git's or cedia's own config, nor what the sandbox holds
+    // out of the working tree — with or without the sandbox up. Read-only commands may still name them.
+    if (!checkReadOnly(command).ok) {
+      const guarded = writesProtected(command, commands, cwd);
+      if (guarded) return deny('protected-path', `${guarded} is git's or cedia's own config; ask the user to change it`);
+    }
   }
   if (!unlocked('secret-path') && policy.secrets?.length) {
     const named = command !== undefined ? secretInCommand(command, commands!, policy.secrets, cwd) : path !== undefined ? secretUnder(path, policy.secrets, cwd) : undefined;
@@ -67,7 +75,7 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
   for (const rule of policy.deny) {
     // edit and write change a file the same way, so a deny rule naming either covers both.
     const tool = spec.name === 'write' && /^edit\b/.test(rule.trim()) ? 'edit' : spec.name === 'edit' && /^write\b/.test(rule.trim()) ? 'write' : spec.name;
-    if (matches(rule, tool, commands, path, cwd, 'any')) return deny(`deny:${rule}`, `matches the deny rule ${rule}`);
+    if (matches(rule, tool, commands, path, cwd, 'any', undefined, input)) return deny(`deny:${rule}`, `matches the deny rule ${rule}`);
     if (command !== undefined && commands && writesDenied(rule, command, commands, cwd))
       return deny(`deny:${rule}`, `may write a path the deny rule ${rule} covers; that rule holds for commands too`);
   }
@@ -82,7 +90,7 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
 
   if (effect === 'read' || effect === 'network') return { decision: 'allow', rule: 'effect:read' };
 
-  const allowRule = policy.allow.find((rule) => matches(rule, spec.name, commands, path, cwd, 'every', command));
+  const allowRule = policy.allow.find((rule) => matches(rule, spec.name, commands, path, cwd, 'every', command, input));
   if (effect === 'write_workspace' && path !== undefined && !insideWorkspace(path, cwd) && !allowRule)
     return deny('outside-workspace', `${path} is outside the working directory`);
   if (effect === 'write_workspace' && path !== undefined && protectedPath(path, cwd))
@@ -97,17 +105,34 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
 
 const deny = (rule: string, reason: string): Decision => ({ decision: 'deny', rule, reason });
 
+// Whether a `tool(pattern)` rule covers a call named by its tool and one line of text (a command line
+// or an MCP tool name): what `suggest` uses to skip calls a deny rule already holds.
+export function rulePatternMatches(rule: string, tool: string, text: string): boolean {
+  const m = /^([\w-]+)(?:\((.*)\))?$/.exec(rule.trim());
+  if (!m || m[1] !== tool) return false;
+  if (m[2] === undefined) return true;
+  return glob(m[2]!).test(text);
+}
+
 // Whether a call matches a rule the way a deny rule does: any simple command of a bash call, or the call's path.
 export function ruleMatches(rule: string, spec: ToolSpec, input: JsonObject, cwd: string): boolean {
   const commands = spec.name === 'bash' ? simpleCommands(String(input.command ?? '')) : undefined;
-  return matches(rule, spec.name, commands, spec.pathOf?.(input), cwd, 'any');
+  return matches(rule, spec.name, commands, spec.pathOf?.(input), cwd, 'any', undefined, input);
 }
 
-function matches(rule: string, tool: string, commands: string[][] | null | undefined, path: string | undefined, cwd: string, mode: 'any' | 'every', command?: string): boolean {
+function matches(rule: string, tool: string, commands: string[][] | null | undefined, path: string | undefined, cwd: string, mode: 'any' | 'every', command?: string, input?: JsonObject): boolean {
   const m = /^([\w-]+)(?:\((.*)\))?$/.exec(rule.trim());
   if (!m || m[1] !== tool) return false;
   const pattern = m[2];
   if (pattern === undefined) return true;
+  // A `tool(param:value)` rule matches the call's input value for that param: `spawn(kind:work)`,
+  // `bash(command:rm *)`. Only when the input actually has the param, so a path with a colon in it
+  // (C:/x, a URL) still matches the classic way below.
+  const pm = /^([\w-]+):([\s\S]*)$/.exec(pattern);
+  if (pm && input !== undefined && Object.hasOwn(input, pm[1]!)) {
+    const v = (input as Record<string, unknown>)[pm[1]!];
+    return v !== undefined && v !== null && glob(pm[2]!).test(Array.isArray(v) ? v.join(' ') : String(v));
+  }
   const re = glob(pattern);
   if (commands) {
     const line = (argv: string[]) => argv.join(' ');
@@ -153,6 +178,25 @@ function commandWrites(file: string, command: string, commands: string[][], cwd:
 
 // A word put back into a command line as it was meant: `grep "a\|b" f` is one grep, not a pipe into b.
 const quoted = (w: string) => (/^[\w@%+=:,./-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`);
+
+// A command that may write must not write git's or cedia's config, nor what the sandbox holds out of the
+// working tree — with or without the sandbox up. Read-only commands may still name these paths. The hooks
+// directory resolves once, not per word (it shells out to git).
+function writesProtected(command: string, commands: string[][], cwd: string): string | undefined {
+  const targets = [...command.matchAll(/>>?\|?\s*([^\s;|&<>()]+)/g)].map((t) => t[1]!.replace(/^['"]|['"]$/g, ''));
+  const words = commands.flatMap((argv) => argv.slice(1)).filter((w) => !w.startsWith('-'));
+  if (!words.length && !targets.length) return undefined;
+  const root = real(cwd);
+  const hooks = hooksDir(cwd);
+  const hooksReal = hooks === undefined ? undefined : real(hooks);
+  for (const w of [...words, ...targets]) {
+    const full = real(resolve(cwd, expandHome(w)));
+    if (/^(\.git|\.cedia)(\/|$)/.test(relative(root, full))) return w;
+    if (hooksReal !== undefined && within(full, hooksReal)) return w;
+    if (sandboxGuarded(relative(root, full))) return w;
+  }
+  return undefined;
+}
 
 function glob(pattern: string): RegExp {
   return new RegExp(`^${pattern.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
@@ -299,6 +343,13 @@ function findStarts(args: string[]): string[] {
 const KEYCHAIN_READS = ['find-generic-password', 'find-internet-password', 'find-key', 'dump-keychain', 'export', 'export-item', '-i', 'interactive'];
 
 function gitHit(args: string[], cwd: string, depth = 0): Hit | undefined {
+  // -C <dir>, --git-dir/--work-tree <dir>: git runs there, not in the working directory. Outside it, writes
+  // land past the snapshots and the sandbox boundary, so even reads are refused up front.
+  for (let j = 0; j < args.length; j++) {
+    const a = args[j]!;
+    const v = a === '-C' || a === '--git-dir' || a === '--work-tree' ? args[++j] : a.startsWith('--git-dir=') || a.startsWith('--work-tree=') ? a.slice(a.indexOf('=') + 1) : undefined;
+    if (v !== undefined && (!resolvable(v) || !insideWorkspace(v, cwd))) return { name: 'rm-outside', reason: `git runs in ${v}, outside the working directory` };
+  }
   // Skip global options such as -C <dir> and -c k=v to reach the subcommand, keeping the aliases -c defines.
   const aliases = new Map<string, string>();
   let i = 0;
@@ -332,9 +383,34 @@ function gitHit(args: string[], cwd: string, depth = 0): Hit | undefined {
     return { name: 'reset-hard', reason: 'git reset --hard throws away work with no way back; use git stash or ask the user' };
   if (subcommand === 'clean' && (rest.includes('--force') || shortFlag(rest, 'f')) && !rest.some((a) => a === '-n' || a === '--dry-run'))
     return { name: 'clean-force', reason: 'git clean -f deletes untracked files with no way back; ask the user' };
+  if (subcommand === 'config') return configHit(rest, cwd);
   if (dropsRefs(subcommand, rest))
     return { name: 'drop-refs', reason: `git ${subcommand} ${rest.join(' ')} deletes commits or the record of them, which cedia's snapshots cannot bring back; ask the user` };
   return undefined;
+}
+
+// `git config` writes the repository config (hooks and remotes live there) or wherever --file, --global
+// or --system points. Only reads run: --list, --get*, or a bare name. Everything else needs the owner.
+function configHit(args: string[], cwd: string): Hit | undefined {
+  let file: string | undefined;
+  let global = false;
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === '--global' || a === '--system') global = true;
+    else if (a === '-f' || a === '--file') file = args[++i];
+    else if (a.startsWith('--file=')) file = a.slice(7);
+    else rest.push(a);
+  }
+  if (global) return { name: 'git-config', reason: 'git config --global writes outside the working directory; ask the user' };
+  if (file !== undefined && (!resolvable(file) || !insideWorkspace(file, cwd)))
+    return { name: 'git-config', reason: `git config --file ${file} writes outside the working directory; ask the user` };
+  const flags = rest.filter((a) => a.startsWith('-'));
+  const words = rest.filter((a) => !a.startsWith('-'));
+  if (flags.some((a) => /^(--add|--unset|--unset-all|--remove-section|--rename-section)$/.test(a)))
+    return { name: 'git-config', reason: 'git config changing configuration runs code later (hooks) or moves remotes; ask the user' };
+  if (flags.some((a) => /^(--list|--get|--get-all|--get-regexp|--name-only)$/.test(a)) || words.length <= 1) return undefined;
+  return { name: 'git-config', reason: 'git config setting a value writes configuration that runs code later; ask the user' };
 }
 
 // Commands that lose commits: the stash, a branch that is not merged, the reflog that finds lost commits, a

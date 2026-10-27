@@ -29,7 +29,7 @@ function score(t: DeferredTool, q: string): number {
 
 export const toolSearchTool: ToolSpec = {
   name: 'ToolSearch',
-  description: 'Search deferred tools by keyword or select:<name>.',
+  description: 'Search tools by keyword or select:<name>. MCP server tools (mcp__*) live here: search what you want, then call the exact name.',
   schema: {
     type: 'object',
     properties: {

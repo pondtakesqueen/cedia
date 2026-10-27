@@ -20,9 +20,18 @@ export type UsageReport = {
   // The tool results that cost most that way.
   largest: { session: string; callId: string; tool: string; chars: number; resent: number }[];
   misses: { cause: string; count: number; tokens: number }[];
+  // Calls the run stopped before they ran, by the rule or hook that stopped them: the session log's
+  // answer to a safety overview (cedia keeps no telemetry; denied permission events and hook blocks
+  // are the record). Allows are not counted.
+  blocked: { rule: string; count: number }[];
   // Requests whose input passed the model's long-context price line, and requests at effort max.
   overPriceLine: number;
   maxEffort: number;
+  // Attempts that waited past SLOW_TTFT_MS for the first byte: a gateway or provider stalling, retried by the run.
+  slowStart: number;
+  // Actionable cost smells: always-on context (system prompt and tools) past ALWAYS_ON_WARN_SHARE of resent
+  // input, and one tool result past TOOL_RESULT_WARN_SHARE of it. Sentences for the usage page; --json too.
+  warnings: string[];
   // Sessions that ended by handing off to a new one.
   handoffs: number;
   // Replies from a model cedia's catalog does not know: no price, so not in costUsd.
@@ -84,6 +93,7 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
   const sent = new Map<string, number>();
   const largest: UsageReport['largest'] = [];
   const misses = new Map<string, { count: number; tokens: number }>();
+  const blocked = new Map<string, number>();
   const tokens = { input: 0, cacheRead: 0, output: 0 };
   let requests = 0;
   let cost = 0;
@@ -91,6 +101,7 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
   let compactUsd = 0;
   let overPriceLine = 0;
   let maxEffort = 0;
+  let slowStart = 0;
   let handoffs = 0;
   let unpriced = 0;
 
@@ -211,6 +222,15 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
         case 'turn_end':
           if (e.reason === 'handoff') handoffs++;
           break;
+        case 'attempt':
+          if ((e.ttftMs ?? 0) >= SLOW_TTFT_MS) slowStart++;
+          break;
+        case 'permission':
+          if (e.decision === 'deny') add(blocked, e.rule, 1);
+          break;
+        case 'hook':
+          if (e.decision === 'block') add(blocked, `hook:${e.hook}`, 1);
+          break;
       }
     }
     requests += sessionRequests;
@@ -225,6 +245,14 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
   }
 
   const total = [...sent.values()].reduce((a, b) => a + b, 0);
+  const ranked = largest.sort((a, b) => b.chars * b.resent - a.chars * a.resent).slice(0, top);
+  const warnings: string[] = [];
+  const alwaysOn = sent.get('system prompt and tools') ?? 0;
+  if (requests >= 2 && total > 0 && alwaysOn / total >= ALWAYS_ON_WARN_SHARE)
+    warnings.push(`always-on context (system prompt and tools) is ${pct(alwaysOn / total)} of resent input across ${requests} requests; slim the prompt, tools, memory or instructions`);
+  const biggest = ranked[0];
+  if (biggest && biggest.resent > 0 && total > 0 && (biggest.chars * biggest.resent) / total >= TOOL_RESULT_WARN_SHARE)
+    warnings.push(`tool result ${biggest.tool} ${biggest.callId} (${k(biggest.chars)} chars x ${biggest.resent}) is ${pct((biggest.chars * biggest.resent) / total)} of resent input; have the model summarize it instead of re-reading it`);
   return {
     sessions: sessions.length,
     requests,
@@ -233,10 +261,13 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
     compactUsd,
     tokens,
     sources: [...sent].map(([source, chars]) => ({ source, chars, share: total ? chars / total : 0 })).sort((a, b) => b.chars - a.chars),
-    largest: largest.sort((a, b) => b.chars * b.resent - a.chars * a.resent).slice(0, top),
+    largest: ranked,
     misses: [...misses].map(([cause, m]) => ({ cause, ...m })).sort((a, b) => b.tokens - a.tokens),
+    blocked: [...blocked].map(([rule, count]) => ({ rule, count })).sort((a, b) => b.count - a.count),
     overPriceLine,
     maxEffort,
+    slowStart,
+    warnings,
     handoffs,
     unpriced,
     days: [...byDay].map(([day, costUsd]) => ({ day, costUsd })).sort((a, b) => a.day.localeCompare(b.day)),
@@ -251,6 +282,14 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
 
 const k = (n: number) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : String(n));
 const pct = (x: number) => `${(x * 100).toFixed(0)}%`;
+
+// A first byte past this is a stall, not thinking: the run retries it, and the report counts it.
+export const SLOW_TTFT_MS = 30_000;
+
+// A share of resent input that earns a warning: the system prompt and tool definitions go out on every
+// request, and one result re-sent whole every turn after it arrived.
+export const ALWAYS_ON_WARN_SHARE = 0.25;
+export const TOOL_RESULT_WARN_SHARE = 0.2;
 
 const extra = (r: UsageReport) => {
   const parts = [r.keepaliveUsd && `$${r.keepaliveUsd.toFixed(4)} keeping caches warm`, r.compactUsd && `$${r.compactUsd.toFixed(4)} summarizing for handoffs`].filter(Boolean);
@@ -269,9 +308,12 @@ export function formatUsage(r: UsageReport): string {
     for (const l of r.largest) lines.push(`  ${l.tool} ${l.callId} in ${l.session}: ${k(l.chars)} chars x ${l.resent}`);
   }
   lines.push(r.misses.length ? `cache misses: ${r.misses.map((m) => `${m.count} ${m.cause} (${k(m.tokens)} tokens)`).join(', ')}` : 'cache misses: none');
+  if (r.blocked.length) lines.push(`blocked calls: ${r.blocked.map((b) => `${b.count} ${b.rule}`).join(', ')}`);
+  for (const w of r.warnings) lines.push(`warning: ${w}`);
   const warn = [
     r.overPriceLine && `${r.overPriceLine} request${r.overPriceLine === 1 ? '' : 's'} past the model's long-context price line`,
     r.maxEffort && `${r.maxEffort} request${r.maxEffort === 1 ? '' : 's'} at effort max`,
+    r.slowStart && `${r.slowStart} attempt${r.slowStart === 1 ? '' : 's'} waited 30s+ for the first byte`,
     r.handoffs && `${r.handoffs} handoff${r.handoffs === 1 ? '' : 's'}`,
     r.unpriced && `${r.unpriced} repl${r.unpriced === 1 ? 'y' : 'ies'} from a model with no known price, left out of the cost`,
   ].filter(Boolean);
@@ -279,9 +321,10 @@ export function formatUsage(r: UsageReport): string {
   return lines.join('\n');
 }
 
-// Only the events a report reads (an effort change included); the rest is dropped once read.
-export const isUsageEvent = (e: SessionEvent): e is EventOf<'session' | 'summary' | 'user' | 'reminder' | 'effort' | 'request' | 'assistant' | 'compaction' | 'keepalive' | 'tool_intent' | 'tool_result' | 'turn_end'> =>
-  ['session', 'summary', 'user', 'reminder', 'effort', 'request', 'assistant', 'compaction', 'keepalive', 'tool_intent', 'tool_result', 'turn_end'].includes(e.kind);
+// Only the events a report reads (an effort change included, denials and hook blocks for the
+// blocked-calls section); the rest is dropped once read.
+export const isUsageEvent = (e: SessionEvent): e is EventOf<'session' | 'summary' | 'user' | 'reminder' | 'effort' | 'request' | 'assistant' | 'compaction' | 'keepalive' | 'tool_intent' | 'tool_result' | 'turn_end' | 'permission' | 'hook'> =>
+  ['session', 'summary', 'user', 'reminder', 'effort', 'request', 'assistant', 'compaction', 'keepalive', 'tool_intent', 'tool_result', 'turn_end', 'permission', 'hook'].includes(e.kind);
 
 // Reads a log as far as its lines parse: a session still being written, or one a crash cut mid-line, still counts.
 export function readEventsLenient(text: string): SessionEvent[] {

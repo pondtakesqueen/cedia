@@ -174,5 +174,51 @@ function expand(words: string[]): string[][] {
     return [rest, ...bodies.flatMap((b) => expand(b))];
   }
   if (cmd === 'eval') return simpleCommands(args.join(' ')) ?? [rest];
+  // PowerShell and cmd run a command line of their own: read it like one. Interpreters run code, so
+  // besides the call itself, string literals handed to execution sinks are read as commands too
+  // (`python3 -c "os.system('rm -rf /')"` shows an rm). `-EncodedCommand` is unreadable and stays as is.
+  if (/^(powershell|pwsh)$/.test(cmd)) {
+    const c = args.findIndex((a) => /^(-c|-Command)$/.test(a));
+    const line = c < 0 ? undefined : args.slice(c + 1).find((a) => !/^-/.test(a));
+    const inner = [...(line !== undefined ? (simpleCommands(line) ?? []) : []), ...sinkLiterals(args.join(' '))];
+    if (inner.length) return [rest, ...inner];
+  }
+  if (cmd === 'cmd') {
+    const c = args.findIndex((a) => /^\/(c|C)$/.test(a));
+    if (c >= 0) {
+      const inner = simpleCommands(args.slice(c + 1).join(' ')) ?? [];
+      if (inner.length) return [rest, ...inner];
+    }
+  }
+  if (/^(python3?|perl|ruby|node|php|deno)$/.test(cmd)) {
+    const inner = sinkLiterals(args.join(' '));
+    if (inner.length) return [rest, ...inner];
+  }
   return [rest];
+}
+
+// String literals handed to execution sinks, read as commands: system("rm -rf /"), os.system('x').
+const SINKS = /\b(?:os\.system|os\.popen|subprocess\.(?:call|run|Popen|check_output|check_call)|commands\.getoutput|system|popen|exec|eval|spawnl|spawnlp|spawnv|spawnvp|shell_exec)\s*\(\s*(['"])/g;
+function sinkLiterals(text: string): string[][] {
+  const out: string[][] = [];
+  for (const m of text.matchAll(SINKS)) {
+    const q = m[1]!;
+    let s = '';
+    let i = (m.index ?? 0) + m[0].length;
+    let closed = false;
+    for (; i < text.length; i++) {
+      const ch = text[i]!;
+      if (ch === '\\' && i + 1 < text.length) {
+        s += text[++i];
+        continue;
+      }
+      if (ch === q) {
+        closed = true;
+        break;
+      }
+      s += ch;
+    }
+    if (closed && s) out.push(...(simpleCommands(s) ?? []));
+  }
+  return out;
 }

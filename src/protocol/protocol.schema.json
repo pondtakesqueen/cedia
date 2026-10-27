@@ -253,7 +253,8 @@
         "threads.delete",
         "mcp.manage",
         "commit",
-        "pr"
+        "pr",
+        "daemon"
       ]
     },
     "Check": {
@@ -3704,11 +3705,39 @@
             "additionalProperties": false
           }
         },
+        "blocked": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "rule": {
+                "type": "string"
+              },
+              "count": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "rule",
+              "count"
+            ],
+            "additionalProperties": false
+          }
+        },
         "overPriceLine": {
           "type": "number"
         },
         "maxEffort": {
           "type": "number"
+        },
+        "slowStart": {
+          "type": "number"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "handoffs": {
           "type": "number"
@@ -3814,8 +3843,11 @@
         "sources",
         "largest",
         "misses",
+        "blocked",
         "overPriceLine",
         "maxEffort",
+        "slowStart",
+        "warnings",
         "handoffs",
         "unpriced",
         "days",

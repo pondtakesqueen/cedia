@@ -9,12 +9,13 @@ import { hash } from '../hash.ts';
 import { MAX_IMAGES_PER_SESSION, type ImageRef } from '../images.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
+import { capEffort, loadMaxEffort } from '../config.ts';
 import { hookName, runHook, type Hooks } from '../hooks.ts';
 import { decide, READ_ONLY_POLICY, ruleMatches, type Policy } from '../safety/policy.ts';
 import { redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
-import { evidence, ledgerEntries, matchCheck, verified } from '../trust/ledger.ts';
+import { evidence, ledgerEntries, matchCheck, repeatCheck, verified } from '../trust/ledger.ts';
 import type { Verdict } from '../trust/classifier.ts';
 import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
@@ -126,6 +127,12 @@ export type RunOptions = {
   // absent means a spent quota ends the session at once, so the client can fall back. `onQuotaWait` hears each wait.
   quotaWaitMs?: number;
   onQuotaWait?: (ms: number) => void;
+  // Long quota waits are slept in slices this small: each slice ends, the request goes out again, so a limit
+  // lifted before its reset is noticed at the next slice instead of hours later. Default QUOTA_RECHECK_MS.
+  quotaRecheckMs?: number;
+  // Said before a retry wait this long or more, so a run that stays open after its last turn says what it waits
+  // for. Quota waits already report through onQuotaWait; this is for the rest.
+  onWait?: (ms: number) => void;
   // While tools run longer than this after a request was sent, its body is sent again with no output every this
   // often, so the cached prefix outlives the provider's cache lifetime (default 4 minutes, under Anthropic's 5;
   // 55 with ttl 1h).
@@ -138,6 +145,11 @@ export type RunOptions = {
 // again on its next request: at Opus 5.5's prices about $0.75 for a 150k parent, against $0.03 for a refresh.
 export const KEEP_ALIVE_MS = 4 * 60_000;
 export const KEEP_ALIVE_1H_MS = 55 * 60_000;
+// Quota waits are slept in slices this small, each ending in a fresh request, so a lifted limit is noticed at
+// the next slice instead of at the reset. Long enough that the slices are not a retry storm.
+export const QUOTA_RECHECK_MS = 5 * 60_000;
+// A non-quota retry wait this long or more is announced through onWait first.
+export const WAIT_SAY_MS = 30_000;
 
 // Refreshes the request's cached prefix while tools run, from `sentAt` + `every` and every `every` after, until
 // stop() (which waits for one in flight, so its event lands before the next request). A provider without
@@ -270,6 +282,10 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     const t = setTimeout(r, ms);
     signal.addEventListener('abort', () => (clearTimeout(t), r()), { once: true });
   }));
+  // A quota wait past this is slept in slices: each slice ends, the request goes out again, so a lifted limit
+  // ends the wait early. Slices do not consume retries: quota waits are bounded by their ceiling, not by count.
+  // A wait that says no time (a spent balance) is not a wait at all, so a zero slice cannot spin.
+  const recheckMs = opts.quotaRecheckMs !== undefined && opts.quotaRecheckMs > 0 ? opts.quotaRecheckMs : QUOTA_RECHECK_MS;
   const byName = new Map(tools.map((t) => [t.name, t]));
 
   if (!log.events.length)
@@ -300,13 +316,18 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const snap: { tree?: string } = {};
   // 0: working; 1: asked for the note; 2: asked again after a tool call; 'off': gave up on handing off.
   let handoff: 0 | 1 | 2 | 'off' = 0;
-  // The compaction in flight, if any; `outcome` is set once it settles. 'off' once one failed: the note takes over.
-  type Compaction = { of: EventId; ac: AbortController; settled: Promise<void>; outcome?: { block?: CompactionBlock } };
+  // The compaction in flight, if any; `outcome` is set once it settles. 'off' once one failed or came back
+  // without a summary twice: the note takes over.
+  type Compaction = { of: EventId; at: number; tries: number; ac: AbortController; settled: Promise<void>; outcome?: { block?: CompactionBlock; empty?: boolean } };
   const cmp: { now: Compaction | 'off' | undefined } = { now: opts.compact && model.compaction ? undefined : 'off' };
   const inFlight = () => (cmp.now && cmp.now !== 'off' ? cmp.now : undefined);
   let spawnNudged = log.events.some((e) => e.kind === 'reminder' && isSpawnNudge(e.text));
   // Soft checks were found, not declared: they never refuse a claim, so they never escalate either.
-  const escalateTo = opts.softChecks ? undefined : escalationTarget(model, opts.effort ?? model.defaultEffort, opts.escalate);
+  // A ceiling on effort from settings or the environment: the writer, spawn children, plan/review steps
+  // and escalation resolve under it, never over.
+  const cap = loadMaxEffort();
+  const startEffort = capEffort(opts.effort, cap);
+  const escalateTo = opts.softChecks ? undefined : escalationTarget(model, startEffort ?? model.defaultEffort, capEffort(opts.escalate, cap));
   // Escalation: logged right after the gate's reminder, the user turn that carries it, so the change applies from
   // that turn on (core/providers/anthropic.ts). Not on a failed check: a turn of tool results alone is not new
   // input, and the note that would carry it made Haiku at low effort give up sooner (SPEC.md, effort escalation).
@@ -374,14 +395,15 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
   // Asks the provider for a summary of the messages request `of` sent, without waiting for it. The compaction
   // request is logged before it is sent and its outcome when it arrives; its cost counts like a turn's.
-  const startCompaction = (at: number) => {
+  // A reply with no summary in it gets one more ask before the note takes over (tries counts the asks).
+  const startCompaction = (at: number, tries = 1) => {
     const of = log.events[at] as EventOf<'request'>;
     const creq: WireRequest = { ...rebuildRequest(log.events, at, model, log.id), compaction: { instructions: COMPACT_INSTRUCTIONS } };
     const sent = log.append({ kind: 'compact_request', of: of.id, bodyHash: hash(provider.body(creq)), headers: redactHeaders(provider.headers(creq)) });
     const ac = new AbortController();
     signal.addEventListener('abort', () => ac.abort(), { once: true });
     const start = performance.now();
-    const c: Compaction = { of: sent.id, ac, settled: Promise.resolve() };
+    const c: Compaction = { of: sent.id, at, tries, ac, settled: Promise.resolve() };
     c.settled = collect(provider, creq, ac.signal).then((got) => {
       if (c.outcome) return; // the session ended first
       const ms = Math.round(performance.now() - start);
@@ -392,7 +414,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
         const c2 = costUsd(model, got.usage, now());
         cost += c2;
         if (opts.meter) opts.meter.usd += c2;
-        c.outcome = block ? { block } : {};
+        c.outcome = block ? { block } : { empty: true };
       } else {
         const error: AttemptError = got.ok === false ? got.error : { code: 'network', message: 'aborted' };
         log.append({ kind: 'compaction', requestId: sent.id, stop: 'error', usage: { ...ZERO_USAGE }, error, ms });
@@ -434,20 +456,22 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       opts.inbox!.delivered(mail.ids);
     }
 
-    const req: WireRequest = {
+    const req0: WireRequest = {
       model,
       sessionId: log.id,
       system: header.system,
       tools: header.tools,
       messages: buildMessages(log.events),
-      ...(opts.effort ? { effort: opts.effort } : {}),
+      ...(startEffort ? { effort: startEffort } : {}),
       maxTokens: model.maxOutput,
       ...(opts.ttl ? { ttl: opts.ttl } : {}),
     };
+    // Resend below may strip beta-gated parts for a rejecting gateway; the request event keeps the original.
+    let req = req0;
     const request = log.append({
       kind: 'request',
       model: model.ref,
-      ...(opts.effort ? { effort: opts.effort } : {}),
+      ...(startEffort ? { effort: startEffort } : {}),
       toolsHash: hash(header.tools),
       systemHash: hash(header.system),
       bodyHash: hash(provider.body(req)),
@@ -457,6 +481,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
     let got: Collected | undefined;
     let sentAt = 0;
+    let stripped = false;
     for (let n = 1; ; n++) {
       const t: { ttftMs?: number; ms?: number } = {};
       sentAt = performance.now();
@@ -476,17 +501,41 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       log.append({ kind: 'attempt', requestId: request.id, n, error: got.error, ...t });
       timing.modelMs += t.ms ?? 0;
       const after = got.error.retryAfterMs;
-      const quotaWait = got.error.code === 'quota' && opts.quotaWaitMs !== undefined && after !== undefined && quotaWaited + after <= opts.quotaWaitMs ? after : undefined;
-      if ((!isRetryable(got.error) && quotaWait === undefined) || n >= retryMax) return finish('error_during_execution', 'error', got.error.message);
+      const budget = opts.quotaWaitMs;
+      const quotaWait = got.error.code === 'quota' && budget !== undefined && after !== undefined && after > 0 && quotaWaited < budget ? after : undefined;
+      // A gateway that rejects a beta-gated feature gets the turn once more without it: no effort messages,
+      // no role-system mapping, custom headers kept. Once only, and never for a compaction request (a summary
+      // needs its beta to be read back); the attempts show the rejection that motivated the resend.
+      if (n === 1 && !stripped && got.error.code === 'bad_request' && (got.error.status === undefined || got.error.status === 400) && /beta/i.test(got.error.message)) {
+        const alt = provider.stripForGateway?.(req);
+        if (alt) {
+          stripped = true;
+          req = alt;
+          continue;
+        }
+      }
+      if ((!isRetryable(got.error) && quotaWait === undefined) || (quotaWait === undefined && n >= retryMax)) return finish('error_during_execution', 'error', got.error.message);
       const base = opts.retry?.baseMs ?? 1000;
       const cap = opts.retry?.capMs ?? 30_000;
       const wait = after ?? Math.min(cap, base * 2 ** (n - 1));
       if (quotaWait !== undefined) {
-        quotaWaited += quotaWait;
-        opts.onQuotaWait?.(quotaWait);
+        // One slice, then around again for a fresh request: a lifted quota succeeds early, a fresh 429 carries
+        // a new retry-after, and the ceiling bounds the total (the last slice is cut short at it). Quota cycles
+        // never consume retries.
+        const step = Math.min(quotaWait, recheckMs, (opts.quotaWaitMs ?? 0) - quotaWaited);
+        if (step <= 0) return finish('error_during_execution', 'error', got.error.message);
+        await sleep(step);
+        timing.retryMs += step;
+        if (signal.aborted) return finish('interrupted', 'aborted');
+        quotaWaited += step;
+        opts.onQuotaWait?.(step);
+        continue;
+      } else {
+        if (wait >= WAIT_SAY_MS) opts.onWait?.(wait);
+        await sleep(wait);
+        timing.retryMs += wait;
+        if (signal.aborted) return finish('interrupted', 'aborted');
       }
-      await sleep(wait);
-      timing.retryMs += wait;
       if (signal.aborted) return finish('interrupted', 'aborted');
     }
     if (!got.ok) throw new Error('unreachable');
@@ -576,8 +625,11 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       }
       const pending = inFlight();
       if (pending && !pending.outcome && opts.handoffAt !== undefined && size >= opts.handoffAt) await pending.settled;
-      // A compaction that brought no summary hands the handoff to the note, from this turn on.
-      if (pending?.outcome && !pending.outcome.block) cmp.now = 'off';
+      // A compaction that came back without a summary is asked once more; an error, or a second miss, hands
+      // the handoff to the note, from this turn on. Retrying an error would resend a request that failed.
+      if (pending?.outcome && !pending.outcome.block && pending.outcome.empty && pending.tries < 2 && cmp.now === pending) {
+        startCompaction(pending.at, pending.tries + 1);
+      } else if (pending?.outcome && !pending.outcome.block) cmp.now = 'off';
       if (inFlight()) {
         // the summary is on its way, or here: the top of the loop ends the session
       } else if (cmp.now === 'off' && handoff === 0 && opts.handoffAt !== undefined && due(opts.handoffAt)) {
@@ -677,6 +729,11 @@ async function runTools(
       // decided again, so a hook can narrow a call but never get one past the policy.
       let input = fixed?.input ?? c.input;
       let d = decide(policy, spec, input, opts.cwd);
+      // A declared check that already passed with nothing written since does not run again.
+      if (d.decision === 'allow' && spec.name === 'bash') {
+        const again = repeatCheck(spec.name, String((input as { command?: unknown }).command ?? ''), log.events, opts.checks ?? [], opts.cwd);
+        if (again) d = { decision: 'deny', rule: 'repeat-check', reason: again };
+      }
       if (d.decision === 'allow') {
         const pre = await preHooks(opts, log, spec, callId, input);
         if (pre.decision === 'block') d = { decision: 'deny', rule: `hook:${pre.hook}`, reason: pre.reason };
