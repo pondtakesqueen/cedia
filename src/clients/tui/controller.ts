@@ -30,6 +30,7 @@ export class CediaController {
   private warming: Promise<void> | undefined;
   private startedAt: number = 0;
   private stopController: AbortController | undefined;
+  private donePromise: Promise<void> = Promise.resolve();
 
   onMessage?: (m: CoreMessage) => void;
   onState?: () => void;
@@ -56,7 +57,7 @@ export class CediaController {
     this.stopController?.abort();
   }
 
-  idle(): Promise<void> { return Promise.resolve(); }
+  idle(): Promise<void> { return this.donePromise; }
 
   abort(): void {
     this.stopController?.abort();
@@ -79,7 +80,6 @@ export class CediaController {
       return;
     }
     this.messages.push({ role: 'user', text: t });
-    this.onMessage?.({ type: 'user', text: t } as unknown as CoreMessage);
     this.startedAt = performance.now();
     this.activity = 'starting';
     this.onActivity?.(this.activity);
@@ -87,6 +87,8 @@ export class CediaController {
     this.stopController = stop;
     this.running = true;
     this.onState?.();
+    let resolveDone: () => void = () => {};
+    this.donePromise = new Promise<void>((res) => { resolveDone = res; });
 
     const runTurn = async () => {
       if (this.warming) {
@@ -127,6 +129,7 @@ export class CediaController {
         this.running = false;
         this.stopController = undefined;
         this.onState?.();
+        resolveDone();
       }
     };
     void runTurn();
@@ -135,27 +138,25 @@ export class CediaController {
   command(line: string): void {
     const trimmed = line.trim();
     const name = trimmed.split(/\s+/)[0] ?? '';
-    if (name === 'new') { this.thread = undefined; this.messages = []; this.onState?.(); return; }
-    if (name === 'goal') {
+    if (name === 'new') { this.thread = undefined; this.messages = []; this.onState?.(); }
+    else if (name === 'goal') {
       const cond = trimmed.slice('goal'.length).trim();
       if (cond === 'off') { this.goal = undefined; } else if (cond) { this.goal = cond; }
       this.onState?.();
-      return;
-    }
-    if (name === 'thread') {
+    } else if (name === 'thread') {
       const id = trimmed.slice('thread'.length).trim();
       if (id) { this.thread = id; this.messages = []; this.onState?.(); }
-      return;
-    }
-    if (name === 'model') {
+    } else if (name === 'model') {
       const ref = trimmed.slice('model'.length).trim();
       if (ref) this.applyModel(ref);
+    } else if (name === 'quit' || name === 'exit') {
+      this.onQuit?.();
       return;
     }
-    if (name === 'quit' || name === 'exit') { this.quit(); return; }
-    // Other commands are view-specific; fire a callback for the view to handle.
+    // Fire view callback for UI (messages, pickers, etc.) for all commands.
     this.onCommand?.(line);
   }
 
   onCommand?: (line: string) => void;
+  onQuit?: () => void;
 }

@@ -1,6 +1,6 @@
 # GAP_ANALYSIS_CC.md — What cedia can learn from Claude Code
 
-Compares `cedia` (its own SPEC.md) against Claude Code (CLONE_SPEC.md) to identify
+Compares `cedia` (its own SPEC.md) against Claude Code (docs/history/CLONE_SPEC.md) to identify
 features worth adopting to make cedia more complete/powerful. Not a clone plan.
 
 ## Already comparable (no action needed)
@@ -109,7 +109,7 @@ as fixtures/templates only, never code.
 ## All tiers in scope (single main harness)
 
 If cedia is the single main harness, Tier 3 is in scope but as optional modules
-behind flags. See IMPLEMENTATION_PLAN.md §6–§8 for phases 7–10. Do not start
+behind flags. See docs/history/IMPLEMENTATION_PLAN.md §6–§8 for phases 7–10. Do not start
 Tier 3 until Tier 1–2 are green and daily workflow is stable. Re-evaluate
 after each phase.
 
@@ -123,3 +123,8 @@ after each phase.
 - Tier 1 #5 Keybindings + vim + status line + doctor: IMPLEMENTED (adapter).
 - Tier 1 #6 Background agents: IMPLEMENTED (attach basic).
 Tier 1 status: COMPLETE (with documented deferrals).
+
+
+## Tier 2.5 / Remote / TUI polish (documented deferrals)
+- extractMemories: IMPLEMENTED (`cedia memory extract`).
+- Remote control (R1) and TUI polish pass: DEFERRED (large; local daemon + web UI and visual polish to be scheduled).

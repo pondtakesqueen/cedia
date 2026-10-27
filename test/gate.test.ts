@@ -192,8 +192,10 @@ describe("regression gate", () => {
     const repo = join(dir, "repo");
     mkdirSync(repo);
     const inv = HARNESSES.cedia!({ id: "t", category: "c", prompt: "say hi" } as Task, repo, "faux");
-    // Inside the task dir, so the runner's cleanup takes it with the workspace.
-    expect(inv.env?.CEDIA_HOME).toBe(join(repo, ".home"));
+    // Beside the workspace, never inside it (the model must not see session logs): under the OS temp dir.
+    const home = inv.env?.CEDIA_HOME ?? "";
+    expect(home.startsWith(join(tmpdir(), ""))).toBe(true);
+    expect(home.startsWith(repo)).toBe(false);
     const script = join(dir, "script.json");
     writeFileSync(script, JSON.stringify([{ blocks: [{ type: "text", text: "done" }] }]));
     const p = Bun.spawnSync(["bin/cedia", "-m", "faux", "--cwd", repo, "-p", "say hi", "--sandbox", "off"], {
@@ -203,9 +205,9 @@ describe("regression gate", () => {
       stderr: "pipe",
     });
     expect(p.exitCode).toBe(0);
-    const [slug] = readdirSync(join(repo, ".home", "sessions"));
-    const [file] = readdirSync(join(repo, ".home", "sessions", slug!));
-    const events = readFileSync(join(repo, ".home", "sessions", slug!, file!), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    const [slug] = readdirSync(join(home, "sessions"));
+    const [file] = readdirSync(join(home, "sessions", slug!));
+    const events = readFileSync(join(home, "sessions", slug!, file!), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
     const names = (events.find((e) => e.kind === "session")?.tools ?? []).map((t: { name: string }) => t.name);
     expect(names.length).toBeGreaterThan(0);
     expect(names.filter((n: string) => n.startsWith("mcp__"))).toEqual([]);

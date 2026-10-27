@@ -58,7 +58,7 @@ export function projectRoot(cwd: string): string {
 
 // The slug threads and sessions are filed under. Snapshots stay per working directory: each worktree has its own
 // tree to diff.
-export const projectKey = (cwd: string) => projectSlug(projectRoot(cwd));
+export const projectKey = (cwd: string) => process.env.CEDIA_PROJECT || projectSlug(projectRoot(cwd));
 
 export function sessionPath(cwd: string, id: string, home = process.env.CEDIA_HOME ?? join(homedir(), '.cedia')): string {
   return join(home, 'sessions', projectKey(cwd), `${id}.jsonl`);

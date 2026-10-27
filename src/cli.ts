@@ -11,6 +11,11 @@ import { processKeychain } from './core/providers/keychain.ts';
 import { modelLine, modelList } from './core/providers/models.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
+import { TeamStore, teamLine } from './core/project/teams.ts';
+import { findMagicDocs } from './core/project/magicdocs.ts';
+import { fetchMdmSettings } from './core/project/mdm-remote.ts';
+import { listRemoteSessions, runRemote, fetchRemoteSession } from './core/project/remote.ts';
+import { voiceInput } from './core/project/voice.ts';
 import { loadKeybindings } from './clients/tui/keybindings/loader.ts';
 import { daemonCmd } from './clients/daemon/cmd.ts';
 import { loadOnboarding, saveOnboarding, acceptTrust, markStep, isComplete } from './clients/tui/onboarding.ts';
@@ -18,6 +23,7 @@ import { loadOutputStyles, getStyle, stylesDir } from './core/output-styles/styl
 import { isAlive, listBgSessions, recordStart, recordStop, bgPath, daemonPidPath, readBgEvents } from './core/project/background.ts';
 import { installPlugin, uninstallPlugin, setPluginEnabled, updatePlugin, listInstalled, loadManifest, discoverPlugins, addMarketplace, removeMarketplace, updateMarketplace, loadMarketplaces } from './core/plugins/plugins.ts';
 import { consolidateMemory } from './core/project/consolidate.ts';
+import { extractMemories } from './core/memory/extract.ts';
 import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Schedule } from './core/project/schedules.ts';
 import { commandList, loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
@@ -36,6 +42,11 @@ import { EFFORTS, type Effort } from './core/types.ts';
 import { doctorReport } from './core/doctor.ts';
 import { selfSpawnArgs } from './core/self.ts';
 import { versionInfo } from './protocol/version.ts';
+
+// Multi-repo workspace: --project <key> overrides the project key for this invocation, so threads in different
+// repositories can file under one workspace. Set early, before any command parses args.
+const _projectFlagIndex = process.argv.indexOf('--project');
+if (_projectFlagIndex >= 0 && process.argv[_projectFlagIndex + 1]) process.env.CEDIA_PROJECT = process.argv[_projectFlagIndex + 1];
 
 const USAGE = `usage: cedia [options]                 the TUI, at a terminal: each prompt is a turn of one thread
        cedia -p "<prompt>" [options]   (prompt may also come on stdin)
@@ -82,6 +93,7 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                message is work a plan helps, so a greeting or a question skips the planner
                                ("planWhen" in settings)
       --triage <ref>           the model that decides (default: the code model; roles.triage in settings)
+      --output-style <name>    report style by name (default, explanatory, learning, terse; settings, cedia output-style)
       --cache-ttl <5m|1h>      how long the writer's cached prompt lasts on Claude API models between requests.
                                Default 5m for -p, 1h in the TUI (writes cost 2x input instead of 1.25x)
       --lsp <on|off>           after each edit, add the file's errors from a language server when one is installed
@@ -197,8 +209,16 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'lint-session') return lintFiles(argv.slice(1));
   if (argv[0] === 'threads') return threads(argv.slice(1));
   if (argv[0] === 'memory') return memory(argv.slice(1));
+  if (argv[0] === 'teams') return teamsCmd(argv.slice(1));
+  if (argv[0] === 'magic-docs') return magicDocsCmd(argv.slice(1));
+  if (argv[0] === 'mdm') return mdmCmd(argv.slice(1));
+  if (argv[0] === 'serve') return serveCmd(argv.slice(1));
+  if (argv[0] === 'remote') return remoteCmd(argv.slice(1));
+  if (argv[0] === 'teleport') return teleportCmd(argv.slice(1));
+  if (argv[0] === 'voice') return voiceCmd(argv.slice(1));
   if (argv[0] === 'output-style') return outputStyle(argv.slice(1));
   if (argv[0] === 'doctor') return doctor(argv.slice(1));
+  if (argv[0] === 'onboarding') return onboarding(argv.slice(1));
   if (argv[0] === 'agents') return agentsCmd(argv.slice(1));
   if (argv[0] === 'logs') return logsCmd(argv.slice(1));
   if (argv[0] === 'attach') return attachCmd(argv.slice(1));
@@ -213,7 +233,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'skills') return skills(argv.slice(1));
   if (argv[0] === 'commands') return commands(argv.slice(1));
   if (argv[0] === 'permissions') return permissions(argv.slice(1));
-  if (argv[0] === 'models') return models(argv.slice(1));
+  if (argv[0] === 'models') return await models(argv.slice(1));
   if (argv[0] === 'mcp') return mcp(argv.slice(1));
   if (argv[0] === 'commit') return commit(argv.slice(1));
   if (argv[0] === 'pr') return pr(argv.slice(1));
@@ -242,12 +262,15 @@ export async function main(argv: string[]): Promise<number> {
       lsp: { type: 'string' },
       'cache-ttl': { type: 'string' },
       'plan-when': { type: 'string' },
+      'output-style': { type: 'string' },
       triage: { type: 'string' },
       ask: { type: 'string' },
       todo: { type: 'string' },
       'auto-dream': { type: 'string' },
       'prompt-suggestions': { type: 'string' },
       browser: { type: 'string' },
+      'context-management': { type: 'string' },
+      'streaming-tools': { type: 'boolean' },
       bg: { type: 'boolean' },
       profile: { type: 'string' },
       swarm: { type: 'string' },
@@ -306,10 +329,13 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.lsp ? { lsp: values.lsp } : {}),
     ...(values['cache-ttl'] ? { cacheTtl: values['cache-ttl'] } : {}),
     ...(values['plan-when'] ? { planWhen: values['plan-when'] } : {}),
+    ...(values['output-style'] ? { outputStyle: values['output-style'] } : {}),
     ...(values.triage ? { triage: values.triage } : {}),
     ...(values.ask ? { ask: values.ask } : {}),
     ...(values.todo ? { todo: values.todo } : {}),
     ...(values.browser ? { browser: values.browser } : {}),
+    ...(values['context-management'] ? { 'context-management': values['context-management'] } : {}),
+    ...(values['streaming-tools'] ? { streamingTools: true } : {}),
     ...(values.profile ? { profile: values.profile } : {}),
     ...(values.swarm ? { swarm: values.swarm } : {}),
     ...(values.workers ? { workers: values.workers } : {}),
@@ -334,6 +360,11 @@ export async function main(argv: string[]): Promise<number> {
     if (base.noSessionFile) {
       console.error('cedia: the TUI keeps its turns in a thread, so it needs session files');
       return 2;
+    }
+    const tuiChoice = values.tui ?? process.env.CEDIA_TUI ?? 'ink';
+    if (tuiChoice === 'ink') {
+      const { runInkTui } = await import('./clients/tui-ink/index.ts');
+      return await runInkTui(base as TuiArgs);
     }
     // Loaded only here, so a headless run never pays for the terminal library.
     const { runTui } = await import('./clients/tui/main.ts');
@@ -590,13 +621,19 @@ function skills(argv: string[]): number {
   return 0;
 }
 
-function models(argv: string[]): number {
+async function models(argv: string[]): Promise<number> {
   let parsed;
   try {
-    parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' } } });
+    parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' }, refresh: { type: 'boolean' } } });
   } catch (e) {
     console.error(`cedia: ${(e as Error).message}`);
     return 2;
+  }
+  if (parsed.values.refresh) {
+    try {
+      const { refreshLocalModelCache } = await import('./core/providers/catalog.ts');
+      await refreshLocalModelCache();
+    } catch {}
   }
   let list;
   try {
@@ -893,7 +930,7 @@ function schedules(argv: string[]): number {
 async function memory(argv: string[]): Promise<number> {
   let parsed;
   try {
-    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' }, model: { type: 'string' }, json: { type: 'boolean' }, 'auto-dream': { type: 'string' } } });
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' }, model: { type: 'string' }, json: { type: 'boolean' }, thread: { type: 'string' }, 'auto-dream': { type: 'string' } } });
   } catch (e) {
     console.error(`cedia: ${(e as Error).message} (put -- before a note that starts with -)`);
     return 2;
@@ -923,6 +960,12 @@ async function memory(argv: string[]): Promise<number> {
       const r = await consolidateMemory({ cwd, ...(values.model ? { model: values.model } : {}), force: true });
       if (values.json) console.log(JSON.stringify(r));
       else console.log(`consolidated: ${r.added} note${r.added === 1 ? '' : 's'} added (${r.sessionsScanned} session${r.sessionsScanned === 1 ? '' : 's'} scanned)`);
+      return 0;
+    }
+    if (cmd === 'extract' && rest.length === 0) {
+      const r = await extractMemories({ cwd, ...(values.model ? { model: values.model } : {}), ...(values.thread ? { thread: values.thread } : {}), force: true });
+      if (values.json) console.log(JSON.stringify(r));
+      else console.log(`extracted: ${r.added} note${r.added === 1 ? '' : 's'} added (${r.sessionsScanned} session${r.sessionsScanned === 1 ? '' : 's'} scanned)`);
       return 0;
     }
   } catch (e) {
@@ -1199,4 +1242,169 @@ function outputStyle(argv: string[]): number {
   return 0;
 }
 
+function onboarding(argv: string[]): number {
+  let parsed;
+  try { parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' }, accept: { type: 'boolean' }, step: { type: 'string' } } }); } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
+  const home = cediaHome();
+  if (parsed.values.accept) { acceptTrust(home); console.log('trust accepted'); return 0; }
+  if (parsed.values.step) { markStep(parsed.values.step, home); console.log(`marked ${parsed.values.step}`); return 0; }
+  const s = loadOnboarding(home);
+  if (parsed.values.json) console.log(JSON.stringify({ ...s, complete: isComplete(home) }));
+  else console.log(`completed: ${s.completed.join(', ') || '(none)'}; trust: ${s.hasTrustDialogAccepted ? 'accepted' : 'pending'}; complete: ${isComplete(home)}`);
+  return 0;
+}
+
+async function remoteCmd(argv: string[]): Promise<number> {
+  const [sub, ...rest] = argv;
+  if (sub === 'list' || !sub) {
+    const sessions = await listRemoteSessions();
+    if (sessions.length === 0) { console.log('no remote sessions (set CEDIA_REMOTE_URL)'); return 0; }
+    for (const s of sessions) console.log(`${s.id}  ${s.title ?? ''}`);
+    return 0;
+  }
+  if (sub === 'run') {
+    const prompt = rest.join(' ').trim();
+    if (!prompt) { console.error('usage: cedia remote run <prompt>'); return 2; }
+    console.log(await runRemote(prompt));
+    return 0;
+  }
+  console.error('usage: cedia remote [list|run <prompt>]');
+  return 2;
+}
+
+async function voiceCmd(argv: string[]): Promise<number> {
+  let seconds = 5;
+  const i = argv.indexOf('--seconds');
+  if (i >= 0 && argv[i + 1]) seconds = Number(argv[i + 1]);
+  console.log(`recording ${seconds}s…`);
+  const r = await voiceInput(seconds);
+  if (r.error) { console.error(r.error); return 1; }
+  console.log(r.text);
+  return 0;
+}
+
+async function mdmCmd(argv: string[]): Promise<number> {
+  const [sub] = argv;
+  if (sub === 'sync' || !sub) {
+    const data = await fetchMdmSettings();
+    if (!Object.keys(data).length) { console.log('no MDM data (set CEDIA_MDM_URL)'); return 0; }
+    const { writeFileSync, mkdirSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const dir = join(cediaHome(), 'mdm-cache');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'managed-settings.json'), JSON.stringify(data, null, 2) + '\n');
+    console.log('synced MDM settings');
+    return 0;
+  }
+  console.error('usage: cedia mdm [sync]');
+  return 2;
+}
+
+async function serveCmd(argv: string[]): Promise<number> {
+  let port = 8787;
+  const i = argv.indexOf('--port');
+  if (i >= 0 && argv[i + 1]) port = Number(argv[i + 1]);
+  const { runHeadless } = await import('./clients/headless/main.ts');
+  const server = Bun.serve({
+    port,
+    async fetch(req) {
+      const url = new URL(req.url);
+      if (req.method === 'GET' && url.pathname === '/sessions') {
+        return new Response(JSON.stringify({ sessions: [] }), { headers: { 'content-type': 'application/json' } });
+      }
+      if (req.method === 'POST' && url.pathname === '/run') {
+        try {
+          const body = (await req.json()) as { prompt?: string };
+          const prompt = body.prompt ?? '';
+          let out = '';
+          const result = await runHeadless({ cwd: process.cwd(), prompt, outputFormat: 'json', permission: 'workspace', sandbox: 'off' }, (s) => { out += s; });
+          return new Response(JSON.stringify({ output: result.result ?? out, thread: result.thread }), { headers: { 'content-type': 'application/json' } });
+        } catch (e) {
+          return new Response(JSON.stringify({ error: (e as Error).message }), { status: 500, headers: { 'content-type': 'application/json' } });
+        }
+      }
+      return new Response('not found', { status: 404 });
+    },
+  });
+  console.log(`cedia serve on http://127.0.0.1:${server.port}`);
+  // keep alive
+  await new Promise(() => {});
+  return 0;
+}
+
+async function teleportCmd(argv: string[]): Promise<number> {
+  const id = argv[0];
+  if (!id) { console.error('usage: cedia teleport <session-id>'); return 2; }
+  const remote = await fetchRemoteSession(id);
+  if (!remote) { console.error('session not found (set CEDIA_REMOTE_URL)'); return 1; }
+  const { ThreadStore, threadsDir } = await import('./core/project/threads.ts');
+  const { projectKey } = await import('./core/session/log.ts');
+  const store = new ThreadStore(threadsDir(cediaHome(), projectKey(process.cwd())));
+  const tid = store.open(remote.title ?? `teleported ${id}`, { title: remote.title });
+  console.log(`teleported ${id} -> ${tid}`);
+  return 0;
+}
+
 if (import.meta.main) process.exit(await main(process.argv.slice(2)));
+
+function teamsCmd(argv: string[]): number {
+  const home = cediaHome();
+  const store = new TeamStore(home);
+  const [sub, ...rest] = argv;
+  if (!sub || sub === 'list') {
+    const teams = store.list();
+    if (teams.length === 0) { console.log('no teams'); return 0; }
+    for (const t of teams) console.log(teamLine(t));
+    return 0;
+  }
+  if (sub === 'create') {
+    const name = rest.join(' ').trim();
+    if (!name) { console.error('usage: cedia teams create <name>'); return 2; }
+    const t = store.create(name);
+    console.log(`created ${t.id}: ${t.name}`);
+    return 0;
+  }
+  if (sub === 'show') {
+    const t = store.get(rest[0] ?? '');
+    if (!t) { console.error('no such team'); return 1; }
+    console.log(JSON.stringify(t, null, 2));
+    return 0;
+  }
+  if (sub === 'add-task') {
+    const [id, ...titleParts] = rest;
+    const title = titleParts.join(' ').trim();
+    if (!id || !title) { console.error('usage: cedia teams add-task <team> <title>'); return 2; }
+    const task = store.addTask(id, title);
+    if (!task) { console.error('no such team'); return 1; }
+    console.log(`added ${task.id}: ${task.title}`);
+    return 0;
+  }
+  if (sub === 'set-status') {
+    const [id, taskId, status] = rest;
+    if (!id || !taskId || !status) { console.error('usage: cedia teams set-status <team> <task> <status>'); return 2; }
+    const t = store.updateTask(id, taskId, { status: status as 'pending' | 'in_progress' | 'done' | 'blocked' });
+    if (!t) { console.error('no such team/task'); return 1; }
+    console.log(`${t.id}: ${t.status}`);
+    return 0;
+  }
+  if (sub === 'delete') {
+    if (!rest[0] || !store.delete(rest[0])) { console.error('no such team'); return 1; }
+    console.log('deleted');
+    return 0;
+  }
+  console.error(`unknown subcommand: ${sub}`);
+  return 2;
+}
+
+function magicDocsCmd(argv: string[]): number {
+  const [sub, ...rest] = argv;
+  const root = rest[0] || process.cwd();
+  if (sub === 'list' || !sub) {
+    const docs = findMagicDocs(root);
+    if (docs.length === 0) { console.log('no magic docs'); return 0; }
+    for (const d of docs) console.log(`${d.title}  ${d.path}`);
+    return 0;
+  }
+  console.error('usage: cedia magic-docs [list] [root]');
+  return 2;
+}

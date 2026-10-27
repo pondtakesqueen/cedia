@@ -74,7 +74,9 @@ export function resumeChoice(events: SessionEvent[], model: ModelSpec, freshToke
   const request = events.findLast((e): e is EventOf<'request'> => e.kind === 'request');
   if (!reply || !request) return undefined;
   const ttlMs = request.ttl === '1h' ? 3_600_000 : 300_000;
-  const idleMs = now.getTime() - Date.parse(reply.at);
+  // From the request's start, not the reply's end: the TTL counts from when the prefixed request went out,
+  // and a long-streaming reply eats into it.
+  const idleMs = now.getTime() - Date.parse(request.at);
   const cold = idleMs > ttlMs;
   const stale = idleMs > ttlMs * 0.8;
   const contextTokens = contextSize(reply.usage);

@@ -100,7 +100,7 @@ export async function* parseChat(body: ReadableStream<Uint8Array>): AsyncGenerat
     }
     const choice = d.choices?.[0];
     const delta = choice?.delta ?? {};
-    const reasoning = delta.reasoning_content ?? delta.reasoning;
+    const reasoning = delta.reasoning_content ?? delta.reasoning ?? delta.reasoning_text;
     if (typeof reasoning === 'string' && reasoning) a.thinking('reasoning', reasoning);
     if (typeof delta.content === 'string' && delta.content) {
       a.end('reasoning');

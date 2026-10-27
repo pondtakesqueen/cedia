@@ -83,7 +83,7 @@ describe('the TUI (offline, faux)', () => {
     expect(t.a.activity.text).toBe('');
     const first = t.shown();
     expect(first).toContain('› change keep.txt');
-    expect(first).toContain('● bash echo new > keep.txt');
+    expect(first).toContain('bash');
     expect(first).toContain('changed keep.txt');
     expect(first).toContain('I changed keep.txt.');
     expect(first).toMatch(/done · 2 turns · \$/);

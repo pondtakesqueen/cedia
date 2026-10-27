@@ -133,6 +133,7 @@ export type ModelSpec = {
   wire: Wire;
   url: string;
   auth: { env: string; altEnv?: string; scheme: 'x-api-key' | 'bearer' }; // altEnv: read when env is empty
+  local?: boolean; // a local (self-hosted) model: no API key required
   headers?: Record<string, string>;
   sessionHeader?: string; // e.g. x-opencode-session
   cacheKeyField?: 'prompt_cache_key';
@@ -167,6 +168,8 @@ export type WireRequest = {
   ttl?: '5m' | '1h';
   // Asks for a summary of `messages` instead of a reply (Anthropic on-demand compaction).
   compaction?: { instructions: string };
+  // Server-side context management edits (Anthropic). Optional, gated behind a flag.
+  contextManagement?: { edits: Array<{ type: string; [k: string]: unknown }> };
 };
 
 export type StreamEvent =

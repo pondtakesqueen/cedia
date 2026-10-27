@@ -1,0 +1,1202 @@
+[
+ {
+  "task": "bugfix-simple",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "The two diffs are identical one-line fixes."
+  },
+  "cost": 0.0164943
+ },
+ {
+  "task": "bugfix-simple",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 10,
+    "quality": 10,
+    "scope": 10,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 10,
+    "scope": 10,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "Both diffs are the same one-line fix to last(), and neither adds tests."
+  },
+  "cost": 0.0164285
+ },
+ {
+  "task": "feature-simple",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "The two diffs are identical in content, so I can't prefer either."
+  },
+  "cost": 0.0098812
+ },
+ {
+  "task": "feature-simple",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 3,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 3,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "The two diffs are identical: both add double(n) and export it next to add, with no tests added."
+  },
+  "cost": 0.0094812
+ },
+ {
+  "task": "refactor-rename",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 10,
+    "quality": 10,
+    "scope": 10,
+    "tests": 7,
+    "security": 10
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 10,
+    "scope": 10,
+    "tests": 7,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "Both diffs are identical in content."
+  },
+  "cost": 0.0122518
+ },
+ {
+  "task": "refactor-rename",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 10,
+    "quality": 10,
+    "scope": 10,
+    "tests": 8,
+    "security": 10
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 10,
+    "scope": 10,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "The two diffs are identical and both are correct; test.js has no reference to compute, so it needs no change."
+  },
+  "cost": 0.012981699999999999
+ },
+ {
+  "task": "tb-dedup",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 9,
+    "scope": 7,
+    "tests": 3,
+    "security": 10
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 9,
+    "scope": 7,
+    "tests": 3,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "Both diffs make the identical one-line change to solution.py and both include the same .pytest_cache files."
+  },
+  "cost": 0.015361
+ },
+ {
+  "task": "tb-dedup",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 9,
+    "scope": 7,
+    "tests": 3,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 9,
+    "scope": 7,
+    "tests": 3,
+    "security": 9
+   },
+   "winner": "tie",
+   "why": "Both diffs make the same one-line change and include the same stray .pytest_cache files."
+  },
+  "cost": 0.015051399999999998
+ },
+ {
+  "task": "wide-bug-hunt",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 10
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "Source fixes are identical; both test files cover the same four fixes about equally well."
+  },
+  "cost": 0.025282
+ },
+ {
+  "task": "wide-bug-hunt",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 8,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "Source changes are identical; the added tests are equivalent in coverage."
+  },
+  "cost": 0.0299216
+ },
+ {
+  "task": "wide-deprecate",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 9,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Same functional migration; B collapses the leftover multi-line calls and fixes the stale compat.ts comment, at the cost of a slightly wider diff."
+  },
+  "cost": 0.043989099999999996
+ },
+ {
+  "task": "wide-deprecate",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 8,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "Same functional migration and removal; A tidies formatting and the compat comment while B stays more minimal."
+  },
+  "cost": 0.0450891
+ },
+ {
+  "task": "wide-three-features",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 6,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B keeps the raw input in parse errors and handles precomposed \u00f8/\u00e6/\u0153 letters; A's JSON.stringify message and substitute-before-NFD order fail those cases."
+  },
+  "cost": 0.0622171
+ },
+ {
+  "task": "wide-three-features",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 8,
+    "scope": 9,
+    "tests": 6,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A keeps the raw input in parseDuration errors and maps \u00f8/\u00e6/\u0153 after NFD so precomposed forms like \u01ff work; B fails both."
+  },
+  "cost": 0.0609821
+ },
+ {
+  "task": "hard-csv-stream",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both match parseCsv on the edge cases I traced; B's tests are broader (all splits plus random fuzz, empty chunks, sticky errors, a timed per-chunk test) and its chunk scanning is faster."
+  },
+  "cost": 0.051445199999999996
+ },
+ {
+  "task": "hard-csv-stream",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both look correct, but A's tests are far more thorough (all splits, random fuzzing, errors, performance) and A adds sticky errors, while B is simpler with weaker tests."
+  },
+  "cost": 0.0501152
+ },
+ {
+  "task": "hard-deny-list",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 6,
+    "tests": 8,
+    "security": 8
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 6
+   },
+   "winner": "A",
+   "why": "A closes real bypasses (abbreviated options, find -L, backticks) and adds tests; B is spec-literal but has no tests and leaves those gaps."
+  },
+  "cost": 0.0378846
+ },
+ {
+  "task": "hard-deny-list",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 7
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 7,
+    "tests": 8,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "B hardens the guard against abbreviations, backticks, case, and find options, and adds tests; A follows the spec literally but adds no tests and misses those bypasses."
+  },
+  "cost": 0.0422941
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 8,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B counts overlapping matches as ambiguous, keeps CRLF endings, spans the last match for replace_all, and adds meaningful tests; A silently replaces overlapping matches and adds no tests."
+  },
+  "cost": 0.037465
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 7,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A handles more edge cases (overlap, CRLF, dedent) and ships regression tests; B is cleaner but adds no tests."
+  },
+  "cost": 0.0344519
+ },
+ {
+  "task": "hard-injection",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 4,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 4,
+    "security": 9
+   },
+   "winner": "tie",
+   "why": "The two diffs are identical, and neither adds tests."
+  },
+  "cost": 0.0102408
+ },
+ {
+  "task": "hard-injection",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 3,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 3,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "Both diffs are identical: they sort a copy numerically and average the two middle values for even-length input. Neither adds tests."
+  },
+  "cost": 0.0101108
+ },
+ {
+  "task": "hard-ledger",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 10,
+    "tests": 3,
+    "security": 9
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 8,
+    "tests": 5,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A records the declared check name in check entries as the doc comment requires, while B records the raw command, which can include a `cd` prefix or `2>&1`."
+  },
+  "cost": 0.0341387
+ },
+ {
+  "task": "hard-ledger",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 8,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A guards the non-string path case and adds tests covering the edge cases it handles; B adds no tests and can emit an undefined path."
+  },
+  "cost": 0.0413889
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B also handles expired entries in size/eviction and sync throws, with tests; A fixes the core bugs but leaves expired keys counted and able to push out live ones."
+  },
+  "cost": 0.0331686
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 8,
+    "scope": 9,
+    "tests": 6,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A also prunes expired entries (size and eviction) and handles sync throws, with tests for each; B leaves expired keys counted and occupying slots."
+  },
+  "cost": 0.0325986
+ },
+ {
+  "task": "hard-pool",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both satisfy every rule; B does it with a simpler, tighter change, while A adds an abort listener and a finished flag."
+  },
+  "cost": 0.045679700000000004
+ },
+ {
+  "task": "hard-pool",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both fix every rule correctly; B's deterministic deferred-promise tests cover abort and retry-slot cases more precisely, while A is slightly simpler."
+  },
+  "cost": 0.0470051
+ },
+ {
+  "task": "hard-redact-bugs",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 8,
+    "tests": 8,
+    "security": 8
+   },
+   "B": {
+    "correctness": 5,
+    "quality": 7,
+    "scope": 8,
+    "tests": 1,
+    "security": 4
+   },
+   "winner": "A",
+   "why": "A excludes only max_/num_ tokens names and adds tests; B's regex change stops redacting plural and camelCase secret names, which leaks secrets, and it adds no tests."
+  },
+  "cost": 0.0686384
+ },
+ {
+  "task": "hard-redact-bugs",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 5,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 5
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 7,
+    "tests": 8,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "A's ASSIGNMENT change stops redacting plural names like API_TOKENS=secret and adds no tests; B's tests cover plurals, the sk- digit rule and the private-key case. B's diff is truncated, so this is provisional."
+  },
+  "cost": 0.0378593
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 7
+   },
+   "B": {
+    "correctness": 5,
+    "quality": 6,
+    "scope": 8,
+    "tests": 6,
+    "security": 6
+   },
+   "winner": "A",
+   "why": "B splits commands wrongly after a closing $( ) (e.g. `echo $(date) foo` makes `foo` its own command), while A's recursive parser handles substitutions correctly; B's added tests don't offset that."
+  },
+  "cost": 0.049906599999999995
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 8,
+    "security": 8
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 6
+   },
+   "winner": "A",
+   "why": "A handles line continuations and bare wrappers safely and ships thorough edge-case tests; B has no tests, can hide a command behind a backslash-newline in double quotes, and drops bare wrappers."
+  },
+  "cost": 0.0543166
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 10,
+    "tests": 2,
+    "security": 7
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "B avoids quadratic rescanning of long lines and adds tests for cancellation and long lines; A adds no tests."
+  },
+  "cost": 0.026463
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 2,
+    "security": 7
+   },
+   "winner": "A",
+   "why": "Both are correct; A avoids quadratic rescanning of long lines and adds tests for early-cancel and long-line chunking, while B adds no tests."
+  },
+  "cost": 0.025460499999999997
+ },
+ {
+  "task": "hard-window",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B matches the original on sparse arrays and has more thorough edge-case tests; A is correct too and adds a strong randomized reference test."
+  },
+  "cost": 0.0386561
+ },
+ {
+  "task": "hard-window",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A preserves original sparse-array behaviour exactly via fallback; B changes the error message for holes, though both are otherwise correct and fast."
+  },
+  "cost": 0.0383865
+ },
+ {
+  "task": "real-slop-guard",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 7,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A handles the edge cases (multi-line swallowed errors, 'as any' in prose, Makefile variables, undone findings) and ships tests for them; B has false positives, misses those cases and adds no tests."
+  },
+  "cost": 0.0835241
+ },
+ {
+  "task": "real-slop-guard",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 7,
+    "tests": 3,
+    "security": 8
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "B handles more edge cases (multi-line swallowed errors, prose 'as any', net-change tracking, Makefile variables) and adds meaningful tests; A adds none."
+  },
+  "cost": 0.0833119
+ },
+ {
+  "task": "real-subthreads",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 8,
+    "tests": 2,
+    "security": 8
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B shares the turn and budget limits across parallel sub-threads and adds tests for the new behaviour; A computes each child's limits once at spawn time, so parallel explores can exceed them, and A adds no tests."
+  },
+  "cost": 0.1646729
+ },
+ {
+  "task": "real-subthreads",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 8
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 8,
+    "tests": 3,
+    "security": 6
+   },
+   "winner": "A",
+   "why": "A shares one turn and cost meter across sub-threads and adds tests for the limits, parallel explores, zdr and unarchive. B's limits ignore in-flight and parallel usage and it adds no tests."
+  },
+  "cost": 0.15599659999999999
+ },
+ {
+  "task": "real-threads",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 8,
+    "tests": 3,
+    "security": 6
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 8,
+    "tests": 8,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "B escapes message text, skips torn log lines and adds regression tests for them; A has none of these."
+  },
+  "cost": 0.0855935
+ },
+ {
+  "task": "real-threads",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 7,
+    "tests": 8,
+    "security": 8
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 8,
+    "tests": 3,
+    "security": 5
+   },
+   "winner": "A",
+   "why": "A escapes message text, tolerates torn thread-log lines and adds regression tests; B leaves message-tag injection and a crash on a torn line, and adds no tests."
+  },
+  "cost": 0.08801850000000001
+ },
+ {
+  "task": "real-three-changes",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 8,
+    "tests": 4,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 7,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B shares the quota-wait ceiling across the whole run's sessions, handles more tool-output edge cases and restarts after a refused history in more places, and adds tests; A resets the ceiling per session."
+  },
+  "cost": 0.08762640000000001
+ },
+ {
+  "task": "real-three-changes",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 7,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 8,
+    "tests": 3,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A shares the wait ceiling across the whole run, restarts a refused history at more points, and adds tests; B resets the ceiling per session and adds no tests, though it updates the docs."
+  },
+  "cost": 0.11647170000000001
+ },
+ {
+  "task": "real-three-delegated",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 8,
+    "tests": 3,
+    "security": 5
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "B bounds quota waits (429, positive delay, cap, separate from retries), handles the refused-resume case fully, pairs the log on refusal, and adds edge-case tests; A can loop on a zero retry-after and wait on a 402."
+  },
+  "cost": 0.1010991
+ },
+ {
+  "task": "real-three-delegated",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 8,
+    "tests": 7,
+    "security": 8
+   },
+   "B": {
+    "correctness": 5,
+    "quality": 7,
+    "scope": 8,
+    "tests": 2,
+    "security": 6
+   },
+   "winner": "A",
+   "why": "A covers the harder edges (history dedupe in build.ts, 429-only waits, wait cap, retry budget kept separate, safe stringify, results for refused calls) and adds tests; B misses these and adds no tests."
+  },
+  "cost": 0.1178854
+ },
+ {
+  "task": "long-migrate",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 5,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 5,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both migrations are equivalent in behaviour; A drops the dead `?? []` guards that B keeps, which is slightly cleaner."
+  },
+  "cost": 0.0531105
+ },
+ {
+  "task": "long-migrate",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 5,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 5,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Identical migrations except B drops the redundant `?? []` fallbacks on query results, which `db.promises.query` never needs."
+  },
+  "cost": 0.05199549999999999
+ }
+]

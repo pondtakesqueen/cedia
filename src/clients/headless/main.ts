@@ -6,7 +6,7 @@ import { resolveModel } from '../../core/providers/catalog.ts';
 import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
-import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
+import { projectKey, projectRoot, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
 import { DAILY_SPEND_WARN_USD, daySpendUsd } from '../../core/session/select.ts';
 import { dayOf } from '../../core/session/usage.ts';
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadMaxEffort, capEffort, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
@@ -26,6 +26,8 @@ import { spawnNudgeAt, spawnPool, spawnReport, spawnTool, subtaskPrompt, type Sp
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { todoTool } from '../../core/tools/todo.ts';
+import { teamTool } from '../../core/tools/team.ts';
+import { TeamStore } from '../../core/project/teams.ts';
 import { BROWSER_TOOL, browserStub, browserTool } from '../../core/tools/browser.ts';
 import { openThreadTool } from '../../core/tools/open.ts';
 import { scheduleTool } from '../../core/tools/schedule.ts';
@@ -46,7 +48,7 @@ import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { toolDefs, type ToolSpec } from '../../core/tools/registry.ts';
 import { ADVISOR_SYSTEM, adviceOf, advicePrompt, adviceReminder, turnDigest } from '../../core/trust/advisor.ts';
 import { callText, CLASSIFIER_SYSTEM, classifyPrompt, MAX_INPUT, namedFiles, verdictOf, type Verdict } from '../../core/trust/classifier.ts';
-import { changedLines, fixPrompt, parseVerdict, reviewPrompt, SMALL_CHANGE_LINES, type ReviewOutcome } from '../../core/trust/review.ts';
+import { changedLines, fixPrompt, parseVerdict, reviewPrompt, SMALL_CHANGE_LINES, verifyFindings, type ReviewOutcome } from '../../core/trust/review.ts';
 import { existingTests, leavesTestsAlone, PROTECTED_TEST_REASON } from '../../core/trust/tests.ts';
 import { goalContinuePrompt, goalPlanPrompt, goalPrompt, judgeWithPlan, MAX_GOAL_ROUNDS, parseCriteria, parseGoal, strategistPrompt, withCriteria, type GoalRound } from '../../core/trust/goal.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type JsonObject, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
@@ -95,8 +97,13 @@ export type HeadlessArgs = {
   browser?: string;
   // Start no MCP server: core tools only, at core-tools cost. Evals use it; runs that need a server leave it off.
   noMcp?: boolean;
+  // Execute tools as their tool_use blocks complete during the stream (overlaps with model generation).
+  streamingTools?: boolean;
+  'context-management'?: string;
   // A named set of defaults under the flags (core/profiles.ts); a thread goes on with the profile it was opened with.
   profile?: string;
+  // Output style by name (core/output-styles): flag beats the settings file.
+  outputStyle?: string;
   // "fallback" or "wait:<minutes>": what a spent quota does.
   onQuota?: string;
   // Reviews the change once the writer's claim passes the done gate.
@@ -225,6 +232,14 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   };
   const profileName = given.profile ?? (given.thread && !given.noSessionFile ? recorded() : undefined);
   const profile = profileName ? { name: profileName, ...resolveProfile(profileName, loadProfiles()) } : undefined;
+  // Workspace roots (cedian): tell the coordinator which roots it may open threads in.
+  if (profile?.name === 'coordinator' && process.env.CEDIA_ROOTS) {
+    const roots = process.env.CEDIA_ROOTS.split(':').filter(Boolean).join('\n- ');
+    if (profile) {
+      const note = `\n\nWorkspace roots (local checkouts you may open threads in):\n- ${roots}\nPass one as \`root\` to open_thread when the task names a repository.`;
+      profile.instructions = (profile.instructions ?? '') + note;
+    }
+  }
   const profiled = profile ? withProfile(given, profile) : given;
   // `-m auto` and `-m oplan` pick the steps around the user's own writer (core/config.ts).
   const args: HeadlessArgs = isMode(profiled.model) ? withMode(profiled, profiled.model) : profiled;
@@ -247,6 +262,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const promptSuggestionsOn = loadPromptSuggestions(args.promptSuggestions);
   const planWhen = loadPlanWhen(args.planWhen);
   const cacheTtl = args.cacheTtl ?? '5m';
+  warnDaySpend(args.cwd, cediaHome(), say);
   if (cacheTtl !== '5m' && cacheTtl !== '1h') throw new Error(`--cache-ttl must be 5m or 1h, not ${cacheTtl}`);
   const model = roles.code;
   const declared = loadChecks(args.cwd, args.checks);
@@ -367,7 +383,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       return '';
     }
   };
-  const styleName = loadOutputStyleSetting(cediaHome());
+  const styleName = args.outputStyle ?? loadOutputStyleSetting(cediaHome());
   const style = getStyle(styleName, cediaHome());
   const styleModifier = style?.promptModifier ?? '';
   const remember = store ? rememberTool(memory, threadId ?? 'cedia') : undefined;
@@ -498,7 +514,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
     // A resumed session that had the browser keeps the tool when this run has none, and a call says so.
     const browserTools = browser ? [browser.tool] : header?.tools.some((d) => d.name === BROWSER_TOOL) ? [browserStub] : [];
-    const extra = [...(spawnOn ? [spawnHere] : []), ...((askOn || policy.plan) && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened)] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...browserTools, ...mcpTools];
+    const extra = [...(spawnOn ? [spawnHere] : []), ...((askOn || policy.plan) && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(store && threadId ? [teamTool(new TeamStore(), threadId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened, projectRoot(args.cwd))] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...browserTools, ...mcpTools];
     // The advisor and the classifier answer in one reply, with no tools, in a session of their own.
     const helper = opts.role === 'advisor' || opts.role === 'classifier' || opts.role === 'triage';
     const tools = helper ? [] : reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
@@ -533,7 +549,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         ...(opts.inherited?.length ? { inherited: opts.inherited } : {}),
         ...(opts.role ? { role: opts.role } : {}),
         ...(child ? (child.thread ? { thread: child.thread } : {}) : threadId ? { thread: threadId } : {}),
-        ...(handoffAt !== undefined && (writing ? handoffs < MAX_HANDOFFS : child?.handoff) ? { handoffAt, ...(handoffVia === 'compact' && m.compaction ? { compact: compactPlan(handoffAt) } : {}) } : {}),
+        // A sub-thread with its own window hands off on it; otherwise the run's point stands.
+        ...((opts.handoffAt ?? handoffAt) !== undefined && (writing ? handoffs < MAX_HANDOFFS : child?.handoff) ? { handoffAt: (opts.handoffAt ?? handoffAt)!, ...(handoffVia === 'compact' && m.compaction ? { compact: compactPlan((opts.handoffAt ?? handoffAt)!) } : {}) } : {}),
         ...(writing && spawnOn ? { spawnNudgeAt: spawnNudgeAt(handoffAt ?? defaultHandoffAt(m)) } : {}),
         ...(writing && store && threadId
           ? {
@@ -554,6 +571,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
           ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), say(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
           : {}),
         ...(opts.effort ? { effort: opts.effort } : helper ? (m.defaultEffort ? { effort: 'low' as Effort } : {}) : args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
+        ...(args['context-management'] ? { contextManagement: { edits: args['context-management'].split(',').map((e) => ({ type: e.trim() })) } } : {}),
+        ...(args.streamingTools ? { streamingTools: true } : {}),
         ...(escalate && !reviewer ? { escalate } : {}),
         ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - usedTurns } : {}),
         // One reply a turn, and one more if that came back empty.
@@ -1019,15 +1038,20 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       const r = await side('review', roles.review, reviewPrompt(args.prompt, result.evidence, patch));
       // A review cut off by a stop said nothing about the change: it was interrupted, not without a verdict.
       const { verdict, findings, overruled } = r.ok ? parseVerdict(r.text) : { verdict: ac.signal.aborted ? ('interrupted' as const) : ('unclear' as const), findings: '', overruled: undefined };
-      review = { ...r.step, verdict, fixed: false };
-      if (verdict === 'interrupted') say(`cedia: the review by ${r.step.model} was interrupted before it gave a verdict; the change is as the writer left it\n`);
-      if (overruled) say(`cedia: the review by ${r.step.model} approved but named a file and line; sending it back as changes\n`);
-      if (verdict === 'changes') {
+      // Findings outside the diff were not reviewed: drop them with names, so the fix chases only placed ones.
+      const placed = patch ? verifyFindings(findings, patch) : { kept: findings, dropped: [] as { ref: string; reason: string }[] };
+      const verdictNow = verdict === 'changes' && !placed.kept ? 'approve' as const : verdict;
+      if (placed.dropped.length)
+        say(`cedia: the review named ${placed.dropped.length} file${placed.dropped.length === 1 ? '' : 's'} outside the change (${placed.dropped.map((d) => d.ref).join(', ')}); ${verdictNow === 'changes' ? 'fixing the findings that remain' : 'keeping the change as it is'}\n`);
+      review = { ...r.step, verdict: verdictNow, fixed: false };
+      if (verdictNow === 'interrupted') say(`cedia: the review by ${r.step.model} was interrupted before it gave a verdict; the change is as the writer left it\n`);
+      if (overruled && verdictNow === 'changes') say(`cedia: the review by ${r.step.model} approved but named a file and line; sending it back as changes\n`);
+      if (verdictNow === 'changes') {
         const t0 = Date.now();
-        result = await recover(await write(writer.model, writer.log, fixPrompt(r.step.model, findings)));
+        result = await recover(await write(writer.model, writer.log, fixPrompt(r.step.model, placed.kept)));
         review.fixed = true;
         review.fixMs = Date.now() - t0;
-      } else if (verdict === 'unclear') say(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
+      } else if (verdictNow === 'unclear') say(`cedia: the review by ${r.step.model} gave no verdict; keeping the change as it is\n`);
     }
     // Goal: a separate judge decides whether the condition holds; while it does not, the writer goes on in its
     // own session with what the judge found missing, up to MAX_GOAL_ROUNDS more passes.

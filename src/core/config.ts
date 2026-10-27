@@ -64,6 +64,8 @@ export type Settings = {
   outputStyle?: string;
   // Prompt suggestions: predict next user prompt after each turn (default off).
   promptSuggestions?: boolean;
+  // Local (self-hosted) OpenAI-compatible models: [{ref, id, wire, url, contextWindow, maxOutput, authEnv}].
+  localModels?: unknown[];
   // A ceiling on effort everywhere the run sets one (writer, spawn children, plan/review steps, escalation):
   // levels above it resolve down to it. Flags choose under it, never over. User settings only
   // (or CEDIA_MAX_EFFORT).
@@ -95,6 +97,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   autoDream: 'any',
   outputStyle: 'any',
   promptSuggestions: 'any',
+  localModels: 'any',
   maxEffort: 'any',
 };
 
@@ -121,7 +124,7 @@ export type ClaudeCodeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export const cediaHome = () => process.env.CEDIA_HOME ?? join(homedir(), '.cedia');
 
-function readSettings(path: string): Settings {
+export function readSettings(path: string): Settings {
   if (!existsSync(path)) return {};
   try {
     return checkSettings(JSON.parse(readFileSync(path, 'utf8')));
@@ -512,10 +515,45 @@ export function loadManagedSettings(): Settings {
   return merged;
 }
 
+// MDM tier (platform). Best-effort: reads JSON files from a platform-managed directory. macOS MDM
+// (Configuration Profiles / plist) and Windows registry (HKLM/HKCU) are not parsed here; set
+// CEDIA_MDM_DIR to point at a directory of JSON files for testing or custom MDM tooling.
+export function mdmDir(): string {
+  if (process.env.CEDIA_MDM_DIR) return process.env.CEDIA_MDM_DIR;
+  if (process.platform === 'darwin') return '/Library/Managed Preferences/Cedia';
+  if (process.platform === 'win32') return 'C:\\ProgramData\\Cedia\\Managed';
+  return '/etc/cedia/mdm';
+}
+
+export function loadMdmSettings(): Settings {
+  const dirs = [mdmDir(), join(cediaHome(), 'mdm-cache')];
+  let merged: Settings = {};
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    const files: string[] = [];
+    try {
+      for (const f of readdirSync(dir)) {
+        if (f.endsWith('.json')) files.push(join(dir, f));
+      }
+    } catch {
+      continue;
+    }
+    for (const f of files.sort()) {
+      try {
+        merged = mergeSettings(merged, readSettings(f));
+      } catch {
+        // skip
+      }
+    }
+  }
+  return merged;
+}
+
 export function loadResolvedSettings(): Settings {
   const user = readSettings(join(cediaHome(), 'settings.json'));
   const managed = loadManagedSettings();
-  return mergeSettings(user, managed);
+  const mdm = loadMdmSettings();
+  return mergeSettings(mergeSettings(user, managed), mdm);
 }
 
 // Policy limits cache (~/.cedia/policy-limits.json). Eligibility is determined by the caller (API key or

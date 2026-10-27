@@ -114,13 +114,14 @@ export function workDiff(base: string, cwd: string): string {
 type Invocation = { bin: string; args: string[]; env?: Record<string, string> };
 
 export const HARNESSES: Record<string, (task: Task, cwd: string, model: string | null) => Invocation> = {
-  cedia: (task, cwd, model) => ({
+  cedia: (task, _cwd, model) => ({
     bin: process.env.CEDIA_EVAL_CEDIA_BIN ?? resolve(import.meta.dir, "../bin/cedia"),
-    // An isolated home, cleaned with the task's directory: evals measure the harness and the task, not the user's
-    // own settings (their MCP servers would join every request's tools, their roles would add plan/review steps,
-    // their memory would leak across tasks). Keys still come from the environment and the Keychain, which live
-    // outside CEDIA_HOME.
-    env: { CEDIA_HOME: join(cwd, ".home") },
+    // An isolated home beside the workspace (never inside it: the model must not see session logs, and the
+    // work diff must not include them): evals measure the harness and the task, not the user's own settings
+    // (their MCP servers would join every request's tools, their roles would add plan/review steps, their
+    // memory would leak across tasks). Cleaned with the workspace. Keys still come from the environment and
+    // the Keychain, which live outside CEDIA_HOME.
+    env: { CEDIA_HOME: mkdtempSync(join(tmpdir(), "cedia-eval-home-")) },
     args: [
       "-p", task.prompt,
       "--output-format", "json",
@@ -204,14 +205,22 @@ export function defaultOut(harness: string, model: string | null, date = new Dat
 
 // Reads the JSON result cedia (`--output-format json`) or claude (`--output-format json`) prints last.
 export function parseReported(stdout: string): { reported: Reported; text: string } | undefined {
-  const line = stdout.trim().split("\n").at(-1) ?? "";
-  let j: Record<string, unknown>;
-  try {
-    j = JSON.parse(line);
-  } catch {
-    return undefined;
+  // The result is the last result line, not necessarily the last line: trailing junk (a crash tail, a stray
+  // print after a long run) must not hide it. Bounded scan, so a megabyte of junk stays cheap.
+  const lines = stdout.trim().split("\n");
+  let j: Record<string, unknown> | undefined;
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 50); i--) {
+    try {
+      const cand = JSON.parse(lines[i]!) as Record<string, unknown>;
+      if (cand.type === "result") {
+        j = cand;
+        break;
+      }
+    } catch {
+      continue;
+    }
   }
-  if (j.type !== "result") return undefined;
+  if (!j) return undefined;
   const u = (j.usage ?? {}) as Record<string, number>;
   if ("costUsd" in j) {
     // cedia
@@ -284,6 +293,8 @@ export async function runTask(task: Task, harness: string, model: string | null,
   const cwd = mkdtempSync(join(tmpdir(), `cedia-eval-${task.id}-`));
   // The starting files again, outside the workspace, to diff the run's changes against.
   const base = mkdtempSync(join(tmpdir(), `cedia-eval-base-${task.id}-`));
+  // A harness-isolated home, for cleanup below.
+  let home = "";
   try {
     for (const dir of [cwd, base])
       for (const [path, content] of Object.entries(task.setup ?? {})) {
@@ -296,6 +307,7 @@ export async function runTask(task: Task, harness: string, model: string | null,
     if (task.repo && existsSync(join(REPO_ROOT, "node_modules"))) symlinkSync(join(REPO_ROOT, "node_modules"), join(cwd, "node_modules"));
 
     const inv = make(task, cwd, model);
+    home = inv.env?.CEDIA_HOME ?? "";
     const start = Date.now();
     const out = await exec(inv.bin, inv.args, cwd, (task.timeoutSec ?? 300) * 1000, inv.env);
     const wallMs = Date.now() - start;
@@ -372,6 +384,9 @@ export async function runTask(task: Task, harness: string, model: string | null,
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(base, { recursive: true, force: true });
+    // A harness-isolated home (cedia's CEDIA_HOME above) lives outside the workspace, so clean it here: only
+    // under the OS temp dir, never anything the caller pointed at.
+    if (home.startsWith(join(tmpdir(), ""))) rmSync(home, { recursive: true, force: true });
   }
 }
 

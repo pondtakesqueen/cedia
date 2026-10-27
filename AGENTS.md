@@ -40,6 +40,7 @@ Work the pstack poteto-mode way:
 - Prove it works: every done-criterion has a test or a command that reruns.
 - Decide by experiment (prototype or eval) instead of asking when the question can be measured.
 - Small commits, each one a unit that can be checked.
+- Commit messages carry Verify (the test or command that reruns the done-criteria) and Risk (low/medium/high per the code-review skill's tier paths, and whether a person still needs to see it).
 
 ## Rules that are easy to get wrong
 

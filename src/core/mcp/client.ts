@@ -234,7 +234,7 @@ export class McpClient {
   }
 
   async connect(): Promise<void> {
-    const init = await this.request<{ protocolVersion?: string }>('initialize', { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'cedia', version: '0.1.0' } }, CONNECT_TIMEOUT_MS);
+    const init = await this.request<{ protocolVersion?: string }>('initialize', { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'cedia', version: '1.0.0' } }, CONNECT_TIMEOUT_MS);
     if (this.transport instanceof HttpTransport) this.transport.setVersion(init?.protocolVersion ?? PROTOCOL_VERSION);
     await this.notify('notifications/initialized', {});
   }
