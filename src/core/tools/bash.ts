@@ -1,4 +1,5 @@
 import { clip, MAX_SHELL_OUTPUT_CHARS, preview, type ToolSpec } from './registry.ts';
+import { summarizeTestFailures } from './testfail.ts';
 
 // A command counts as read-only when every command in its pipeline or && chain is on this list and
 // nothing writes, substitutes or redirects. Read-only commands run in parallel and in read-only sessions;
@@ -219,6 +220,9 @@ export const bashTool: ToolSpec = {
     const full = `${text}\n[exit ${code}${stopped ? `, ${stopped}` : ''}]${lingering ? ' (background jobs of this command are still running)' : ''}${slowGrepNote(command, Date.now() - started)}`;
     // A long output goes to a file whole, so the lines in the middle (often the failing test) are still there.
     const path = full.length > MAX_SHELL_OUTPUT_CHARS ? ctx.spill?.(full) : undefined;
+    // A long check's failures ride the result instead of its head and tail, so the fix sees them first.
+    const failures = path ? summarizeTestFailures(command, full) : undefined;
+    if (path && failures) return { text: `${failures}\n\nThe whole output (${full.length} characters) is in ${path}: grep it, or read it with offset and limit.`, isError: code !== 0, exitCode: code, spillPath: path };
     if (path) return { text: preview(full, path, MAX_SHELL_OUTPUT_CHARS), isError: code !== 0, exitCode: code, spillPath: path };
     return { text: clip(full, MAX_SHELL_OUTPUT_CHARS), isError: code !== 0, exitCode: code };
   },
