@@ -244,9 +244,13 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       await Bun.sleep(300);
       h.write('\x06');
       await Bun.sleep(300);
+      h.drain();
       h.write('hello');
       await Bun.sleep(400);
-      expect(h.frame()).toContain('search transcript');
+      const highlighted = h.frame();
+      expect(highlighted).toContain('search transcript: hello');
+      expect(highlighted).toContain('hello back');
+      expect(highlighted).not.toContain('│ hello there');
       h.drain();
       h.write('\x1b[B');
       await Bun.sleep(300);

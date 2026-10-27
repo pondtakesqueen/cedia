@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useWindowSize, useStdin, useIsScreenReaderEnabled } from 'ink';
-import { buildAutoItems, highlightSpans, truncateDescription, truncateLongText, estimateLines, loadFrecency, recordPick, frecencyBonus, type AutoItem } from './autocomplete.ts';
+import { buildAutoItems, highlightQuery, highlightSpans, truncateDescription, truncateLongText, estimateLines, offsetAt, loadFrecency, recordPick, frecencyBonus, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
@@ -26,7 +26,7 @@ import { versionInfo } from '../../protocol/version.ts';
 import { runStatusLineCommand } from '../tui/statusline.ts';
 import { loadKeybindings, watchKeybindings } from './keybindings/loader.ts';
 import { activeContext, findCommand, resolveBindings, vimInputGate, type LiveContext } from './keybindings/resolver.ts';
-import { cancelStep, offsetForIndex } from './row-map.ts';
+import { cancelStep, offsetForIndex, rowMapFromWalk, selectionBounds, type InkSelection, type RowMap, type WalkBand } from './row-map.ts';
 import { matchesKey } from '@mariozechner/pi-tui';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
@@ -123,6 +123,17 @@ const shortCwd = (cwd: string): string => {
 
 const themedColorFor = (T: ThemeTokens, role: Msg['role']): string | undefined =>
   role === 'user' ? undefined : role === 'assistant' ? T.text : role === 'tool' ? T.textMuted : T.warning;
+
+// User rows paint a two-column bar before the text. The wrap width and the hit column both count it.
+function paintedWidth(role: Msg['role'] | undefined, columns: number, screenReader: boolean): number {
+  const bar = role === 'user' && !screenReader ? 2 : 0;
+  return Math.max(10, columns - 2 - bar);
+}
+
+function paintedCol(termCol: number, role: Msg['role'] | undefined, screenReader: boolean): number {
+  const bar = role === 'user' && !screenReader ? 2 : 0;
+  return Math.max(0, termCol - 1 - bar);
+}
 
 export type DialogKind = 'picker' | 'historySearch' | 'messageSelector' | null;
 
@@ -271,8 +282,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     return () => clearInterval(t);
   }, [running]);
   const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-  const [selection, setSelection] = useState<{ aMsg: number; aCol: number; bMsg: number; bCol: number } | null>(null);
+  const [selection, setSelection] = useState<InkSelection | null>(null);
   const [selecting, setSelecting] = useState(false);
+  const rowMapRef = useRef<RowMap>(rowMapFromWalk([]));
+  const displayRef = useRef<Msg[]>([]);
+  const columnsRef = useRef(80);
+  const screenReaderRef = useRef(false);
+  const selectionRef = useRef<InkSelection | null>(null);
+  const selectingRef = useRef(false);
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
 
   const push = (m: Msg) => setMessages((prev) => [...prev, m]);
@@ -1099,63 +1116,83 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   }, []);
   React.useEffect(() => {
     if (!stdin) return;
+    const pointer = (termCol: number, termRow: number) => {
+      // SGR rows and columns are 1-based. rowAt counts from 0 at the top of this frame.
+      const hit = rowMapRef.current.rowAt(termRow - 1);
+      if (!hit) return;
+      const msg = displayRef.current[hit.index];
+      const text = truncateLongText(msg?.text ?? '');
+      const col = offsetAt(
+        text,
+        paintedWidth(msg?.role, columnsRef.current, screenReaderRef.current),
+        hit.rowInSpan,
+        paintedCol(termCol, msg?.role, screenReaderRef.current),
+      );
+      return { index: hit.index, col };
+    };
     const handler = (data: Buffer) => {
       const s = data.toString();
-      // wheel
-      if (/\x1b\[<64;/.test(s)) setScrollOffset((o) => Math.min(o + 3, Math.max(0, messages.length - Math.max(5, rows - 6))));
+      if (/\x1b\[<64;/.test(s)) {
+        const maxOff = Math.max(0, displayRef.current.length - 1);
+        setScrollOffset((o) => Math.min(maxOff, o + 3));
+      }
       if (/\x1b\[<65;/.test(s)) setScrollOffset((o) => Math.max(0, o - 3));
-      // left button press: \x1b[<0;COL;ROW M  ; drag (motion): \x1b[<32;COL;ROW M ; release: ...m
       const press = /\x1b\[<0;(\d+);(\d+)M/.exec(s);
       if (press) {
-        const col = parseInt(press[1]!, 10);
-        const row = parseInt(press[2]!, 10);
-        const idx = Math.max(0, Math.min(messages.length - 1, row - 2 + scrollOffset));
-        const msg = messages[idx];
-        const c = Math.max(0, Math.min((msg?.text.length ?? 1) - 1, col - 1));
-        setSelection({ aMsg: idx, aCol: c, bMsg: idx, bCol: c });
-        setSelecting(true);
+        const at = pointer(parseInt(press[1]!, 10), parseInt(press[2]!, 10));
+        if (at) {
+          const next = { aMsg: at.index, aCol: at.col, bMsg: at.index, bCol: at.col };
+          selectionRef.current = next;
+          selectingRef.current = true;
+          setSelection(next);
+          setSelecting(true);
+        }
       }
       const drag = /\x1b\[<32;(\d+);(\d+)M/.exec(s);
-      if (drag && selecting) {
-        const col = parseInt(drag[1]!, 10);
-        const row = parseInt(drag[2]!, 10);
-        const idx = Math.max(0, Math.min(messages.length - 1, row - 2 + scrollOffset));
-        const msg = messages[idx];
-        const c = Math.max(0, Math.min((msg?.text.length ?? 1) - 1, col - 1));
-        setSelection((sel) => (sel ? { ...sel, bMsg: idx, bCol: c } : null));
+      if (drag && selectingRef.current) {
+        const at = pointer(parseInt(drag[1]!, 10), parseInt(drag[2]!, 10));
+        if (at) {
+          setSelection((sel) => {
+            if (!sel) return null;
+            const next = { ...sel, bMsg: at.index, bCol: at.col };
+            selectionRef.current = next;
+            return next;
+          });
+        }
       }
       const release = /\x1b\[<0;(\d+);(\d+)m/.exec(s);
-      if (release && selecting) {
+      if (release && selectingRef.current) {
+        selectingRef.current = false;
         setSelecting(false);
-        if (!selection) return;
-        if (selection.aMsg === selection.bMsg && selection.aCol === selection.bCol) { setSelection(null); return; }
-        const lo = Math.min(selection.aMsg, selection.bMsg);
-          const hi = Math.max(selection.aMsg, selection.bMsg);
-          const parts: string[] = [];
-          for (let i = lo; i <= hi; i++) {
-            const m = messages[i];
-            if (!m) continue;
-            if (lo === hi) {
-              const a = Math.min(selection.aCol, selection.bCol);
-              const b = Math.max(selection.aCol, selection.bCol) + 1;
-              parts.push(m.text.slice(a, b));
-            } else if (i === lo) {
-              const a = selection.aMsg <= selection.bMsg ? selection.aCol : 0;
-              parts.push(m.text.slice(a));
-            } else if (i === hi) {
-              const b = selection.aMsg <= selection.bMsg ? selection.bCol + 1 : m.text.length;
-              parts.push(m.text.slice(0, b));
-            } else {
-              parts.push(m.text);
-            }
-          }
-          const text = parts.join('\n');
-          if (!text) { setSelection(null); return; }
-          try {
-            const proc = Bun.spawn(['pbcopy'], { stdin: new TextEncoder().encode(text) });
-            void proc.exited;
-          } catch {}
-          push({ role: 'system', text: 'copied selection' });
+        const sel = selectionRef.current;
+        if (!sel) return;
+        if (sel.aMsg === sel.bMsg && sel.aCol === sel.bCol) {
+          selectionRef.current = null;
+          setSelection(null);
+          return;
+        }
+        const lo = Math.min(sel.aMsg, sel.bMsg);
+        const hi = Math.max(sel.aMsg, sel.bMsg);
+        const parts: string[] = [];
+        for (let i = lo; i <= hi; i++) {
+          const m = displayRef.current[i];
+          if (!m) continue;
+          const text = truncateLongText(m.text);
+          const bounds = selectionBounds(sel, i, text.length);
+          if (!bounds || bounds.end <= bounds.start) continue;
+          parts.push(text.slice(bounds.start, bounds.end));
+        }
+        const text = parts.join('\n');
+        if (!text) {
+          selectionRef.current = null;
+          setSelection(null);
+          return;
+        }
+        try {
+          const proc = Bun.spawn(['pbcopy'], { stdin: new TextEncoder().encode(text) });
+          void proc.exited;
+        } catch {}
+        push({ role: 'system', text: 'copied selection' });
       }
     };
     stdin.on('data', handler);
@@ -1164,7 +1201,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       stdin.off('data', handler);
       process.stdout.write('\x1b[?1000l\x1b[?1006l');
     };
-  }, [stdin, messages.length, selecting, selection, scrollOffset]);
+  }, [stdin]);
 
   React.useEffect(() => {
     try {
@@ -1212,9 +1249,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   let heightStart = heightEnd;
   {
     let used = 0;
-    const w = Math.max(10, columns - 2);
     while (heightStart > 0) {
-      const h = estimateLines(displayMessages[heightStart - 1]?.text ?? '', w);
+      const msg = displayMessages[heightStart - 1];
+      const h = estimateLines(truncateLongText(msg?.text ?? ''), paintedWidth(msg?.role, columns, screenReader));
       if (used + h > heightBudget && heightStart < heightEnd) break;
       used += h;
       heightStart--;
@@ -1226,6 +1263,28 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const visibleMessages = displayMessages.slice(renderStart, renderEnd);
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
+  columnsRef.current = columns;
+  screenReaderRef.current = screenReader;
+  selectionRef.current = selection;
+  selectingRef.current = selecting;
+  displayRef.current = displayMessages;
+  {
+    const bands: WalkBand[] = [{ kind: 'chrome', rows: 2 }];
+    if (displayMessages.length > 0 && (scrollOffset > 0 || aboveHidden > 0)) bands.push({ kind: 'chrome', rows: 1 });
+    for (let i = renderStart; i < renderEnd; i++) {
+      const msg = displayMessages[i];
+      bands.push({
+        kind: 'message',
+        index: i,
+        rows: estimateLines(truncateLongText(msg?.text ?? ''), paintedWidth(msg?.role, columns, screenReader)),
+      });
+    }
+    if (thinkingText && showThinking) {
+      bands.push({ kind: 'chrome', rows: estimateLines(thinkingText.slice(-500), Math.max(10, columns - 2)) });
+    }
+    if (running && activity) bands.push({ kind: 'chrome', rows: 1 });
+    rowMapRef.current = rowMapFromWalk(bands);
+  }
   // Transcript search hits (derived): global indices into displayMessages.
   const searchHits: number[] = (() => {
     const q = transcriptSearch.query.trim().toLowerCase();
@@ -1679,33 +1738,19 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <>
               {visibleMessages.map((m, i) => {
             const globalIdx = renderStart + i;
-            let a = -1, b = -1;
-            if (selection) {
-              const lo = Math.min(selection.aMsg, selection.bMsg);
-              const hi = Math.max(selection.aMsg, selection.bMsg);
-              if (globalIdx >= lo && globalIdx <= hi) {
-                if (lo === hi) { a = Math.min(selection.aCol, selection.bCol); b = Math.max(selection.aCol, selection.bCol) + 1; }
-                else if (globalIdx === lo) { a = (selection.aMsg <= selection.bMsg ? selection.aCol : 0); b = m.text.length; }
-                else if (globalIdx === hi) { a = 0; b = (selection.aMsg <= selection.bMsg ? selection.bCol + 1 : m.text.length); }
-                else { a = 0; b = m.text.length; }
-              }
-            }
-            const hasSel = a >= 0 && b > a;
-            // opencode-style user row: full-width highlight with a left accent
-            // bar. ink only paints background behind actual characters, so pad
-            // each visual line to the full content width.
-            const isUserRow = m.role === 'user' && !hasSel;
+            const capped = truncateLongText(m.text);
+            const q = transcriptSearch.query.trim();
+            const queryHit = q.length > 0 && capped.toLowerCase().includes(q.toLowerCase());
+            const bounds = selection ? selectionBounds(selection, globalIdx, capped.length) : undefined;
+            const hasSel = !!bounds && bounds.end > bounds.start;
+            // ink only paints background behind actual characters, so pad each user line.
+            const isUserRow = m.role === 'user' && !hasSel && !queryHit;
             const isToolError = m.role === 'tool' && m.status === 'error';
-            const rawFull = m.text;
-            // Hard cap like cc: a pasted file must not make every frame rewrap megabytes.
-            const capped = truncateLongText(rawFull);
-            const contentWidth = Math.max(10, columns - 2 - (isUserRow && !screenReader ? 2 : 0));
+            const contentWidth = paintedWidth(m.role, columns, screenReader);
             const userLines = isUserRow && !screenReader
               ? capped.split('\n').map((ln) => ln.padEnd(Math.max(ln.length, contentWidth)))
               : null;
             const full = capped;
-            const sa = hasSel ? a : -1;
-            const sb = hasSel ? b : -1;
             if (screenReader) {
               return (
                 <Box key={globalIdx} flexDirection="column">
@@ -1714,15 +1759,21 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               );
             }
               return (
-            <Box key={globalIdx} flexDirection="column" backgroundColor={!screenReader && isUserRow ? T.userRowBg : undefined}>
-              {m.role === 'assistant' ? (
-                <Markdown>{m.text}</Markdown>
-              ) : hasSel ? (
+            <Box key={globalIdx} flexDirection="column" backgroundColor={isUserRow ? T.userRowBg : undefined}>
+              {hasSel && bounds ? (
                 <Text wrap="wrap">
-                  <Text color={themedColorFor(T, m.role)}>{full.slice(0, sa)}</Text>
-                  <Text backgroundColor="blue" color="white">{full.slice(sa, sb)}</Text>
-                  <Text color={themedColorFor(T, m.role)}>{full.slice(sb)}</Text>
+                  <Text color={themedColorFor(T, m.role)}>{full.slice(0, bounds.start)}</Text>
+                  <Text backgroundColor="blue" color="white">{full.slice(bounds.start, bounds.end)}</Text>
+                  <Text color={themedColorFor(T, m.role)}>{full.slice(bounds.end)}</Text>
                 </Text>
+              ) : queryHit ? (
+                <Text wrap="wrap">
+                  {highlightQuery(full, q).map((sp, si) => (
+                    <Text key={si} backgroundColor={sp.hit ? 'yellow' : undefined} color={sp.hit ? 'black' : themedColorFor(T, m.role)} bold={sp.hit}>{sp.text}</Text>
+                  ))}
+                </Text>
+              ) : m.role === 'assistant' ? (
+                <Markdown>{m.text}</Markdown>
               ) : m.role === 'tool' && !isToolError && full.split('\n').some((l) => /^[+-]/.test(l)) ? (
                 <Box flexDirection="column">
                   {full.split('\n').slice(0, 12).map((ln, li) => {
