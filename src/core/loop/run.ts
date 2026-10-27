@@ -127,6 +127,12 @@ export type RunOptions = {
   // absent means a spent quota ends the session at once, so the client can fall back. `onQuotaWait` hears each wait.
   quotaWaitMs?: number;
   onQuotaWait?: (ms: number) => void;
+  // Long quota waits are slept in slices this small: each slice ends, the request goes out again, so a limit
+  // lifted before its reset is noticed at the next slice instead of hours later. Default QUOTA_RECHECK_MS.
+  quotaRecheckMs?: number;
+  // Said before a retry wait this long or more, so a run that stays open after its last turn says what it waits
+  // for. Quota waits already report through onQuotaWait; this is for the rest.
+  onWait?: (ms: number) => void;
   // While tools run longer than this after a request was sent, its body is sent again with no output every this
   // often, so the cached prefix outlives the provider's cache lifetime (default 4 minutes, under Anthropic's 5;
   // 55 with ttl 1h).
@@ -139,6 +145,11 @@ export type RunOptions = {
 // again on its next request: at Opus 5.5's prices about $0.75 for a 150k parent, against $0.03 for a refresh.
 export const KEEP_ALIVE_MS = 4 * 60_000;
 export const KEEP_ALIVE_1H_MS = 55 * 60_000;
+// Quota waits are slept in slices this small, each ending in a fresh request, so a lifted limit is noticed at
+// the next slice instead of at the reset. Long enough that the slices are not a retry storm.
+export const QUOTA_RECHECK_MS = 5 * 60_000;
+// A non-quota retry wait this long or more is announced through onWait first.
+export const WAIT_SAY_MS = 30_000;
 
 // Refreshes the request's cached prefix while tools run, from `sentAt` + `every` and every `every` after, until
 // stop() (which waits for one in flight, so its event lands before the next request). A provider without
@@ -271,6 +282,10 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     const t = setTimeout(r, ms);
     signal.addEventListener('abort', () => (clearTimeout(t), r()), { once: true });
   }));
+  // A quota wait past this is slept in slices: each slice ends, the request goes out again, so a lifted limit
+  // ends the wait early. Slices do not consume retries: quota waits are bounded by their ceiling, not by count.
+  // A wait that says no time (a spent balance) is not a wait at all, so a zero slice cannot spin.
+  const recheckMs = opts.quotaRecheckMs !== undefined && opts.quotaRecheckMs > 0 ? opts.quotaRecheckMs : QUOTA_RECHECK_MS;
   const byName = new Map(tools.map((t) => [t.name, t]));
 
   if (!log.events.length)
@@ -486,7 +501,8 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       log.append({ kind: 'attempt', requestId: request.id, n, error: got.error, ...t });
       timing.modelMs += t.ms ?? 0;
       const after = got.error.retryAfterMs;
-      const quotaWait = got.error.code === 'quota' && opts.quotaWaitMs !== undefined && after !== undefined && quotaWaited + after <= opts.quotaWaitMs ? after : undefined;
+      const budget = opts.quotaWaitMs;
+      const quotaWait = got.error.code === 'quota' && budget !== undefined && after !== undefined && after > 0 && quotaWaited < budget ? after : undefined;
       // A gateway that rejects a beta-gated feature gets the turn once more without it: no effort messages,
       // no role-system mapping, custom headers kept. Once only, and never for a compaction request (a summary
       // needs its beta to be read back); the attempts show the rejection that motivated the resend.
@@ -498,16 +514,28 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
           continue;
         }
       }
-      if ((!isRetryable(got.error) && quotaWait === undefined) || n >= retryMax) return finish('error_during_execution', 'error', got.error.message);
+      if ((!isRetryable(got.error) && quotaWait === undefined) || (quotaWait === undefined && n >= retryMax)) return finish('error_during_execution', 'error', got.error.message);
       const base = opts.retry?.baseMs ?? 1000;
       const cap = opts.retry?.capMs ?? 30_000;
       const wait = after ?? Math.min(cap, base * 2 ** (n - 1));
       if (quotaWait !== undefined) {
-        quotaWaited += quotaWait;
-        opts.onQuotaWait?.(quotaWait);
+        // One slice, then around again for a fresh request: a lifted quota succeeds early, a fresh 429 carries
+        // a new retry-after, and the ceiling bounds the total (the last slice is cut short at it). Quota cycles
+        // never consume retries.
+        const step = Math.min(quotaWait, recheckMs, (opts.quotaWaitMs ?? 0) - quotaWaited);
+        if (step <= 0) return finish('error_during_execution', 'error', got.error.message);
+        await sleep(step);
+        timing.retryMs += step;
+        if (signal.aborted) return finish('interrupted', 'aborted');
+        quotaWaited += step;
+        opts.onQuotaWait?.(step);
+        continue;
+      } else {
+        if (wait >= WAIT_SAY_MS) opts.onWait?.(wait);
+        await sleep(wait);
+        timing.retryMs += wait;
+        if (signal.aborted) return finish('interrupted', 'aborted');
       }
-      await sleep(wait);
-      timing.retryMs += wait;
       if (signal.aborted) return finish('interrupted', 'aborted');
     }
     if (!got.ok) throw new Error('unreachable');

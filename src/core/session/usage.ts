@@ -27,6 +27,8 @@ export type UsageReport = {
   // Requests whose input passed the model's long-context price line, and requests at effort max.
   overPriceLine: number;
   maxEffort: number;
+  // Attempts that waited past SLOW_TTFT_MS for the first byte: a gateway or provider stalling, retried by the run.
+  slowStart: number;
   // Actionable cost smells: always-on context (system prompt and tools) past ALWAYS_ON_WARN_SHARE of resent
   // input, and one tool result past TOOL_RESULT_WARN_SHARE of it. Sentences for the usage page; --json too.
   warnings: string[];
@@ -99,6 +101,7 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
   let compactUsd = 0;
   let overPriceLine = 0;
   let maxEffort = 0;
+  let slowStart = 0;
   let handoffs = 0;
   let unpriced = 0;
 
@@ -219,6 +222,9 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
         case 'turn_end':
           if (e.reason === 'handoff') handoffs++;
           break;
+        case 'attempt':
+          if ((e.ttftMs ?? 0) >= SLOW_TTFT_MS) slowStart++;
+          break;
         case 'permission':
           if (e.decision === 'deny') add(blocked, e.rule, 1);
           break;
@@ -260,6 +266,7 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
     blocked: [...blocked].map(([rule, count]) => ({ rule, count })).sort((a, b) => b.count - a.count),
     overPriceLine,
     maxEffort,
+    slowStart,
     warnings,
     handoffs,
     unpriced,
@@ -275,6 +282,9 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
 
 const k = (n: number) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : String(n));
 const pct = (x: number) => `${(x * 100).toFixed(0)}%`;
+
+// A first byte past this is a stall, not thinking: the run retries it, and the report counts it.
+export const SLOW_TTFT_MS = 30_000;
 
 // A share of resent input that earns a warning: the system prompt and tool definitions go out on every
 // request, and one result re-sent whole every turn after it arrived.
@@ -303,6 +313,7 @@ export function formatUsage(r: UsageReport): string {
   const warn = [
     r.overPriceLine && `${r.overPriceLine} request${r.overPriceLine === 1 ? '' : 's'} past the model's long-context price line`,
     r.maxEffort && `${r.maxEffort} request${r.maxEffort === 1 ? '' : 's'} at effort max`,
+    r.slowStart && `${r.slowStart} attempt${r.slowStart === 1 ? '' : 's'} waited 30s+ for the first byte`,
     r.handoffs && `${r.handoffs} handoff${r.handoffs === 1 ? '' : 's'}`,
     r.unpriced && `${r.unpriced} repl${r.unpriced === 1 ? 'y' : 'ies'} from a model with no known price, left out of the cost`,
   ].filter(Boolean);

@@ -224,19 +224,24 @@ describe('loop', () => {
     const MIN = 60_000;
     const spent = (retryAfterMs?: number): FauxStep => ({ error: { code: 'quota', status: 429, message: 'usage limit reached', ...(retryAfterMs ? { retryAfterMs } : {}) } });
     const waits: number[] = [];
-    const waited = setup([spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN, onQuotaWait: (ms) => void waits.push(ms) });
+    const waited = setup([spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN, onQuotaWait: (ms) => void waits.push(ms) });
     expect(await runPrompt(waited.opts, 'hi')).toMatchObject({ subtype: 'success', timing: { retryMs: 20 * MIN } });
-    expect(waited.sleeps).toEqual([20 * MIN]);
-    expect(waits).toEqual([20 * MIN]);
-    expect(of(waited.log.events, 'attempt').map((a) => a.error?.code)).toEqual(['quota', undefined]);
+    // Sliced into 5-minute rechecks (quotaRecheckMs): each slice ends in a fresh request, same total, heard per slice.
+    expect(waited.sleeps).toEqual([5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN]);
+    expect(waits).toEqual([5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN]);
+    expect(of(waited.log.events, 'attempt').map((a) => a.error?.code)).toEqual(['quota', 'quota', 'quota', 'quota', undefined]);
+    // A limit lifted before its reset ends the wait at the next slice, not at the reset.
+    const early = setup([spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN });
+    expect(await runPrompt(early.opts, 'hi')).toMatchObject({ subtype: 'success', timing: { retryMs: 5 * MIN } });
+    expect(early.sleeps).toEqual([5 * MIN]);
     // Without the option a spent quota ends the session, so the client can fall back.
     const plain = setup([spent(20 * MIN), { blocks: [text('ok')] }]);
     expect((await runPrompt(plain.opts, 'hi')).subtype).toBe('error_during_execution');
     expect(plain.sleeps).toEqual([]);
     // The ceiling is for the whole run: a second 20-minute wait would pass 30 minutes.
-    const twice = setup([spent(20 * MIN), spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN });
+    const twice = setup([spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN });
     expect((await runPrompt(twice.opts, 'hi')).subtype).toBe('error_during_execution');
-    expect(twice.sleeps).toEqual([20 * MIN]);
+    expect(twice.sleeps).toEqual([5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN]);
     // A spent balance says no time: waiting will not bring it back.
     const balance = setup([{ error: { code: 'quota', status: 402, message: 'Insufficient Balance' } }, { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN });
     expect((await runPrompt(balance.opts, 'hi')).subtype).toBe('error_during_execution');

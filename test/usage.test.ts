@@ -52,6 +52,20 @@ describe('cedia usage', () => {
     expect(text).toContain('warning: tool result bash c1 (10k chars x 2) is 98% of resent input');
   });
 
+  test('attempts that wait 30s+ for the first byte count as slow starts', () => {
+    let n = 0;
+    const e = (body: Record<string, unknown>): SessionEvent => ({ id: `e${n++}`, at: at(n), ...body }) as unknown as SessionEvent;
+    const events = [
+      e({ kind: 'session', cwd: '/x', role: 'code', model: 'anthropic/claude-haiku-5-5', system: '', tools: [] }),
+      e({ kind: 'request', model: 'm', toolsHash: 't', systemHash: 's', bodyHash: 'b', headers: {} }),
+      e({ kind: 'attempt', requestId: 'q', n: 1, ttftMs: 45_000, ms: 46_000 }),
+      e({ kind: 'attempt', requestId: 'q', n: 2, ttftMs: 200, ms: 900 }),
+    ];
+    const r = usageReport([{ id: 's', events }]);
+    expect(r.slowStart).toBe(1);
+    expect(formatUsage(r)).toContain('1 attempt waited 30s+ for the first byte');
+  });
+
   test('always-on context past a quarter of resent input earns a warning; one request never does', () => {
     let n = 0;
     const e = (body: Record<string, unknown>): SessionEvent => ({ id: `e${n++}`, at: at(n), ...body }) as unknown as SessionEvent;

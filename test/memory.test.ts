@@ -76,4 +76,36 @@ describe('project memory', () => {
     expect(run([], ['memory', 'list']).out).toContain('no notes');
     expect(run([], ['memory', 'add', 'from', 'me']).out).toContain('kept as note');
   });
+
+  test('a note kept mid-run reaches the session after a handoff: memory is read fresh, not stale', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-mem-handoff-'));
+    const home = join(dir, '.home');
+    const run2 = (steps: unknown[], args: string[]) => {
+      const script = join(dir, `.script-${Math.random()}.json`);
+      writeFileSync(script, JSON.stringify(steps));
+      const p = Bun.spawnSync([BIN, ...args, '--cwd', dir], { env: { ...process.env, CEDIA_FAUX_SCRIPT: script, CEDIA_HOME: home } });
+      return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
+    };
+    const keep = { blocks: [{ type: 'tool_use', id: 'c1', name: 'remember', input: { note: 'MIDRUN MARKER deployments go through make ship' } }] };
+    // One turn with three capped reads: enough re-sent context to pass the handoff point in one session.
+    const big = { blocks: [2, 3, 4].map((n) => ({ type: 'tool_use', id: `c${n}`, name: 'bash', input: { command: 'seq 1 8000' } })) };
+    const r = run2(
+      [keep, big, { blocks: [{ type: 'text', text: 'NOTE: deploys via make ship, then check' }] }, { blocks: [{ type: 'text', text: 'done' }] }],
+      ['-m', 'faux', '-p', 'learn the deploy flow', '--permission', 'workspace', '--sandbox', 'off', '--handoff-at', '1000', '--handoff', 'note'],
+    );
+    expect(r.code).toBe(0);
+    const sessions = join(home, 'sessions');
+    const [project] = readdirSync(sessions);
+    const pres = readdirSync(join(sessions, project!))
+      .map((f) => SessionLog.load(join(sessions, project!, f)).events)
+      .filter((ev) => ev.some((e) => e.kind === 'session' && (e as { role?: string }).role === 'code'))
+      .map((ev) => ({
+        handedOff: ev.some((e) => e.kind === 'turn_end' && (e as { reason?: string }).reason === 'handoff'),
+        preamble: ev.find((e): e is Extract<SessionEvent, { kind: 'reminder' }> => e.kind === 'reminder' && e.text.startsWith('<environment>'))?.text ?? '',
+      }));
+    expect(pres.length).toBeGreaterThanOrEqual(2);
+    // The session that handed off started before the note was kept; the one after it re-read memory.
+    expect(pres.find((p) => p.handedOff)?.preamble).not.toContain('MIDRUN MARKER');
+    expect(pres.find((p) => !p.handedOff)?.preamble).toContain('MIDRUN MARKER');
+  });
 });

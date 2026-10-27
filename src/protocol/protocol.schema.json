@@ -3730,6 +3730,9 @@
         "maxEffort": {
           "type": "number"
         },
+        "slowStart": {
+          "type": "number"
+        },
         "warnings": {
           "type": "array",
           "items": {
@@ -3843,6 +3846,7 @@
         "blocked",
         "overPriceLine",
         "maxEffort",
+        "slowStart",
         "warnings",
         "handoffs",
         "unpriced",
