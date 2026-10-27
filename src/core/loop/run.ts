@@ -300,8 +300,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const snap: { tree?: string } = {};
   // 0: working; 1: asked for the note; 2: asked again after a tool call; 'off': gave up on handing off.
   let handoff: 0 | 1 | 2 | 'off' = 0;
-  // The compaction in flight, if any; `outcome` is set once it settles. 'off' once one failed: the note takes over.
-  type Compaction = { of: EventId; ac: AbortController; settled: Promise<void>; outcome?: { block?: CompactionBlock } };
+  // The compaction in flight, if any; `outcome` is set once it settles. 'off' once one failed or came back
+  // without a summary twice: the note takes over.
+  type Compaction = { of: EventId; at: number; tries: number; ac: AbortController; settled: Promise<void>; outcome?: { block?: CompactionBlock; empty?: boolean } };
   const cmp: { now: Compaction | 'off' | undefined } = { now: opts.compact && model.compaction ? undefined : 'off' };
   const inFlight = () => (cmp.now && cmp.now !== 'off' ? cmp.now : undefined);
   let spawnNudged = log.events.some((e) => e.kind === 'reminder' && isSpawnNudge(e.text));
@@ -374,14 +375,15 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
   // Asks the provider for a summary of the messages request `of` sent, without waiting for it. The compaction
   // request is logged before it is sent and its outcome when it arrives; its cost counts like a turn's.
-  const startCompaction = (at: number) => {
+  // A reply with no summary in it gets one more ask before the note takes over (tries counts the asks).
+  const startCompaction = (at: number, tries = 1) => {
     const of = log.events[at] as EventOf<'request'>;
     const creq: WireRequest = { ...rebuildRequest(log.events, at, model, log.id), compaction: { instructions: COMPACT_INSTRUCTIONS } };
     const sent = log.append({ kind: 'compact_request', of: of.id, bodyHash: hash(provider.body(creq)), headers: redactHeaders(provider.headers(creq)) });
     const ac = new AbortController();
     signal.addEventListener('abort', () => ac.abort(), { once: true });
     const start = performance.now();
-    const c: Compaction = { of: sent.id, ac, settled: Promise.resolve() };
+    const c: Compaction = { of: sent.id, at, tries, ac, settled: Promise.resolve() };
     c.settled = collect(provider, creq, ac.signal).then((got) => {
       if (c.outcome) return; // the session ended first
       const ms = Math.round(performance.now() - start);
@@ -392,7 +394,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
         const c2 = costUsd(model, got.usage, now());
         cost += c2;
         if (opts.meter) opts.meter.usd += c2;
-        c.outcome = block ? { block } : {};
+        c.outcome = block ? { block } : { empty: true };
       } else {
         const error: AttemptError = got.ok === false ? got.error : { code: 'network', message: 'aborted' };
         log.append({ kind: 'compaction', requestId: sent.id, stop: 'error', usage: { ...ZERO_USAGE }, error, ms });
@@ -576,8 +578,11 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       }
       const pending = inFlight();
       if (pending && !pending.outcome && opts.handoffAt !== undefined && size >= opts.handoffAt) await pending.settled;
-      // A compaction that brought no summary hands the handoff to the note, from this turn on.
-      if (pending?.outcome && !pending.outcome.block) cmp.now = 'off';
+      // A compaction that came back without a summary is asked once more; an error, or a second miss, hands
+      // the handoff to the note, from this turn on. Retrying an error would resend a request that failed.
+      if (pending?.outcome && !pending.outcome.block && pending.outcome.empty && pending.tries < 2 && cmp.now === pending) {
+        startCompaction(pending.at, pending.tries + 1);
+      } else if (pending?.outcome && !pending.outcome.block) cmp.now = 'off';
       if (inFlight()) {
         // the summary is on its way, or here: the top of the loop ends the session
       } else if (cmp.now === 'off' && handoff === 0 && opts.handoffAt !== undefined && due(opts.handoffAt)) {
