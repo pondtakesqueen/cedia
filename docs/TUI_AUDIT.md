@@ -1,0 +1,188 @@
+# TUI Audit: cedia (ink) vs Claude Code (cc) vs Codex CLI
+
+Date: 2026-10-26. Scope: `src/clients/tui-ink/app.tsx` (ink TUI, default) vs history/CLONE_SPEC.md §16 + GAP_ANALYSIS_CC.md.
+
+## 1. Slash commands
+
+### cc built-ins (from history/CLONE_SPEC §2.4)
+| cc command | cedia ink | status |
+|---|---|---|
+| /diff | ✅ | |
+| /undo | ✅ | |
+| /redo | ✅ | |
+| /commit | ✅ | |
+| /pr | ✅ | |
+| /review | ✅ | |
+| /new | ✅ | |
+| /thread | ✅ | |
+| /model | ✅ | |
+| /goal | ✅ | |
+| /help | ✅ | |
+| /quit | ✅ | |
+| /vim | ✅ | |
+| /memory | ✅ | |
+| /compact | ✅ (info only) | cc: actual compaction |
+| /context | ✅ | |
+| /cost | ✅ | |
+| /doctor | ✅ (basic) | cc: versions, settings errors, keybinding warnings, MCP warnings, sandbox |
+| /config | ✅ | |
+| /permissions | ⚠️ /permission (singular) | rename to /permissions? |
+| /hooks | ✅ | |
+| /mcp | ✅ | |
+| /plugin | ❌ | not implemented (Tier 3) |
+| /agents | ✅ | |
+| /tasks | ✅ | |
+| /resume | ✅ | |
+| /rename | ✅ | |
+| /export | ✅ | |
+| /share | ❌ | not implemented |
+| /clear | ✅ | |
+| /color | ❌ (alias /theme?) | cc has /color |
+| /theme | ✅ | |
+| /effort | ✅ (info only) | cc: sets effort |
+| /fast | ✅ (info only) | cc: toggles fast mode |
+| /output-style | ✅ | |
+| /passes | ❌ | cc-specific |
+| /privacy-settings | ❌ | cc-specific |
+| /release-notes | ❌ | cc-specific |
+| /sandbox-toggle | ❌ | could be useful |
+| /status | ✅ | |
+| /stats | ❌ | cc: usage stats |
+| /tag | ❌ | cc-specific |
+| /terminalSetup | ❌ | could be useful |
+| /thinkback | ❌ | cc-specific |
+| /ctx_viz | ❌ | cc: context visualization |
+| /files | ❌ | cc: list files in context |
+| /copy | ✅ | |
+| /branch | ✅ | |
+| /rewind | ✅ | |
+| /btw | ✅ | |
+| /palette | ✅ | |
+| /suggest | ✅ | |
+| /trust | ✅ | |
+| /onboarding | ✅ | |
+| /statusline | ✅ | |
+| /plan | ✅ | |
+| /quick | ✅ | |
+| /goal | ✅ | |
+
+### 2. Screens & overlays
+
+| cc feature | cedia ink | status |
+|---|---|---|
+| REPL main screen | ✅ | |
+| Message list (Messages/VirtualMessageList) | ⚠️ windowed slicing | not true virtualization |
+| PromptInput | ✅ (VimInput) | |
+| Transcript toggle | ✅ | |
+| History search | ✅ (Ctrl+R) | |
+| Message selector / rewind | ✅ (Ctrl+O) | |
+| Surveys | ❌ deferred | |
+| Cost/idle dialogs | ✅ basic | |
+| Permission/tool JSX overlays | ⚠️ | no specialized per-tool dialogs |
+| Ultrapan | ✅ /plan | no choice dialog |
+| Desktop upsell | ❌ deferred | |
+| Doctor screen | ✅ basic | |
+| Resume conversation picker | ✅ | |
+| Focused dialog priority | ✅ basic | |
+| Settings tabs (Status/Config/Usage) | ✅ | |
+| Settings search | ✅ (Config tab) | |
+| Onboarding (preflight/theme/api-key/oauth/security/terminal) | ⚠️ basic | missing Grove, Claude-in-Chrome, bypass/auto-mode opt-in, dev channels |
+| Trust dialog | ✅ | |
+| Keybindings (contexts/chords/overrides) | ⚠️ | missing many contexts |
+| Vim mode (motions/text objects/find/counts/dot-repeat) | ✅ | |
+| Status line (command) | ✅ | |
+| Ink renderer (Yoga/scheduleRender/Frame diff) | ⚠️ ink 8.x direct | no custom tuning |
+| Accessibility (--ax-screen-reader) | ✅ | |
+| Mouse/selection | ✅ | |
+| Resize/alt-screen | ✅ | |
+
+### 3. Permission dialogs
+
+| cc tool dialog | cedia ink | status |
+|---|---|---|
+| Bash | ✅ | |
+| PowerShell | N/A | no PowerShell tool |
+| FileEdit | ✅ (edit) | |
+| FileWrite | ⚠️ | label only, no specialized dialog |
+| WebFetch | ✅ | |
+| Notebook | ❌ | no NotebookEdit tool |
+| Skill | ⚠️ | label only |
+| AskUserQuestion | ✅ | |
+| EnterPlanMode | ⚠️ | label only |
+| ExitPlanMode | ⚠️ | label only |
+| Filesystem | ⚠️ | label only |
+| Sed | ⚠️ | label only |
+| Fallback | ⚠️ | label only |
+
+### 4. Codex CLI comparison (general knowledge)
+
+Codex CLI (OpenAI) TUI features:
+| Codex feature | cedia ink | status |
+|---|---|---|
+| Interactive REPL | ✅ | |
+| Slash commands | ✅ (47+) | |
+| Model switching (/model) | ✅ | |
+| Permission modes | ✅ | |
+| File editing (apply_patch) | ✅ (edit/write) | |
+| Shell commands | ✅ (bash) | |
+| Web search | ⚠️ | via MCP, not built-in |
+| Image input | ✅ (--image, read image) | |
+| Session resume/fork | ✅ (/thread, /fork, /resume, /rewind) | |
+| MCP servers | ✅ | |
+| Skills | ✅ | |
+| Memory/AGENTS.md | ✅ | |
+| Sandbox | ✅ | |
+| Diff view | ✅ (/diff) | |
+| Undo/redo | ✅ | |
+| Commit/PR | ✅ (/commit, /pr) | |
+| Review | ✅ (/review) | |
+| Goal mode | ✅ (/goal) | codex doesn't have this |
+| Plan mode | ✅ (/plan, /quick) | |
+| Vim mode | ✅ | codex: basic |
+| History search | ✅ (Ctrl+R) | |
+| Mouse selection | ✅ | |
+| Accessibility | ✅ | codex: basic |
+| Status line | ✅ | |
+| Onboarding | ✅ | |
+| Doctor | ✅ | |
+| Cost tracking | ✅ | |
+| Context compaction | ✅ (auto handoff) | |
+| Multi-agent/sub-threads | ✅ (spawn, /tasks, /agents) | codex: basic |
+| Browser tool | ✅ | |
+| LSP diagnostics | ✅ | |
+| Image generation | ❌ | not implemented |
+| Voice | ❌ deferred | |
+
+### 5. Summary: gaps to close for 95%+
+
+**High priority (functional gaps):**
+1. Permission router: specialized dialogs for FileWrite, Skill, PlanMode, Filesystem, Sed (not just labels)
+2. True virtualization: replace slicing with VirtualMessageList (overscan + recycling)
+3. Keybindings: add missing contexts (Autocomplete, Confirmation, Tabs, Transcript, etc.)
+4. Onboarding: add Grove, Claude-in-Chrome, bypass/auto-mode opt-in, dev channels
+5. Selection overlay: inline search highlight + message selection overlay
+
+**Medium priority (polish):**
+6. Ink renderer: tune scheduleRender, Frame diff, SIGCONT, pause/resume
+7. Vim: visual mode? (cc has it; cedia doesn't)
+8. Settings: search mode in Config (done), but Usage tab could show per-model breakdown
+9. Accessibility: manual testing with screen reader
+
+**Low priority (deferred by design):**
+10. Surveys, desktop upsell, ultrapan choice dialogs
+11. Voice/buddy/computer-use (Tier 2)
+12. Plugin marketplace, remote/cloud (Tier 3)
+13. /passes, /privacy-settings, /release-notes, /sandbox-toggle, /stats, /tag, /terminalSetup, /thinkback, /ctx_viz, /files, /share, /plugin, /color (cc-specific or low value)
+
+### 6. Feature surface score: ~90%
+
+**Done:** ~47 commands, virtual list, history search, message selector, transcript toggle, cost/idle dialogs, dialog priority, status line, keybindings, mouse, resize, onboarding, accessibility, resume picker, settings tabs+search, permission router (expanded labels), vim depth (motions/operators/text objects/find/counts/dot-repeat), rewind, LSP, full goal mode, classifier, spawn display, markdown, tool cards, permission dialogs, Tab autocomplete, arrow-key navigation.
+
+**Missing for 95%:** specialized permission dialogs, true virtualization, keybindings contexts, onboarding completeness, selection overlay polish.
+
+**Missing for 100% (deferred):** voice/buddy/computer-use, plugin/remote/cloud, surveys, desktop upsell, ultrapan choice, cc-specific commands. (cedia doesn't need all of these — some are cc-specific.)
+## Update 2026-10-26 (ink TUI polish round)
+- Theme tokens (dark/light, original values) applied: user rows, selection, dialogs, borders, diff colors, errors, status line.
+- `/theme <dark|light>` switches live and persists.
+- Fixes: duplicate stdin handler removed (double-input bug), Esc/Ctrl+C abort, no more `unknown command /historyUp` (real input history), /model /effort /output-style /theme actually apply, shift+tab cycles permission mode.
+- New: transcript search UI (Ctrl+F), @-file mentions, visual vim mode, multiline input, thinking toggle (Meta+T), frecency-ranked autocomplete, draft stash per thread, structured diff rendering, windowed virtual list by estimated rows, input history, external editor (Ctrl+G).
