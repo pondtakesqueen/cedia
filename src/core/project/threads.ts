@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { inert } from '../trust/frame.ts';
 import type { RunPermission } from '../safety/policy.ts';
 
@@ -19,7 +19,7 @@ type ThreadBody =
   // client to run. profile: the profile its runs take unless another is named (core/profiles.ts).
   // forkOf: the thread and run this one was forked at (core/project/fork.ts). side: a side chat, forked at the
   // other thread's end to ask about it without adding to it; a client shows it beside that thread, not in the list.
-  | { kind: 'open'; title: string; task: string; parent?: string; by?: string; profile?: string; forkOf?: ForkOf; side?: boolean }
+  | { kind: 'open'; title: string; task: string; parent?: string; by?: string; profile?: string; forkOf?: ForkOf; side?: boolean; root?: string }
   | { kind: 'session'; sessionId: string; model: string; role: string; why: SessionWhy; path?: string }
   // Written when a session hands off: the note the next session starts from.
   | { kind: 'handoff'; sessionId: string; note: string }
@@ -77,6 +77,7 @@ export type Thread = {
   profile?: string;
   forkOf?: ForkOf;
   side?: boolean;
+  root?: string;
   archived: boolean;
   sessions: (Extract<ThreadEvent, { kind: 'session' }> & { rewound?: boolean })[];
   handoff?: { sessionId: string; note: string };
@@ -142,7 +143,6 @@ export class ThreadStore {
     } else if (body.kind === 'rewind') {
       if (existsSync(this.summaryPath(id))) appendFileSync(this.summaryPath(id), `\n> Rewound to just before run ${body.run}.\n`);
     }
-
   }
 
   summaryPath(id: string): string {
@@ -157,9 +157,10 @@ export class ThreadStore {
       return undefined;
     }
   }
-  open(task: string, opts: { parent?: string; by?: string; profile?: string; title?: string; forkOf?: ForkOf; side?: boolean; now?: Date } = {}): string {
+
+  open(task: string, opts: { parent?: string; by?: string; profile?: string; title?: string; forkOf?: ForkOf; side?: boolean; root?: string; now?: Date } = {}): string {
     const id = newThreadId();
-    this.append(id, { kind: 'open', title: titleOf(opts.title || task), task, ...(opts.parent ? { parent: opts.parent } : {}), ...(opts.by ? { by: opts.by } : {}), ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.forkOf ? { forkOf: opts.forkOf } : {}), ...(opts.side ? { side: true } : {}) }, opts.now);
+    this.append(id, { kind: 'open', title: titleOf(opts.title || task), task, ...(opts.parent ? { parent: opts.parent } : {}), ...(opts.by ? { by: opts.by } : {}), ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.forkOf ? { forkOf: opts.forkOf } : {}), ...(opts.side ? { side: true } : {}), ...(opts.root ? { root: opts.root } : {}) }, opts.now);
     return id;
   }
 
@@ -240,6 +241,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     ...(open?.profile ? { profile: open.profile } : {}),
     ...(open?.forkOf ? { forkOf: open.forkOf } : {}),
     ...(open?.side ? { side: true } : {}),
+    ...(open?.root ? { root: open.root } : {}),
     archived: false,
     sessions: [],
     messages: [],
@@ -322,5 +324,5 @@ export function inboxReminder(messages: ThreadMessage[]): string {
 export function threadLine(t: Thread): string {
   const latest = (t.result ?? t.handoff?.note ?? '').trim().split('\n')[0] ?? '';
   const done = t.todo?.filter((i) => i.state === 'done').length;
-  return `${t.id}  ${t.state.padEnd(7)}  ${t.parent ? `(sub-thread of ${t.parent}) ` : ''}${t.by ? `(opened by ${t.by}) ` : ''}${t.forkOf ? `(${t.side ? 'side chat of' : 'forked from'} ${t.forkOf.thread}) ` : ''}${t.archived ? '(archived) ' : ''}${t.todo?.length ? `[${done}/${t.todo.length}] ` : ''}${t.title}${latest ? `\n    ${latest.length > 120 ? `${latest.slice(0, 117)}...` : latest}` : ''}`;
+  return `${t.id}  ${t.state.padEnd(7)}  ${t.root ? `[${basename(t.root)}] ` : ''}${t.parent ? `(sub-thread of ${t.parent}) ` : ''}${t.by ? `(opened by ${t.by}) ` : ''}${t.forkOf ? `(${t.side ? 'side chat of' : 'forked from'} ${t.forkOf.thread}) ` : ''}${t.archived ? '(archived) ' : ''}${t.todo?.length ? `[${done}/${t.todo.length}] ` : ''}${t.title}${latest ? `\n    ${latest.length > 120 ? `${latest.slice(0, 117)}...` : latest}` : ''}`;
 }

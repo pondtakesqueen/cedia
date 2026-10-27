@@ -1,4 +1,7 @@
 import { EFFORTS, type ModelCapabilities, type ModelSpec, type Price, type Usage } from '../types.ts';
+import { cediaHome, readSettings } from '../config.ts';
+import { join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 // Prices are USD per 1M tokens: Anthropic from the Claude API model catalog, OpenCode Go from its docs
 // (console/go.mdx, read 2026-10-21). Context windows for Go models are DeepSeek harness defaults;
@@ -219,11 +222,195 @@ export const FALLBACKS: Record<string, string> = {
   'openrouter/deepseek-v4.1-flash': 'anthropic/claude-haiku-5-5',
 };
 
+// Local (self-hosted) models declared in ~/.cedia/settings.json under `localModels`:
+// [{ "ref": "local/llama", "id": "llama3.1", "wire": "chat-completions", "url": "http://localhost:11434/v1/chat/completions", "contextWindow": 128000 }]
+export const LOCAL_MODEL_CACHE = 'local-models-cache.json';
+
+export function localModelCachePath(home = cediaHome()): string {
+  return join(home, LOCAL_MODEL_CACHE);
+}
+
+export function loadLocalModelCache(home = cediaHome()): ModelSpec[] {
+  const p = localModelCachePath(home);
+  if (!existsSync(p)) return [];
+  try {
+    const raw = JSON.parse(readFileSync(p, 'utf8'));
+    if (!Array.isArray(raw)) return [];
+    return raw as ModelSpec[];
+  } catch {
+    return [];
+  }
+}
+
+async function probe(url: string, timeoutMs = 300): Promise<Response | undefined> {
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), timeoutMs);
+    const res = await fetch(url, { signal: ac.signal });
+    clearTimeout(t);
+    return res;
+  } catch {
+    return undefined;
+  }
+}
+
+function mkSpec(ref: string, id: string, url: string, ctx: number, reasoning = false): ModelSpec {
+  return {
+    ref,
+    id,
+    wire: 'chat-completions',
+    url,
+    auth: { env: '', scheme: 'bearer' },
+    local: true,
+    maxOutput: 8192,
+    price: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    dataPolicy: 'retained',
+    caps: {
+      reasoning: reasoning ? 'reasoning_content' : 'none',
+      replayReasoning: 'same-turn',
+      parallelToolCalls: true,
+      input: ['text'],
+      effortLevels: [],
+      cacheMinTokens: 0,
+      cacheBlockTokens: 0,
+      midConversationSystem: true,
+      midConversationEffort: false,
+      contextWindow: ctx,
+    },
+
+  } as unknown as ModelSpec;
+}
+
+export async function discoverLocalModels(home = cediaHome()): Promise<ModelSpec[]> {
+  const out: ModelSpec[] = [];
+  const env = process.env;
+  // Ollama
+  const ollamaBase = (env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
+  const tags = await probe(`${ollamaBase}/api/tags`, 400);
+  if (tags && tags.ok) {
+    try {
+      const data = (await tags.json()) as { models?: { name: string }[] };
+      for (const m of data.models ?? []) {
+        let ctx = 128_000;
+        let reasoning = /r1|thinking|reasoner|qwen3/i.test(m.name);
+        let tools = true;
+        try {
+          const showRes = await probe(`${ollamaBase}/api/show`, 400);
+          if (showRes && showRes.ok) {
+            const show = (await showRes.json()) as { model_info?: Record<string, unknown>; capabilities?: string[] };
+            for (const [k, v] of Object.entries(show.model_info ?? {})) {
+              if (k.endsWith('.context_length') && typeof v === 'number') { ctx = v; break; }
+            }
+            if (Array.isArray(show.capabilities)) {
+              tools = show.capabilities.includes('tools');
+              if (show.capabilities.includes('thinking')) reasoning = true;
+            }
+          }
+        } catch {}
+        const spec = mkSpec(`ollama/${m.name}`, m.name, `${ollamaBase}/v1/chat/completions`, ctx, reasoning);
+        (spec as { caps: { parallelToolCalls: boolean } }).caps.parallelToolCalls = tools;
+        out.push(spec);
+      }
+    } catch {}
+  }
+  // LM Studio
+  const lmBase = (env.LM_STUDIO_BASE_URL || 'http://127.0.0.1:1234').replace(/\/$/, '');
+  const lm = await probe(`${lmBase}/v1/models`, 400);
+  if (lm && lm.ok) {
+    try {
+      const data = (await lm.json()) as { data?: { id: string }[] };
+      for (const m of data.data ?? []) {
+        out.push(mkSpec(`lmstudio/${m.id}`, m.id, `${lmBase}/v1/chat/completions`, 128_000));
+      }
+    } catch {}
+  }
+  // llama.cpp
+  const llamaBase = (env.LLAMA_CPP_BASE_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
+  const llama = await probe(`${llamaBase}/v1/models`, 400);
+  if (llama && llama.ok) {
+    try {
+      const data = (await llama.json()) as { data?: { id: string; max_model_len?: number }[] };
+      for (const m of data.data ?? []) {
+        out.push(mkSpec(`llamacpp/${m.id}`, m.id, `${llamaBase}/v1/chat/completions`, m.max_model_len ?? 128_000, /r1|thinking|reasoner|qwen3/i.test(m.id)));
+      }
+    } catch {}
+  }
+  // vLLM
+  const vllmBase = (env.VLLM_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+  const vllm = await probe(`${vllmBase}/v1/models`, 400);
+  if (vllm && vllm.ok) {
+    try {
+      const data = (await vllm.json()) as { data?: { id: string; max_model_len?: number }[] };
+      for (const m of data.data ?? []) {
+        out.push(mkSpec(`vllm/${m.id}`, m.id, `${vllmBase}/v1/chat/completions`, m.max_model_len ?? 128_000));
+      }
+    } catch {}
+  }
+  return out;
+}
+
+export async function refreshLocalModelCache(home = cediaHome()): Promise<ModelSpec[]> {
+  const found = await discoverLocalModels(home);
+  try {
+    writeFileSync(localModelCachePath(home), JSON.stringify(found, null, 2));
+  } catch {}
+  return found;
+}
+
+export function localModels(): ModelSpec[] {
+  const cached = loadLocalModelCache();
+  let raw: unknown;
+  try {
+    raw = (readSettings as (p: string) => { localModels?: unknown[] })(join(cediaHome(), 'settings.json')).localModels;
+  } catch {
+    raw = undefined;
+  }
+  if (!Array.isArray(raw)) return [];
+  const out: ModelSpec[] = [];
+  for (const e of raw) {
+    if (!e || typeof e !== 'object') continue;
+    const o = e as Record<string, unknown>;
+    const ref = typeof o.ref === 'string' ? o.ref : undefined;
+    const id = typeof o.id === 'string' ? o.id : ref;
+    const url = typeof o.url === 'string' ? o.url : undefined;
+    if (!ref || !url) continue;
+    const wire = (o.wire === 'anthropic-messages' || o.wire === 'openai-responses') ? o.wire : 'chat-completions';
+    const ctx = typeof o.contextWindow === 'number' ? o.contextWindow : 128_000;
+    const reasoning = o.reasoning === true;
+    const maxOut = typeof o.maxOutput === 'number' ? o.maxOutput : 8_192;
+    out.push({
+      ref,
+      id: id ?? ref,
+      wire,
+      url,
+      auth: { env: typeof o.authEnv === 'string' ? o.authEnv : '', scheme: 'bearer' },
+      local: true,
+      maxOutput: maxOut,
+      defaultEffort: undefined,
+      price: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      dataPolicy: 'retained',
+      caps: {
+        reasoning: reasoning ? 'reasoning_content' : 'none',
+        replayReasoning: 'forbidden',
+        parallelToolCalls: true,
+        input: ['text'],
+        effortLevels: [],
+        cacheMinTokens: 0,
+        cacheBlockTokens: 0,
+        midConversationSystem: true,
+        midConversationEffort: false,
+        contextWindow: ctx,
+      },
+    } as unknown as ModelSpec);
+  }
+  return out;
+}
+
 export function resolveModel(ref: string): ModelSpec {
   const full = ALIASES[ref] ?? ref;
   if (full === FAUX_MODEL.ref) return FAUX_MODEL;
   if (full === FAUX_FALLBACK.ref) return FAUX_FALLBACK;
-  const m = CATALOG.find((c) => c.ref === full);
+  const m = [...CATALOG, ...localModels()].find((c) => c.ref === full);
   if (!m) throw new Error(`unknown model "${ref}". Known: ${[...Object.keys(ALIASES), ...CATALOG.map((c) => c.ref)].join(', ')}`);
   return m;
 }

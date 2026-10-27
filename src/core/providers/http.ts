@@ -9,6 +9,7 @@ type Env = Record<string, string | undefined>;
 // The environment first, then the Keychain under the same names (core/providers/keychain.ts). A caller that passes
 // its own env gets no Keychain unless it passes one too, so tests never read the real one.
 export function authKey(model: ModelSpec, env: Env = process.env, keychain: Keychain | undefined = env === process.env ? processKeychain() : undefined): string | undefined {
+  if (model.local) return 'local';
   const names = [model.auth.env, ...(model.auth.altEnv ? [model.auth.altEnv] : [])];
   for (const n of names) if (env[n]) return env[n];
   if (model.wire === 'faux' || !keychain) return undefined;

@@ -6,7 +6,7 @@ import { resolveModel } from '../../core/providers/catalog.ts';
 import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
-import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
+import { projectKey, projectRoot, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
 import { DAILY_SPEND_WARN_USD, daySpendUsd } from '../../core/session/select.ts';
 import { dayOf } from '../../core/session/usage.ts';
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadMaxEffort, capEffort, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
@@ -26,6 +26,8 @@ import { spawnNudgeAt, spawnPool, spawnReport, spawnTool, subtaskPrompt, type Sp
 import { recallTool, threadTools, type EarlierSession } from '../../core/tools/threads.ts';
 import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { todoTool } from '../../core/tools/todo.ts';
+import { teamTool } from '../../core/tools/team.ts';
+import { TeamStore } from '../../core/project/teams.ts';
 import { BROWSER_TOOL, browserStub, browserTool } from '../../core/tools/browser.ts';
 import { openThreadTool } from '../../core/tools/open.ts';
 import { scheduleTool } from '../../core/tools/schedule.ts';
@@ -95,6 +97,9 @@ export type HeadlessArgs = {
   browser?: string;
   // Start no MCP server: core tools only, at core-tools cost. Evals use it; runs that need a server leave it off.
   noMcp?: boolean;
+  // Execute tools as their tool_use blocks complete during the stream (overlaps with model generation).
+  streamingTools?: boolean;
+  'context-management'?: string;
   // A named set of defaults under the flags (core/profiles.ts); a thread goes on with the profile it was opened with.
   profile?: string;
   // Output style by name (core/output-styles): flag beats the settings file.
@@ -227,6 +232,14 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   };
   const profileName = given.profile ?? (given.thread && !given.noSessionFile ? recorded() : undefined);
   const profile = profileName ? { name: profileName, ...resolveProfile(profileName, loadProfiles()) } : undefined;
+  // Workspace roots (cedian): tell the coordinator which roots it may open threads in.
+  if (profile?.name === 'coordinator' && process.env.CEDIA_ROOTS) {
+    const roots = process.env.CEDIA_ROOTS.split(':').filter(Boolean).join('\n- ');
+    if (profile) {
+      const note = `\n\nWorkspace roots (local checkouts you may open threads in):\n- ${roots}\nPass one as \`root\` to open_thread when the task names a repository.`;
+      profile.instructions = (profile.instructions ?? '') + note;
+    }
+  }
   const profiled = profile ? withProfile(given, profile) : given;
   // `-m auto` and `-m oplan` pick the steps around the user's own writer (core/config.ts).
   const args: HeadlessArgs = isMode(profiled.model) ? withMode(profiled, profiled.model) : profiled;
@@ -249,6 +262,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const promptSuggestionsOn = loadPromptSuggestions(args.promptSuggestions);
   const planWhen = loadPlanWhen(args.planWhen);
   const cacheTtl = args.cacheTtl ?? '5m';
+  warnDaySpend(args.cwd, cediaHome(), say);
   if (cacheTtl !== '5m' && cacheTtl !== '1h') throw new Error(`--cache-ttl must be 5m or 1h, not ${cacheTtl}`);
   const model = roles.code;
   const declared = loadChecks(args.cwd, args.checks);
@@ -500,7 +514,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
     // A resumed session that had the browser keeps the tool when this run has none, and a call says so.
     const browserTools = browser ? [browser.tool] : header?.tools.some((d) => d.name === BROWSER_TOOL) ? [browserStub] : [];
-    const extra = [...(spawnOn ? [spawnHere] : []), ...((askOn || policy.plan) && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened)] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...browserTools, ...mcpTools];
+    const extra = [...(spawnOn ? [spawnHere] : []), ...((askOn || policy.plan) && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(store && threadId ? [teamTool(new TeamStore(), threadId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened, projectRoot(args.cwd))] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...browserTools, ...mcpTools];
     // The advisor and the classifier answer in one reply, with no tools, in a session of their own.
     const helper = opts.role === 'advisor' || opts.role === 'classifier' || opts.role === 'triage';
     const tools = helper ? [] : reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];
@@ -535,7 +549,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         ...(opts.inherited?.length ? { inherited: opts.inherited } : {}),
         ...(opts.role ? { role: opts.role } : {}),
         ...(child ? (child.thread ? { thread: child.thread } : {}) : threadId ? { thread: threadId } : {}),
-        ...(handoffAt !== undefined && (writing ? handoffs < MAX_HANDOFFS : child?.handoff) ? { handoffAt, ...(handoffVia === 'compact' && m.compaction ? { compact: compactPlan(handoffAt) } : {}) } : {}),
+        // A sub-thread with its own window hands off on it; otherwise the run's point stands.
+        ...((opts.handoffAt ?? handoffAt) !== undefined && (writing ? handoffs < MAX_HANDOFFS : child?.handoff) ? { handoffAt: (opts.handoffAt ?? handoffAt)!, ...(handoffVia === 'compact' && m.compaction ? { compact: compactPlan((opts.handoffAt ?? handoffAt)!) } : {}) } : {}),
         ...(writing && spawnOn ? { spawnNudgeAt: spawnNudgeAt(handoffAt ?? defaultHandoffAt(m)) } : {}),
         ...(writing && store && threadId
           ? {
@@ -556,6 +571,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
           ? { quotaWaitMs: quotaWaitMs - quotaWaited, onQuotaWait: (ms: number) => ((quotaWaited += ms), say(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`)) }
           : {}),
         ...(opts.effort ? { effort: opts.effort } : helper ? (m.defaultEffort ? { effort: 'low' as Effort } : {}) : args.effort ?? m.defaultEffort ? { effort: args.effort ?? m.defaultEffort } : {}),
+        ...(args['context-management'] ? { contextManagement: { edits: args['context-management'].split(',').map((e) => ({ type: e.trim() })) } } : {}),
+        ...(args.streamingTools ? { streamingTools: true } : {}),
         ...(escalate && !reviewer ? { escalate } : {}),
         ...(args.maxTurns !== undefined ? { maxTurns: args.maxTurns - usedTurns } : {}),
         // One reply a turn, and one more if that came back empty.

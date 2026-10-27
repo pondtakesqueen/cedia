@@ -9,6 +9,8 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
     "types": ["bun"]
   },
   "include": ["src", "test", "evals", "scripts"],

@@ -2985,6 +2985,9 @@
             "side": {
               "type": "boolean"
             },
+            "root": {
+              "type": "string"
+            },
             "at": {
               "type": "string"
             },

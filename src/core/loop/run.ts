@@ -92,6 +92,8 @@ export type RunOptions = {
   // ends with subtype 'handoff' at the first turn boundary after the summary arrives, waiting for it if the context
   // reaches handoffAt first. A compaction that brings no summary falls back to the note.
   compact?: { startAt: number; keepTokens: number };
+  // Server-side context management edits (Anthropic), passed through to the request body. Gated behind a flag.
+  contextManagement?: { edits: Array<{ type: string; [k: string]: unknown }> };
   // Once a turn leaves the context at this many tokens, a session that has the spawn tool and has not used it is
   // reminded of it, once (core/tools/spawn.ts). Absent means never.
   spawnNudgeAt?: number;
@@ -120,6 +122,9 @@ export type RunOptions = {
   // maxBudgetUsd is checked against it instead of this session's own cost. A session that spawns sub-threads
   // shares it with them, so their spend counts against the run's budget while the session is still going.
   meter?: { usd: number };
+  // Execute tools as their tool_use blocks complete during the stream, instead of waiting for the full reply.
+  // Overlaps tool execution with the tail of model generation. Default off: the existing path is unchanged.
+  streamingTools?: boolean;
   signal?: AbortSignal;
   onStream?: (e: StreamEvent) => void;
   retry?: { max?: number; baseMs?: number; capMs?: number; sleep?: (ms: number) => Promise<void> };
@@ -234,8 +239,12 @@ export function rebuildRequest(events: SessionEvent[], requestIndex: number, mod
 
 type Collected = { ok: true; blocks: AssistantBlock[]; stop: StopReason; usage: Usage } | { ok: false; error: AttemptError } | { ok: 'aborted' };
 
-async function collect(provider: Provider, req: WireRequest, signal: AbortSignal, onStream?: (e: StreamEvent) => void, timing: { ttftMs?: number; ms?: number } = {}): Promise<Collected> {
+async function collect(provider: Provider, req: WireRequest, signal: AbortSignal, onStream?: (e: StreamEvent) => void, timing: { ttftMs?: number; ms?: number } = {}, onToolCall?: (block: Extract<AssistantBlock, { type: 'tool_use' }>) => Promise<void>): Promise<Collected> {
   const start = performance.now();
+  // Track tool_use blocks as they complete during the stream, so a caller can start executing them before the
+  // reply finishes (streaming tool execution).
+  const toolcalls = new Map<number, { id: string; name: string; args: string }>();
+  const toolPromises: Promise<void>[] = [];
   try {
     for await (const ev of provider.stream(req, signal)) {
       // Time until the provider starts streaming. Hidden thinking (Anthropic's default display) streams no text,
@@ -243,9 +252,21 @@ async function collect(provider: Provider, req: WireRequest, signal: AbortSignal
       timing.ttftMs ??= Math.round(performance.now() - start);
       timing.ms = Math.round(performance.now() - start);
       onStream?.(ev);
+      if (ev.type === 'toolcall_start') toolcalls.set(ev.index, { id: ev.id, name: ev.name, args: '' });
+      if (ev.type === 'toolcall_delta') { const t = toolcalls.get(ev.index); if (t) t.args += ev.delta; }
+      if (ev.type === 'toolcall_end') {
+        const t = toolcalls.get(ev.index);
+        if (t && onToolCall) {
+          let input: Record<string, unknown> = {};
+          try { input = JSON.parse(t.args || '{}'); } catch { input = { _parseError: t.args }; }
+          const block: Extract<AssistantBlock, { type: 'tool_use' }> = { type: 'tool_use', id: t.id, name: t.name, input };
+          if (t.args && !input._parseError) {} else if (t.args) block.inputError = `invalid JSON: ${t.args.slice(0, 120)}`;
+          toolPromises.push(onToolCall(block));
+        }
+      }
       if (ev.type === 'error') return { ok: false, error: ev.error };
-      if (ev.type === 'done') return ev.stop === 'aborted' ? { ok: 'aborted' } : { ok: true, blocks: ev.blocks, stop: ev.stop, usage: ev.usage };
-      if (signal.aborted) return { ok: 'aborted' };
+      if (ev.type === 'done') { await Promise.all(toolPromises); return ev.stop === 'aborted' ? { ok: 'aborted' } : { ok: true, blocks: ev.blocks, stop: ev.stop, usage: ev.usage }; }
+      if (signal.aborted) { await Promise.all(toolPromises); return { ok: 'aborted' }; }
     }
   } catch (err) {
     if (signal.aborted) return { ok: 'aborted' };
@@ -287,6 +308,66 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   // A wait that says no time (a spent balance) is not a wait at all, so a zero slice cannot spin.
   const recheckMs = opts.quotaRecheckMs !== undefined && opts.quotaRecheckMs > 0 ? opts.quotaRecheckMs : QUOTA_RECHECK_MS;
   const byName = new Map(tools.map((t) => [t.name, t]));
+
+  // Streaming tool execution: when enabled, tools are executed as their tool_use blocks complete during the
+  // stream, and their results are cached here for logging once the reply (and its assistant event) is in the log.
+  type Cached = { callId: string; result: EventOf<'tool_result'>['output'] & { status: EventOf<'tool_result'>['status'] }; permission?: ReturnType<typeof decide>; input: Record<string, unknown>; fixed?: { input: Record<string, unknown>; repairs: string[] } };
+  const streamCache = new Map<string, Cached>();
+  const streamingOn = !!opts.streamingTools;
+  const onToolCall = streamingOn ? async (block: Extract<AssistantBlock, { type: 'tool_use' }>) => {
+    const callId = callIdOf(block);
+    if (streamCache.has(callId)) return;
+    const spec = byName.get(block.name);
+    if (block.inputError) { streamCache.set(callId, { callId, result: { status: 'not_started', text: `not run: ${block.inputError}`, isError: true }, input: block.input }); return; }
+    if (!spec) { streamCache.set(callId, { callId, result: { status: 'not_started', text: `not run: unknown tool "${block.name}"`, isError: true }, input: block.input }); return; }
+    const policy = opts.permission ?? READ_ONLY_POLICY;
+    const fixed = spec.repair?.(block.input);
+    if (fixed) log.append({ kind: 'input_repaired', callId, tool: block.name, repairs: fixed.repairs });
+    let input = fixed?.input ?? block.input;
+    let d = decide(policy, spec, input, opts.cwd);
+    // A declared check that already passed with nothing written since does not run again.
+    if (d.decision === 'allow' && spec.name === 'bash') {
+      const again = repeatCheck(spec.name, String((input as { command?: unknown }).command ?? ''), log.events, opts.checks ?? [], opts.cwd);
+      if (again) d = { decision: 'deny', rule: 'repeat-check', reason: again };
+    }
+    if (d.decision === 'allow') {
+      const pre = await preHooks(opts, log, spec, callId, input);
+      if (pre.decision === 'block') d = { decision: 'deny', rule: `hook:${pre.hook}`, reason: pre.reason };
+      else if (pre.input !== input) { input = pre.input; d = decide(policy, spec, input, opts.cwd); }
+    }
+    if (opts.classify && d.decision === 'allow' && d.rule === 'mode:workspace' && effectOf(spec, input) === 'exec' && !signal.aborted) {
+      let v: Verdict;
+      try { v = await opts.classify({ tool: block.name, input, cwd: opts.cwd }); } catch (e) { v = { decision: 'deny', reason: `the classifier failed (${(e as Error).message})` }; }
+      if (signal.aborted) { streamCache.set(callId, { callId, result: { status: 'not_started', text: 'not run: the run was stopped', isError: true }, input }); return; }
+      d = v.decision === 'allow' ? { decision: 'allow', rule: 'classifier' } : { decision: 'deny', rule: 'classifier', reason: v.reason };
+    }
+    if (d.decision === 'deny') {
+      streamCache.set(callId, { callId, result: { status: 'denied', text: deniedText(d.rule, d.reason ?? ''), isError: true }, permission: d, input });
+      return;
+    }
+    const snapshots = opts.snapshots;
+    if (snapshots && !snap.tree) {
+      const t0 = performance.now();
+      const base = snapshots.take();
+      if (base) { snap.tree = base; log.append({ kind: 'snapshot', tree: base, changed: [], ms: Math.round(performance.now() - t0) }); }
+    }
+    try {
+      const redact = !opts.permission?.unlock?.includes('secret-redaction');
+      const spill = (text: string) => spillOutput(log.id, callId, redact ? redactSecrets(text).text : text);
+      // redaction default on
+      const out = await postHooks(opts, log, { callId, spec, input }, asOutput(await spec.run(input, { cwd: opts.cwd, signal, spill, ...(opts.wrap ? { wrap: opts.wrap } : {}), ...(opts.diagnose ? { diagnose: opts.diagnose } : {}) })));
+      const result = { ...out, status: (signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed') as EventOf<'tool_result'>['status'] };
+      if (snapshots && snap.tree) {
+        const t1 = performance.now();
+        const after = snapshots.take();
+        if (after) { log.append({ kind: 'snapshot', tree: after, callId, changed: snapshots.diff(snap.tree, after), ms: Math.round(performance.now() - t1) }); snap.tree = after; }
+      }
+      streamCache.set(callId, { callId, result, permission: d, input });
+    } catch (e) {
+      if (snapshots && snap.tree) { const after = snapshots.take(); if (after) { log.append({ kind: 'snapshot', tree: after, callId, changed: snapshots.diff(snap.tree, after), ms: 0 }); snap.tree = after; } }
+      streamCache.set(callId, { callId, result: { status: 'failed', text: `tool crashed: ${e instanceof Error ? e.message : String(e)}`, isError: true }, permission: d, input });
+    }
+  } : undefined;
 
   if (!log.events.length)
     log.append({
@@ -465,6 +546,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       ...(startEffort ? { effort: startEffort } : {}),
       maxTokens: model.maxOutput,
       ...(opts.ttl ? { ttl: opts.ttl } : {}),
+      ...(opts.contextManagement ? { contextManagement: opts.contextManagement } : {}),
     };
     // Resend below may strip beta-gated parts for a rejecting gateway; the request event keeps the original.
     let req = req0;
@@ -485,7 +567,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     for (let n = 1; ; n++) {
       const t: { ttftMs?: number; ms?: number } = {};
       sentAt = performance.now();
-      got = await collect(provider, req, signal, opts.onStream, t);
+      got = await collect(provider, req, signal, opts.onStream, t, streamingOn ? onToolCall : undefined);
       if (got.ok === 'aborted') {
         log.append({ kind: 'attempt', requestId: request.id, n, error: { code: 'network', message: 'aborted' } });
         log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: [], stop: 'aborted', usage: { ...ZERO_USAGE } });
@@ -582,7 +664,21 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
         cost += c;
         if (opts.meter) opts.meter.usd += c;
       });
-      await runTools(calls, byName, opts, signal, log, snap, shared);
+      if (streamingOn) {
+        for (const c of calls) {
+          const callId = callIdOf(c);
+          const cached = streamCache.get(callId);
+          if (cached) {
+            if (cached.permission) log.append({ kind: 'permission', callId, tool: c.name, ...cached.permission });
+            if (cached.permission?.decision === 'allow' || !cached.permission) log.append({ kind: 'tool_intent', callId, tool: c.name, input: cached.input });
+            log.append({ kind: 'tool_result', callId, status: cached.result.status, output: cached.result });
+          }
+        }
+        const missed = calls.filter((c) => !streamCache.has(callIdOf(c)));
+        if (missed.length) await runTools(missed, byName, opts, signal, log, snap, shared);
+      } else {
+        await runTools(calls, byName, opts, signal, log, snap, shared);
+      }
       await warm.stop();
       timing.toolMs += performance.now() - toolStart;
       // A question for the owner ends the run once the turn's other calls are done; the answer is the next prompt.

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { loadHandoff } from '../src/core/config.ts';
 import { runPrompt } from '../src/core/loop/run.ts';
 import { HANDOFF_NO_TOOLS, HANDOFF_PROMPT, defaultHandoffAt, resumeChoice } from '../src/core/project/handoff.ts';
@@ -614,7 +614,7 @@ describe('cedia threads (offline, faux)', () => {
       ['Login bug', 'queued'],
       ['Write the release notes', 'queued'],
     ]);
-    expect(threadsCli(dir, 'list').out).toContain(`queued   (opened by ${r.thread}) Login bug`);
+    expect(threadsCli(dir, 'list').out).toContain(`queued   [${basename(dir)}] (opened by ${r.thread}) Login bug`);
     // Its first run makes it working, then done; it runs without the coordinator's profile.
     const login = opened.find((t) => t.title === 'Login bug')!;
     const ran = JSON.parse(cedia(dir, [reply('found it')], ['-p', login.task, '--output-format', 'json', '--sandbox', 'off', '--thread', login.id]).out);

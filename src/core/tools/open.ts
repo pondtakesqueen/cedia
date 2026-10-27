@@ -11,7 +11,7 @@ export const OPEN_TOOL = 'open_thread';
 // Threads one run may open: a coordinator that splits a task into dozens would start more work than anyone reviews.
 export const MAX_OPENS = 8;
 
-export function openThreadTool(store: ThreadStore, opener: string, opened: { count: number } = { count: 0 }): ToolSpec {
+export function openThreadTool(store: ThreadStore, opener: string, opened: { count: number } = { count: 0 }, root?: string): ToolSpec {
   return {
     name: OPEN_TOOL,
     description: `Open a new thread of this project for one piece of the work. It runs in a session of its own, in a worktree of its own, started for you, and sees only the task you write: give it the goal, the facts and paths it needs, what done looks like, and what to report back. Returns its id; follow it with read_thread and tell it something with message_thread. At most ${MAX_OPENS} per run.`,
@@ -20,6 +20,7 @@ export function openThreadTool(store: ThreadStore, opener: string, opened: { cou
       properties: {
         task: { type: 'string', description: 'The complete brief for the thread' },
         title: { type: 'string', description: 'A short name for the thread, a few words (default: the first line of the task)' },
+        root: { type: 'string', description: 'The repository root this thread runs in, for a multi-repo workspace (default: the project root this run is in)' },
       },
       required: ['task'],
       additionalProperties: false,
@@ -32,7 +33,8 @@ export function openThreadTool(store: ThreadStore, opener: string, opened: { cou
       if (opened.count >= MAX_OPENS) return { text: `not opened: this run has opened ${opened.count} threads, the most it may`, isError: true };
       opened.count++;
       const title = typeof input.title === 'string' ? input.title.trim() : '';
-      const id = store.open(task, { by: opener, ...(title ? { title } : {}) });
+      const chosenRoot = typeof input.root === 'string' && input.root.trim() ? input.root.trim() : root;
+      const id = store.open(task, { by: opener, ...(title ? { title } : {}), ...(chosenRoot ? { root: chosenRoot } : {}) });
       return { text: `Opened thread ${id} ("${titleOf(title || task)}"). It is queued and starts on its own; it will message you when it needs you.`, isError: false };
     },
   };
