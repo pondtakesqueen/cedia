@@ -6,6 +6,7 @@ import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
 import { inkTheme, type ThemeTokens } from './theme-tokens.ts';
 import { PermissionDialog, permissionDialogFor, toolLabel } from './permission-dialogs.tsx';
+import { askedBannerText } from './asked.ts';
 import { StatusBar } from './status-bar.tsx';
 import { runHeadless } from '../headless/main.ts';
 
@@ -1049,6 +1050,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       setSpent((prev) => prev + resultCost);
       if (typeof result.timing?.outputTokPerSec === 'number') setLastRate(result.timing.outputTokPerSec);
       setMessages((m) => [...m, { role: 'system', dim: true, text: `✳ done · ${result.numTurns} turn${result.numTurns === 1 ? '' : 's'} · ${effModel?.label ?? model ?? 'auto'} · ${((Date.now() - turnStart) / 1000).toFixed(1)}s${typeof result.timing?.outputTokPerSec === 'number' ? ` · ${Math.round(result.timing.outputTokPerSec)} tok/s` : ''} · $${result.costUsd.toFixed(4)}` }]);
+      // A run that ended asking waits for the owner: surface the question with its options, answered by the
+      // next prompt. (The PermissionDialog overlay stays for a future binding; text carries it for now.)
+      if (result.subtype === 'asked' && result.question) {
+        push({ role: 'system', text: askedBannerText(result.question) });
+      }
       if (loadPromptSuggestions(args.promptSuggestions)) {
         void (async () => {
           try {

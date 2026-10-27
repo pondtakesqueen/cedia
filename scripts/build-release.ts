@@ -101,6 +101,9 @@ function parse(argv: string[]): { targets: string[]; outfile: string; bytecode: 
 async function buildOne(target: string, outfile: string, bytecode: boolean, minify: boolean): Promise<ReleaseFile> {
   const entry = join(import.meta.dir, "..", "src", "cli.ts");
   const args = ["build", entry, "--compile", `--target=${target}`, `--outfile=${outfile}`, "--format=esm"];
+  // --trim (Bun AOT): drop unused runtime parts from the binary (89MB -> ~25MB for a Bun.serve app
+  // per upstream). Toolchains without AOT support ignore unknown flags silently (verified: a bogus
+  // flag still builds byte-identical output), so this activates on upgrade and is free until then.
   // NOTE: do NOT mark react-devtools-core external. Ink imports it behind a
   // guarded dynamic import that stays lazy in the bundle (verified by probe),
   // but an --external of a missing package crashes a --bytecode binary at
@@ -109,6 +112,7 @@ async function buildOne(target: string, outfile: string, bytecode: boolean, mini
   if (bytecode) args.push("--bytecode");
   if (minify) args.push("--minify");
   args.push("--sourcemap=linked");
+  args.push("--trim");
   const p = Bun.spawnSync(["bun", ...args], { stdout: "pipe", stderr: "pipe" });
   const out = p.stdout.toString();
   const err = p.stderr.toString();
