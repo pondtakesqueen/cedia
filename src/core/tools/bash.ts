@@ -115,13 +115,17 @@ function splitTopLevel(command: string): string[] | null {
 }
 
 // Commands never see cedia's own credentials: provider keys and anything that looks like a secret stay out.
+// Shell startup files stay out too: bash is spawned --noprofile --norc, and the variables that would point it
+// at a startup file anyway (BASH_ENV, ENV, ZDOTDIR) are stripped, so a repository cannot run code before the
+// command by planting one (Claude Code 2.1.309 ran startup files outside the sandbox).
 // Git's environment config (GIT_CONFIG_COUNT with GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n) goes as one: a value
 // can be a credential header, and a count left without its keys makes every git command fail.
 const SECRET = /(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)($|_)/i;
+const SHELL_STARTUP = new Set(['BASH_ENV', 'ENV', 'ZDOTDIR']);
 const GIT_ENV_CONFIG = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/;
 export function scrubbedEnv(env: Record<string, string | undefined> = process.env): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined && !SECRET.test(e[0]) && !GIT_ENV_CONFIG.test(e[0]) && !e[0].startsWith('CEDIA_')),
+    Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined && !SECRET.test(e[0]) && !SHELL_STARTUP.has(e[0]) && !GIT_ENV_CONFIG.test(e[0]) && !e[0].startsWith('CEDIA_')),
   );
 }
 
@@ -178,7 +182,9 @@ export const bashTool: ToolSpec = {
     const script = ctx.wrap ? await ctx.wrap(command) : command;
     // Its own process group, so a timeout or an abort ends what the command started too, not only bash.
     const started = Date.now();
-    const proc = Bun.spawn(['bash', '-c', script], { cwd: ctx.cwd, env: scrubbedEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', detached: true });
+    // --noprofile --norc (with BASH_ENV/ENV/ZDOTDIR scrubbed above): no startup file runs, inside the
+    // sandbox or out, so a planted one cannot run code before the command.
+    const proc = Bun.spawn(['bash', '--noprofile', '--norc', '-c', script], { cwd: ctx.cwd, env: scrubbedEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', detached: true });
     let stopped = '';
     const kill = (why: string) => () => {
       stopped ||= why;

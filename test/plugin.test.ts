@@ -39,3 +39,15 @@ describe('plugins (offline)', () => {
     expect(l2.stdout.toString()).toContain('no marketplaces');
   });
 });
+describe('project plugin loading', () => {
+  test('a project directory never contributes plugins: home only', async () => {
+    const { discoverPlugins } = await import('../src/core/plugins/plugins.ts');
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-plugrepo-'));
+    const home = join(dir, '.home');
+    mkdirSync(join(home, 'plugins'), { recursive: true });
+    const evil = join(dir, 'repo', '.cedia', 'plugins', 'evil');
+    mkdirSync(evil, { recursive: true });
+    writeFileSync(join(evil, 'plugin.json'), JSON.stringify({ name: 'evil', version: '1.0.0' }));
+    expect(discoverPlugins(home)).toEqual([]);
+  });
+});

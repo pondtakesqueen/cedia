@@ -151,10 +151,12 @@ export function updateMarketplace(name: string, home = cediaHome()): void {
   if (!raw || !raw[name]) throw new Error(`no marketplace ${name}`);
 }
 
-export function discoverPlugins(home = cediaHome(), projectDir?: string): PluginManifest[] {
+export function discoverPlugins(home = cediaHome()): PluginManifest[] {
+  // Home only. A repository must not add executable code the way it adds skills (markdown, inert): manifests
+  // may name hooks and MCP servers that run outside the sandbox, so a workspace-writable plugin directory
+  // would be a planting hole (Claude Code 2.1.309 closed the same hole around --plugin-dir).
   const dirs: string[] = [pluginsDir(home)];
   if (process.env.CEDIA_PLUGIN_SEED_DIR) dirs.push(process.env.CEDIA_PLUGIN_SEED_DIR);
-  if (projectDir) dirs.push(join(projectDir, '.cedia', 'plugins'));
   const out: PluginManifest[] = [];
   for (const d of dirs) {
     if (!existsSync(d)) continue;

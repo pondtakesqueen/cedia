@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runPrompt } from '../src/core/loop/run.ts';
 import { FAUX_MODEL } from '../src/core/providers/catalog.ts';
 import { fauxProvider, text, toolUse } from '../src/core/providers/faux.ts';
 import { decide } from '../src/core/safety/policy.ts';
-import { openSandbox } from '../src/core/safety/sandbox.ts';
+import { openSandbox, sandboxConfig } from '../src/core/safety/sandbox.ts';
 import { openSnapshots } from '../src/core/safety/snapshot.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 import { SessionLog } from '../src/core/session/log.ts';
@@ -94,6 +94,37 @@ describe('bash environment and protected paths', () => {
     const ws = { mode: 'workspace' as const, allow: [], deny: [] };
     expect(decide(ws, writeTool, { path: '.husky/pre-commit', content: '' }, cwd).rule).toBe('protected-path');
     expect(decide(ws, writeTool, { path: '.husky-notes.md', content: '' }, cwd).rule).toBe('mode:workspace');
+  });
+
+  test("the home settings file is outside every workspace, and .cedia/plugins is protected inside one", () => {
+    const cwd = tmp('cedia-prot-');
+    const ws = { mode: 'workspace' as const, allow: [], deny: [] };
+    expect(decide(ws, writeTool, { path: join(homedir(), '.cedia', 'settings.json'), content: '' }, cwd).rule).toBe('outside-workspace');
+    expect(decide(ws, writeTool, { path: '.cedia/plugins/evil/plugin.json', content: '' }, cwd).rule).toBe('protected-path');
+  });
+
+  test('shell startup files cannot leak in: BASH_ENV, ENV and ZDOTDIR are stripped', () => {
+    expect(scrubbedEnv({ PATH: '/bin', BASH_ENV: '/x/env', ENV: '/y/env', ZDOTDIR: '/z', HOME: '/root' })).toEqual({ PATH: '/bin', HOME: '/root' });
+  });
+
+  test('bash runs --noprofile --norc and still runs ordinary commands', async () => {
+    const r = await bashTool.run({ command: 'echo ok' }, { cwd: tmp('cedia-norc-'), signal: new AbortController().signal });
+    expect(r).toMatchObject({ isError: false, exitCode: 0 });
+    expect(r.text).toContain('ok');
+  });
+
+  test('sandbox boundaries use the real path behind a symlinked parent', () => {
+    const real = tmp('cedia-real-');
+    mkdirSync(join(real, '.cedia'), { recursive: true });
+    const link = join(tmpdir(), `cedia-link-${Date.now()}`);
+    symlinkSync(real, link);
+    try {
+      const cfg = sandboxConfig(link, [], join(real, 'nohome'));
+      expect(cfg.filesystem.allowWrite[0]).toBe(realpathSync(link));
+      expect(cfg.filesystem.denyWrite).toContain(join(realpathSync(link), '.cedia'));
+    } finally {
+      rmSync(link, { force: true });
+    }
   });
 });
 

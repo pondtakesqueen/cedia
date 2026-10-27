@@ -385,3 +385,14 @@ describe('settings keys', () => {
     }
   });
 });
+
+describe('deny beats allow (hard deny)', () => {
+  const both: Policy = { mode: 'workspace', allow: ['bash(*)'], deny: ['bash(rm *)'] };
+  test('a deny rule holds against a matching allow rule', () => {
+    expect(bash(both, 'rm -rf x').rule).toBe('deny:bash(rm *)');
+    expect(bash(both, 'bun test').rule).toBe('allow:bash(*)');
+  });
+  test('no allow rule lifts the deny list either', () => {
+    expect(bash(both, 'npm publish').rule).toBe('deny-list:deploy');
+  });
+});
