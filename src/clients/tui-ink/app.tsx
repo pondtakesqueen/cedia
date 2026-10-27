@@ -31,7 +31,7 @@ import { matchesKey } from '@mariozechner/pi-tui';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
-import { acceptTrust, isComplete, loadOnboarding, markStep, ONBOARDING_STEPS } from './onboarding.ts';
+import { acceptTrust, completedNames, isComplete, loadOnboarding, markStep, ONBOARDING_STEPS, reconcileOnboarding, saveOnboarding } from './onboarding.ts';
 import { workingDiff } from '../../core/project/git.ts';
 import { MemoryStore, memoryPath } from '../../core/project/memory.ts';
 import { loadSkills } from '../../core/skills/skills.ts';
@@ -195,6 +195,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const lastActivityRef = useRef(Date.now());
   const [thread, setThread] = useState<string | undefined>(args.thread);
   const [permission, setPermission] = useState<string | undefined>(args.permission);
+  const permissionRef = useRef(permission);
+  permissionRef.current = permission;
+  const syncOnboardingRef = useRef<(openTrust?: boolean) => void>(() => {});
   // Theme tokens (opencode-style design tokens, cedia's own values).
   // Bumped when /theme writes, so the whole TUI repaints immediately.
   const [themeTick, setThemeTick] = useState(0);
@@ -722,20 +725,28 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'trust': {
         acceptTrust(cediaHome());
+        setTrustOpen(false);
+        syncOnboardingRef.current();
         push({ role: 'system', text: 'trust accepted' });
         return;
       }
       case 'onboarding': {
-        if (rest[0] === 'accept') { acceptTrust(cediaHome()); setNotice(null); setTrustOpen(false); push({ role: 'system', text: 'trust accepted' }); return; }
+        if (rest[0] === 'accept') {
+          acceptTrust(cediaHome());
+          setTrustOpen(false);
+          syncOnboardingRef.current();
+          push({ role: 'system', text: 'trust accepted' });
+          return;
+        }
         if (rest[0] && rest[0] !== 'accept') {
           try { markStep(rest[0]); } catch {}
           setNotice(null);
         }
         try {
           const s = loadOnboarding(cediaHome());
-          const done = new Set(s.completed);
+          const done = completedNames(s);
           const theme = (() => { try { return String((readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>)?.theme ?? '(not set)'); } catch { return '(unreadable)'; } })();
-          const keyNames = ['ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'].filter((k) => !!process.env[k]);
+          const keyNames = ['ANTHROPIC_API_KEY', 'CEDIA_ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'].filter((k) => !!process.env[k]);
           const detail: Record<string, string> = {
             preflight: `bun ${Bun.version} · ${process.platform}`,
             theme: String(theme),
@@ -743,7 +754,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             trust: s.hasTrustDialogAccepted ? 'accepted' : 'pending — /onboarding accept',
             terminal: `${process.env.TERM ?? '?'} · ${process.env.COLORTERM ?? 'no truecolor'}`,
           };
-          const rows = ONBOARDING_STEPS.map((st) => `${done.has(st) || (st === 'trust' && s.hasTrustDialogAccepted) ? '✓' : '○'} ${st} — ${detail[st] ?? ''}`);
+          const rows = ONBOARDING_STEPS.map((st) => `${done.has(st) ? '✓' : '○'} ${st} — ${detail[st] ?? ''}`);
           push({ role: 'system', text: ['onboarding:', ...rows, isComplete(cediaHome()) ? 'complete' : 'use /onboarding <step> to mark one done'].join('\n') });
         } catch (e) { push({ role: 'system', text: `onboarding: ${(e as Error).message}` }); }
         return;
@@ -828,6 +839,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
           } catch { /* ignore */ }
           setThemeTick((n) => n + 1);
+          syncOnboardingRef.current();
           say(`theme: ${t}`);
           return;
         }
@@ -1203,17 +1215,42 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     };
   }, [stdin]);
 
-  React.useEffect(() => {
+  syncOnboardingRef.current = (openTrust = false) => {
     try {
-      const pending = ONBOARDING_STEPS.filter((x: string) => !loadOnboarding().completed.includes(x));
-      if (!loadOnboarding().hasTrustDialogAccepted) {
+      const home = cediaHome();
+      const prev = loadOnboarding(home);
+      let themeOk = false;
+      try {
+        const raw = readSettings(join(home, 'settings.json')) as { theme?: unknown };
+        themeOk = raw.theme === 'dark' || raw.theme === 'light';
+      } catch { themeOk = false; }
+      const next = reconcileOnboarding(prev, {
+        preflight: typeof Bun !== 'undefined' && Bun.version.length > 0,
+        theme: themeOk,
+        apiKey: ['ANTHROPIC_API_KEY', 'CEDIA_ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'].some((name) => !!process.env[name]),
+        trust: prev.hasTrustDialogAccepted === true,
+        terminal: Boolean(process.stdout.isTTY) && (process.stdout.columns ?? 0) >= 20,
+      });
+      const same = JSON.stringify(prev.completed ?? []) === JSON.stringify(next.completed)
+        && !!prev.hasTrustDialogAccepted === !!next.hasTrustDialogAccepted;
+      if (!same) saveOnboarding(next, home);
+      if (openTrust && !next.hasTrustDialogAccepted) {
         setTrustOpen(true);
         setTrustSelected(1);
-      } else if (pending.length) {
-        setNotice(`onboarding: ${pending.join(', ')} pending — /onboarding accept`);
+        return;
+      }
+      if (!next.hasTrustDialogAccepted) return;
+      if (!isComplete(home)) {
+        const names = completedNames(next);
+        const pending = ONBOARDING_STEPS.filter((step) => !names.has(step));
+        const mode = permissionRef.current ?? 'auto';
+        setNotice(`onboarding: ${pending.join(', ')} pending — /onboarding accept. Shift+Tab cycles the permission setting. This run is ${mode}.`);
+      } else {
+        setNotice((n) => (n?.startsWith('onboarding:') ? null : n));
       }
     } catch {}
-  }, []);
+  };
+  React.useEffect(() => { syncOnboardingRef.current(true); }, []);
   React.useEffect(() => {
     let cmd: string | undefined;
     try {
@@ -1342,7 +1379,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (input === 'y' || input === 'Y') {
         acceptTrust(cediaHome());
         setTrustOpen(false);
-        setNotice(null);
+        syncOnboardingRef.current();
         push({ role: 'system', text: 'trust accepted' });
         return;
       }
@@ -1355,7 +1392,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         if (trustSelected === 1) {
           acceptTrust(cediaHome());
           setTrustOpen(false);
-          setNotice(null);
+          syncOnboardingRef.current();
           push({ role: 'system', text: 'trust accepted' });
         } else {
           push({ role: 'system', text: 'not trusted: leaving' });

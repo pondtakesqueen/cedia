@@ -6,6 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DISMISS_NOTE, noticeLines, PermissionDialog } from '../src/clients/tui-ink/permission-dialogs.tsx';
+import { completedNames, isComplete, reconcileOnboarding, saveOnboarding } from '../src/clients/tui-ink/onboarding.ts';
 import { activeContext, findCommand, IDLE_OVERLAY, resolveBindings, vimInputGate } from '../src/clients/tui-ink/keybindings/resolver.ts';
 import { keybindingsPath, watchKeybindings } from '../src/clients/tui-ink/keybindings/loader.ts';
 import { cancelStep, offsetForIndex, rowMapFromWalk, selectionBounds } from '../src/clients/tui-ink/row-map.ts';
@@ -140,6 +141,27 @@ describe('ink key context', () => {
     expect(text).toContain(DISMISS_NOTE);
     expect(text).not.toContain('[Allow]');
     expect(text).not.toContain('[Deny]');
+  });
+
+  test('onboarding is complete only when every step is recorded', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cedia-onboard-'));
+    saveOnboarding({ completed: ['preflight', 'theme', 'apiKey', 'trust'] }, home);
+    expect(isComplete(home)).toBe(false);
+    const once = reconcileOnboarding({ completed: ['theme'] }, { preflight: true, theme: true, trust: true });
+    const twice = reconcileOnboarding(once, { preflight: true, theme: true, trust: true });
+    expect(twice.completed).toEqual(once.completed);
+    expect(twice.completed).toEqual(['theme', 'preflight', 'trust']);
+    expect(twice.hasTrustDialogAccepted).toBe(true);
+    const kept = reconcileOnboarding(twice, { preflight: false, trust: false });
+    expect(kept.completed).toEqual(twice.completed);
+    expect(kept.hasTrustDialogAccepted).toBe(true);
+    const done = reconcileOnboarding(
+      { completed: ['preflight', 'theme', 'apiKey', 'terminal'], hasTrustDialogAccepted: true },
+      {},
+    );
+    expect([...completedNames(done)].sort()).toEqual(['apiKey', 'preflight', 'terminal', 'theme', 'trust']);
+    saveOnboarding(done, home);
+    expect(isComplete(home)).toBe(true);
   });
 
   test('the keybindings watcher stops when its disposer runs', async () => {

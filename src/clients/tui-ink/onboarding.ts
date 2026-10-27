@@ -14,8 +14,37 @@ export function saveOnboarding(state: OnboardingState, home = cediaHome()) {
   mkdirSync(home, { recursive: true });
   writeFileSync(path(home), JSON.stringify(state, null, 2) + '\n');
 }
+export const ONBOARDING_STEPS = ['preflight', 'theme', 'apiKey', 'trust', 'terminal'] as const;
+export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
+
+/** Names in completed, plus trust when hasTrustDialogAccepted is set. */
+export function completedNames(state: OnboardingState): ReadonlySet<OnboardingStep> {
+  const known = new Set<string>(ONBOARDING_STEPS);
+  const names = new Set<OnboardingStep>();
+  for (const name of state.completed ?? []) {
+    if (known.has(name)) names.add(name as OnboardingStep);
+  }
+  if (state.hasTrustDialogAccepted) names.add('trust');
+  return names;
+}
+
 export function isComplete(home = cediaHome()): boolean {
-  return loadOnboarding(home).completed.length >= 4;
+  const names = completedNames(loadOnboarding(home));
+  return ONBOARDING_STEPS.every((step) => names.has(step));
+}
+
+/** Add-only. False and omitted facts remove nothing. Does not write disk. */
+export function reconcileOnboarding(
+  state: OnboardingState,
+  facts: Partial<Record<OnboardingStep, boolean>>,
+): OnboardingState {
+  const completed = Array.isArray(state.completed) ? [...state.completed] : [];
+  for (const step of ONBOARDING_STEPS) {
+    if (facts[step] === true && !completed.includes(step)) completed.push(step);
+  }
+  const next: OnboardingState = { completed };
+  if (state.hasTrustDialogAccepted || facts.trust === true) next.hasTrustDialogAccepted = true;
+  return next;
 }
 export function acceptTrust(home = cediaHome()) {
   const s = loadOnboarding(home);
@@ -28,5 +57,3 @@ export function markStep(step: string, home = cediaHome()) {
   if (!s.completed.includes(step)) s.completed.push(step);
   saveOnboarding(s, home);
 }
-
-export const ONBOARDING_STEPS = ['preflight', 'theme', 'apiKey', 'trust', 'terminal'];
