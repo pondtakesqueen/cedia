@@ -3730,6 +3730,12 @@
         "maxEffort": {
           "type": "number"
         },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "handoffs": {
           "type": "number"
         },
@@ -3837,6 +3843,7 @@
         "blocked",
         "overPriceLine",
         "maxEffort",
+        "warnings",
         "handoffs",
         "unpriced",
         "days",

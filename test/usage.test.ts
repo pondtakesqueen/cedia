@@ -47,6 +47,21 @@ describe('cedia usage', () => {
     const text = formatUsage(r);
     expect(text).toContain('cache misses: 1 idle_over_ttl (4992 tokens)');
     expect(text).toContain("1 request past the model's long-context price line; 1 request at effort max; 1 handoff");
+    // The 10k bash result re-sent twice dominates resent input, so it earns a warning; always-on context does not.
+    expect(r.warnings).toEqual(['tool result bash c1 (10k chars x 2) is 98% of resent input; have the model summarize it instead of re-reading it']);
+    expect(text).toContain('warning: tool result bash c1 (10k chars x 2) is 98% of resent input');
+  });
+
+  test('always-on context past a quarter of resent input earns a warning; one request never does', () => {
+    let n = 0;
+    const e = (body: Record<string, unknown>): SessionEvent => ({ id: `e${n++}`, at: at(n), ...body }) as unknown as SessionEvent;
+    const sys = 'S'.repeat(10_000);
+    const one = [{ id: 's', events: [e({ kind: 'session', cwd: '/x', role: 'code', model: 'anthropic/claude-haiku-5-5', system: sys, tools: [] }), e({ kind: 'user', text: 'hi' }), e({ kind: 'request', model: 'm', toolsHash: 't', systemHash: 's', bodyHash: 'b', headers: {} })] }];
+    expect(usageReport(one).warnings).toEqual([]);
+    const two = [{ id: 's', events: [...one[0]!.events, e({ kind: 'request', model: 'm', toolsHash: 't', systemHash: 's', bodyHash: 'b2', headers: {} })] }];
+    const r = usageReport(two);
+    expect(r.warnings).toEqual(['always-on context (system prompt and tools) is 100% of resent input across 2 requests; slim the prompt, tools, memory or instructions']);
+    expect(formatUsage(r)).toContain('warning: always-on context (system prompt and tools) is 100%');
   });
 
   test("counts thinking by the model's replay rule: DeepSeek sends it back only until the next user text", () => {

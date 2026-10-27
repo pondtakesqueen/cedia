@@ -27,6 +27,9 @@ export type UsageReport = {
   // Requests whose input passed the model's long-context price line, and requests at effort max.
   overPriceLine: number;
   maxEffort: number;
+  // Actionable cost smells: always-on context (system prompt and tools) past ALWAYS_ON_WARN_SHARE of resent
+  // input, and one tool result past TOOL_RESULT_WARN_SHARE of it. Sentences for the usage page; --json too.
+  warnings: string[];
   // Sessions that ended by handing off to a new one.
   handoffs: number;
   // Replies from a model cedia's catalog does not know: no price, so not in costUsd.
@@ -236,6 +239,14 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
   }
 
   const total = [...sent.values()].reduce((a, b) => a + b, 0);
+  const ranked = largest.sort((a, b) => b.chars * b.resent - a.chars * a.resent).slice(0, top);
+  const warnings: string[] = [];
+  const alwaysOn = sent.get('system prompt and tools') ?? 0;
+  if (requests >= 2 && total > 0 && alwaysOn / total >= ALWAYS_ON_WARN_SHARE)
+    warnings.push(`always-on context (system prompt and tools) is ${pct(alwaysOn / total)} of resent input across ${requests} requests; slim the prompt, tools, memory or instructions`);
+  const biggest = ranked[0];
+  if (biggest && biggest.resent > 0 && total > 0 && (biggest.chars * biggest.resent) / total >= TOOL_RESULT_WARN_SHARE)
+    warnings.push(`tool result ${biggest.tool} ${biggest.callId} (${k(biggest.chars)} chars x ${biggest.resent}) is ${pct((biggest.chars * biggest.resent) / total)} of resent input; have the model summarize it instead of re-reading it`);
   return {
     sessions: sessions.length,
     requests,
@@ -244,11 +255,12 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
     compactUsd,
     tokens,
     sources: [...sent].map(([source, chars]) => ({ source, chars, share: total ? chars / total : 0 })).sort((a, b) => b.chars - a.chars),
-    largest: largest.sort((a, b) => b.chars * b.resent - a.chars * a.resent).slice(0, top),
+    largest: ranked,
     misses: [...misses].map(([cause, m]) => ({ cause, ...m })).sort((a, b) => b.tokens - a.tokens),
     blocked: [...blocked].map(([rule, count]) => ({ rule, count })).sort((a, b) => b.count - a.count),
     overPriceLine,
     maxEffort,
+    warnings,
     handoffs,
     unpriced,
     days: [...byDay].map(([day, costUsd]) => ({ day, costUsd })).sort((a, b) => a.day.localeCompare(b.day)),
@@ -263,6 +275,11 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
 
 const k = (n: number) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : String(n));
 const pct = (x: number) => `${(x * 100).toFixed(0)}%`;
+
+// A share of resent input that earns a warning: the system prompt and tool definitions go out on every
+// request, and one result re-sent whole every turn after it arrived.
+export const ALWAYS_ON_WARN_SHARE = 0.25;
+export const TOOL_RESULT_WARN_SHARE = 0.2;
 
 const extra = (r: UsageReport) => {
   const parts = [r.keepaliveUsd && `$${r.keepaliveUsd.toFixed(4)} keeping caches warm`, r.compactUsd && `$${r.compactUsd.toFixed(4)} summarizing for handoffs`].filter(Boolean);
@@ -282,6 +299,7 @@ export function formatUsage(r: UsageReport): string {
   }
   lines.push(r.misses.length ? `cache misses: ${r.misses.map((m) => `${m.count} ${m.cause} (${k(m.tokens)} tokens)`).join(', ')}` : 'cache misses: none');
   if (r.blocked.length) lines.push(`blocked calls: ${r.blocked.map((b) => `${b.count} ${b.rule}`).join(', ')}`);
+  for (const w of r.warnings) lines.push(`warning: ${w}`);
   const warn = [
     r.overPriceLine && `${r.overPriceLine} request${r.overPriceLine === 1 ? '' : 's'} past the model's long-context price line`,
     r.maxEffort && `${r.maxEffort} request${r.maxEffort === 1 ? '' : 's'} at effort max`,

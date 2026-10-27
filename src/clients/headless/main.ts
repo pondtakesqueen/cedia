@@ -936,7 +936,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const choice = lastLog ? resumeChoice(lastLog.events, model, freshTokens) : undefined;
     if (choice?.fresh)
       say(
-        `cedia: thread ${threadId}'s last session has been idle ${Math.round(choice.idleMs / 60_000)} min, past its cache; resuming it re-reads ${Math.round(choice.contextTokens / 1000)}k tokens (about $${choice.resumeUsd.toFixed(3)}), a new session from where it stopped starts at about ${Math.round(freshTokens / 1000)}k ($${choice.freshUsd.toFixed(3)}), so it goes on in a new session\n`,
+        `cedia: thread ${threadId}'s last session has been idle ${Math.round(choice.idleMs / 60_000)} min, ${choice.cold ? 'past its cache' : 'nearing its cache expiry'}; resuming it re-reads ${Math.round(choice.contextTokens / 1000)}k tokens (about $${choice.resumeUsd.toFixed(3)}), a new session from where it stopped starts at about ${Math.round(freshTokens / 1000)}k ($${choice.freshUsd.toFixed(3)}), so it goes on in a new session\n`,
       );
     if (lastLog && !historyRejected(lastLog.events) && !choice?.fresh) {
       const log = lastLog;
