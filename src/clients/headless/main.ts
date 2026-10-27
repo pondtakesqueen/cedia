@@ -640,7 +640,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   };
   // One sub-thread run to its end, in `wt` when it has one; its changes are not applied yet.
   type Ran = { wt?: Worktree; sub?: string; m: ModelSpec; r: HeadlessResult };
-  const runSub = async (brief: string, kind: SpawnKind, wt: Worktree | undefined, on?: ModelSpec, part = false): Promise<Ran> => {
+  const runSub = async (brief: string, kind: SpawnKind, wt: Worktree | undefined, on?: ModelSpec, part = false, effort?: Effort): Promise<Ran> => {
     subthreads++;
     spawned[kind]++;
     let m = on ?? (kind === 'explore' ? explorer : writer.model);
@@ -665,7 +665,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       if (store && sub) store.append(sub, { kind: 'session', sessionId: log.id, model: m.ref, role: kind === 'explore' ? 'explore' : 'code', why, ...(log.path ? { path: log.path } : {}) });
       mine.push({ id: log.id, events: () => log.events });
       const child = { ...(sub ? { thread: sub } : {}), ...(kind === 'work' && handoffsHere < MAX_HANDOFFS ? { handoff: true } : {}), ...(part ? { part: true as const } : {}), ...(mine.length > 1 ? { recall: recallMine } : {}), ...(place ? { place } : {}) };
-      const r = await run(m, log, prompt, { ...opts, ...(kind === 'explore' ? { role: 'explore' as const } : {}), child });
+      const r = await run(m, log, prompt, { ...opts, ...(kind === 'explore' ? { role: 'explore' as const } : {}), ...(effort ? { effort } : {}), child });
       cost += r.costUsd;
       spawned.peakContext = Math.max(spawned.peakContext, r.peakContext ?? 0);
       return { log, r };
@@ -751,11 +751,11 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       if ('error' in w) {
         for (const o of wts) o.close();
         say(`cedia: no worktree for best of ${approaches.length} (${w.error}); the first approach runs in place, alone\n`);
-        return ctx.write!(() => spawner(`${brief}\n\nTake this approach: ${approaches[0]}`, 'work', { signal: ctx.signal }));
+        return ctx.write!(() => spawner(`${brief}\n\nTake this approach: ${approaches[0]}`, 'work', { signal: ctx.signal, ...(ctx.effort ? { effort: ctx.effort } : {}) }));
       }
       wts.push(w);
     }
-    const settled = await Promise.allSettled(approaches.map((a, i) => runSub(approachBrief(brief, a, approaches.length), 'work', wts[i])));
+    const settled = await Promise.allSettled(approaches.map((a, i) => runSub(approachBrief(brief, a, approaches.length), 'work', wts[i], undefined, false, ctx.effort)));
     const ran = settled.flatMap((s) => (s.status === 'fulfilled' ? [s.value] : []));
     if (!ran.length) throw (settled[0] as PromiseRejectedResult).reason;
     const tries: Try[] = [];
@@ -781,11 +781,11 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       const w = openWt();
       if ('error' in w) {
         say(`cedia: no worktree for the work sub-thread (${w.error}); it runs in place, alone\n`);
-        return ctx.write(() => spawner(brief, kind, { signal: ctx.signal }));
+        return ctx.write(() => spawner(brief, kind, { signal: ctx.signal, ...(ctx.effort ? { effort: ctx.effort } : {}) }));
       }
       wt = w;
     }
-    return land(await runSub(brief, kind, wt), ctx);
+    return land(await runSub(brief, kind, wt, undefined, false, ctx.effort), ctx);
   };
   const pool = spawnPool();
   const spawn = spawnTool(spawner, undefined, { worktrees: spawnMode === 'worktree', pool });

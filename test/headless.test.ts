@@ -558,3 +558,21 @@ describe('miss attribution', () => {
     expect(rows[1]!.reusable).toBe(640);
   });
 });
+
+describe('spawn effort (offline, faux)', () => {
+  test("a sub-thread runs at the effort the spawn call names: the child's requests carry it", () => {
+    const spawnCall = { blocks: [{ type: 'tool_use', id: 's1', name: 'spawn', input: { task: 'find the thing', kind: 'explore', effort: 'high' } }] };
+    const args = ['-p', 'find the thing, write it to f.txt, and check it', '--output-format', 'json', '--permission', 'workspace', '--sandbox', 'off', '--check', 'test -s f.txt', '--swarm', 'faux/fallback'];
+    const r = cedia([spawnCall, { ...reply('found it'), when: 'find the thing' }, call('w1', 'echo ok > f.txt'), call('w2', 'test -s f.txt'), reply('done')], args);
+    expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success' });
+    const root = join(r.home, 'sessions');
+    const [project] = readdirSync(root);
+    const logs = readdirSync(join(root, project!)).map((f) => SessionLog.load(join(root, project!, f)).events);
+    const child = logs.find((l) => (l[0] as { role?: string }).role === 'explore')!;
+    expect(child).toBeDefined();
+    const requests = child.filter((e): e is Extract<SessionEvent, { kind: 'request' }> => e.kind === 'request');
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every((q) => (q as { effort?: string }).effort === 'high')).toBe(true);
+    for (const l of logs) expect(lintSession(l)).toEqual([]);
+  });
+});
