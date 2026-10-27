@@ -13,7 +13,7 @@ import { bashTool } from '../src/core/tools/bash.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
 import { readTool } from '../src/core/tools/read.ts';
 import { MAX_OUTPUT_CHARS, preview } from '../src/core/tools/registry.ts';
-import { EFFORTS, type EventOf, type SessionEvent } from '../src/core/types.ts';
+import { EFFORTS, type EventOf, type SessionEvent, type WireRequest } from '../src/core/types.ts';
 import { hash } from '../src/core/hash.ts';
 
 const cwd = mkdtempSync(join(tmpdir(), 'cedia-loop-'));
@@ -642,5 +642,29 @@ describe('malformed turns', () => {
     const { log, opts } = setup([cut, long, cut, long, cut, long, cut, long], { maxTurns: 5 });
     expect(await runPrompt(opts, 'go')).toMatchObject({ subtype: 'error_max_turns', numTurns: 5 });
     expectPaired(log.events);
+  });
+});
+
+describe('beta-gated gateway fallback', () => {
+  const betaError = { error: { code: 'bad_request', status: 400, message: 'invalid_request_error: the anthropic-beta header value is not supported by this gateway' } } as const;
+  test('one stripped resend on a beta rejection, then success; attempts show the rejection', async () => {
+    const base = fauxProvider((req, state) => (state.callCount > 1 ? { blocks: [text('done')] } : betaError));
+    let strips = 0;
+    const provider = { ...base, stripForGateway: (req: WireRequest) => { strips++; return { ...req }; } };
+    const { log, opts } = setup([], { provider });
+    const r = await runPrompt(opts, 'hi');
+    expect(r.subtype).toBe('success');
+    expect(r.result).toBe('done');
+    expect(strips).toBe(1);
+    expect(base.state.callCount).toBe(2);
+    expect(of(log.events, 'attempt')).toHaveLength(2);
+    expect(of(log.events, 'attempt')[0]).toMatchObject({ n: 1, error: { code: 'bad_request' } });
+    expectPaired(log.events);
+  });
+  test('a bad request that names no beta, or a strip that changes nothing, ends the run', async () => {
+    const plain = fauxProvider([{ error: { code: 'bad_request', status: 400, message: 'invalid_request_error: prompt is empty' } }]);
+    const s1 = setup([], { provider: { ...plain, stripForGateway: () => undefined } });
+    expect((await runPrompt(s1.opts, 'hi')).subtype).toBe('error_during_execution');
+    expect(plain.state.callCount).toBe(1);
   });
 });

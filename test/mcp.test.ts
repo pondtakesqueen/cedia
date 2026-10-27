@@ -210,3 +210,49 @@ describe('MCP', () => {
     }
   });
 });
+
+describe('MCP reconnect', () => {
+  test('a remote server that answers late still makes the initial tool list (connect retried)', async () => {
+    let initializes = 0;
+    const sleeps: number[] = [];
+    const http = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        if (req.method === 'DELETE') return new Response(null, { status: 204 });
+        const m = (await req.json()) as { id?: number; method: string };
+        const json = (result: unknown) => Response.json({ jsonrpc: '2.0', id: m.id, result });
+        if (m.method === 'initialize') {
+          initializes++;
+          if (initializes < 3) return new Response('starting', { status: 503 });
+          return json({ protocolVersion: '2025-06-18', capabilities: {} });
+        }
+        if (m.method === 'tools/list') return json({ tools: [{ name: 'late', inputSchema: { type: 'object' } }] });
+        return new Response(null, { status: 202 });
+      },
+    });
+    try {
+      const m = await startMcp({ late: { url: `http://localhost:${http.port}/mcp`, timeoutSec: 5 } }, async (ms) => void sleeps.push(ms));
+      try {
+        expect(m.notes).toEqual([]);
+        expect(m.tools.map((t) => t.name)).toEqual(['mcp__late__late']);
+        expect(initializes).toBe(3);
+        expect(sleeps).toEqual([1000, 2000]);
+      } finally {
+        await m.close();
+      }
+    } finally {
+      http.stop(true);
+    }
+  });
+
+  test('a local server that cannot start fails fast, without retries', async () => {
+    const sleeps: number[] = [];
+    const m = await startMcp({ gone: { command: '/nonexistent/mcp-server' } }, async (ms) => void sleeps.push(ms));
+    try {
+      expect(m.notes).toHaveLength(1);
+      expect(sleeps).toEqual([]);
+    } finally {
+      await m.close();
+    }
+  });
+});

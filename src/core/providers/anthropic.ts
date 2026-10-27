@@ -92,6 +92,20 @@ export function anthropicBody(req: WireRequest): JsonObject {
   };
 }
 
+// Without beta-gated wire features, for a gateway that rejects the beta headers: effort messages go
+// (the level falls back to the session's), system reminders go as user text even where the model takes
+// role system, and custom model headers stay. Undefined when there is nothing beta-gated to take out,
+// or when the request carries compaction (a summary needs its beta to be read back).
+export function stripGatewayBetas(req: WireRequest): WireRequest | undefined {
+  if (carriesCompaction(req)) return undefined;
+  if (!req.messages.some((m) => m.role === 'effort') && !req.model.caps.midConversationSystem) return undefined;
+  return {
+    ...req,
+    messages: req.messages.filter((m) => m.role !== 'effort'),
+    model: { ...req.model, caps: { ...req.model.caps, midConversationSystem: false } },
+  };
+}
+
 // The model's own headers, with each beta the request needs added: compaction when it carries a compaction request
 // or block, per-message effort once the conversation holds an effort change. Adding the effort beta partway
 // through keeps the cache (tried on Haiku 5.5, 2026-10-22).
@@ -221,6 +235,7 @@ export function anthropicProvider(fetcher?: Fetcher): Provider {
       }
       yield* parseAnthropic(res.body);
     },
+    stripForGateway: stripGatewayBetas,
     // The same body with max_tokens 0 and no stream: the API reads the prompt into the cache and returns at once.
     // It bills the prefix as a cache read (a write if it had already expired) and no output.
     async keepAlive(req, signal) {

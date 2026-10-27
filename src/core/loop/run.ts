@@ -436,7 +436,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       opts.inbox!.delivered(mail.ids);
     }
 
-    const req: WireRequest = {
+    const req0: WireRequest = {
       model,
       sessionId: log.id,
       system: header.system,
@@ -446,6 +446,8 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       maxTokens: model.maxOutput,
       ...(opts.ttl ? { ttl: opts.ttl } : {}),
     };
+    // Resend below may strip beta-gated parts for a rejecting gateway; the request event keeps the original.
+    let req = req0;
     const request = log.append({
       kind: 'request',
       model: model.ref,
@@ -459,6 +461,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
     let got: Collected | undefined;
     let sentAt = 0;
+    let stripped = false;
     for (let n = 1; ; n++) {
       const t: { ttftMs?: number; ms?: number } = {};
       sentAt = performance.now();
@@ -479,6 +482,17 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       timing.modelMs += t.ms ?? 0;
       const after = got.error.retryAfterMs;
       const quotaWait = got.error.code === 'quota' && opts.quotaWaitMs !== undefined && after !== undefined && quotaWaited + after <= opts.quotaWaitMs ? after : undefined;
+      // A gateway that rejects a beta-gated feature gets the turn once more without it: no effort messages,
+      // no role-system mapping, custom headers kept. Once only, and never for a compaction request (a summary
+      // needs its beta to be read back); the attempts show the rejection that motivated the resend.
+      if (n === 1 && !stripped && got.error.code === 'bad_request' && (got.error.status === undefined || got.error.status === 400) && /beta/i.test(got.error.message)) {
+        const alt = provider.stripForGateway?.(req);
+        if (alt) {
+          stripped = true;
+          req = alt;
+          continue;
+        }
+      }
       if ((!isRetryable(got.error) && quotaWait === undefined) || n >= retryMax) return finish('error_during_execution', 'error', got.error.message);
       const base = opts.retry?.baseMs ?? 1000;
       const cap = opts.retry?.capMs ?? 30_000;

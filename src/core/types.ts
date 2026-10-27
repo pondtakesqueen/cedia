@@ -189,6 +189,11 @@ export type Provider = {
   body(req: WireRequest): JsonObject;
   headers(req: WireRequest): Record<string, string>;
   stream(req: WireRequest, signal: AbortSignal): AsyncIterable<StreamEvent>;
+  // Without beta-gated wire features, for a gateway that rejects them: returns the request with the
+  // beta-gated parts taken out (effort messages, non-default system mapping), or undefined when the
+  // request cannot survive the strip (it carries compaction). The loop sends it once on a 400 that
+  // names a beta, then gives up; the request event keeps the original body.
+  stripForGateway?(req: WireRequest): WireRequest | undefined;
   // Reads the request's prefix into the cache again without generating anything, which restarts its lifetime.
   // Only for a provider whose cache expires within minutes (Anthropic's 5-minute default).
   keepAlive?(req: WireRequest, signal: AbortSignal): Promise<{ ok: true; usage: Usage } | { ok: false; error: AttemptError }>;

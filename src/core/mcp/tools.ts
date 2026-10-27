@@ -66,6 +66,25 @@ export function mcpToolSpec(client: McpClient, t: McpTool, name: string): ToolSp
   };
 }
 
+// Connects, retrying a remote server that answers late: all of this happens before the first request,
+// so the tool list is still fixed for the run and a slow server makes the initial list instead of a
+// mid-run addition (which would break the cached prefix). Local spawns fail deterministically (a missing
+// binary), so they get one attempt; remote servers get three, 1s then 2s apart.
+export async function connectWithRetry(client: McpClient, remote: boolean, sleep: (ms: number) => Promise<void>): Promise<{ attempts: number }> {
+  const tries = remote ? 3 : 1;
+  let error: unknown;
+  for (let n = 1; ; n++) {
+    try {
+      await client.connect();
+      return { attempts: n };
+    } catch (e) {
+      error = e;
+      if (n >= tries) throw error;
+      await sleep(1000 * n);
+    }
+  }
+}
+
 // A resumed session's tool whose server is not connected now: it keeps the definition the session was cached
 // with, and a call says why it cannot run.
 export function mcpStub(def: ToolDef): ToolSpec {
@@ -81,7 +100,7 @@ export function mcpStub(def: ToolDef): ToolSpec {
 }
 
 // Starts every configured server and lists its tools. One that fails is left out with a note, and the run goes on.
-export async function startMcp(servers: Record<string, McpServerConfig>): Promise<McpServers> {
+export async function startMcp(servers: Record<string, McpServerConfig>, sleep: (ms: number) => Promise<void> = (ms) => new Promise<void>((r) => setTimeout(r, ms))): Promise<McpServers> {
   const notes: string[] = [];
   const started = await Promise.all(
     Object.entries(servers)
@@ -91,7 +110,7 @@ export async function startMcp(servers: Record<string, McpServerConfig>): Promis
         try {
           // A command that cannot be started throws here.
           client = new McpClient(name, cfg);
-          await client.connect();
+          await connectWithRetry(client, 'url' in cfg, sleep);
           return { client, tools: (await client.tools()).sort((a, b) => a.name.localeCompare(b.name)) };
         } catch (e) {
           notes.push(`cedia: MCP server ${name} did not start: ${(e as Error).message}; going on without it`);

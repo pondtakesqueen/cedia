@@ -375,3 +375,24 @@ describe('cost', () => {
     expect(costUsd(haiku, { uncached: 200_000, cacheRead: 0, cacheWrite: 0, output: 0 })).toBeCloseTo(0.1);
   });
 });
+
+describe('gateway beta fallback', () => {
+  test('effort and role-system mapping strip out; compaction and plain requests do not', async () => {
+    const { stripGatewayBetas } = await import('../src/core/providers/anthropic.ts');
+    const raised: Message[] = [...history, { role: 'effort', effort: 'high' }];
+    const stripped = stripGatewayBetas(req('opus', raised))!;
+    expect(stripped.messages.some((m) => m.role === 'effort')).toBe(false);
+    expect(stripped.model.caps.midConversationSystem).toBe(false);
+    expect(anthropicProvider().headers(stripped)['anthropic-beta']).toBeUndefined();
+    // The stripped body still carries the turn; system reminders go as user text.
+    const last = (anthropicBody(stripped) as any).messages.at(-1);
+    expect(last.role).toBe('user');
+    expect(last.content.at(-1)).toEqual({ type: 'text', text: '<system-reminder>\nnote\n</system-reminder>' });
+    // Custom model headers survive the strip.
+    const gw = { ...req('opus', raised), model: { ...req('opus').model, headers: { 'x-gw': '1' } } };
+    expect(anthropicProvider().headers(stripGatewayBetas(gw)!)['x-gw']).toBe('1');
+    // Nothing beta-gated, and compaction (which needs its beta), stay as they are.
+    expect(stripGatewayBetas(req('opus'))).toBeUndefined();
+    expect(stripGatewayBetas({ ...req('opus', raised), compaction: { instructions: 'x' } })).toBeUndefined();
+  });
+});
