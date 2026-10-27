@@ -11,6 +11,8 @@ import { modelLine, modelList } from './core/providers/models.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
 import { loadKeybindings } from './clients/tui/keybindings/loader.ts';
+import { daemonCmd } from './clients/daemon/cmd.ts';
+import { loadOnboarding, saveOnboarding, acceptTrust, markStep, isComplete } from './clients/tui/onboarding.ts';
 import { loadOutputStyles, getStyle, stylesDir } from './core/output-styles/styles.ts';
 import { isAlive, listBgSessions, recordStart, recordStop, bgPath, daemonPidPath, readBgEvents } from './core/project/background.ts';
 import { installPlugin, uninstallPlugin, setPluginEnabled, updatePlugin, listInstalled, loadManifest, discoverPlugins, addMarketplace, removeMarketplace, updateMarketplace, loadMarketplaces } from './core/plugins/plugins.ts';
@@ -147,6 +149,10 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia schedules add <when> <prompt> --thread <id> [--every <dur>]
                                             when: an ISO time or a delay (30m, 2h); every: 1h, 1d, 1w (at least 5m)
        cedia schedules cancel|pause|resume|fire <id>
+       cedia daemon [--once] [--interval <s>] [--max <n>] [--json] [--cwd <dir>]
+                                            run queued threads and due schedules in cedia processes of their
+                                            own; --once runs one pass (for cron), otherwise it loops until
+                                            stopped. cedia daemon stop|status controls it
        cedia memory [list | add <text> | forget <id> | consolidate]
                                             the project's memory: short facts every new session gets in its first
                                             turn; writer sessions add to it with the remember tool
@@ -188,6 +194,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'agents') return agentsCmd(argv.slice(1));
   if (argv[0] === 'logs') return logsCmd(argv.slice(1));
   if (argv[0] === 'attach') return attachCmd(argv.slice(1));
+  if (argv[0] === 'daemon') return daemonCmd(argv.slice(1));
   if (argv[0] === 'stop' || argv[0] === 'kill') return stopCmd(argv.slice(1), argv[0] === 'kill');
   if (argv[0] === 'respawn') return respawnCmd(argv.slice(1));
   if (argv[0] === 'plugin') return plugin(argv.slice(1));

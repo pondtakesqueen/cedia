@@ -253,7 +253,8 @@
         "threads.delete",
         "mcp.manage",
         "commit",
-        "pr"
+        "pr",
+        "daemon"
       ]
     },
     "Check": {
