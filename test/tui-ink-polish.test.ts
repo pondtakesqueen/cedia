@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import React from 'react';
+import { render } from 'ink';
+import { PassThrough } from 'node:stream';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DISMISS_NOTE, noticeLines, PermissionDialog } from '../src/clients/tui-ink/permission-dialogs.tsx';
 import { activeContext, findCommand, IDLE_OVERLAY, resolveBindings, vimInputGate } from '../src/clients/tui-ink/keybindings/resolver.ts';
 import { keybindingsPath, watchKeybindings } from '../src/clients/tui-ink/keybindings/loader.ts';
 import { cancelStep, offsetForIndex, rowMapFromWalk, selectionBounds } from '../src/clients/tui-ink/row-map.ts';
@@ -89,6 +93,53 @@ describe('ink key context', () => {
     expect(offsetAt('abcdefghijXY', 10, 1, 5)).toBe(12);
     expect(offsetAt('ab\ncd', 10, 1, 1)).toBe(4);
     expect(offsetAt('abcdefghijkl', 3, 1, 0)).toBe(10);
+  });
+
+  test('a denial notice names the tool fields and offers no allow or deny caption', async () => {
+    expect(noticeLines('bash', { command: 'rm -rf x' }).map((line) => line.label)).toEqual(['command']);
+    expect(noticeLines('bash', { command: 'ls', timeout_ms: 1000 }).map((line) => line.label)).toEqual(['command', 'timeout_ms']);
+    expect(noticeLines('edit', {
+      path: 'a.ts',
+      edits: [{ old_text: 'a', new_text: 'b' }, { old_text: 'c', new_text: 'd' }],
+    }).map((line) => line.label)).toEqual(['path', 'old_text', 'new_text', 'edits']);
+    expect(noticeLines('write', { path: 'a.ts', content: 'hello' })).toContainEqual({ label: 'content', value: '5 chars, hello' });
+    expect(noticeLines('WebFetch', { url: 'https://example.test' }).map((line) => line.label)).toEqual(['url']);
+    expect(noticeLines('web_fetch', { url: 'https://example.test', offset: 12 }).map((line) => line.label)).toEqual(['url', 'offset']);
+    expect(noticeLines('skill', { skill: 'poteto', file: 'SKILL.md' })).toEqual([
+      { label: 'name', value: 'poteto' },
+      { label: 'file', value: 'SKILL.md' },
+    ]);
+    expect(noticeLines('grep', { pattern: 'x' })[0]?.label).toBe('input');
+    expect(noticeLines('bash', { command: 'x'.repeat(250) })[0]?.value).toHaveLength(200);
+    expect(DISMISS_NOTE.includes('Allow')).toBe(false);
+    expect(DISMISS_NOTE.includes('Deny')).toBe(false);
+
+    let out = '';
+    const stdin = new PassThrough();
+    (stdin as unknown as { isTTY: boolean }).isTTY = true;
+    (stdin as unknown as { setRawMode: (on: boolean) => void }).setRawMode = () => {};
+    const stdout = new PassThrough() as PassThrough & { columns: number; rows: number };
+    stdout.columns = 80;
+    stdout.rows = 24;
+    stdout.on('data', (d: Buffer) => { out += d.toString(); });
+    const { unmount } = render(React.createElement(PermissionDialog, {
+      tool: 'bash',
+      input: { command: 'rm -rf x' },
+      reason: 'blocked',
+      rule: 'read-only',
+    }), {
+      stdin: stdin as unknown as NodeJS.ReadStream,
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      exitOnCtrlC: false,
+    });
+    await Bun.sleep(200);
+    unmount();
+    const text = out.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+    expect(text).toContain('bash denied');
+    expect(text).toContain('command: rm -rf x');
+    expect(text).toContain(DISMISS_NOTE);
+    expect(text).not.toContain('[Allow]');
+    expect(text).not.toContain('[Deny]');
   });
 
   test('the keybindings watcher stops when its disposer runs', async () => {

@@ -5,7 +5,7 @@ import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
 import { inkTheme, type ThemeTokens } from './theme-tokens.ts';
-import { PermissionDialog, permissionDialogFor, toolLabel } from './permission-dialogs.tsx';
+import { PermissionDialog, toolLabel } from './permission-dialogs.tsx';
 import { askedBannerText } from './asked.ts';
 import { StatusBar } from './status-bar.tsx';
 import { runHeadless } from '../headless/main.ts';
@@ -1914,10 +1914,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           })()
         ) : null}
         {permissionDialog ? (
-          (() => {
-            const Dialog = permissionDialogFor(permissionDialog.tool);
-            return <Dialog tool={permissionDialog.tool} input={permissionDialog.input} reason={permissionDialog.reason} rule={permissionDialog.rule} />;
-          })()
+          <PermissionDialog tool={permissionDialog.tool} input={permissionDialog.input} reason={permissionDialog.reason} rule={permissionDialog.rule} />
         ) : null}
         {settingsOpen ? (
           <Box flexDirection="column" paddingX={1}>
