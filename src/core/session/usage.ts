@@ -20,6 +20,10 @@ export type UsageReport = {
   // The tool results that cost most that way.
   largest: { session: string; callId: string; tool: string; chars: number; resent: number }[];
   misses: { cause: string; count: number; tokens: number }[];
+  // Calls the run stopped before they ran, by the rule or hook that stopped them: the session log's
+  // answer to a safety overview (cedia keeps no telemetry; denied permission events and hook blocks
+  // are the record). Allows are not counted.
+  blocked: { rule: string; count: number }[];
   // Requests whose input passed the model's long-context price line, and requests at effort max.
   overPriceLine: number;
   maxEffort: number;
@@ -84,6 +88,7 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
   const sent = new Map<string, number>();
   const largest: UsageReport['largest'] = [];
   const misses = new Map<string, { count: number; tokens: number }>();
+  const blocked = new Map<string, number>();
   const tokens = { input: 0, cacheRead: 0, output: 0 };
   let requests = 0;
   let cost = 0;
@@ -211,6 +216,12 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
         case 'turn_end':
           if (e.reason === 'handoff') handoffs++;
           break;
+        case 'permission':
+          if (e.decision === 'deny') add(blocked, e.rule, 1);
+          break;
+        case 'hook':
+          if (e.decision === 'block') add(blocked, `hook:${e.hook}`, 1);
+          break;
       }
     }
     requests += sessionRequests;
@@ -235,6 +246,7 @@ export function usageReport(sessions: SessionInput[], opts: UsageOptions = {}): 
     sources: [...sent].map(([source, chars]) => ({ source, chars, share: total ? chars / total : 0 })).sort((a, b) => b.chars - a.chars),
     largest: largest.sort((a, b) => b.chars * b.resent - a.chars * a.resent).slice(0, top),
     misses: [...misses].map(([cause, m]) => ({ cause, ...m })).sort((a, b) => b.tokens - a.tokens),
+    blocked: [...blocked].map(([rule, count]) => ({ rule, count })).sort((a, b) => b.count - a.count),
     overPriceLine,
     maxEffort,
     handoffs,
@@ -269,6 +281,7 @@ export function formatUsage(r: UsageReport): string {
     for (const l of r.largest) lines.push(`  ${l.tool} ${l.callId} in ${l.session}: ${k(l.chars)} chars x ${l.resent}`);
   }
   lines.push(r.misses.length ? `cache misses: ${r.misses.map((m) => `${m.count} ${m.cause} (${k(m.tokens)} tokens)`).join(', ')}` : 'cache misses: none');
+  if (r.blocked.length) lines.push(`blocked calls: ${r.blocked.map((b) => `${b.count} ${b.rule}`).join(', ')}`);
   const warn = [
     r.overPriceLine && `${r.overPriceLine} request${r.overPriceLine === 1 ? '' : 's'} past the model's long-context price line`,
     r.maxEffort && `${r.maxEffort} request${r.maxEffort === 1 ? '' : 's'} at effort max`,
@@ -279,9 +292,10 @@ export function formatUsage(r: UsageReport): string {
   return lines.join('\n');
 }
 
-// Only the events a report reads (an effort change included); the rest is dropped once read.
-export const isUsageEvent = (e: SessionEvent): e is EventOf<'session' | 'summary' | 'user' | 'reminder' | 'effort' | 'request' | 'assistant' | 'compaction' | 'keepalive' | 'tool_intent' | 'tool_result' | 'turn_end'> =>
-  ['session', 'summary', 'user', 'reminder', 'effort', 'request', 'assistant', 'compaction', 'keepalive', 'tool_intent', 'tool_result', 'turn_end'].includes(e.kind);
+// Only the events a report reads (an effort change included, denials and hook blocks for the
+// blocked-calls section); the rest is dropped once read.
+export const isUsageEvent = (e: SessionEvent): e is EventOf<'session' | 'summary' | 'user' | 'reminder' | 'effort' | 'request' | 'assistant' | 'compaction' | 'keepalive' | 'tool_intent' | 'tool_result' | 'turn_end' | 'permission' | 'hook'> =>
+  ['session', 'summary', 'user', 'reminder', 'effort', 'request', 'assistant', 'compaction', 'keepalive', 'tool_intent', 'tool_result', 'turn_end', 'permission', 'hook'].includes(e.kind);
 
 // Reads a log as far as its lines parse: a session still being written, or one a crash cut mid-line, still counts.
 export function readEventsLenient(text: string): SessionEvent[] {

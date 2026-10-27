@@ -3704,6 +3704,25 @@
             "additionalProperties": false
           }
         },
+        "blocked": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "rule": {
+                "type": "string"
+              },
+              "count": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "rule",
+              "count"
+            ],
+            "additionalProperties": false
+          }
+        },
         "overPriceLine": {
           "type": "number"
         },
@@ -3814,6 +3833,7 @@
         "sources",
         "largest",
         "misses",
+        "blocked",
         "overPriceLine",
         "maxEffort",
         "handoffs",

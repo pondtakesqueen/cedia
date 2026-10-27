@@ -169,3 +169,30 @@ describe('cedia usage', () => {
     expect(JSON.parse(empty.stdout.toString())).toMatchObject({ sessions: 0, costUsd: 0, days: [] });
   });
 });
+
+describe('blocked calls', () => {
+  test('denials and hook blocks count by rule; allows do not', () => {
+    let n = 0;
+    const e = (body: Record<string, unknown>): SessionEvent => ({ id: `e${n}`, at: at(n++), ...body }) as unknown as SessionEvent;
+    const m = 'anthropic/claude-haiku-5-5';
+    const r = usageReport([
+      {
+        id: 's',
+        events: [
+          e({ kind: 'session', cwd: '/x', role: 'code', model: m, system: '', tools: [] }),
+          e({ kind: 'permission', callId: 'c1', tool: 'bash', decision: 'deny', rule: 'deny:bash(rm *)' }),
+          e({ kind: 'permission', callId: 'c2', tool: 'bash', decision: 'deny', rule: 'deny:bash(rm *)' }),
+          e({ kind: 'permission', callId: 'c3', tool: 'bash', decision: 'deny', rule: 'classifier', reason: 'reaches past the project' }),
+          e({ kind: 'permission', callId: 'c4', tool: 'read', decision: 'allow', rule: 'effect:read' }),
+          e({ kind: 'hook', hook: 'no-curl', event: 'preToolUse', callId: 'c5', decision: 'block', ms: 3 }),
+        ],
+      },
+    ]);
+    expect(r.blocked).toEqual([
+      { rule: 'deny:bash(rm *)', count: 2 },
+      { rule: 'classifier', count: 1 },
+      { rule: 'hook:no-curl', count: 1 },
+    ]);
+    expect(formatUsage(r)).toContain('blocked calls: 2 deny:bash(rm *), 1 classifier, 1 hook:no-curl');
+  });
+});
