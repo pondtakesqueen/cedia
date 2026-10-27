@@ -1,5 +1,73 @@
 import type { Binding, Context } from './types.ts';
 
+/** Booleans the ink shell already has. activeContext does not read React state. */
+export type OverlayState = {
+  permissionNotice: boolean;
+  picker: boolean;
+  settings: boolean;
+  messageSelector: boolean;
+  historySearch: boolean;
+  transcriptSearch: boolean;
+  autocomplete: boolean;
+};
+
+/**
+ * Idle is the Chat residual. Tests spread this and flip one field.
+ * First true field in ORDER wins. Permission, then picker, then settings,
+ * then message selector, then history search, then transcript search,
+ * then autocomplete. Chat only when every field is false.
+ * Settings beats autocomplete so a slash draft cannot take Enter from the panel.
+ */
+export const IDLE_OVERLAY: OverlayState = {
+  permissionNotice: false,
+  picker: false,
+  settings: false,
+  messageSelector: false,
+  historySearch: false,
+  transcriptSearch: false,
+  autocomplete: false,
+};
+
+export const ORDER = [
+  ['permissionNotice', 'Confirmation'],
+  ['picker', 'Select'],
+  ['settings', 'Settings'],
+  ['messageSelector', 'MessageSelector'],
+  ['historySearch', 'HistorySearch'],
+  ['transcriptSearch', 'Transcript'],
+  ['autocomplete', 'Autocomplete'],
+] as const satisfies readonly (readonly [keyof OverlayState, Context])[];
+
+type OrderedKey = (typeof ORDER)[number][0];
+const _orderCoversOverlayState: [Exclude<keyof OverlayState, OrderedKey>] extends [never] ? true : never = true;
+
+export type LiveContext = (typeof ORDER)[number][1] | 'Chat';
+
+/** First ORDER row whose field is true, otherwise Chat. */
+export function activeContext(state: OverlayState): LiveContext {
+  void _orderCoversOverlayState;
+  for (const [field, ctx] of ORDER) {
+    if (state[field]) return ctx;
+  }
+  return 'Chat';
+}
+
+export type VimGate = { captured: boolean; suppressSubmit: boolean };
+
+/**
+ * Trust captures the editor.
+ * Any LiveContext other than Chat or Autocomplete captures it.
+ * Autocomplete leaves captured false and sets suppressSubmit, so VimInput types
+ * the draft and does not submit on Enter.
+ * Chat leaves both false.
+ */
+export function vimInputGate(ctx: LiveContext, trustOpen: boolean): VimGate {
+  if (trustOpen) return { captured: true, suppressSubmit: false };
+  if (ctx === 'Autocomplete') return { captured: false, suppressSubmit: true };
+  if (ctx === 'Chat') return { captured: false, suppressSubmit: false };
+  return { captured: true, suppressSubmit: false };
+}
+
 export const DEFAULT_BINDINGS: Binding[] = [
   { key: 'ctrl+c', command: 'cancel', context: 'Global' },
   { key: 'enter', command: 'submit', context: 'Chat' },

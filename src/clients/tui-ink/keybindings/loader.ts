@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, watchFile } from 'node:fs';
+import { existsSync, readFileSync, unwatchFile, watchFile } from 'node:fs';
 import { join } from 'node:path';
 import { cediaHome } from '../../../core/config.ts';
 import type { Binding, KeybindingsFile } from './types.ts';
@@ -21,5 +21,5 @@ export function watchKeybindings(home: string, cb: (b: Binding[]) => void): () =
   const p = keybindingsPath(home);
   const handler = () => cb(loadKeybindings(home));
   watchFile(p, { interval: 500 }, handler);
-  return () => {};
+  return () => { unwatchFile(p, handler); };
 }
