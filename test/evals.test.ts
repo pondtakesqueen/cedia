@@ -86,6 +86,7 @@ describe("evals runner", () => {
     const claude = parseReported('{"type":"result","subtype":"success","total_cost_usd":0.2,"num_turns":3,"result":"done","usage":{"input_tokens":10,"cache_read_input_tokens":80,"cache_creation_input_tokens":10,"output_tokens":7}}');
     expect(claude?.reported).toEqual({ subtype: "success", costUsd: 0.2, tokens: { input: 100, cacheRead: 80, output: 7 }, cacheHitRatio: 0.8, turns: 3 });
     expect(parseReported("plain text")).toBeUndefined();
+    expect(parseReported('{"type":"event"}\n{"type":"result","subtype":"success","costUsd":0.5,"cacheHitRatio":0.5,"numTurns":2,"result":"ok","usage":{"uncached":10,"cacheRead":10,"cacheWrite":0,"output":5}}\n["junk","tail"]\ncrash tail')?.reported.costUsd).toBe(0.5);
     const reviewed = parseReported('{"type":"result","subtype":"success","costUsd":0,"cacheHitRatio":0,"numTurns":1,"result":"ok","usage":{},"review":{"model":"m","verdict":"changes","fixed":true}}');
     expect(reviewed?.reported.review).toEqual({ verdict: "changes", fixed: true });
     const timed = parseReported('{"type":"result","subtype":"success","costUsd":0,"cacheHitRatio":0,"numTurns":1,"result":"ok","usage":{},"plan":{"model":"m","ms":4100},"review":{"model":"m","verdict":"changes","fixed":true,"ms":9000,"fixMs":"x"}}');
