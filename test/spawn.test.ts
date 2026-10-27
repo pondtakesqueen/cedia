@@ -88,3 +88,10 @@ test('spawn takes an effort level for the sub-thread and refuses an unknown one'
   expect((await tool.run({ kind: 'explore', task: 'x', effort: 'ultra' }, ctx)).text).toBe('effort must be one of low, medium, high, xhigh, max');
   expect(seen).toEqual(['high', undefined]);
 });
+
+test('subtask briefs say time matters: earlier correct reports beat polish', async () => {
+  const { subtaskPrompt } = await import('../src/core/tools/spawn.ts');
+  const brief = subtaskPrompt('find it', 't-12345678', 'explore');
+  expect(brief).toContain('Time matters');
+  expect(brief).toContain('of thread t-12345678');
+});
