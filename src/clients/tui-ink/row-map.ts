@@ -74,3 +74,14 @@ export function offsetForIndex(count: number, index: number): number {
   const i = Math.max(0, Math.min(count - 1, index));
   return count - 1 - i;
 }
+
+/** True when the selection covers this display message from start to end. */
+export function messageFullySelected(
+  sel: InkSelection | null | undefined,
+  index: number,
+  textLength: number,
+): boolean {
+  if (!sel || textLength <= 0) return false;
+  const bounds = selectionBounds(sel, index, textLength);
+  return !!bounds && bounds.start === 0 && bounds.end >= textLength;
+}

@@ -27,7 +27,7 @@ import { runStatusLineCommand } from '../tui/statusline.ts';
 import { loadKeybindings, watchKeybindings } from './keybindings/loader.ts';
 import { activeContext, findCommand, resolveBindings, vimInputGate, type LiveContext } from './keybindings/resolver.ts';
 import { ChordInterceptor, chordsFromBindings, matchChord } from './keybindings/chord.ts';
-import { cancelStep, offsetForIndex, rowMapFromWalk, selectionBounds, type InkSelection, type RowMap, type WalkBand } from './row-map.ts';
+import { cancelStep, messageFullySelected, offsetForIndex, rowMapFromWalk, selectionBounds, type InkSelection, type RowMap, type WalkBand } from './row-map.ts';
 import { createHeightCache, heightCacheKey, visibleWindow } from './visible-window.ts';
 import { matchesKey } from '@mariozechner/pi-tui';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
@@ -1808,6 +1808,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const queryHit = q.length > 0 && capped.toLowerCase().includes(q.toLowerCase());
             const bounds = selection ? selectionBounds(selection, globalIdx, capped.length) : undefined;
             const hasSel = !!bounds && bounds.end > bounds.start;
+            const fullySelected = messageFullySelected(selection, globalIdx, capped.length);
             const isUserRow = m.role === 'user' && !hasSel && !queryHit;
             const isToolError = m.role === 'tool' && m.status === 'error';
             const contentWidth = paintedWidth(m.role, columns, screenReader);
@@ -1823,7 +1824,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               );
             }
               return (
-            <Box key={globalIdx} flexDirection="column" backgroundColor={isUserRow ? T.userRowBg : undefined}>
+            <Box key={globalIdx} flexDirection="column" backgroundColor={fullySelected ? T.selectedBg : isUserRow ? T.userRowBg : undefined}>
               {hasSel || queryHit ? (
                 <Text wrap="wrap">
                   {paintRuns(full, { query: q, selection: hasSel ? bounds : undefined }).map((sp, si) => (

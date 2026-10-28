@@ -160,7 +160,7 @@ Codex CLI (OpenAI) TUI features:
 2. True virtualization: replace slicing with VirtualMessageList (overscan + recycling)
 3. Keybindings: add missing contexts (Autocomplete, Confirmation, Tabs, Transcript, etc.)
 4. Onboarding: add Grove, Claude-in-Chrome, bypass/auto-mode opt-in, dev channels
-5. Selection overlay: inline search highlight + message selection overlay
+5. Selection overlay: inline search highlight + message selection overlay (row chrome when fully selected)
 
 **Medium priority (polish):**
 6. Ink renderer: tune scheduleRender, Frame diff, SIGCONT, pause/resume
@@ -215,3 +215,7 @@ Codex CLI (OpenAI) TUI features:
 - `ChordInterceptor` returns `none` for non-prefixes so typing is not swallowed.
 - Multi-key bindings (`g g`) resolve through `chordsFromBindings` / `matchChord`.
 - In vim normal mode, Chat runs the interceptor before single-key bindings; default `g g` scrolls to the top.
+
+## Update 2026-10-28 (ink message selection chrome)
+
+- A display message covered end-to-end by the mouse selection gets `selectedBg` row chrome via `messageFullySelected`.
