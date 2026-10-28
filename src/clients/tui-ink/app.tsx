@@ -26,6 +26,7 @@ import { versionInfo } from '../../protocol/version.ts';
 import { runStatusLineCommand } from '../tui/statusline.ts';
 import { loadKeybindings, watchKeybindings } from './keybindings/loader.ts';
 import { activeContext, findCommand, resolveBindings, vimInputGate, type LiveContext } from './keybindings/resolver.ts';
+import { ChordInterceptor, chordsFromBindings, matchChord } from './keybindings/chord.ts';
 import { cancelStep, offsetForIndex, rowMapFromWalk, selectionBounds, type InkSelection, type RowMap, type WalkBand } from './row-map.ts';
 import { createHeightCache, heightCacheKey, visibleWindow } from './visible-window.ts';
 import { matchesKey } from '@mariozechner/pi-tui';
@@ -252,6 +253,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const pendingRef = useRef<{ what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined>(undefined);
   const [scrollOffset, setScrollOffset] = useState(0);
   const heightCacheRef = useRef(createHeightCache());
+  const loadedKeybindingsRef = useRef(loadedKeybindings);
+  loadedKeybindingsRef.current = loadedKeybindings;
+  const chordDispatchRef = useRef<(command: string) => void>(() => {});
+  const chordRef = useRef(new ChordInterceptor(
+    (keys) => matchChord(keys, chordsFromBindings(resolveBindings(loadedKeybindingsRef.current), 'Chat')),
+    (command) => chordDispatchRef.current(command),
+  ));
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
   const historyRef = useRef<string[]>([]);
   const histPos = useRef(-1);
@@ -1371,6 +1379,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     if (step === 'clear-input') { setInput(''); inputRef.current = ''; return; }
     exit();
   };
+  chordDispatchRef.current = (command) => {
+    if (command === 'scrollTop') { setScrollOffset(maxScrollOffset); return; }
+    if (command === 'scrollBottom') { setScrollOffset(0); return; }
+  };
+  useEffect(() => {
+    if (vimMode !== 'normal' || ctx !== 'Chat') chordRef.current.reset();
+  }, [vimMode, ctx]);
   useInput((input, key) => {
     if (trustOpen) {
       if (key.upArrow || key.downArrow) { setTrustSelected((s) => (s === 0 ? 1 : 0)); return; }
@@ -1618,6 +1633,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       return;
+    }
+    if (vimMode === 'normal') {
+      const id = inkKeyId(input, key);
+      if (id && !key.ctrl && !key.meta) {
+        const status = chordRef.current.push(id);
+        if (status === 'handled' || status === 'pending') return;
+      } else {
+        chordRef.current.reset();
+      }
     }
     if (key.home) {
       setScrollOffset(maxScrollOffset);
