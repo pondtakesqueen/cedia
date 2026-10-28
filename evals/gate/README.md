@@ -16,6 +16,16 @@ Exit 0: no model got worse. 1: a model regressed. 3: no comparison could be made
 
 Each run writes its rows to `evals/results/<date>-gate-<model>-<commit>-<time>.jsonl`. A baseline is `baseline/<model>.json`: the commit, date, runs, jobs and cedia flags it was made with, a hash of each task, and the rows.
 
+## Frontier suite
+
+`bun evals/gate.ts --suite evals/gate/frontier.json` runs a second, small suite of tasks meant to fail some runs, because the gate suite no longer can: every stored baseline passes 48 to 50 of 50, and on the hard tasks cedia and Claude Code both passed 10 of 10 (`research/NOTES.md`), so a change that makes cedia write better code cannot show there. Its tasks follow a written contract whose answers come from the library the contract describes, and their hidden tests hold those answers:
+
+- `frontier-semver`: npm-style ranges (0.x carets, partial versions, hyphen ranges, the prerelease rule); 210 answers from node-semver 7.6.3.
+- `frontier-cron`: the next time a 5-field cron expression fires (steps from a value, names, Sunday as 7, the day-of-month/day-of-week rule, leap days, validation); 127 answers from cron-parser 4.9.0 and 15 invalid expressions.
+- `hard-redact-bugs`, the gate task that Haiku 5.5 through OpenCode Go failed in both runs of its baseline.
+
+Each reference solution was checked against its library on random cases with no difference: 110,000 for semver, 24,000 for cron. Calibration on `anthropic/claude-haiku-5-5` (2026-10-28, 8 runs of semver, 4 of cron): semver 7/8, cron 3/4. The misses were single edge cases (a hyphen range with a prerelease lower bound; a time with milliseconds just before a new minute), the kind of defect the gate tasks no longer catch. It is 4 runs a task, not 2, because at these pass rates 2 runs cannot tell a change from noise. Its baselines live in `frontier-baseline/` (`baselineDir` in the suite), apart from the gate's, and it is not a merge requirement: run it on a change meant to make cedia write better code, and read pass@1 beside the gate's verdict.
+
 ## How it decides
 
 Over the tasks both runs have, with provider-error runs left out:

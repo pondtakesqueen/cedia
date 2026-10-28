@@ -1,0 +1,10 @@
+{
+  "name": "frontier",
+  "tasks": ["frontier-semver", "frontier-cron", "hard-redact-bugs"],
+  "runs": 4,
+  "jobs": 4,
+  "models": ["opencode-go/claude-haiku-5-5", "opencode-go/deepseek-v4.1-flash"],
+  "maxUsd": 1,
+  "thresholds": { "passP": 0.1, "costRise": 0.15, "timeRise": 0.2, "totalRise": 0.4 },
+  "baselineDir": "frontier-baseline"
+}

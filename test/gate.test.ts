@@ -110,6 +110,16 @@ describe("regression gate", () => {
     expect(suite.thresholds).toMatchObject({ passP: expect.any(Number), costRise: expect.any(Number), timeRise: expect.any(Number), totalRise: expect.any(Number) });
   });
 
+  test("the frontier suite names existing tasks and keeps its baselines apart from the gate's", () => {
+    const path = join(import.meta.dir, "..", "evals", "gate", "frontier.json");
+    const { suite, tasks } = loadSuite(path);
+    expect(tasks.map((t) => t.id)).toEqual(suite.tasks);
+    expect(suite.runs).toBeGreaterThanOrEqual(4);
+    expect(suite.baselineDir).toBe("frontier-baseline");
+    // The gate never runs these: they are meant to fail some runs, which would make the gate noisy.
+    expect(loadSuite(DEFAULT_SUITE).suite.tasks.filter((t) => t.startsWith("frontier-"))).toEqual([]);
+  });
+
   test("expected cost comes from the baseline's spend, then earlier results, then the token estimate", () => {
     const tasks = ["t0", "t1", "t2"].map((id): Task => ({ id, category: "c", prompt: "p", verify: "true" }));
     const baseline = { results: [row("t0", 1, { cost: 0.1 }), row("t0", 2, { cost: 0.3 })] } as Baseline;

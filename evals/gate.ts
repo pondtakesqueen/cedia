@@ -44,6 +44,9 @@ export type Suite = {
   cediaArgs?: string[];
   // Relative to the suite file; evals/tasks by default.
   tasksDir?: string;
+  // Relative to the suite file; evals/gate/baseline by default. A second suite keeps its baselines apart, since a
+  // baseline file is named by model only.
+  baselineDir?: string;
 };
 
 export type Baseline = {
@@ -325,7 +328,7 @@ export function baselineRefusal(r: { dirty: boolean; allowDirty: boolean; verdic
 
 async function main(argv: string[]): Promise<number> {
   let suitePath = DEFAULT_SUITE;
-  let baselineDir = BASELINE_DIR;
+  let baselineDir: string | undefined;
   let resultsDir = resolve(import.meta.dir, "results");
   const models: string[] = [];
   let runs: number | undefined;
@@ -360,6 +363,7 @@ async function main(argv: string[]): Promise<number> {
   }
   const loaded = loadSuite(suitePath);
   const { suite } = loaded;
+  baselineDir ??= suite.baselineDir ? resolve(dirname(suitePath), suite.baselineDir) : BASELINE_DIR;
   for (const id of only ?? []) if (!suite.tasks.includes(id)) throw new Error(`--only: ${id} is not in suite ${suite.name}`);
   const tasks = loaded.tasks.filter((t) => !only || only.includes(t.id));
   const hiddenTasks = tasks.filter((t) => Object.keys(t.hidden ?? {}).length).map((t) => t.id);

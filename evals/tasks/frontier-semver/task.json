@@ -1,0 +1,7 @@
+{
+  "id": "frontier-semver",
+  "category": "bugfix",
+  "source": "synthetic: npm-style semver ranges (0.x carets, partial versions, hyphen ranges, prerelease rules) with a naive implementation; hidden tests are 210 answers from node-semver 7.6.3. Meant to be hard enough that runs do not all pass (evals/gate/frontier.json)",
+  "prompt": "semver.ts answers whether a version satisfies an npm-style range. Users report wrong answers for 0.x carets, partial versions such as `1.2` or `1.x`, hyphen ranges, and prerelease versions. The doc comment at the top of semver.ts is the contract. Fix semver.ts so it keeps every rule there. Do not change the existing tests; add tests for what you fix. Run `bun test` before you finish.",
+  "verify": "bun test"
+}
