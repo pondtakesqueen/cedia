@@ -488,17 +488,16 @@ describe('cedia -p (offline, faux)', () => {
       expect(userTexts(writer)).toEqual([expect.stringContaining('<plan by="claude-code:opus@medium">'), expect.stringContaining('<review>\nf.txt:1 needs a period.\n</review>')]);
     });
 
-    test('Claude Code steps start ahead of their prompts, and one the run does not need is stopped before it sends one', () => {
+    test('a Claude Code step started ahead of its prompt that the run does not need never gets one', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cedia-warm-claude-'));
       const bin = join(dir, 'claude');
-      // Each start is counted; a prompt is recorded only when one arrives on stdin.
-      writeFileSync(bin, `#!/bin/sh\nn=$(($(cat ${dir}/n 2>/dev/null || echo 0) + 1)); echo $n > ${dir}/n\nread -r line && echo "$line" > ${dir}/prompt$n\n`, { mode: 0o755 });
+      // A prompt is recorded only when one arrives on stdin. Whether the shell got further than its first line
+      // before it was stopped is a race, so only the prompt is checked (claude-code.test.ts times the early start).
+      writeFileSync(bin, `#!/bin/sh\nread -r line && echo "$line" > ${dir}/prompt$$\n`, { mode: 0o755 });
       const r = cedia([reply('DIRECT'), ...writes], [...base, '--plan', 'claude-code', '--review', 'claude-code'], undefined, { CEDIA_CLAUDE_BIN: bin });
       expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success', result: 'done' });
       expect(r.err).toContain('no plan for this one');
       expect(r.err).toContain('no review');
-      // Both were started (the plan during the triage, the review during the writer) and neither got a prompt.
-      expect(readFileSync(join(dir, 'n'), 'utf8').trim()).toBe('2');
       expect(readdirSync(dir).filter((f) => f.startsWith('prompt'))).toEqual([]);
     });
 
