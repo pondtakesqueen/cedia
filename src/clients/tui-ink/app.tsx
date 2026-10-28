@@ -510,7 +510,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         const text = rest.join(' ').trim();
         if (!text) {
           const notes = store.notes();
-          say(notes.length ? notes.map((n) => `${n.id}  ${n.text}`).join('\\n') : 'no memory notes for this project');
+          say(notes.length ? notes.map((n) => `${n.id}  ${n.text}`).join('\n') : 'no memory notes for this project');
           return;
         }
         try {
@@ -521,12 +521,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'skills': {
         const skills = loadSkills(args.cwd, cediaHome());
-        say(skills.length ? skills.map((s) => `${s.name}  ${s.description}`).join('\\n') : 'no skills for this project');
+        say(skills.length ? skills.map((s) => `${s.name}  ${s.description}`).join('\n') : 'no skills for this project');
         return;
       }
       case 'mcp': {
         const { servers } = listMcp();
-        say(servers.length ? servers.map((s) => `${s.name}  ${s.command ?? s.url ?? ''}`).join('\\n') : 'no MCP servers configured');
+        say(servers.length ? servers.map((s) => `${s.name}  ${s.command ?? s.url ?? ''}`).join('\n') : 'no MCP servers configured');
         return;
       }
       case 'new':
@@ -568,7 +568,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           say([`commit ${files.length} file${files.length === 1 ? '' : 's'}: ${files.join(', ')}`, '', message, '', 'commit this? y to commit; n, or anything else you type, cancels'].join('\n'));
           pendingRef.current = { what: 'the commit', yes: () => {
             const r = commitFiles(args.cwd, files, message);
-            say(r.ok ? (r.out.split('\\n')[0] ?? 'committed') : `git commit failed: ${r.out}`, r.ok ? undefined : 'red');
+            say(r.ok ? (r.out.split('\n')[0] ?? 'committed') : `git commit failed: ${r.out}`, r.ok ? undefined : 'red');
           } };
           } finally { busyRef.current = false; }
         })();
@@ -914,14 +914,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         if (!thread) { say('no thread yet'); return; }
         const t = store.read(thread);
         const path = rest[0] || join(args.cwd, `${thread}.txt`);
-        try { const lines = [`thread: ${t.id}`, `title: ${t.title}`, '', ...t.messages.map((m) => `${m.from}: ${m.text}`)]; require('node:fs').writeFileSync(path, lines.join('\\n') + '\\n'); say(`exported to ${path}`); } catch (e) { say((e as Error).message); }
+        try { const lines = [`thread: ${t.id}`, `title: ${t.title}`, '', ...t.messages.map((m) => `${m.from}: ${m.text}`)]; require('node:fs').writeFileSync(path, lines.join('\n') + '\n'); say(`exported to ${path}`); } catch (e) { say((e as Error).message); }
         return;
       }
       case 'tasks':
       case 'agents': {
         if (!thread) { say('no thread yet'); return; }
         const children = store.list().filter((t) => (t as { parent?: string }).parent === thread);
-        say(children.length ? children.map((t) => `${t.id}  ${t.title}`).join('\\n') : 'no sub-threads');
+        say(children.length ? children.map((t) => `${t.id}  ${t.title}`).join('\n') : 'no sub-threads');
         return;
       }
       case 'vim': {

@@ -47,8 +47,14 @@ export const READ_ONLY_POLICY: Policy = { mode: 'read-only', allow: [], deny: []
 
 export type Decision = { decision: 'allow' | 'deny'; rule: string; reason?: string };
 
+// Tools that run their `command` input in a shell: each is held to bash's deny list, guards and rules.
+const SHELL_TOOLS = new Set(['bash', 'Monitor']);
+const shellCommand = (spec: ToolSpec, input: JsonObject) => (SHELL_TOOLS.has(spec.name) ? String(input.command ?? '') : undefined);
+// The names a rule may give a call: its own, and `bash` for every shell tool, so a `bash(…)` rule covers them all.
+const ruleTools = (name: string) => (SHELL_TOOLS.has(name) && name !== 'bash' ? [name, 'bash'] : [name]);
+
 export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: string): Decision {
-  const command = spec.name === 'bash' ? String(input.command ?? '') : undefined;
+  const command = shellCommand(spec, input);
   const commands = command !== undefined ? simpleCommands(command) : undefined;
   const unlocked = (g: Guard) => policy.unlock?.includes(g) ?? false;
   const path = spec.pathOf?.(input);
@@ -75,7 +81,7 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
   for (const rule of policy.deny) {
     // edit and write change a file the same way, so a deny rule naming either covers both.
     const tool = spec.name === 'write' && /^edit\b/.test(rule.trim()) ? 'edit' : spec.name === 'edit' && /^write\b/.test(rule.trim()) ? 'write' : spec.name;
-    if (matches(rule, tool, commands, path, cwd, 'any', undefined, input)) return deny(`deny:${rule}`, `matches the deny rule ${rule}`);
+    if (ruleTools(tool).some((t) => matches(rule, t, commands, path, cwd, 'any', undefined, input))) return deny(`deny:${rule}`, `matches the deny rule ${rule}`);
     if (command !== undefined && commands && writesDenied(rule, command, commands, cwd))
       return deny(`deny:${rule}`, `may write a path the deny rule ${rule} covers; that rule holds for commands too`);
   }
@@ -90,7 +96,7 @@ export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: s
 
   if (effect === 'read' || effect === 'network') return { decision: 'allow', rule: 'effect:read' };
 
-  const allowRule = policy.allow.find((rule) => matches(rule, spec.name, commands, path, cwd, 'every', command, input));
+  const allowRule = policy.allow.find((rule) => ruleTools(spec.name).some((t) => matches(rule, t, commands, path, cwd, 'every', command, input)));
   if (effect === 'write_workspace' && path !== undefined && !insideWorkspace(path, cwd) && !allowRule)
     return deny('outside-workspace', `${path} is outside the working directory`);
   if (effect === 'write_workspace' && path !== undefined && protectedPath(path, cwd))
@@ -116,8 +122,9 @@ export function rulePatternMatches(rule: string, tool: string, text: string): bo
 
 // Whether a call matches a rule the way a deny rule does: any simple command of a bash call, or the call's path.
 export function ruleMatches(rule: string, spec: ToolSpec, input: JsonObject, cwd: string): boolean {
-  const commands = spec.name === 'bash' ? simpleCommands(String(input.command ?? '')) : undefined;
-  return matches(rule, spec.name, commands, spec.pathOf?.(input), cwd, 'any', undefined, input);
+  const command = shellCommand(spec, input);
+  const commands = command !== undefined ? simpleCommands(command) : undefined;
+  return ruleTools(spec.name).some((t) => matches(rule, t, commands, spec.pathOf?.(input), cwd, 'any', undefined, input));
 }
 
 function matches(rule: string, tool: string, commands: string[][] | null | undefined, path: string | undefined, cwd: string, mode: 'any' | 'every', command?: string, input?: JsonObject): boolean {

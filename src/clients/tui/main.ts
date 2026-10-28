@@ -746,7 +746,7 @@ export class CediaTui {
           const pp = join(cediaHome(), 'settings.json');
           let raw = '{}';
           try { raw = readFileSync(pp, 'utf8'); } catch {}
-          this.say(`settings file: ${pp}\\n${raw.trim() || '{}'}`);
+          this.say(`settings file: ${pp}\n${raw.trim() || '{}'}`);
           break;
         }
         case 'cost':
@@ -794,7 +794,7 @@ export class CediaTui {
           break;
         }
         case 'resume': {
-          if (!rest[0]) this.say(this.store.list().filter((t) => !t.archived).map(threadLine).join('\\n') || dim('no threads in this project'));
+          if (!rest[0]) this.say(this.store.list().filter((t) => !t.archived).map(threadLine).join('\n') || dim('no threads in this project'));
           else if (!this.store.has(rest[0])) this.say(red(`no thread ${rest[0]} in this project`));
           else {
             this.thread = rest[0];
@@ -816,7 +816,7 @@ export class CediaTui {
           const lines = ['hooks'];
           for (const e of ['preToolUse', 'postToolUse', 'stop']) lines.push(`  ${e}: ${(hooks[e] ?? []).length}`);
           lines.push(`file: ${pp}`);
-          this.say(lines.join('\\n'));
+          this.say(lines.join('\n'));
           break;
         }
         case 'effort':
@@ -847,7 +847,7 @@ export class CediaTui {
         case 'agents': {
           if (!this.thread) { this.say(dim('no thread yet')); break; }
           const children = this.store.list().filter((t) => t.parent === this.thread);
-          this.say(children.length ? children.map((t) => `${t.id}  ${t.title}`).join('\\n') : dim('no sub-threads / tasks'));
+          this.say(children.length ? children.map((t) => `${t.id}  ${t.title}`).join('\n') : dim('no sub-threads / tasks'));
           break;
         }
         case 'compact':
@@ -863,7 +863,7 @@ export class CediaTui {
           const path = rest[0] || join(this.args.cwd, `${this.thread}.txt`);
           try {
             const lines = [`thread: ${t.id}`, `title: ${t.title}`, `task: ${t.task}`, '', ...t.messages.map((m) => `${m.from}: ${m.text}`)];
-            writeFileSync(path, lines.join('\\n') + '\\n');
+            writeFileSync(path, lines.join('\n') + '\n');
             this.say(green(`exported to ${path}`));
           } catch (e) { this.say(red((e as Error).message)); }
           break;
@@ -871,7 +871,7 @@ export class CediaTui {
         case 'agents': {
           if (!this.thread) { this.say(dim('no thread yet')); break; }
           const children = this.store.list().filter((t) => (t as { parent?: string }).parent === this.thread);
-          this.say(children.length ? children.map((t) => `${t.id}  ${t.title}`).join('\\n') : dim('no sub-threads'));
+          this.say(children.length ? children.map((t) => `${t.id}  ${t.title}`).join('\n') : dim('no sub-threads'));
           break;
         }
         case 'btw': {
@@ -1027,7 +1027,7 @@ export class CediaTui {
             `  vim mode      ${this.vimMode}   vim keybindings on/off`,
             'pick one below to change it (Esc cancels); or run /model, /permission, /theme, /output-style, /vim directly.',
           ];
-          this.say(lines.join('\\n'));
+          this.say(lines.join('\n'));
           const items: SelectItem[] = [
             { value: 'model', label: `model         ${currentModel}` },
             { value: 'permission', label: `permission    ${this.args.permission ?? 'auto'}` },
