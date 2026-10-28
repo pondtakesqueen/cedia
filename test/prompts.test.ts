@@ -13,11 +13,25 @@ describe('system prompt per model', () => {
     expect(systemFor(resolveModel('haiku'))).toBe(BASE_SYSTEM);
     for (const ref of ['opus', 'anthropic/claude-opus-5-5-fast']) {
       const s = systemFor(resolveModel(ref));
-      expect(s.startsWith(`${BASE_SYSTEM}\n\nFor this model in particular, correctness comes before brevity:\n`)).toBe(true);
+      expect(s.startsWith('You are cedia')).toBe(true);
+      expect(s).toContain('\n\nFor this model in particular, correctness comes before brevity:\n');
       expect(s).toContain('Walk the failure paths');
     }
     expect(systemFor(resolveModel('sonnet'))).toBe(BASE_SYSTEM);
     expect(systemFor(FAUX_MODEL)).toBe(BASE_SYSTEM);
+  });
+
+  test("Opus gets the base without its turn-saving lines; every other model keeps them word for word", () => {
+    const turnSaving = ['so it costs the user time and money', 'Extra probes, edge cases or improvements nobody asked for widen the change and cost turns'];
+    for (const m of CATALOG) {
+      const s = systemFor(m);
+      for (const line of turnSaving) expect(s.includes(line)).toBe(!m.thorough);
+      if (!m.thorough) expect(s.startsWith(BASE_SYSTEM)).toBe(true);
+    }
+    expect(CATALOG.filter((m) => m.thorough).map((m) => m.ref)).toEqual(['anthropic/claude-opus-5-5', 'anthropic/claude-opus-5-5-fast']);
+    const opus = systemFor(resolveModel('opus'));
+    expect(opus).toContain('once every rule the task states holds and a declared check passes after your last change');
+    expect(opus).toContain('Leave improvements nobody asked for out of the change.');
   });
 
   test('a model prompt holds no per-session value, so the prefix stays cacheable (cache rule 1)', () => {

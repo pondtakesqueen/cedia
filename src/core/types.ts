@@ -146,6 +146,9 @@ export type ModelSpec = {
   // Lines for this model after cedia's base prompt (core/prompts.ts systemFor): where a model family's habits
   // cost turns that the base prompt's rules do not stop. Fixed per model, so a session's prefix stays the same.
   prompt?: string;
+  // The base prompt without its lines that trade checking for fewer turns (core/prompts.ts), for a model that
+  // stops too early with them.
+  thorough?: boolean;
   maxOutput: number;
   defaultEffort?: Effort;
   price: Price & { offPeak?: Price & { isOffPeak: (d: Date) => boolean }; above?: { tokens: number; price: Price } };
