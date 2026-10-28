@@ -1,5 +1,6 @@
 import React from 'react';
-import { Box, Text, useIsScreenReaderEnabled } from 'ink';
+import { Box, Text } from 'ink';
+import { useCediaScreenReader } from './a11y.ts';
 import { inkTheme } from './theme-tokens.ts';
 import { cediaHome } from '../../core/config.ts';
 
@@ -228,7 +229,7 @@ function renderBlock(
 
 export function PermissionDialog(props: PermissionDialogProps): React.ReactElement {
   const { tool, input, reason, rule } = props;
-  const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
+  const screenReader = useCediaScreenReader();
   const label = toolLabel(tool);
   const T = inkTheme(cediaHome()).tokens;
   const blocks = noticeBlocks(tool, input);
