@@ -13,6 +13,8 @@ import { cancelStep, messageFullySelected, offsetForIndex, rowMapFromWalk, selec
 import { highlightQuery, offsetAt, paintRuns } from '../src/clients/tui-ink/autocomplete.ts';
 import { createHeightCache, heightCacheKey, visibleWindow } from '../src/clients/tui-ink/visible-window.ts';
 import { assignRecycleSlots, messageSlotKey } from '../src/clients/tui-ink/virtual-list.ts';
+import { inkRenderOptions } from '../src/clients/tui-ink/render-options.ts';
+import { attachSigcontRedraw, notifyTerminalResume, onTerminalResume } from '../src/clients/tui-ink/terminal-resume.ts';
 
 const stops: Array<() => void> = [];
 afterEach(() => {
@@ -303,5 +305,28 @@ describe('ink key context', () => {
     writeFileSync(path, JSON.stringify({ bindings: [] }));
     await Bun.sleep(1500);
     expect(seen.length).toBe(n);
+  });
+
+  test('inkRenderOptions enables Frame-diff and a 60 fps schedule', () => {
+    const opts = inkRenderOptions();
+    expect(opts.incrementalRendering).toBe(true);
+    expect(opts.maxFps).toBe(60);
+    expect(opts.alternateScreen).toBe(true);
+    expect(opts.exitOnCtrlC).toBe(false);
+    expect(inkRenderOptions({ maxFps: 30 }).maxFps).toBe(30);
+  });
+
+  test('terminal resume notifies listeners and SIGCONT clears then notifies', () => {
+    const ticks: number[] = [];
+    const stop = onTerminalResume(() => { ticks.push(1); });
+    stops.push(stop);
+    notifyTerminalResume();
+    expect(ticks).toEqual([1]);
+    const cleared: number[] = [];
+    const detach = attachSigcontRedraw(() => { cleared.push(1); });
+    stops.push(detach);
+    process.emit('SIGCONT');
+    expect(cleared).toEqual([1]);
+    expect(ticks).toEqual([1, 1]);
   });
 });

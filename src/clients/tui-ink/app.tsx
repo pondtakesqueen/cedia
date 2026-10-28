@@ -30,6 +30,7 @@ import { ChordInterceptor, chordsFromBindings, matchChord } from './keybindings/
 import { cancelStep, messageFullySelected, offsetForIndex, rowMapFromWalk, selectionBounds, type InkSelection, type RowMap, type WalkBand } from './row-map.ts';
 import { createHeightCache, heightCacheKey, visibleWindow } from './visible-window.ts';
 import { assignRecycleSlots, messageSlotKey, type RecycleSlot } from './virtual-list.ts';
+import { onTerminalResume } from './terminal-resume.ts';
 import { matchesKey } from '@mariozechner/pi-tui';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
@@ -180,12 +181,15 @@ function normKey(id: string): string {
 }
 
 export function App({ args }: { args: TuiArgs }): React.ReactElement {
-  const { exit } = useApp();
+  const { exit, suspendTerminal } = useApp();
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [running, setRunning] = useState(false);
   const inputRef = useRef(input);
   useEffect(() => { inputRef.current = input; }, [input]);
+  // After SIGCONT (fg), bump state so Ink commits a fresh frame onto the cleared screen.
+  const [, setResumeTick] = useState(0);
+  useEffect(() => onTerminalResume(() => setResumeTick((n) => n + 1)), []);
   const [activity, setActivity] = useState('');
   const [context, setContext] = useState(0);
   const [spent, setSpent] = useState(0);
@@ -1764,23 +1768,23 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       const editor = process.env.VISUAL || process.env.EDITOR;
       if (!editor) { push({ role: 'system', text: 'no $VISUAL or $EDITOR set' }); return; }
       const tmp = join(tmpdir(), `cedia-prompt-${Date.now()}.md`);
-      try {
-        fsWrite(tmp, inputRef.current);
-        process.stdout.write('\x1b[?1049l');
+      void (async () => {
         try {
-          Bun.spawnSync([editor, tmp], { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' });
-        } finally {
-          process.stdout.write('\x1b[?1049h');
+          fsWrite(tmp, inputRef.current);
+          // Hand the TTY to $EDITOR; Ink leaves alt-screen, restores it, and force-redraws.
+          await suspendTerminal(() => {
+            Bun.spawnSync([editor, tmp], { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' });
+          });
           process.stdout.write('\x1b[?1000h\x1b[?1006h');
+          const edited = fsRead(tmp, 'utf8').replace(/\n+$/, '');
+          setInput(edited);
+          inputRef.current = edited;
+        } catch (e) {
+          push({ role: 'system', text: `editor failed: ${(e as Error).message}`, tone: 'red' });
+        } finally {
+          try { fsUnlink(tmp); } catch {}
         }
-        const edited = fsRead(tmp, 'utf8').replace(/\n+$/, '');
-        setInput(edited);
-        inputRef.current = edited;
-      } catch (e) {
-        push({ role: 'system', text: `editor failed: ${(e as Error).message}`, tone: 'red' });
-      } finally {
-        try { fsUnlink(tmp); } catch {}
-      }
+      })();
       return;
     }
   });
