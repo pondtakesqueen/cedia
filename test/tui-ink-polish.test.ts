@@ -12,6 +12,7 @@ import { keybindingsPath, watchKeybindings } from '../src/clients/tui-ink/keybin
 import { cancelStep, messageFullySelected, offsetForIndex, rowMapFromWalk, selectionBounds } from '../src/clients/tui-ink/row-map.ts';
 import { highlightQuery, offsetAt, paintRuns } from '../src/clients/tui-ink/autocomplete.ts';
 import { createHeightCache, heightCacheKey, visibleWindow } from '../src/clients/tui-ink/visible-window.ts';
+import { assignRecycleSlots, messageSlotKey } from '../src/clients/tui-ink/virtual-list.ts';
 
 const stops: Array<() => void> = [];
 afterEach(() => {
@@ -132,6 +133,24 @@ describe('ink key context', () => {
     expect(visibleWindow({ count: 0, scrollOffset: 0, budget: 10, heightAt: () => 1 })).toEqual({
       start: 0, end: 0, used: 0,
     });
+  });
+
+  test('assignRecycleSlots reuses slots for the same message key', () => {
+    const items = [
+      { role: 'user', text: 'a' },
+      { role: 'assistant', text: 'b' },
+      { role: 'user', text: 'c' },
+      { role: 'assistant', text: 'd' },
+    ];
+    const keyAt = (i: number) => messageSlotKey(items[i]!, i);
+    const first = assignRecycleSlots(1, 3, keyAt);
+    expect(first.map((s) => s.index)).toEqual([1, 2]);
+    const slotFor = Object.fromEntries(first.map((s) => [s.key, s.slot]));
+    const slid = assignRecycleSlots(2, 4, keyAt, first);
+    expect(slid.map((s) => s.index)).toEqual([2, 3]);
+    const kept = slid.find((s) => s.index === 2);
+    expect(kept?.slot).toBe(slotFor[keyAt(2)]);
+    expect(assignRecycleSlots(0, 0, keyAt)).toEqual([]);
   });
 
   test('height cache returns the same estimate until cleared', () => {
