@@ -425,7 +425,8 @@ describe('cedia -p (offline, faux)', () => {
     test('a review cut off by a stop is reported as interrupted, not as no verdict', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'cedia-slow-claude-'));
       const bin = join(dir, 'claude');
-      writeFileSync(bin, `#!/bin/sh\ntouch ${dir}/started\nexec sleep 30\n`, { mode: 0o755 });
+      // Claude Code starts before the writer is done and reads its prompt from stdin: the review has begun once it has.
+      writeFileSync(bin, `#!/bin/sh\nread -r prompt\ntouch ${dir}/started\nexec sleep 30\n`, { mode: 0o755 });
       writeFileSync(join(dir, 'script.json'), JSON.stringify(writes));
       const proc = Bun.spawn([BIN, '-m', 'faux', '--cwd', dir, ...base, '--review', 'claude-code'], {
         env: { ...process.env, CEDIA_FAUX_SCRIPT: join(dir, 'script.json'), CEDIA_HOME: join(dir, 'home'), CEDIA_CLAUDE_BIN: bin },
@@ -450,7 +451,7 @@ describe('cedia -p (offline, faux)', () => {
       writeFileSync(join(dir, '2'), result('f.txt:1 needs a period.\nVERDICT: changes'));
       writeFileSync(
         bin,
-        `#!/bin/sh\nn=$(($(cat ${dir}/n 2>/dev/null || echo 0) + 1)); echo $n > ${dir}/n\nprintf '%s\\n' "$@" > ${dir}/args$n; env > ${dir}/env$n\ncat ${dir}/$n\n`,
+        `#!/bin/sh\nn=$(($(cat ${dir}/n 2>/dev/null || echo 0) + 1)); echo $n > ${dir}/n\nprintf '%s\\n' "$@" > ${dir}/args$n; env > ${dir}/env$n\ncat > ${dir}/prompt$n\ncat ${dir}/$n\n`,
         { mode: 0o755 },
       );
       const r = cedia([...writes, call('c3', 'echo good. > f.txt'), call('c4', 'test -s f.txt'), reply('fixed')], [...base, '--plan', 'claude-code', '--plan-when', 'always', '--review', 'claude-code'], undefined, {
@@ -476,8 +477,28 @@ describe('cedia -p (offline, faux)', () => {
       expect(readFileSync(join(dir, 'args2'), 'utf8')).toContain('Bash(git diff:*)\nBash(git log:*)\nBash(git show:*)\nBash(git status:*)\nBash(test -s f.txt)');
       expect(readFileSync(join(dir, 'env1'), 'utf8')).not.toContain('ANTHROPIC_API_KEY');
       expect(readFileSync(join(dir, 'env1'), 'utf8')).not.toContain('CEDIA_');
+      // The prompt goes in on stdin, so each step can start before it is known.
+      expect(planArgs).toContain('-p\n--input-format\nstream-json\n--output-format\nstream-json\n');
+      expect(JSON.parse(readFileSync(join(dir, 'prompt1'), 'utf8')).message.content).toContain('Plan how to do the task below');
+      expect(JSON.parse(readFileSync(join(dir, 'prompt2'), 'utf8')).message.content).toContain('Review a change another model just made');
+      // The review starts while the writer works, before the change: it goes without the start-time git status.
+      expect(readFileSync(join(dir, 'env1'), 'utf8')).not.toContain('CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS');
+      expect(readFileSync(join(dir, 'env2'), 'utf8')).toContain('CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1');
       const writer = sessionsOf(r.home).find((l) => (l[0] as { role: string }).role === 'code')!;
       expect(userTexts(writer)).toEqual([expect.stringContaining('<plan by="claude-code:opus@medium">'), expect.stringContaining('<review>\nf.txt:1 needs a period.\n</review>')]);
+    });
+
+    test('a Claude Code step started ahead of its prompt that the run does not need never gets one', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cedia-warm-claude-'));
+      const bin = join(dir, 'claude');
+      // A prompt is recorded only when one arrives on stdin. Whether the shell got further than its first line
+      // before it was stopped is a race, so only the prompt is checked (claude-code.test.ts times the early start).
+      writeFileSync(bin, `#!/bin/sh\nread -r line && echo "$line" > ${dir}/prompt$$\n`, { mode: 0o755 });
+      const r = cedia([reply('DIRECT'), ...writes], [...base, '--plan', 'claude-code', '--review', 'claude-code'], undefined, { CEDIA_CLAUDE_BIN: bin });
+      expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success', result: 'done' });
+      expect(r.err).toContain('no plan for this one');
+      expect(r.err).toContain('no review');
+      expect(readdirSync(dir).filter((f) => f.startsWith('prompt'))).toEqual([]);
     });
 
     test('a failed plan step goes on without a plan', () => {
