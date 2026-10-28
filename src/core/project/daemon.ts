@@ -8,7 +8,6 @@ import { selfSpawnArgs } from '../self.ts';
 import { projectKey, sessionPath } from '../session/log.ts';
 import { daemonPid, daemonStart, daemonStop, isAlive, listBgSessions, recordStart, recordStop } from './background.ts';
 import { desktopLockHolder } from './desktop-lock.ts';
-import { refreshMdmIfStale } from './mdm-remote.ts';
 import { schedulesPath, ScheduleStore } from './schedules.ts';
 import { threadsDir, ThreadStore } from './threads.ts';
 
@@ -43,9 +42,6 @@ export async function pumpDaemon(deps: DaemonDeps): Promise<DaemonTick> {
   if (desktop) return { ...tick, yielded: desktop.pid };
   const threads = new ThreadStore(threadsDir(home, slug));
   const schedules = new ScheduleStore(schedulesPath(home, slug));
-  // Org policy rolls out on its own: refetch the managed cache when older than the poll interval.
-  // Fail-open (a missing URL or failed fetch just leaves the file cache), so this never stops a pass.
-  await refreshMdmIfStale(home).catch(() => 'failed' as const);
   for (const s of listBgSessions(home, slug)) {
     if (!s.alive && !s.stopped) {
       recordStop(home, slug, s.id);

@@ -37,7 +37,6 @@ import { createHeightCache, heightCacheKey, visibleWindow } from './visible-wind
 import { assignRecycleSlots, messageSlotKey, type RecycleSlot } from './virtual-list.ts';
 import { onTerminalResume } from './terminal-resume.ts';
 import { matchesKey } from '@mariozechner/pi-tui';
-import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
 import { acceptTrust, completedNames, isComplete, loadOnboarding, markStep, ONBOARDING_STEPS, reconcileOnboarding, saveOnboarding } from './onboarding.ts';
@@ -1116,9 +1115,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
 
   const { stdin } = useStdin();
-  React.useEffect(() => {
-    if (process.env.CEDIA_MDM_URL) void fetchMdmSettings().then((d) => { if (Object.keys(d).length) { /* cached by server; reload not needed */ } }).catch(() => {});
-  }, []);
   React.useEffect(() => {
     const home = cediaHome();
     setLoadedKeybindings(loadKeybindings(home));

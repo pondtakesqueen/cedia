@@ -3,27 +3,23 @@ import { basename, join, resolve } from 'node:path';
 import { storeImage } from './core/images.ts';
 import { inlineEdit, parseRange, type InlineEdit } from './core/project/inline-edit.ts';
 import { parseArgs } from 'node:util';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { runHeadless } from './clients/headless/main.ts';
 import type { TuiArgs } from './clients/tui-ink/args.ts';
 import { ALIASES } from './core/providers/catalog.ts';
 import { GUARDS, PERMISSION_ENTRIES, type PermissionList } from './core/safety/policy.ts';
 import { applyAllowRules, suggestAllowRules } from './core/safety/suggest.ts';
-import { cediaHome, loadPermissionSetting, loadPolicy, loadRoles, loadManagedSettings, loadResolvedSettings, loadPolicyLimits, savePolicyLimits } from './core/config.ts';
+import { cediaHome, loadPermissionSetting, loadPolicy, loadRoles } from './core/config.ts';
 import { processKeychain } from './core/providers/keychain.ts';
 import { modelLine, modelList } from './core/providers/models.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
 import { TeamStore, teamLine } from './core/project/teams.ts';
 import { findLivingDocs } from './core/project/livingdocs.ts';
-import { fetchMdmSettings } from './core/project/mdm-remote.ts';
-import { listRemoteSessions, runRemote, fetchRemoteSession } from './core/project/remote.ts';
 import { voiceInput } from './core/project/voice.ts';
 import { loadKeybindings } from './clients/tui-ink/keybindings/loader.ts';
 import { daemonCmd } from './clients/daemon/cmd.ts';
 import { loadOnboarding, saveOnboarding, acceptTrust, markStep, isComplete } from './clients/tui-ink/onboarding.ts';
 import { loadOutputStyles, getStyle, stylesDir } from './core/output-styles/styles.ts';
-import { isAlive, listBgSessions, recordStart, recordStop, bgPath, daemonPidPath, readBgEvents } from './core/project/background.ts';
 import { installPlugin, uninstallPlugin, setPluginEnabled, updatePlugin, listInstalled, loadManifest, discoverPlugins, addMarketplace, removeMarketplace, updateMarketplace, loadMarketplaces } from './core/plugins/plugins.ts';
 import { consolidateMemory } from './core/project/consolidate.ts';
 import { gatherNotes } from './core/memory/gather.ts';
@@ -43,7 +39,6 @@ import { formatUsage, isUsageEvent, readEventsLenient, sinceOf, usageReport, typ
 import { selectSessions } from './core/session/select.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
 import { doctorReport } from './core/doctor.ts';
-import { selfSpawnArgs } from './core/self.ts';
 import { versionInfo } from './protocol/version.ts';
 
 // Multi-repo workspace: --project <key> overrides the project key for this invocation, so threads in different
@@ -219,24 +214,14 @@ export async function main(argv: string[]): Promise<number> {
     console.error('cedia: magic-docs is now living-docs; the old name still works for now');
     return livingDocsCmd(argv.slice(1));
   }
-  if (argv[0] === 'mdm') return mdmCmd(argv.slice(1));
-  if (argv[0] === 'serve') return serveCmd(argv.slice(1));
-  if (argv[0] === 'remote') return remoteCmd(argv.slice(1));
-  if (argv[0] === 'teleport') return teleportCmd(argv.slice(1));
   if (argv[0] === 'voice') return voiceCmd(argv.slice(1));
   if (argv[0] === 'output-style') return outputStyle(argv.slice(1));
   if (argv[0] === 'doctor') return doctor(argv.slice(1));
   if (argv[0] === 'onboarding') return onboarding(argv.slice(1));
-  if (argv[0] === 'agents') return agentsCmd(argv.slice(1));
-  if (argv[0] === 'logs') return logsCmd(argv.slice(1));
-  if (argv[0] === 'attach') return attachCmd(argv.slice(1));
   if (argv[0] === 'daemon') return daemonCmd(argv.slice(1));
-  if (argv[0] === 'stop' || argv[0] === 'kill') return stopCmd(argv.slice(1), argv[0] === 'kill');
-  if (argv[0] === 'respawn') return respawnCmd(argv.slice(1));
   if (argv[0] === 'plugin') return plugin(argv.slice(1));
   if (argv[0] === 'marketplace') return marketplace(argv.slice(1));
   if (argv[0] === 'settings') return settings(argv.slice(1));
-  if (argv[0] === 'policy-limits') return policyLimits(argv.slice(1));
   if (argv[0] === 'schedules') return schedules(argv.slice(1));
   if (argv[0] === 'skills') return skills(argv.slice(1));
   if (argv[0] === 'commands') return commands(argv.slice(1));
@@ -281,7 +266,6 @@ export async function main(argv: string[]): Promise<number> {
       browser: { type: 'string' },
       'context-management': { type: 'string' },
       'streaming-tools': { type: 'boolean' },
-      bg: { type: 'boolean' },
       profile: { type: 'string' },
       swarm: { type: 'string' },
       workers: { type: 'string' },
@@ -384,23 +368,6 @@ export async function main(argv: string[]): Promise<number> {
   if (!prompt) {
     console.error(USAGE);
     return 2;
-  }
-  if (values.bg) {
-    const { ThreadStore, threadsDir } = await import('./core/project/threads.ts');
-    const { sessionPath } = await import('./core/session/log.ts');
-    const { projectKey } = await import('./core/session/log.ts');
-    const { recordStart } = await import('./core/project/background.ts');
-    const store = new ThreadStore(threadsDir(cediaHome(), projectKey(base.cwd ?? process.cwd())));
-    const tid = store.open(prompt, {});
-    const sid = crypto.randomUUID();
-    const logPath = sessionPath(base.cwd ?? process.cwd(), sid);
-    const child = Bun.spawn(selfSpawnArgs(['-p', prompt, '--thread', tid, '--sandbox', base.sandbox ?? 'auto', '--output-format', 'json']), { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
-    // detach
-    try { child.unref(); } catch {}
-    const bgid = `bg-${crypto.randomUUID().slice(0, 8)}`;
-    recordStart(cediaHome(), projectKey(base.cwd ?? process.cwd()), { id: bgid, thread: tid, pid: child.pid ?? 0, logPath });
-    console.log(bgid);
-    return 0;
   }
   try {
     const result = await runHeadless({ ...base, prompt, outputFormat: format });
@@ -1044,8 +1011,7 @@ function doctor(argv: string[]): number {
     console.log(`home: ${home}`);
     console.log(`cwd: ${cwd}`);
     console.log(`sandbox: ${r.sandbox.available ? 'available' : 'unavailable'} (${r.sandbox.tool ?? 'no tool'})`);
-    console.log(`settings: user ${tier(r.settings.user)}, managed ${tier(r.settings.managed)}, mdm ${tier(r.settings.mdm)}, resolved ${r.settings.resolved}`);
-    console.log(`mdm: ${r.mdm.url ? 'url set' : 'no url'}, cache ${r.mdm.cache}`);
+    console.log(`settings: ${tier(r.settings.user)}`);
     console.log(`keybindings: ${keybindings.count ?? keybindings.error ?? 0}`);
     console.log(`mcp servers: ${r.mcp.servers.length ? r.mcp.servers.map((s) => s.name).join(', ') : 'none'}${bad.length ? ` (invalid: ${bad.map((s) => `${s.name}: ${s.error}`).join('; ')})` : ''}`);
   }
@@ -1055,48 +1021,14 @@ function doctor(argv: string[]): number {
 function settings(argv: string[]): number {
   let parsed;
   try {
-    parsed = parseArgs({ args: argv, options: { source: { type: 'string', default: 'resolved' }, json: { type: 'boolean' }, cwd: { type: 'string' } } });
+    parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' }, cwd: { type: 'string' } } });
   } catch (e) {
     console.error(`cedia: ${(e as Error).message}`);
     return 2;
   }
-  const source = parsed.values.source ?? 'resolved';
   let data: unknown;
-  if (source === 'user') {
-    try { data = JSON.parse(readFileSync(join(cediaHome(), 'settings.json'), 'utf8')); } catch { data = {}; }
-  }
-  else if (source === 'managed') data = loadManagedSettings();
-  else if (source === 'resolved') data = loadResolvedSettings();
-  else if (source === 'policy') data = loadPolicyLimits() ?? {};
-  else {
-    console.error(`cedia: unknown --source ${source}`);
-    return 2;
-  }
+  try { data = JSON.parse(readFileSync(join(cediaHome(), 'settings.json'), 'utf8')); } catch { data = {}; }
   console.log(parsed.values.json ? JSON.stringify(data) : JSON.stringify(data, null, 2));
-  return 0;
-}
-
-async function policyLimits(argv: string[]): Promise<number> {
-  let parsed;
-  try {
-    parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' }, write: { type: 'string' } } });
-  } catch (e) {
-    console.error(`cedia: ${(e as Error).message}`);
-    return 2;
-  }
-  // With --write <json>, cache it (for tests/offline). Otherwise print cached.
-  if (parsed.values.write) {
-    try {
-      savePolicyLimits(JSON.parse(parsed.values.write));
-      console.log('saved policy limits');
-      return 0;
-    } catch (e) {
-      console.error(`cedia: ${(e as Error).message}`);
-      return 1;
-    }
-  }
-  const cached = loadPolicyLimits();
-  console.log(parsed.values.json ? JSON.stringify(cached ?? {}) : JSON.stringify(cached ?? {}, null, 2));
   return 0;
 }
 
@@ -1174,91 +1106,6 @@ function marketplace(argv: string[]): number {
   return 2;
 }
 
-function agentsCmd(argv: string[]): number {
-  let parsed;
-  try { parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' }, cwd: { type: 'string' } } }); } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
-  const home = cediaHome();
-  const cwd = parsed.values.cwd ?? process.cwd();
-  const slug = projectKey(cwd);
-  const sessions = listBgSessions(home, slug);
-  if (parsed.values.json) console.log(JSON.stringify(sessions));
-  else console.log(sessions.length ? sessions.map((s) => `${s.id}  ${s.alive ? 'alive' : 'dead'}  thread=${s.thread}  pid=${s.pid}`).join('\n') : 'no background sessions');
-  return 0;
-}
-
-function logsCmd(argv: string[]): number {
-  let parsed;
-  try { parsed = parseArgs({ args: argv, allowPositionals: true, options: { tail: { type: 'string' }, follow: { type: 'boolean' }, cwd: { type: 'string' } } }); } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
-  const id = parsed.positionals[0];
-  if (!id) { console.error('usage: cedia logs <id> [--tail N] [--follow]'); return 2; }
-  const home = cediaHome();
-  const cwd = parsed.values.cwd ?? process.cwd();
-  const slug = projectKey(cwd);
-  const sessions = listBgSessions(home, slug);
-  const s = sessions.find((x) => x.id === id);
-  if (!s) { console.error(`no session ${id}`); return 1; }
-  const tail = parsed.values.tail ? Number(parsed.values.tail) : 50;
-  const { readFileSync, existsSync } = require('node:fs');
-  if (!existsSync(s.logPath)) { console.log('(no log yet)'); return 0; }
-  const lines = readFileSync(s.logPath, 'utf8').split('\n');
-  console.log(lines.slice(-tail).join('\n'));
-  return 0;
-}
-
-function attachCmd(argv: string[]): number {
-  const id = argv[0];
-  if (!id) { console.error('usage: cedia attach <id>'); return 2; }
-  console.log(`attach ${id}: tailing log (Ctrl+C to detach)`);
-  return 0;
-}
-
-function stopCmd(argv: string[], kill: boolean): number {
-  let parsed;
-  try { parsed = parseArgs({ args: argv, allowPositionals: true, options: { force: { type: 'boolean' }, cwd: { type: 'string' } } }); } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
-  const id = parsed.positionals[0];
-  if (!id) { console.error('usage: cedia stop|kill <id> [--force]'); return 2; }
-  const home = cediaHome();
-  const cwd = parsed.values.cwd ?? process.cwd();
-  const slug = projectKey(cwd);
-  const sessions = listBgSessions(home, slug);
-  const s = sessions.find((x) => x.id === id);
-  if (!s) { console.error(`no session ${id}`); return 1; }
-  try {
-    process.kill(s.pid, kill ? 'SIGKILL' : 'SIGTERM');
-  } catch {}
-  // wait briefly
-  const start = Date.now();
-  while (Date.now() - start < 2000 && isAlive(s.pid)) { /* busy wait small */ }
-  if (isAlive(s.pid)) {
-    try { process.kill(s.pid, 'SIGKILL'); } catch {}
-  }
-  recordStop(home, slug, id);
-  console.log(`${kill ? 'killed' : 'stopped'} ${id}`);
-  return 0;
-}
-
-function respawnCmd(argv: string[]): number {
-  let parsed;
-  try { parsed = parseArgs({ args: argv, allowPositionals: true, options: { all: { type: 'boolean' }, cwd: { type: 'string' } } }); } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
-  const home = cediaHome();
-  const cwd = parsed.values.cwd ?? process.cwd();
-  const slug = projectKey(cwd);
-  let ids = parsed.positionals;
-  if (parsed.values.all) ids = listBgSessions(home, slug).map((s) => s.id);
-  if (!ids.length) { console.error('usage: cedia respawn <id|--all>'); return 2; }
-  for (const id of ids) {
-    const sessions = listBgSessions(home, slug);
-    const s = sessions.find((x) => x.id === id);
-    if (!s) { console.error(`no session ${id}`); continue; }
-    const child = Bun.spawn(selfSpawnArgs(['-p', 'respawn', '--thread', s.thread]), { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore' });
-    try { child.unref(); } catch {}
-    const bgid = `bg-${crypto.randomUUID().slice(0, 8)}`;
-    recordStart(home, slug, { id: bgid, thread: s.thread, pid: child.pid ?? 0, logPath: s.logPath });
-    console.log(`respawned ${id} as ${bgid}`);
-  }
-  return 0;
-}
-
 function outputStyle(argv: string[]): number {
   let parsed;
   try { parsed = parseArgs({ args: argv, allowPositionals: true, options: { json: { type: 'boolean' }, cwd: { type: 'string' } } }); } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 2; }
@@ -1294,24 +1141,6 @@ function onboarding(argv: string[]): number {
   return 0;
 }
 
-async function remoteCmd(argv: string[]): Promise<number> {
-  const [sub, ...rest] = argv;
-  if (sub === 'list' || !sub) {
-    const sessions = await listRemoteSessions();
-    if (sessions.length === 0) { console.log('no remote sessions (set CEDIA_REMOTE_URL)'); return 0; }
-    for (const s of sessions) console.log(`${s.id}  ${s.title ?? ''}`);
-    return 0;
-  }
-  if (sub === 'run') {
-    const prompt = rest.join(' ').trim();
-    if (!prompt) { console.error('usage: cedia remote run <prompt>'); return 2; }
-    console.log(await runRemote(prompt));
-    return 0;
-  }
-  console.error('usage: cedia remote [list|run <prompt>]');
-  return 2;
-}
-
 async function voiceCmd(argv: string[]): Promise<number> {
   let seconds = 5;
   const i = argv.indexOf('--seconds');
@@ -1320,82 +1149,6 @@ async function voiceCmd(argv: string[]): Promise<number> {
   const r = await voiceInput(seconds);
   if (r.error) { console.error(r.error); return 1; }
   console.log(r.text);
-  return 0;
-}
-
-async function mdmCmd(argv: string[]): Promise<number> {
-  const [sub] = argv;
-  if (sub === 'sync' || !sub) {
-    const data = await fetchMdmSettings();
-    if (!Object.keys(data).length) { console.log('no MDM data (set CEDIA_MDM_URL)'); return 0; }
-    const { writeFileSync, mkdirSync } = await import('node:fs');
-    const { join } = await import('node:path');
-    const dir = join(cediaHome(), 'mdm-cache');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'managed-settings.json'), JSON.stringify(data, null, 2) + '\n');
-    console.log('synced MDM settings');
-    return 0;
-  }
-  console.error('usage: cedia mdm [sync]');
-  return 2;
-}
-
-// `cedia serve`: a run over HTTP for `cedia remote` on another machine of the owner's. A run edits files and runs
-// commands, so the server listens on loopback only and answers only a request that carries its token
-// (`Authorization: Bearer <token>`): without it any web page the owner opened could post a prompt to localhost, and
-// anyone on the network could on 0.0.0.0. The token is CEDIA_SERVE_TOKEN or a fresh one printed at start. Runs keep
-// the OS sandbox as `-p` runs do.
-function serveAuthorized(req: Request, token: string): boolean {
-  const got = req.headers.get('authorization') ?? '';
-  const want = `Bearer ${token}`;
-  return got.length === want.length && timingSafeEqual(Buffer.from(got), Buffer.from(want));
-}
-
-async function serveCmd(argv: string[]): Promise<number> {
-  let port = 8787;
-  const i = argv.indexOf('--port');
-  if (i >= 0 && argv[i + 1]) port = Number(argv[i + 1]);
-  const token = process.env.CEDIA_SERVE_TOKEN || randomBytes(24).toString('base64url');
-  const { runHeadless } = await import('./clients/headless/main.ts');
-  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-  const server = Bun.serve({
-    hostname: '127.0.0.1',
-    port,
-    async fetch(req) {
-      if (!serveAuthorized(req, token)) return json({ error: 'unauthorized' }, 401);
-      const url = new URL(req.url);
-      if (req.method === 'GET' && url.pathname === '/sessions') return json({ sessions: [] });
-      if (req.method === 'POST' && url.pathname === '/run') {
-        try {
-          const body = (await req.json()) as { prompt?: string };
-          const prompt = body.prompt ?? '';
-          let out = '';
-          const result = await runHeadless({ cwd: process.cwd(), prompt, outputFormat: 'json', permission: 'workspace' }, (s) => { out += s; });
-          return json({ output: result.result ?? out, thread: result.thread });
-        } catch (e) {
-          return json({ error: (e as Error).message }, 500);
-        }
-      }
-      return new Response('not found', { status: 404 });
-    },
-  });
-  console.log(`cedia serve on http://127.0.0.1:${server.port}`);
-  if (!process.env.CEDIA_SERVE_TOKEN) console.log(`token: ${token} (set CEDIA_REMOTE_TOKEN to it where cedia remote runs)`);
-  // keep alive
-  await new Promise(() => {});
-  return 0;
-}
-
-async function teleportCmd(argv: string[]): Promise<number> {
-  const id = argv[0];
-  if (!id) { console.error('usage: cedia teleport <session-id>'); return 2; }
-  const remote = await fetchRemoteSession(id);
-  if (!remote) { console.error('session not found (set CEDIA_REMOTE_URL)'); return 1; }
-  const { ThreadStore, threadsDir } = await import('./core/project/threads.ts');
-  const { projectKey } = await import('./core/session/log.ts');
-  const store = new ThreadStore(threadsDir(cediaHome(), projectKey(process.cwd())));
-  const tid = store.open(remote.title ?? `teleported ${id}`, { title: remote.title });
-  console.log(`teleported ${id} -> ${tid}`);
   return 0;
 }
 

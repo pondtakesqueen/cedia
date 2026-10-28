@@ -291,6 +291,6 @@ cedia itself is proprietary (`LICENSE`, all rights reserved; `package.json` says
 
 ## Tier 1 and Tier 2 status
 
-Tier 1: COMPLETE (with documented deferrals: microcompact client-side rejected; server-side context_management deferred; MDM plist/HKLM/HKCU + remote fetch/polling deferred).
+Tier 1: COMPLETE (with documented deferrals: microcompact client-side rejected; server-side context_management deferred). Removed on 2026-10-28 as features a personal harness does not use, which were shown but never enforced or never worked: the managed settings and MDM tiers with `cedia mdm` and `policy-limits` (no policy ever read them), `--bg` with `agents`/`logs`/`attach`/`stop`/`kill`/`respawn` (queued threads and `cedia daemon` do this work), and `serve`/`remote`/`teleport` (the desktop does this work).
 
 Tier 2: Sleep, NotebookEdit, ToolSearch, Monitor, output styles, prompt suggestions implemented. Voice/buddy/computer-use remain deferred.

@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Removed: managed settings and MDM (`cedia mdm`, `policy-limits`, `settings --source managed|resolved|policy`, doctor's managed and mdm lines), since the permission policy never read them; `--bg`, `agents`, `logs`, `attach`, `stop`, `kill` and `respawn`, since queued threads and `cedia daemon` run work in the background; `serve`, `remote` and `teleport`, since the desktop does this work. `cedia settings` prints the user settings.
 - Security: `cedia serve` listens on 127.0.0.1 only and answers only a request with its token (`CEDIA_SERVE_TOKEN`, or one printed at start; `cedia remote` sends `CEDIA_REMOTE_TOKEN`), and its runs keep the OS sandbox. Before, it took prompts in workspace mode with the sandbox off from anyone who could reach port 8787, a web page in the owner's browser included.
 - Security: a plugin whose `name` is not one path segment is refused (`../x` had install delete a directory outside `~/.cedia/plugins`); the `team` tool takes only team ids of its own shape (`../settings` read and rewrote JSON files outside `~/.cedia/teams`, in read-only mode too).
 - Prompt suggestions hold to the privacy level (under `zdr` nothing goes to a model that keeps prompts), and the TUI suggests from the last reply rather than from the word "success".
