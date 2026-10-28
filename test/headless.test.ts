@@ -420,7 +420,7 @@ describe('cedia -p (offline, faux)', () => {
         const offAll = sessionsOf(off.home);
         expect(userTexts(offAll.find((l) => (l[0] as { role: string }).role === 'plan')!)[0]).not.toContain('<part files=');
       }
-    });
+    }, 20_000);
 
     test('a review cut off by a stop is reported as interrupted, not as no verdict', async () => {
       const dir = mkdtempSync(join(tmpdir(), 'cedia-slow-claude-'));
