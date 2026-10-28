@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Security: `cedia serve` listens on 127.0.0.1 only and answers only a request with its token (`CEDIA_SERVE_TOKEN`, or one printed at start; `cedia remote` sends `CEDIA_REMOTE_TOKEN`), and its runs keep the OS sandbox. Before, it took prompts in workspace mode with the sandbox off from anyone who could reach port 8787, a web page in the owner's browser included.
+- Security: a plugin whose `name` is not one path segment is refused (`../x` had install delete a directory outside `~/.cedia/plugins`); the `team` tool takes only team ids of its own shape (`../settings` read and rewrote JSON files outside `~/.cedia/teams`, in read-only mode too).
+- Prompt suggestions hold to the privacy level (under `zdr` nothing goes to a model that keeps prompts), and the TUI suggests from the last reply rather than from the word "success".
+- `sleep` ends on a stop; `Monitor` output is clipped like bash's (the whole in a file) and a watch holds at most 4M characters.
 - `cedia daemon` yields to the desktop's daemon while it holds `~/.cedia/desktop.lock` (`daemon.desktop-lock`).
 - `cedia threads send --image`: images on a thread message, shown with it at the next turn; a fork returns the forked run's images and `-p --image sha256:<hex>` shows a stored one again (`threads.send-images`).
 - `cedia inline-edit`: a selection and an instruction, answered with the new text and its patch; nothing is written (`inline-edit`).
@@ -8,4 +12,4 @@
 ## 1.0.0
 - Tier 1 complete: memory consolidation, managed settings tier (file-based), plugin marketplace (local), keybindings/vim/status line/doctor, background agents.
 - Tier 2: Sleep, NotebookEdit, ToolSearch, Monitor, output styles, prompt suggestions.
-- Deferrals documented in GAP_ANALYSIS_CC.md.
+- Deferrals documented in docs/history/GAP_ANALYSIS_CC.md.

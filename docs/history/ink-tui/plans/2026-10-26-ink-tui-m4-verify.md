@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, React, ink, existing modules.
 
-**Spec:** `docs/superpowers/specs/2026-10-26-ink-tui-design.md` (M2/M3) + SPEC.md stages 3-6.
+**Spec:** `docs/history/ink-tui/specs/2026-10-26-ink-tui-design.md` (M2/M3) + SPEC.md stages 3-6.
 
 ## Global Constraints
 
@@ -82,4 +82,4 @@ Commit: "chore(tui-ink): verify sub-thread display"
 Spec coverage: M4 rewind/LSP/goal full/classifier/spawn.
 
 ## Execution Handoff
-Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/superpowers/plans/2026-10-26-ink-tui-m4-verify.md
+Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/history/ink-tui/plans/2026-10-26-ink-tui-m4-verify.md

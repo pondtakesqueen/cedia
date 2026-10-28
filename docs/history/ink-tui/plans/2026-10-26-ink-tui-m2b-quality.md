@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, React, ink, existing modules.
 
-**Spec:** `docs/superpowers/specs/2026-10-26-ink-tui-design.md` (M2b section).
+**Spec:** `docs/history/ink-tui/specs/2026-10-26-ink-tui-design.md` (M2b section).
 
 ## Global Constraints
 
@@ -70,4 +70,4 @@ Commit: "feat(tui-ink): resize handling (M2b)"
 Spec coverage: M2b partial (status line, keybindings, mouse, resize). Settings tabs, permission router, vim depth deferred to M2c.
 
 ## Execution Handoff
-Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/superpowers/plans/2026-10-26-ink-tui-m2b-quality.md
+Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/history/ink-tui/plans/2026-10-26-ink-tui-m2b-quality.md

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, React, ink, existing core modules.
 
-**Spec:** `docs/superpowers/specs/2026-10-26-ink-tui-design.md` (M2a section).
+**Spec:** `docs/history/ink-tui/specs/2026-10-26-ink-tui-design.md` (M2a section).
 
 ## Global Constraints
 
@@ -95,4 +95,4 @@ Commit: "feat(tui-ink): focused dialog priority (M2a)"
 Spec coverage: M2a all items. M2b/c separate plans.
 
 ## Execution Handoff
-Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/superpowers/plans/2026-10-26-ink-tui-m2a-quality.md
+Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/history/ink-tui/plans/2026-10-26-ink-tui-m2a-quality.md

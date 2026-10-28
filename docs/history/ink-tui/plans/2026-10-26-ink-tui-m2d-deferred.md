@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, React, ink, existing modules.
 
-**Spec:** `docs/superpowers/specs/2026-10-26-ink-tui-design.md` (M2b/M2c deferred).
+**Spec:** `docs/history/ink-tui/specs/2026-10-26-ink-tui-design.md` (M2b/M2c deferred).
 
 ## Global Constraints
 
@@ -59,4 +59,4 @@ Commit: "feat(tui-ink): vim depth (motions/text objects/find/counts) (M2d)"
 Spec coverage: settings tabs, permission router, vim depth.
 
 ## Execution Handoff
-Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/superpowers/plans/2026-10-26-ink-tui-m2d-deferred.md
+Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/history/ink-tui/plans/2026-10-26-ink-tui-m2d-deferred.md

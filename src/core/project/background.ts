@@ -9,7 +9,6 @@ export type BgEvent =
 
 export type BgSession = { id: string; thread: string; pid: number; startedAt: string; logPath: string; alive: boolean; stopped: boolean };
 
-export const bgDir = (home = cediaHome()) => join(home, 'bg');
 export const bgPath = (home: string, slug: string) => join(home, 'projects', slug, 'background.jsonl');
 export const daemonPidPath = (home = cediaHome()) => join(home, 'daemon.pid');
 

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 
 // A living doc is a Markdown file that names itself with a `# LIVING DOC: <title>` line and
 // keeps one section between LIVING markers that cedia may rewrite. Files written for the
@@ -64,8 +64,4 @@ export function updateLivingSection(path: string, content: string): boolean {
   if (!s) return false;
   writeFileSync(path, text.slice(0, s.inner) + '\n' + content.trim() + '\n' + text.slice(s.close));
   return true;
-}
-
-export function relativeLivingDocs(root: string): LivingDoc[] {
-  return findLivingDocs(root).map((d) => ({ ...d, path: relative(root, d.path) }));
 }

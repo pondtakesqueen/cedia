@@ -28,7 +28,7 @@ import type { SessionEvent } from '../../core/types.ts';
 import { cediaHome, loadPromptSuggestions, loadRoles, isMode, loadPolicy, loadPrivacy, readSettings } from '../../core/config.ts';
 import { modelLabel } from '../../core/providers/models.ts';
 import { versionInfo } from '../../protocol/version.ts';
-import { runStatusLineCommand } from '../tui/statusline.ts';
+import { runStatusLineCommand } from './statusline.ts';
 import { loadKeybindings, watchKeybindings } from './keybindings/loader.ts';
 import { activeContext, findCommand, resolveBindings, vimInputGate, type LiveContext } from './keybindings/resolver.ts';
 import { ChordInterceptor, chordsFromBindings, matchChord } from './keybindings/chord.ts';
@@ -1093,7 +1093,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         void (async () => {
           try {
             const { generateSuggestion } = await import('../../core/suggestions/prompt-suggestion.ts');
-            const sug = await generateSuggestion({ cwd: args.cwd, model: model ?? args.model, lastResult: result.subtype });
+            const sug = await generateSuggestion({ cwd: args.cwd, model: model ?? args.model, lastResult: result.result });
             if (sug) setSuggestion(sug.text);
           } catch {}
         })();

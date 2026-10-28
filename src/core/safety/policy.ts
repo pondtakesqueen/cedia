@@ -12,7 +12,6 @@ import { hooksDir, sandboxGuarded } from './sandbox.ts';
 // workspace: writes inside the working directory and any command run, except the deny list.
 // cedia never stops to ask for permission: a denied call returns its reason to the model and the run goes on.
 export type PermissionMode = 'read-only' | 'workspace';
-export const PERMISSION_MODES: PermissionMode[] = ['read-only', 'workspace'];
 // auto (the default setting): workspace when the OS sandbox is on, read-only when it is not. plan: read-only, and
 // the writer is asked for a plan and the owner's go-ahead (ask_user) instead of the change; the change is a later
 // run the owner lets write.

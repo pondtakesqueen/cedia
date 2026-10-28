@@ -20,4 +20,19 @@ describe('teams', () => {
     expect(store.delete(team.id)).toBe(true);
     expect(store.get(team.id)).toBeUndefined();
   });
+
+  test('an id from the model never names a file outside the teams directory', () => {
+    const fs = require('node:fs');
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-teams-'));
+    const home = join(dir, '.home');
+    fs.mkdirSync(home, { recursive: true });
+    const outside = join(home, 'settings.json');
+    const body = JSON.stringify({ id: 'x', name: 'x', createdAt: '', tasks: [] });
+    fs.writeFileSync(outside, body);
+    const store = new TeamStore(home);
+    expect(store.get('../settings')).toBeUndefined();
+    expect(store.addTask('../settings', 'planted')).toBeUndefined();
+    expect(store.delete('../settings')).toBe(false);
+    expect(fs.readFileSync(outside, 'utf8')).toBe(body);
+  });
 });

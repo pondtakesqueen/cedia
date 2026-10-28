@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, React, ink, existing modules.
 
-**Spec:** `docs/superpowers/specs/2026-10-26-ink-tui-design.md` + docs/TUI_AUDIT.md.
+**Spec:** `docs/history/ink-tui/specs/2026-10-26-ink-tui-design.md` + docs/TUI_AUDIT.md.
 
 ## Global Constraints
 
@@ -75,4 +75,4 @@ Commit: "feat(tui-ink): settings page completeness (M2f)"
 Spec coverage: permission dialogs, true virtualization, keybindings contexts, settings page completeness.
 
 ## Execution Handoff
-Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/superpowers/plans/2026-10-26-ink-tui-m2f-polish2.md
+Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/history/ink-tui/plans/2026-10-26-ink-tui-m2f-polish2.md

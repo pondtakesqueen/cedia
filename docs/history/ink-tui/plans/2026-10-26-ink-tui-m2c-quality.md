@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, React, ink, existing modules.
 
-**Spec:** `docs/superpowers/specs/2026-10-26-ink-tui-design.md` (M2c section).
+**Spec:** `docs/history/ink-tui/specs/2026-10-26-ink-tui-design.md` (M2c section).
 
 ## Global Constraints
 

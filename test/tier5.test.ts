@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { resolveBindings, findCommand } from '../src/clients/tui-ink/keybindings/resolver.ts';
 import { ChordInterceptor, chordsFromBindings, matchChord, parseChordKey } from '../src/clients/tui-ink/keybindings/chord.ts';
-import { handleNormalKey, toInsert, toNormal } from '../src/clients/tui/vim/transitions.ts';
-import { buildStatusLineInput, runStatusLineCommand } from '../src/clients/tui/statusline.ts';
+import { buildStatusLineInput, runStatusLineCommand } from '../src/clients/tui-ink/statusline.ts';
 
 const BIN = (import.meta as any).dir ? '' : '';
 import { join } from 'node:path';
@@ -35,16 +34,6 @@ describe('tier5 keybindings', () => {
     const chords = chordsFromBindings(resolveBindings([]), 'Chat');
     expect(chords.some((c) => c.command === 'scrollTop' && c.keys.join(' ') === 'g g')).toBe(true);
     expect(findCommand(resolveBindings([]), 'g g', 'Chat')).toBe('scrollTop');
-  });
-});
-
-describe('tier5 vim', () => {
-  test('transitions', () => {
-    let s = toNormal({ mode: 'insert', insertedText: 'x' } as any);
-    expect(s.mode).toBe('normal');
-    const r = handleNormalKey(s, 'i');
-    expect(r.state.mode).toBe('insert');
-    expect(r.action).toBe('insert');
   });
 });
 

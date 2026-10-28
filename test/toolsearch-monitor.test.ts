@@ -19,6 +19,14 @@ describe('toolsearch', () => {
 });
 
 describe('monitor', () => {
+  test('long output is clipped to what bash would show, not returned whole', async () => {
+    const m = await import('../src/core/tools/monitor.ts');
+    const { MAX_SHELL_OUTPUT_CHARS } = await import('../src/core/tools/registry.ts');
+    const ctx = { cwd: '/tmp', signal: new AbortController().signal } as any;
+    const r = await m.monitorTool.run({ command: 'yes 0123456789 | head -n 20000', timeout_ms: 10_000 }, ctx);
+    expect(r.text.length).toBeLessThan(MAX_SHELL_OUTPUT_CHARS + 500);
+  }, 15_000);
+
   test('captures and filters', async () => {
     const m = await import('../src/core/tools/monitor.ts');
     const ctx = { cwd: '/tmp', signal: new AbortController().signal } as any;

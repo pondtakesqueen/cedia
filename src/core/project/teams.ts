@@ -29,6 +29,10 @@ function teamPath(id: string, home = cediaHome()): string {
   return join(teamsDir(home), `${id}.json`);
 }
 
+// Ids come from the model through the team tool, so only the shape newId makes names a file: "../settings" would
+// read or rewrite a JSON file outside the teams directory.
+const TEAM_ID = /^team-[a-z0-9]+-[a-z0-9]+$/;
+
 function newId(): string {
   return `team-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
@@ -58,6 +62,7 @@ export class TeamStore {
   }
 
   get(id: string): Team | undefined {
+    if (!TEAM_ID.test(id)) return undefined;
     const p = teamPath(id, this.home);
     if (!existsSync(p)) return undefined;
     try {
@@ -74,6 +79,7 @@ export class TeamStore {
   }
 
   delete(id: string): boolean {
+    if (!TEAM_ID.test(id)) return false;
     const p = teamPath(id, this.home);
     if (!existsSync(p)) return false;
     rmSync(p);
