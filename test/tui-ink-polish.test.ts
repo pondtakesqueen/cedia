@@ -330,3 +330,12 @@ describe('ink key context', () => {
     expect(ticks).toEqual([1, 1]);
   });
 });
+
+describe('fitPath', () => {
+  test('keeps the last parts of a path that does not fit', async () => {
+    const { fitPath } = await import('../src/clients/tui-ink/app.tsx');
+    expect(fitPath('~/code/cedia', 20)).toBe('~/code/cedia');
+    expect(fitPath('/tmp/a-very-long-directory-name/scratchpad/demo', 24)).toBe('…/scratchpad/demo');
+    expect(fitPath('/x/' + 'y'.repeat(30), 12)).toBe('…' + 'y'.repeat(11));
+  });
+});

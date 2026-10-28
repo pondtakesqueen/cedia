@@ -143,6 +143,16 @@ const shortCwd = (cwd: string): string => {
   } catch { return cwd; }
 };
 
+/** A path that fits in `width` cells: its last parts stay, the front gives way to "…". */
+export function fitPath(path: string, width: number): string {
+  if (path.length <= width) return path;
+  const parts = path.split('/');
+  let out = parts.pop() ?? '';
+  while (parts.length && parts[parts.length - 1]!.length + out.length + 3 <= width) out = `${parts.pop()}/${out}`;
+  const fitted = `…/${out}`;
+  return fitted.length <= width ? fitted : `…${path.slice(-(Math.max(1, width - 1)))}`;
+}
+
 const themedColorFor = (T: ThemeTokens, role: Msg['role']): string | undefined =>
   role === 'user' ? undefined : role === 'assistant' ? T.text : T.textMuted;
 
@@ -1850,12 +1860,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <Text color={screenReader ? undefined : T.primary} bold={!screenReader}>{screenReader ? 'cedia' : '◆ cedia'}</Text>
             <Text color={screenReader ? undefined : T.textMuted}>  {versionInfo().version}</Text>
           </Text>
-          <Text>
+          <Text wrap="truncate">
             <Text>  {effModel?.label ?? model ?? 'auto'}</Text>
-            <Text color={screenReader ? undefined : T.textMuted}> · </Text>
-            <Text>{shortCwd(args.cwd)}</Text>
             {branch ? <Text color={screenReader ? undefined : T.thinking}>{screenReader ? ` · branch ${branch}` : ` · ⎇ ${branch}`}</Text> : null}
           </Text>
+          <Text color={screenReader ? undefined : T.textMuted}>  {fitPath(shortCwd(args.cwd), Math.max(10, columns - 4))}</Text>
           <Text> </Text>
           <Text wrap="truncate">
             {([['/help', 'commands'], ['ctrl+p', 'palette'], ['esc', 'stop a turn'], ['alt+t', 'thinking']] as const).map(([k, v], i) => (
@@ -1870,7 +1879,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         <Box paddingX={1} flexShrink={0}>
           <Text wrap="truncate" color={screenReader ? undefined : T.textMuted}>
             <Text color={screenReader ? undefined : T.primary}>{screenReader ? '' : '◆ '}</Text>
-            cedia · {effModel?.label ?? model ?? 'auto'} · {shortCwd(args.cwd)}{branch ? (screenReader ? ` · branch ${branch}` : ` · ⎇ ${branch}`) : ''}
+            {(() => {
+              const lead = `cedia · ${effModel?.label ?? model ?? 'auto'}${branch ? (screenReader ? ` · branch ${branch}` : ` · ⎇ ${branch}`) : ''}`;
+              // The path goes last and gives way first: it takes what the line has left.
+              return `${lead} · ${fitPath(shortCwd(args.cwd), Math.max(10, columns - lead.length - 8))}`;
+            })()}
           </Text>
         </Box>
       )}
@@ -1971,12 +1984,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           box by default, which squeezed rows into each other). */}
       <Box flexDirection="column" flexShrink={0}>
         {trustOpen ? (
-          <Box flexDirection="column" paddingX={1}>
-            <Text color={screenReader ? undefined : T.warning} bold={!screenReader}>Accessing workspace:</Text>
-            <Text>{shortCwd(args.cwd)}</Text>
+          <Box flexDirection="column" paddingX={1} marginX={screenReader ? 0 : 1} borderStyle={screenReader ? undefined : 'round'} borderColor={screenReader ? undefined : T.warning}>
+            <Text color={screenReader ? undefined : T.warning} bold={!screenReader}>Do you trust the files in this folder?</Text>
+            <Text bold={!screenReader}>{fitPath(shortCwd(args.cwd), Math.max(10, columns - 8))}</Text>
+            <Text> </Text>
             <Text wrap="wrap">Quick safety check: is this a project you created or one you trust? If not, take a moment to review what is in this folder first.</Text>
             <Text wrap="wrap">cedia will be able to read, edit, and execute files here.</Text>
-            <Text dimColor={!screenReader}>Security guide: least privilege · deny-list enforced · snapshots can undo edits</Text>
+            <Text dimColor={!screenReader} wrap="wrap">Security guide: least privilege · deny-list enforced · snapshots can undo edits</Text>
+            <Text> </Text>
             {(["No, exit", "Yes, I trust this folder"] as const).map((label, i) => (
               <Text key={label} color={screenReader ? undefined : (i === trustSelected ? T.primary : undefined)}>{selectedPrefix(i === trustSelected, screenReader)}{label}</Text>
             ))}
@@ -2250,7 +2265,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <Text color={screenReader ? undefined : T.warning}>{notice}</Text>
           </Box>
         ) : null}
-        {(() => {
+        {/* The trust question owns the screen until it is answered (like cc): no prompt under it. */}
+        {trustOpen ? null : (() => {
           const mode = permission ?? args.permission ?? 'auto';
           const modeColor = mode === 'plan' ? T.thinking : mode === 'read-only' ? T.textMuted : T.primary;
           // The box says what the prompt will do: brand while a turn runs, violet in plan mode, amber in vim normal.

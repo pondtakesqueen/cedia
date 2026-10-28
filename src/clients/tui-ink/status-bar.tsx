@@ -70,6 +70,8 @@ export function StatusBar(props: {
           {images ? <Text color={T.textMuted}> · {images} image{images === 1 ? '' : 's'}</Text> : null}
         </Text>
       )}
+      {/* The right side keeps its cells and a gap; the left gives way (truncates) on a narrow terminal. */}
+      <Box flexShrink={0} marginLeft={2}>
       <Text wrap="truncate">
         {m ? (
           <>
@@ -81,6 +83,7 @@ export function StatusBar(props: {
         {tokens ? <Text color={T.textMuted}>{m ? ' · ' : ''}{fmt(tokens)}</Text> : null}
         {money ? <Text color={T.textMuted}>{m || tokens ? ' · ' : ''}{money}</Text> : null}
       </Text>
+      </Box>
     </Box>
   );
 }

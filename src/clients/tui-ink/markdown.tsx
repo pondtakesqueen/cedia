@@ -28,8 +28,9 @@ export function inline(src: string, base: MdStyle = 'text'): MdLine {
   for (const m of src.matchAll(INLINE)) {
     if (m.index! > at) out.push({ text: src.slice(at, m.index), style: base });
     if (m[2] !== undefined) out.push({ text: m[2], style: 'code' });
-    else if (m[3] !== undefined || m[4] !== undefined) out.push({ text: (m[3] ?? m[4])!, style: base === 'heading' ? 'heading' : 'bold' });
-    else if (m[5] !== undefined || m[6] !== undefined) out.push({ text: (m[5] ?? m[6])!, style: 'italic' });
+    // Bold and italic hold markdown of their own: **`add`** is code, not backticks.
+    else if (m[3] !== undefined || m[4] !== undefined) out.push(...inline((m[3] ?? m[4])!, base === 'heading' ? 'heading' : 'bold'));
+    else if (m[5] !== undefined || m[6] !== undefined) out.push(...inline((m[5] ?? m[6])!, 'italic'));
     else if (m[7] !== undefined) {
       out.push({ text: m[7], style: 'link' });
       if (m[8] !== m[7]) out.push({ text: ` (${m[8]})`, style: 'faint' });
