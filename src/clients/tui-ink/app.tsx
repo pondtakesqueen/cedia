@@ -1,7 +1,10 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useWindowSize, useStdin } from 'ink';
 import { selectedPrefix, useCediaScreenReader } from './a11y.ts';
-import { buildAutoItems, highlightSpans, paintRuns, truncateDescription, truncateLongText, estimateLines, offsetAt, loadFrecency, recordPick, frecencyBonus, type AutoItem } from './autocomplete.ts';
+import { readPicks, savePick, pickBoost } from './picks.ts';
+import { sinceLabel } from './when.ts';
+import { bindingSummary } from './keybindings/summary.ts';
+import { buildAutoItems, highlightSpans, paintRuns, truncateDescription, truncateLongText, estimateLines, offsetAt, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import Markdown, { mdPlain, spanProps } from './markdown.tsx';
@@ -359,24 +362,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     }
   };
   const [notice, setNotice] = useState<string | null>(null);
-  const keyHintLabels: Record<string, string> = {
-    cancel: 'cancel/close', submit: 'send', historyUp: 'older input', historyDown: 'newer input',
-    autocomplete: 'complete', historySearch: 'history search',
-  };
-  // User-customized keybindings (from ~/.cedia/keybindings.json), shown in /help.
-  const bindingHints = React.useMemo(() => {
-    try {
-      const customs = loadKeybindings(cediaHome());
-      if (!customs.length) return '';
-      const parts: string[] = [];
-      for (const b of customs) {
-        const label = keyHintLabels[b.command ?? ''] ?? b.command;
-        if (label) parts.push(`${b.key} ${label}`);
-      }
-      return parts.join(' · ');
-    } catch { return ''; }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadedKeybindings]);
+  // The person's own keybindings, listed under /help.
+  const bindingHints = React.useMemo(() => bindingSummary(loadedKeybindings), [loadedKeybindings]);
   // Thread switches always arrive as submitted commands (editor already
   // committed), so just reset per-thread view state. Stable per render.
   const switchThread = useCallback((id: string | undefined) => {
@@ -386,29 +373,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     setInput('');
     inputRef.current = '';
   }, []);
-  const ago = (iso: string): string => {
-    const ms = Date.now() - new Date(iso).getTime();
-    if (!isFinite(ms) || ms < 0) return '';
-    const m = Math.floor(ms / 60000);
-    if (m < 1) return 'just now';
-    if (m < 60) return `${m}m ago`;
-    const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h ago`;
-    return `${Math.floor(h / 24)}d ago`;
-  };
   const [trustOpen, setTrustOpen] = useState(false);
   const [trustSelected, setTrustSelected] = useState(1);
 
   // @-file mentions (like cc): file paths from the working tree, fuzzy-matched.
   const [mentionSelected, setMentionSelected] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState(false);
-  // Frecency-ranked autocomplete (opencode-style): picks are recorded per value
-  // and boost that item's rank next time. Refreshed after every recorded pick.
-  const [frecencyTick, setFrecencyTick] = useState(0);
-  const frecencyPath = join(cediaHome(), 'frecency.json');
-  const frecencyMap = React.useMemo(() => loadFrecency(frecencyPath), [frecencyTick]);
-  const frecencyOf = (value: string) => frecencyBonus(frecencyMap, value);
-  const notePick = (value: string) => { try { recordPick(frecencyPath, value); } catch {} setFrecencyTick((t) => t + 1); };
+  // The `/` and `@` menus put the person's usual picks first (picks.ts).
+  const picksPath = join(cediaHome(), 'tui-picks.json');
+  const [picks, setPicks] = useState(() => readPicks(picksPath));
+  const boostOf = (value: string) => pickBoost(picks, value);
+  const notePick = (value: string) => { savePick(picksPath, value); setPicks(readPicks(picksPath)); };
 
   const fileList = React.useMemo(() => {
     try {
@@ -426,8 +401,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const mentionQuery = !running ? (/((?:^|\s)@([\w./-]*))$/.exec(input)?.[2] ?? null) : null;
   const mentionItems = React.useMemo(() => {
     if (mentionQuery === null) return [];
-    return buildAutoItems([], fileList.map((f) => ({ value: f, name: f, description: 'file' })), mentionQuery, frecencyOf);
-  }, [mentionQuery, fileList, frecencyMap]);
+    return buildAutoItems([], fileList.map((f) => ({ value: f, name: f, description: 'file' })), mentionQuery, boostOf);
+  }, [mentionQuery, fileList, picks]);
   useEffect(() => { setMentionSelected(0); setMentionDismissed(false); }, [mentionQuery]);
   const mentionOpen = mentionQuery !== null && mentionItems.length > 0
     && !focusedDialog && !settingsOpen && !permissionDialog && !picker && !transcriptSearch.open
@@ -446,8 +421,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     if (autoQuery === null) return [];
     const cmds: AutoItem[] = INK_COMMANDS.map((c) => ({ value: c.name, name: `/${c.name}`, description: c.description }));
     const skills: AutoItem[] = skillsList.map((s) => ({ value: s.name, name: s.name, description: String(s.description).split('\n')[0] ?? '' }));
-    return buildAutoItems(cmds, skills, autoQuery, frecencyOf);
-  }, [autoQuery, skillsList, frecencyMap]);
+    return buildAutoItems(cmds, skills, autoQuery, boostOf);
+  }, [autoQuery, skillsList, picks]);
   // Reset autocomplete selection whenever the query changes (string dep: no loop).
   useEffect(() => { setAutoSelected(0); setAutoDismissed(false); }, [autoQuery]);
   useEffect(() => { setConfigSelected(0); }, [settingsQuery, settingsTab]);
@@ -850,7 +825,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         if (!rest[0]) {
           const threads = store.list().filter((t) => !t.archived);
           if (!threads.length) { say('no threads'); return; }
-          const items = threads.map((t) => ({ value: t.id, label: `${t.id}  ${t.title}${t.updatedAt ? `  (${ago(t.updatedAt)})` : ''} · ${t.messages?.length ?? 0} msgs` }));
+          const items = threads.map((t) => ({ value: t.id, label: `${t.id}  ${t.title}${t.updatedAt && sinceLabel(t.updatedAt) ? `  (${sinceLabel(t.updatedAt)})` : ''} · ${t.messages?.length ?? 0} msgs` }));
           setPicker({ title: 'resume', items, onPick: (v) => { switchThread(v); push({ role: 'system', text: `going on with ${v}` }); } });
           openDialog('picker');
           return;

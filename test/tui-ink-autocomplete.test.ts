@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { fuzzyMatch, buildAutoItems, highlightSpans, truncateDescription, truncateLongText, estimateLines, loadFrecency, recordPick, frecencyBonus, type AutoItem } from '../src/clients/tui-ink/autocomplete.ts';
+import { fuzzyMatch, buildAutoItems, highlightSpans, truncateDescription, truncateLongText, estimateLines, type AutoItem } from '../src/clients/tui-ink/autocomplete.ts';
 
 const cmds = (names: string[]): AutoItem[] => names.map((n) => ({ value: n, name: `/${n}`, description: `${n} does things` }));
 
@@ -53,31 +53,12 @@ describe('autocomplete', () => {
     expect(truncateDescription('hello world', 5)).toBe('hell…');
   });
 
-  test('frecency boosts picked items without overtaking prefixes', () => {
+  test('a boost reorders fuzzy matches but never lifts one over a prefix match', () => {
     const items = [{ value: 'status', name: '/status', description: '' }, { value: 'search', name: '/search', description: '' }, { value: 'cost', name: '/cost', description: '' }];
-    const plain = buildAutoItems(items, [], 's');
-    expect(plain.map((i) => i.name)).toEqual(['/search', '/status', '/cost']);
-    // prefix still wins even with a big bonus on a fuzzy match
-    const boosted = buildAutoItems(items, [], 's', (v) => frecencyBonus({ cost: { count: 9, last: Date.now() } }, v));
-    expect(boosted[0]!.name).toBe('/search');
-    // ...but frecency reorders among non-prefix fuzzy matches
-    const items2 = [{ value: 'cost', name: '/cost', description: '' }, { value: 'docs', name: '/docs', description: '' }];
-    const ranked = buildAutoItems(items2, [], 's', (v) => frecencyBonus({ cost: { count: 3, last: Date.now() } }, v));
-    expect(ranked[0]!.name).toBe('/cost');
-    expect(frecencyBonus({}, 'x')).toBe(0);
-  });
-
-  test('recordPick/loadFrecency round-trips through a file', async () => {
-    const { mkdtempSync } = await import('node:fs');
-    const { tmpdir } = await import('node:os');
-    const { join } = await import('node:path');
-    const p = join(mkdtempSync(join(tmpdir(), 'cedia-freq-')), 'f.json');
-    expect(loadFrecency(p)).toEqual({});
-    recordPick(p, '/commit');
-    recordPick(p, '/commit');
-    const m = loadFrecency(p);
-    expect(m['/commit']!.count).toBe(2);
-    expect(frecencyBonus(m, '/commit')).toBeGreaterThan(0);
+    expect(buildAutoItems(items, [], 's').map((i) => i.name)).toEqual(['/search', '/status', '/cost']);
+    expect(buildAutoItems(items, [], 's', (v) => (v === 'cost' ? 900 : 0))[0]!.name).toBe('/search');
+    const fuzzy = [{ value: 'cost', name: '/cost', description: '' }, { value: 'docs', name: '/docs', description: '' }];
+    expect(buildAutoItems(fuzzy, [], 's', (v) => (v === 'cost' ? 300 : 0))[0]!.name).toBe('/cost');
   });
 
   test('estimateLines counts wrapped rows', () => {
