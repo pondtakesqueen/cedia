@@ -71,7 +71,7 @@ Date: 2026-10-26. Scope: `src/clients/tui-ink/app.tsx` (ink TUI, default) vs his
 | cc feature | cedia ink | status |
 |---|---|---|
 | REPL main screen | ✅ | |
-| Message list (Messages/VirtualMessageList) | ⚠️ windowed slicing | not true virtualization |
+| Message list (Messages/VirtualMessageList) | ✅ | height budget + overscan + slot recycle |
 | PromptInput | ✅ (VimInput) | |
 | Transcript toggle | ✅ | |
 | History search | ✅ (Ctrl+R) | |
@@ -157,7 +157,7 @@ Codex CLI (OpenAI) TUI features:
 
 **High priority (functional gaps):**
 1. Permission router: specialized dialogs for FileWrite, Skill, PlanMode, Filesystem, Sed (not just labels)
-2. True virtualization: replace slicing with VirtualMessageList (overscan + recycling)
+2. True virtualization: replace slicing with VirtualMessageList (overscan + recycling) — height cache + slot recycle landed
 3. Keybindings: add missing contexts (Autocomplete, Confirmation, Tabs, Transcript, etc.)
 4. Onboarding: add Grove, Claude-in-Chrome, bypass/auto-mode opt-in, dev channels
 5. Selection overlay: inline search highlight + message selection overlay (row chrome when fully selected)
@@ -203,7 +203,7 @@ Codex CLI (OpenAI) TUI features:
 ## Update 2026-10-28 (ink TUI virtual window)
 
 - Transcript windowing uses `visibleWindow` with a height budget, message overscan of 3, and a `createHeightCache` map keyed by index/width/text length/role.
-- Still a windowed slice, not a recycled VirtualMessageList component pool.
+- Slot recycle via `assignRecycleSlots` keeps stable React keys (`slot-N`) across window slides.
 
 ## Update 2026-10-28 (ink permission layouts)
 
