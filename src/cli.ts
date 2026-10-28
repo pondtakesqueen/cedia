@@ -20,7 +20,7 @@ import { loadKeybindings } from './clients/tui-ink/keybindings/loader.ts';
 import { daemonCmd } from './clients/daemon/cmd.ts';
 import { loadOnboarding, saveOnboarding, acceptTrust, markStep, isComplete } from './clients/tui-ink/onboarding.ts';
 import { loadOutputStyles, getStyle, stylesDir } from './core/output-styles/styles.ts';
-import { installPlugin, uninstallPlugin, setPluginEnabled, updatePlugin, listInstalled, loadManifest, discoverPlugins, addMarketplace, removeMarketplace, updateMarketplace, loadMarketplaces } from './core/plugins/plugins.ts';
+import { installPlugin, uninstallPlugin, setPluginEnabled, updatePlugin, listInstalled, loadInstalled, pluginContents, addPluginMcp, addMarketplace, removeMarketplace, loadMarketplaces } from './core/plugins/plugins.ts';
 import { consolidateMemory } from './core/project/consolidate.ts';
 import { gatherNotes } from './core/memory/gather.ts';
 import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Schedule } from './core/project/schedules.ts';
@@ -1054,8 +1054,39 @@ function plugin(argv: string[]): number {
     }
     if (cmd === 'install' && rest.length === 1) {
       const rec = installPlugin(rest[0]!, home);
-      console.log(values.json ? JSON.stringify(rec) : `installed ${rec.name}@${rec.version}`);
+      const c = pluginContents(rec.installPath);
+      if (values.json) console.log(JSON.stringify(rec));
+      else {
+        console.log(`installed ${rec.name}@${rec.version}: ${c.skills.length} skill(s), ${c.commands.length} command(s)`);
+        if (c.mcpServers.length) console.log(`MCP servers it names (${c.mcpServers.join(', ')}) do not start until you run: cedia plugin mcp ${rec.name}`);
+        if (c.hooks || c.agents.length) console.log(`its ${[c.hooks ? 'hooks' : '', c.agents.length ? 'agents' : ''].filter(Boolean).join(' and ')} are not run by cedia`);
+      }
       return 0;
+    }
+    if (cmd === 'show' && rest.length === 1) {
+      const rec = loadInstalled(home).plugins[rest[0]!];
+      if (!rec) { console.error(`cedia: no plugin ${rest[0]}`); return 1; }
+      const c = pluginContents(rec.installPath);
+      if (values.json) console.log(JSON.stringify({ ...rec, contents: c }));
+      else {
+        const line = (label: string, xs: string[], note = '') => console.log(`${label}: ${xs.length ? xs.join(', ') : 'none'}${xs.length && note ? ` ${note}` : ''}`);
+        console.log(`${rec.name}@${rec.version} ${rec.enabled ? 'enabled' : 'disabled'}  ${rec.installPath}`);
+        line('skills', c.skills.map((n) => `${rec.name}:${n}`));
+        line('commands', c.commands.map((n) => `/${rec.name}:${n}`));
+        line('mcp servers', c.mcpServers, rec.mcp?.length ? `(added: ${rec.mcp.join(', ')})` : `(add with cedia plugin mcp ${rec.name})`);
+        line('agents', c.agents, '(not run by cedia)');
+        console.log(`hooks: ${c.hooks ? 'yes (not run by cedia)' : 'none'}`);
+      }
+      return 0;
+    }
+    if (cmd === 'mcp' && rest.length === 1) {
+      const r = addPluginMcp(rest[0]!, home);
+      if (values.json) console.log(JSON.stringify(r));
+      else {
+        console.log(r.added.length ? `added to ~/.cedia/settings.json: ${r.added.join(', ')}` : 'no MCP servers added');
+        for (const x of r.refused) console.log(`refused ${x.server}: ${x.error}`);
+      }
+      return r.refused.length ? 1 : 0;
     }
     if (cmd === 'uninstall' && rest.length === 1) {
       uninstallPlugin(rest[0]!, home);
@@ -1073,7 +1104,7 @@ function plugin(argv: string[]): number {
       if (rest.length === 1) { updatePlugin(rest[0]!, home); console.log(`updated ${rest[0]}`); return 0; }
     }
   } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 1; }
-  console.error('usage: cedia plugin [list | install <src> | uninstall <name> | enable <name> | disable <name> | update <name>|--all] [--json]');
+  console.error('usage: cedia plugin [list | install <folder|git-url|github:owner/repo|plugin@marketplace> | show <name> | mcp <name> | uninstall <name> | enable <name> | disable <name> | update <name>|--all] [--json]');
   return 2;
 }
 
@@ -1101,13 +1132,8 @@ function marketplace(argv: string[]): number {
       console.log(`removed marketplace ${rest[0]}`);
       return 0;
     }
-    if (cmd === 'update' && rest.length === 1) {
-      updateMarketplace(rest[0]!, home);
-      console.log(`updated marketplace ${rest[0]}`);
-      return 0;
-    }
   } catch (e) { console.error(`cedia: ${(e as Error).message}`); return 1; }
-  console.error('usage: cedia marketplace [list | add <name> <source> | remove <name> | update <name>] [--json]');
+  console.error('usage: cedia marketplace [list | add <name> <folder|git-url|github:owner/repo> | remove <name>] [--json]');
   return 2;
 }
 

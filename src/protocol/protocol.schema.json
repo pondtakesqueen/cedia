@@ -374,7 +374,8 @@
           "type": "string",
           "enum": [
             "user",
-            "repository"
+            "repository",
+            "plugin"
           ]
         },
         "argumentHint": {
