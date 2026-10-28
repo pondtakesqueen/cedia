@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, React, ink, existing modules.
 
-**Spec:** `docs/superpowers/specs/2026-10-26-ink-tui-design.md` (M2b/M2c/M2d).
+**Spec:** `docs/history/ink-tui/specs/2026-10-26-ink-tui-design.md` (M2b/M2c/M2d).
 
 ## Global Constraints
 
@@ -89,4 +89,4 @@ Commit: "feat(tui-ink): full accessibility flat-text mode (M2e)"
 Spec coverage: true virtualization, settings search, permission router expansion, vim dot-repeat + find edge cases, accessibility flat-text.
 
 ## Execution Handoff
-Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/superpowers/plans/2026-10-26-ink-tui-m2e-polish.md
+Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/history/ink-tui/plans/2026-10-26-ink-tui-m2e-polish.md

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, React, ink, existing core modules.
 
-**Spec:** `docs/superpowers/specs/2026-10-26-ink-tui-design.md` (M1 section).
+**Spec:** `docs/history/ink-tui/specs/2026-10-26-ink-tui-design.md` (M1 section).
 
 ## Global Constraints
 
@@ -85,4 +85,4 @@ Commit: "feat(tui-ink): port /plan and /quick commands"
 Spec coverage: M1 commands goal/commit/pr/review/plan/quick. Remaining M1 commands (memory, skills, mcp, palette, settings, doctor, resume, rename, branch, copy, tasks, agents, compact, fast, export, btw, theme, permission (has), vim, hooks, effort, statusline) deferred to M1b/c.
 
 ## Execution Handoff
-Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/superpowers/plans/2026-10-26-ink-tui-m1-commands.md
+Execute with subagent-driven-development. Task 1 first.<|end|><|start|>write to=assistant<|channel|>analysis<|message|>Created file successfully: docs/history/ink-tui/plans/2026-10-26-ink-tui-m1-commands.md

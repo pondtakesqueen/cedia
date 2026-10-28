@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun, React, ink 8.x, ink-text-input, marked, marked-terminal (nested under ink-markdown's node_modules), pi-tui not used.
 
-**Spec:** `docs/superpowers/specs/2026-10-26-ink-tui-design.md` (M0 section).
+**Spec:** `docs/history/ink-tui/specs/2026-10-26-ink-tui-design.md` (M0 section).
 
 ## Global Constraints
 
@@ -308,7 +308,7 @@ git commit -m "test(tui-ink): add boot smoke tests"
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-10-26-ink-tui-m0-boot.md`.
+Plan complete and saved to `docs/history/ink-tui/plans/2026-10-26-ink-tui-m0-boot.md`.
 
 Two execution options:
 

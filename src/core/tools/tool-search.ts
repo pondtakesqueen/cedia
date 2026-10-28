@@ -7,7 +7,6 @@ const deferred: DeferredTool[] = [];
 export function registerDeferred(tool: DeferredTool) {
   if (!deferred.some((t) => t.name === tool.name)) deferred.push(tool);
 }
-export function deferredTools(): DeferredTool[] { return [...deferred]; }
 export function clearDeferred() { deferred.length = 0; }
 
 function score(t: DeferredTool, q: string): number {
