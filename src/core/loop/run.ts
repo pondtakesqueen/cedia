@@ -5,7 +5,7 @@ import { buildMessages, sessionHeader } from '../context/build.ts';
 import { cacheMissesOf } from '../context/cache.ts';
 import { contextSize, HANDOFF_NO_TOOLS, HANDOFF_PROMPT } from '../project/handoff.ts';
 import { COMPACT_INSTRUCTIONS, compactionCut, compactPlan, firstReply } from '../project/compact.ts';
-import { hash } from '../hash.ts';
+import { hash, stableJson } from '../hash.ts';
 import { MAX_IMAGES_PER_SESSION, type ImageRef } from '../images.ts';
 import { costUsd } from '../providers/catalog.ts';
 import { isRetryable } from '../providers/http.ts';
@@ -239,12 +239,11 @@ export function rebuildRequest(events: SessionEvent[], requestIndex: number, mod
 
 type Collected = { ok: true; blocks: AssistantBlock[]; stop: StopReason; usage: Usage } | { ok: false; error: AttemptError } | { ok: 'aborted' };
 
-async function collect(provider: Provider, req: WireRequest, signal: AbortSignal, onStream?: (e: StreamEvent) => void, timing: { ttftMs?: number; ms?: number } = {}, onToolCall?: (block: Extract<AssistantBlock, { type: 'tool_use' }>) => Promise<void>): Promise<Collected> {
+async function collect(provider: Provider, req: WireRequest, signal: AbortSignal, onStream?: (e: StreamEvent) => void, timing: { ttftMs?: number; ms?: number } = {}, onToolCall?: (block: Extract<AssistantBlock, { type: 'tool_use' }>) => void): Promise<Collected> {
   const start = performance.now();
-  // Track tool_use blocks as they complete during the stream, so a caller can start executing them before the
-  // reply finishes (streaming tool execution).
+  // Track tool_use blocks as they complete during the stream, so a caller can start a call before the reply
+  // finishes (streaming tool execution). The caller only starts it: the reply does not wait for it here.
   const toolcalls = new Map<number, { id: string; name: string; args: string }>();
-  const toolPromises: Promise<void>[] = [];
   try {
     for await (const ev of provider.stream(req, signal)) {
       // Time until the provider starts streaming. Hidden thinking (Anthropic's default display) streams no text,
@@ -257,16 +256,17 @@ async function collect(provider: Provider, req: WireRequest, signal: AbortSignal
       if (ev.type === 'toolcall_end') {
         const t = toolcalls.get(ev.index);
         if (t && onToolCall) {
-          let input: Record<string, unknown> = {};
-          try { input = JSON.parse(t.args || '{}'); } catch { input = { _parseError: t.args }; }
-          const block: Extract<AssistantBlock, { type: 'tool_use' }> = { type: 'tool_use', id: t.id, name: t.name, input };
-          if (t.args && !input._parseError) {} else if (t.args) block.inputError = `invalid JSON: ${t.args.slice(0, 120)}`;
-          toolPromises.push(onToolCall(block));
+          let input: JsonObject | undefined;
+          try {
+            input = JSON.parse(t.args || '{}') as JsonObject;
+          } catch {}
+          // A call whose arguments do not parse is never started early: runTools answers it from the final reply.
+          if (input) onToolCall({ type: 'tool_use', id: t.id, name: t.name, input });
         }
       }
       if (ev.type === 'error') return { ok: false, error: ev.error };
-      if (ev.type === 'done') { await Promise.all(toolPromises); return ev.stop === 'aborted' ? { ok: 'aborted' } : { ok: true, blocks: ev.blocks, stop: ev.stop, usage: ev.usage }; }
-      if (signal.aborted) { await Promise.all(toolPromises); return { ok: 'aborted' }; }
+      if (ev.type === 'done') return ev.stop === 'aborted' ? { ok: 'aborted' } : { ok: true, blocks: ev.blocks, stop: ev.stop, usage: ev.usage };
+      if (signal.aborted) return { ok: 'aborted' };
     }
   } catch (err) {
     if (signal.aborted) return { ok: 'aborted' };
@@ -309,65 +309,25 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const recheckMs = opts.quotaRecheckMs !== undefined && opts.quotaRecheckMs > 0 ? opts.quotaRecheckMs : QUOTA_RECHECK_MS;
   const byName = new Map(tools.map((t) => [t.name, t]));
 
-  // Streaming tool execution: when enabled, tools are executed as their tool_use blocks complete during the
-  // stream, and their results are cached here for logging once the reply (and its assistant event) is in the log.
-  type Cached = { callId: string; result: EventOf<'tool_result'>['output'] & { status: EventOf<'tool_result'>['status'] }; permission?: ReturnType<typeof decide>; input: Record<string, unknown>; fixed?: { input: Record<string, unknown>; repairs: string[] } };
-  const streamCache = new Map<string, Cached>();
+  // Streaming tool execution: a read-only call starts as soon as its tool_use block ends in the stream, so it
+  // overlaps the rest of the reply. Only a call runTools would put in its first parallel pool qualifies (see
+  // startsEarly), and only until the reply's first call that does not: a read after a write must see the write.
+  // runTools still decides, logs and finishes every call; an early call only hands it the run already started.
   const streamingOn = !!opts.streamingTools;
-  const onToolCall = streamingOn ? async (block: Extract<AssistantBlock, { type: 'tool_use' }>) => {
-    const callId = callIdOf(block);
-    if (streamCache.has(callId)) return;
-    const spec = byName.get(block.name);
-    if (block.inputError) { streamCache.set(callId, { callId, result: { status: 'not_started', text: `not run: ${block.inputError}`, isError: true }, input: block.input }); return; }
-    if (!spec) { streamCache.set(callId, { callId, result: { status: 'not_started', text: `not run: unknown tool "${block.name}"`, isError: true }, input: block.input }); return; }
-    const policy = opts.permission ?? READ_ONLY_POLICY;
-    const fixed = spec.repair?.(block.input);
-    if (fixed) log.append({ kind: 'input_repaired', callId, tool: block.name, repairs: fixed.repairs });
-    let input = fixed?.input ?? block.input;
-    let d = decide(policy, spec, input, opts.cwd);
-    // A declared check that already passed with nothing written since does not run again.
-    if (d.decision === 'allow' && spec.name === 'bash') {
-      const again = repeatCheck(spec.name, String((input as { command?: unknown }).command ?? ''), log.events, opts.checks ?? [], opts.cwd);
-      if (again) d = { decision: 'deny', rule: 'repeat-check', reason: again };
-    }
-    if (d.decision === 'allow') {
-      const pre = await preHooks(opts, log, spec, callId, input);
-      if (pre.decision === 'block') d = { decision: 'deny', rule: `hook:${pre.hook}`, reason: pre.reason };
-      else if (pre.input !== input) { input = pre.input; d = decide(policy, spec, input, opts.cwd); }
-    }
-    if (opts.classify && d.decision === 'allow' && d.rule === 'mode:workspace' && effectOf(spec, input) === 'exec' && !signal.aborted) {
-      let v: Verdict;
-      try { v = await opts.classify({ tool: block.name, input, cwd: opts.cwd }); } catch (e) { v = { decision: 'deny', reason: `the classifier failed (${(e as Error).message})` }; }
-      if (signal.aborted) { streamCache.set(callId, { callId, result: { status: 'not_started', text: 'not run: the run was stopped', isError: true }, input }); return; }
-      d = v.decision === 'allow' ? { decision: 'allow', rule: 'classifier' } : { decision: 'deny', rule: 'classifier', reason: v.reason };
-    }
-    if (d.decision === 'deny') {
-      streamCache.set(callId, { callId, result: { status: 'denied', text: deniedText(d.rule, d.reason ?? ''), isError: true }, permission: d, input });
-      return;
-    }
-    const snapshots = opts.snapshots;
-    if (snapshots && !snap.tree) {
-      const t0 = performance.now();
-      const base = snapshots.take();
-      if (base) { snap.tree = base; log.append({ kind: 'snapshot', tree: base, changed: [], ms: Math.round(performance.now() - t0) }); }
-    }
-    try {
-      const redact = !opts.permission?.unlock?.includes('secret-redaction');
-      const spill = (text: string) => spillOutput(log.id, callId, redact ? redactSecrets(text).text : text);
-      // redaction default on
-      const out = await postHooks(opts, log, { callId, spec, input }, asOutput(await spec.run(input, { cwd: opts.cwd, signal, spill, ...(opts.wrap ? { wrap: opts.wrap } : {}), ...(opts.diagnose ? { diagnose: opts.diagnose } : {}) })));
-      const result = { ...out, status: (signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed') as EventOf<'tool_result'>['status'] };
-      if (snapshots && snap.tree) {
-        const t1 = performance.now();
-        const after = snapshots.take();
-        if (after) { log.append({ kind: 'snapshot', tree: after, callId, changed: snapshots.diff(snap.tree, after), ms: Math.round(performance.now() - t1) }); snap.tree = after; }
+  let early = new Map<string, EarlyRun>();
+  let earlyOpen = true;
+  const onToolCall = streamingOn
+    ? (block: Extract<AssistantBlock, { type: 'tool_use' }>) => {
+        if (!earlyOpen) return;
+        const callId = callIdOf(block);
+        const spec = byName.get(block.name);
+        if (!spec || early.has(callId) || early.size >= MAX_PARALLEL_TOOLS || signal.aborted || !startsEarly(spec, block.input, opts, log)) {
+          earlyOpen = false;
+          return;
+        }
+        early.set(callId, startEarly(spec, block.input, callId, opts, signal, log));
       }
-      streamCache.set(callId, { callId, result, permission: d, input });
-    } catch (e) {
-      if (snapshots && snap.tree) { const after = snapshots.take(); if (after) { log.append({ kind: 'snapshot', tree: after, callId, changed: snapshots.diff(snap.tree, after), ms: 0 }); snap.tree = after; } }
-      streamCache.set(callId, { callId, result: { status: 'failed', text: `tool crashed: ${e instanceof Error ? e.message : String(e)}`, isError: true }, permission: d, input });
-    }
-  } : undefined;
+    : undefined;
 
   if (!log.events.length)
     log.append({
@@ -567,7 +527,10 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     for (let n = 1; ; n++) {
       const t: { ttftMs?: number; ms?: number } = {};
       sentAt = performance.now();
-      got = await collect(provider, req, signal, opts.onStream, t, streamingOn ? onToolCall : undefined);
+      // A failed attempt's early calls are left behind: they only read, and the next attempt's reply decides anew.
+      early = new Map();
+      earlyOpen = true;
+      got = await collect(provider, req, signal, opts.onStream, t, onToolCall);
       if (got.ok === 'aborted') {
         log.append({ kind: 'attempt', requestId: request.id, n, error: { code: 'network', message: 'aborted' } });
         log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: [], stop: 'aborted', usage: { ...ZERO_USAGE } });
@@ -664,21 +627,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
         cost += c;
         if (opts.meter) opts.meter.usd += c;
       });
-      if (streamingOn) {
-        for (const c of calls) {
-          const callId = callIdOf(c);
-          const cached = streamCache.get(callId);
-          if (cached) {
-            if (cached.permission) log.append({ kind: 'permission', callId, tool: c.name, ...cached.permission });
-            if (cached.permission?.decision === 'allow' || !cached.permission) log.append({ kind: 'tool_intent', callId, tool: c.name, input: cached.input });
-            log.append({ kind: 'tool_result', callId, status: cached.result.status, output: cached.result });
-          }
-        }
-        const missed = calls.filter((c) => !streamCache.has(callIdOf(c)));
-        if (missed.length) await runTools(missed, byName, opts, signal, log, snap, shared);
-      } else {
-        await runTools(calls, byName, opts, signal, log, snap, shared);
-      }
+      await runTools(calls, byName, opts, signal, log, snap, shared, early);
       await warm.stop();
       timing.toolMs += performance.now() - toolStart;
       // A question for the owner ends the run once the turn's other calls are done; the answer is the next prompt.
@@ -808,6 +757,7 @@ async function runTools(
   log: SessionLog,
   snap: { tree?: string },
   shared: Set<string>,
+  early?: Map<string, EarlyRun>,
 ) {
   type Job = { callId: string; spec: ToolSpec; input: Record<string, unknown>; parallel: boolean };
   const results = new Map<string, EventOf<'tool_result'>['output'] & { status: EventOf<'tool_result'>['status'] }>();
@@ -880,6 +830,17 @@ async function runTools(
       return turn;
     };
   const run = async (j: Job) => {
+    // A call started while the reply streamed (the same input this decision was made on) is only awaited.
+    const started = early?.get(j.callId);
+    if (started && started.input === stableJson(j.input)) {
+      try {
+        const out = await postHooks(opts, log, j, await started.run);
+        results.set(j.callId, { ...out, status: signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed' });
+      } catch (e) {
+        results.set(j.callId, { status: 'failed', text: `tool crashed: ${e instanceof Error ? e.message : String(e)}`, isError: true });
+      }
+      return;
+    }
     // A stop between two calls of a reply leaves the rest unstarted rather than running them unstoppable.
     if (signal.aborted) {
       results.set(j.callId, { status: 'not_started', text: 'not run: the run was stopped', isError: true });
@@ -979,6 +940,30 @@ async function stopHooks(opts: RunOptions, log: SessionLog, result: string, chan
     if (o.decision === 'block') return { hook, reason: o.reason };
   }
   return undefined;
+}
+
+// A call started while its reply still streams. input is the stableJson of the input it started with.
+type EarlyRun = { input: string; run: Promise<ToolOutput> };
+
+// Whether a streamed call may start before its reply ends: exactly the calls runTools would run in its parallel
+// pool on the policy's word alone, so starting one early changes when it runs and nothing else. A repair, a
+// pre hook, an isolated write or a check that would be refused as a repeat leaves it to runTools.
+function startsEarly(spec: ToolSpec, input: JsonObject, opts: RunOptions, log: SessionLog): boolean {
+  if (effectOf(spec, input) !== 'read' || spec.isolated?.(input) || spec.repair?.(input)) return false;
+  if ((opts.hooks?.preToolUse ?? []).some((h) => !h.match || ruleMatches(h.match, spec, input, opts.cwd))) return false;
+  if (decide(opts.permission ?? READ_ONLY_POLICY, spec, input, opts.cwd).decision !== 'allow') return false;
+  return !(spec.name === 'bash' && repeatCheck(spec.name, String(input.command ?? ''), log.events, opts.checks ?? [], opts.cwd));
+}
+
+function startEarly(spec: ToolSpec, input: JsonObject, callId: string, opts: RunOptions, signal: AbortSignal, log: SessionLog): EarlyRun {
+  const redact = !opts.permission?.unlock?.includes('secret-redaction');
+  const spill = (text: string) => spillOutput(log.id, callId, redact ? redactSecrets(text).text : text);
+  const run = Promise.resolve()
+    .then(() => spec.run(input, { cwd: opts.cwd, signal, spill, ...(opts.wrap ? { wrap: opts.wrap } : {}), ...(opts.diagnose ? { diagnose: opts.diagnose } : {}) }))
+    .then(asOutput);
+  // A run nobody awaits (its reply failed, or runTools decided otherwise) must not crash the process.
+  run.catch(() => {});
+  return { input: stableJson(input), run };
 }
 
 // The user's pre hooks for one call, in order. The first block wins; each later hook sees the input as the
