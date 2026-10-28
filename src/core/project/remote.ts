@@ -7,10 +7,16 @@ export function remoteUrl(): string | undefined {
   return process.env.CEDIA_REMOTE_URL;
 }
 
+// `cedia serve` answers only a request with its token (CEDIA_REMOTE_TOKEN here).
+function auth(): Record<string, string> {
+  const t = process.env.CEDIA_REMOTE_TOKEN;
+  return t ? { authorization: `Bearer ${t}` } : {};
+}
+
 export async function listRemoteSessions(url = remoteUrl()): Promise<RemoteSession[]> {
   if (!url) return [];
   try {
-    const res = await fetch(`${url.replace(/\/$/, '')}/sessions`);
+    const res = await fetch(`${url.replace(/\/$/, '')}/sessions`, { headers: auth() });
     if (!res.ok) return [];
     const data = (await res.json()) as { sessions?: RemoteSession[] } | RemoteSession[];
     return Array.isArray(data) ? data : (data.sessions ?? []);
@@ -22,7 +28,7 @@ export async function listRemoteSessions(url = remoteUrl()): Promise<RemoteSessi
 export async function fetchRemoteSession(id: string, url = remoteUrl()): Promise<RemoteSession | undefined> {
   if (!url) return undefined;
   try {
-    const res = await fetch(`${url.replace(/\/$/, '')}/sessions/${encodeURIComponent(id)}`);
+    const res = await fetch(`${url.replace(/\/$/, '')}/sessions/${encodeURIComponent(id)}`, { headers: auth() });
     if (!res.ok) return undefined;
     return (await res.json()) as RemoteSession;
   } catch {
@@ -35,7 +41,7 @@ export async function runRemote(prompt: string, url = remoteUrl()): Promise<stri
   try {
     const res = await fetch(`${url.replace(/\/$/, '')}/run`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...auth() },
       body: JSON.stringify({ prompt }),
     });
     if (!res.ok) return `remote error ${res.status}`;

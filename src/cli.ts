@@ -3,6 +3,7 @@ import { basename, join, resolve } from 'node:path';
 import { storeImage } from './core/images.ts';
 import { inlineEdit, parseRange, type InlineEdit } from './core/project/inline-edit.ts';
 import { parseArgs } from 'node:util';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { runHeadless } from './clients/headless/main.ts';
 import type { TuiArgs } from './clients/tui-ink/args.ts';
 import { ALIASES } from './core/providers/catalog.ts';
@@ -1339,33 +1340,47 @@ async function mdmCmd(argv: string[]): Promise<number> {
   return 2;
 }
 
+// `cedia serve`: a run over HTTP for `cedia remote` on another machine of the owner's. A run edits files and runs
+// commands, so the server listens on loopback only and answers only a request that carries its token
+// (`Authorization: Bearer <token>`): without it any web page the owner opened could post a prompt to localhost, and
+// anyone on the network could on 0.0.0.0. The token is CEDIA_SERVE_TOKEN or a fresh one printed at start. Runs keep
+// the OS sandbox as `-p` runs do.
+function serveAuthorized(req: Request, token: string): boolean {
+  const got = req.headers.get('authorization') ?? '';
+  const want = `Bearer ${token}`;
+  return got.length === want.length && timingSafeEqual(Buffer.from(got), Buffer.from(want));
+}
+
 async function serveCmd(argv: string[]): Promise<number> {
   let port = 8787;
   const i = argv.indexOf('--port');
   if (i >= 0 && argv[i + 1]) port = Number(argv[i + 1]);
+  const token = process.env.CEDIA_SERVE_TOKEN || randomBytes(24).toString('base64url');
   const { runHeadless } = await import('./clients/headless/main.ts');
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const server = Bun.serve({
+    hostname: '127.0.0.1',
     port,
     async fetch(req) {
+      if (!serveAuthorized(req, token)) return json({ error: 'unauthorized' }, 401);
       const url = new URL(req.url);
-      if (req.method === 'GET' && url.pathname === '/sessions') {
-        return new Response(JSON.stringify({ sessions: [] }), { headers: { 'content-type': 'application/json' } });
-      }
+      if (req.method === 'GET' && url.pathname === '/sessions') return json({ sessions: [] });
       if (req.method === 'POST' && url.pathname === '/run') {
         try {
           const body = (await req.json()) as { prompt?: string };
           const prompt = body.prompt ?? '';
           let out = '';
-          const result = await runHeadless({ cwd: process.cwd(), prompt, outputFormat: 'json', permission: 'workspace', sandbox: 'off' }, (s) => { out += s; });
-          return new Response(JSON.stringify({ output: result.result ?? out, thread: result.thread }), { headers: { 'content-type': 'application/json' } });
+          const result = await runHeadless({ cwd: process.cwd(), prompt, outputFormat: 'json', permission: 'workspace' }, (s) => { out += s; });
+          return json({ output: result.result ?? out, thread: result.thread });
         } catch (e) {
-          return new Response(JSON.stringify({ error: (e as Error).message }), { status: 500, headers: { 'content-type': 'application/json' } });
+          return json({ error: (e as Error).message }, 500);
         }
       }
       return new Response('not found', { status: 404 });
     },
   });
   console.log(`cedia serve on http://127.0.0.1:${server.port}`);
+  if (!process.env.CEDIA_SERVE_TOKEN) console.log(`token: ${token} (set CEDIA_REMOTE_TOKEN to it where cedia remote runs)`);
   // keep alive
   await new Promise(() => {});
   return 0;
