@@ -488,6 +488,31 @@ describe('cedia -p (offline, faux)', () => {
       expect(userTexts(writer)).toEqual([expect.stringContaining('<plan by="claude-code:opus@medium">'), expect.stringContaining('<review>\nf.txt:1 needs a period.\n</review>')]);
     });
 
+    test('--plan-overlap on: the writer reads while Claude Code plans, and the plan follows into its session', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cedia-overlap-claude-'));
+      const bin = join(dir, 'claude');
+      const result = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Write good to f.txt.', session_id: 'cc-1', total_cost_usd: 0.5, num_turns: 3, duration_api_ms: 1200 });
+      writeFileSync(join(dir, 'plan'), result);
+      // The plan takes a second, so the writer's first turns come before it.
+      writeFileSync(bin, `#!/bin/sh\ncat > ${dir}/prompt\nsleep 1\ncat ${dir}/plan\n`, { mode: 0o755 });
+      const r = cedia([call('w0', 'ls'), call('w1', 'echo early > f.txt'), ...writes], [...base, '--plan', 'claude-code', '--plan-when', 'always', '--plan-overlap', 'on'], undefined, { CEDIA_CLAUDE_BIN: bin });
+      const out = JSON.parse(r.out);
+      expect(out).toMatchObject({ subtype: 'success', result: 'done', plan: { model: 'claude-code:opus@medium', via: 'claude-code' } });
+      expect(r.err).toContain('the writer reads while the plan is written');
+      expect(readFileSync(join(r.dir, 'f.txt'), 'utf8')).toBe('good\n');
+      const writer = sessionsOf(r.home).find((l) => (l[0] as { role: string }).role === 'code')!;
+      expect(userTexts(writer)).toEqual([expect.stringContaining('<plan-pending by="claude-code:opus@medium">')]);
+      const results = writer.filter((e): e is Extract<SessionEvent, { kind: 'tool_result' }> => e.kind === 'tool_result');
+      expect(results.map((e) => [e.callId, e.status])).toEqual([['w0', 'completed'], ['w1', 'not_started'], ['c1', 'completed'], ['c2', 'completed']]);
+      const plan = writer.findIndex((e) => e.kind === 'reminder' && e.text.startsWith('<plan by="claude-code:opus@medium">\nWrite good to f.txt.\n</plan>'));
+      expect(plan).toBeGreaterThan(writer.indexOf(results[1]!));
+      expect(JSON.parse(readFileSync(join(dir, 'prompt'), 'utf8')).message.content).toContain('Plan how to do the task below');
+    });
+
+    test('--plan-overlap takes on or off', () => {
+      expect(cedia([reply('x')], [...base, '--plan-overlap', 'maybe']).err).toContain('--plan-overlap must be on or off');
+    });
+
     test('a Claude Code step started ahead of its prompt that the run does not need never gets one', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cedia-warm-claude-'));
       const bin = join(dir, 'claude');

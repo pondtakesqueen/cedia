@@ -104,6 +104,11 @@ export type RunOptions = {
   // The advisor role (core/trust/advisor.ts): after each turn that ran tools, it reads the turn's events and may
   // return a note, which the session logs as a reminder before its next request. Absent means no advisor.
   advise?: (turn: SessionEvent[]) => Promise<string | undefined>;
+  // A plan another model is still writing (plan overlap, core/roles.ts): the session starts reading at once. Until
+  // the plan settles it only reads: a turn that calls anything else, or that ends without a call, waits for it, its
+  // calls come back not started, and the plan is the next reminder. `text` settling to undefined means no plan came,
+  // and the session goes on without one. `delivered` runs once the plan's reminder is logged.
+  plan?: { text: Promise<string | undefined>; reminder: (plan: string) => string; delivered?: () => void };
   // The classifier role (core/trust/classifier.ts): reads each command the mode alone would allow and may block
   // it. Absent means none.
   classify?: (call: { tool: string; input: JsonObject; cwd: string }) => Promise<Verdict>;
@@ -192,6 +197,9 @@ export const CONTINUE_AFTER_LIMIT = 'Your previous reply was cut off by the outp
 // A reply with no text and no tool call (thinking only, or nothing at all) ends no task: an earlier turn's text
 // would otherwise stand as the result.
 export const EMPTY_REPLY = 'Your last reply had no text and no tool call. Go on with the task, or reply with what you found or did.';
+
+// A call that would change something, made before the plan it waited for arrived.
+export const PLAN_FIRST = 'not run: the plan arrived before this call ran. It follows; make the call again if the plan still calls for it.';
 
 // The level a session escalates to, or undefined when it cannot: no per-message effort on this model, a level the
 // model lacks, or no step up from where it starts.
@@ -367,6 +375,32 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const cmp: { now: Compaction | 'off' | undefined } = { now: opts.compact && model.compaction ? undefined : 'off' };
   const inFlight = () => (cmp.now && cmp.now !== 'off' ? cmp.now : undefined);
   let spawnNudged = log.events.some((e) => e.kind === 'reminder' && isSpawnNudge(e.text));
+  // The plan still being written (opts.plan): settled once its promise has, done once its reminder is logged (or
+  // once it settled with none).
+  const plan = opts.plan ? { settled: false, text: undefined as string | undefined, done: false } : undefined;
+  opts.plan?.text.then(
+    (t) => Object.assign(plan!, { settled: true, text: t?.trim() || undefined }),
+    () => Object.assign(plan!, { settled: true }),
+  );
+  const deliverPlan = () => {
+    if (!plan?.settled || plan.done) return;
+    plan.done = true;
+    if (!plan.text) return;
+    log.append({ kind: 'reminder', as: 'user', text: opts.plan!.reminder(plan.text) });
+    opts.plan!.delivered?.();
+  };
+  // Waits for the plan, or the stop. The wait counts as model time: the run waits on a model.
+  const awaitPlan = async () => {
+    if (!plan || plan.settled) return;
+    const t0 = performance.now();
+    await Promise.race([opts.plan!.text.catch(() => undefined), new Promise<void>((res) => signal.addEventListener('abort', () => res(), { once: true }))]);
+    timing.modelMs += performance.now() - t0;
+  };
+  // Calls that only read may run before the plan is in; ask_user waits for it too, since the plan may answer it.
+  const readsOnly = (c: Extract<AssistantBlock, { type: 'tool_use' }>) => {
+    const spec = byName.get(c.name);
+    return !!spec && !c.inputError && c.name !== ASK_TOOL && effectOf(spec, c.input) === 'read';
+  };
   // Soft checks were found, not declared: they never refuse a claim, so they never escalate either.
   // A ceiling on effort from settings or the environment: the writer, spawn children, plan/review steps
   // and escalation resolve under it, never over.
@@ -506,6 +540,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       log.append({ kind: 'reminder', as: 'user', text, ...(images.length ? { images } : {}) });
       opts.inbox!.delivered(mail.ids);
     }
+    deliverPlan();
 
     const req0: WireRequest = {
       model,
@@ -629,6 +664,19 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
           log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: 'not run: the session stopped', isError: true } });
         return overBudget ? finish('error_max_budget_usd', 'budget') : finish('interrupted', 'aborted');
       }
+      // A turn that would change something before the plan is in waits for it; with a plan, the turn's calls are
+      // not run and the plan goes first, so the model decides them again with it.
+      if (plan && !plan.done && !calls.every(readsOnly)) {
+        await awaitPlan();
+        if (signal.aborted || plan.text) {
+          const why = signal.aborted ? 'not run: the session stopped' : PLAN_FIRST;
+          for (const c of calls) log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: why, isError: true } });
+          if (signal.aborted) return finish('interrupted', 'aborted');
+          deliverPlan();
+          continue;
+        }
+        deliverPlan();
+      }
       const toolStart = performance.now();
       const before = log.events.length;
       const warm = keepWarm(provider, req, request.id, sentAt, opts.keepAliveMs ?? (opts.ttl === '1h' ? KEEP_ALIVE_1H_MS : KEEP_ALIVE_MS), log, signal, (u) => {
@@ -705,6 +753,14 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       continue;
     }
     if (overBudget) return finish('error_max_budget_usd', 'budget');
+    // A turn that ends before the plan is in is the reading the plan waited on: the plan comes next.
+    if (plan && !plan.done && got.stop !== 'max_tokens') {
+      await awaitPlan();
+      if (signal.aborted) return finish('interrupted', 'aborted');
+      const coming = !!plan.text;
+      deliverPlan();
+      if (coming) continue;
+    }
     if (got.stop === 'max_tokens') {
       log.append({ kind: 'reminder', as: 'user', text: CONTINUE_AFTER_LIMIT });
       continue;

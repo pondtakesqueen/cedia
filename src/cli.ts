@@ -90,6 +90,9 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --plan-when <auto|always|never> with a plan role: auto (default) asks the writer's model first whether the
                                message is work a plan helps, so a greeting or a question skips the planner
                                ("planWhen" in settings)
+      --plan-overlap <on|off>  with a plan role: on starts the writer reading while the plan is written; the plan
+                               follows into its session and nothing changes before it arrives (default: settings
+                               planOverlap, off)
       --triage <ref>           the model that decides (default: the code model; roles.triage in settings)
       --output-style <name>    report style by name (default, explanatory, learning, terse; settings, cedia output-style)
       --cache-ttl <5m|1h>      how long the writer's cached prompt lasts on Claude API models between requests.
@@ -256,6 +259,7 @@ export async function main(argv: string[]): Promise<number> {
       lsp: { type: 'string' },
       'cache-ttl': { type: 'string' },
       'plan-when': { type: 'string' },
+      'plan-overlap': { type: 'string' },
       'output-style': { type: 'string' },
       triage: { type: 'string' },
       ask: { type: 'string' },
@@ -323,6 +327,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.lsp ? { lsp: values.lsp } : {}),
     ...(values['cache-ttl'] ? { cacheTtl: values['cache-ttl'] } : {}),
     ...(values['plan-when'] ? { planWhen: values['plan-when'] } : {}),
+    ...(values['plan-overlap'] ? { planOverlap: values['plan-overlap'] } : {}),
     ...(values['output-style'] ? { outputStyle: values['output-style'] } : {}),
     ...(values.triage ? { triage: values.triage } : {}),
     ...(values.ask ? { ask: values.ask } : {}),

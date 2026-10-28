@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CONTINUE_AFTER_LIMIT, EMPTY_REPLY, escalationTarget, nearCheck, runPrompt, spillOutput, type RunOptions } from '../src/core/loop/run.ts';
+import { CONTINUE_AFTER_LIMIT, EMPTY_REPLY, escalationTarget, nearCheck, PLAN_FIRST, runPrompt, spillOutput, type RunOptions } from '../src/core/loop/run.ts';
 import { FAUX_MODEL, resolveModel } from '../src/core/providers/catalog.ts';
 import { fauxProvider, text, toolUse, type FauxStep } from '../src/core/providers/faux.ts';
 import { decide } from '../src/core/safety/policy.ts';
@@ -701,6 +701,82 @@ describe('repeat checks', () => {
     await runPrompt(opts, 'failing check twice');
     const results = of(log.events, 'tool_result');
     expect(results.map((r) => r.status)).toEqual(['failed', 'failed']);
+    expectPaired(log.events);
+  });
+});
+
+describe('plan overlap', () => {
+  const ws = { mode: 'workspace' as const, allow: [], deny: [] };
+  // A plan that arrives when the test says so.
+  const later = () => {
+    let settle!: (t: string | undefined) => void;
+    const text = new Promise<string | undefined>((r) => (settle = r));
+    return { text, settle };
+  };
+  const reminder = (t: string) => `<plan>${t}</plan>`;
+
+  test('reads run before the plan; a write waits for it, comes back not started, and the plan goes first', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-overlap-'));
+    writeFileSync(join(dir, 'a.txt'), 'alpha\n');
+    const p = later();
+    const { log, opts } = setup(
+      [
+        { blocks: [toolUse('c1', 'read', { path: 'a.txt' }), toolUse('c2', 'bash', { command: 'cat a.txt' })] },
+        { blocks: [toolUse('c3', 'bash', { command: 'echo x > b.txt' })] },
+        { blocks: [toolUse('c4', 'bash', { command: 'echo y > b.txt' })] },
+        { blocks: [text('done')] },
+      ],
+      { cwd: dir, permission: ws, plan: { text: p.text, reminder } },
+    );
+    const run = runPrompt(opts, 'task');
+    // The reads ran with no plan yet; the write is held.
+    await Bun.sleep(50);
+    const early = of(log.events, 'tool_result');
+    expect(early.map((r) => [r.callId, r.status])).toEqual([['c1', 'completed'], ['c2', 'completed']]);
+    expect(existsSync(join(dir, 'b.txt'))).toBe(false);
+    p.settle('  write y to b.txt  ');
+    const r = await run;
+    expect(r.subtype).toBe('success');
+    const c3 = of(log.events, 'tool_result').find((e) => e.callId === 'c3')!;
+    expect(c3).toMatchObject({ status: 'not_started', output: { text: PLAN_FIRST, isError: true } });
+    const at = log.events.findIndex((e) => e.kind === 'reminder' && e.text === '<plan>write y to b.txt</plan>');
+    expect(at).toBeGreaterThan(log.events.indexOf(c3));
+    expect(readFileSync(join(dir, 'b.txt'), 'utf8')).toBe('y\n');
+    expectPaired(log.events);
+  });
+
+  test('a turn that ends before the plan waits for it, and the session goes on with it', async () => {
+    const p = later();
+    let delivered = 0;
+    const { log, opts } = setup([{ blocks: [text('read everything')] }, { blocks: [text('done with the plan')] }], { plan: { text: p.text, reminder, delivered: () => delivered++ } });
+    const run = runPrompt(opts, 'task');
+    setTimeout(() => p.settle('the plan'), 20);
+    const r = await run;
+    expect(r).toMatchObject({ subtype: 'success', result: 'done with the plan' });
+    expect(of(log.events, 'reminder').map((e) => e.text)).toEqual(['<plan>the plan</plan>']);
+    expect(delivered).toBe(1);
+  });
+
+  test('no plan: the held write runs and the session ends as it would have', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-overlap-'));
+    const p = later();
+    const { log, opts } = setup([{ blocks: [toolUse('c1', 'bash', { command: 'echo x > b.txt' })] }, { blocks: [text('wrote it')] }], { cwd: dir, permission: ws, plan: { text: p.text, reminder } });
+    const run = runPrompt(opts, 'task');
+    setTimeout(() => p.settle(undefined), 20);
+    expect(await run).toMatchObject({ subtype: 'success', result: 'wrote it' });
+    expect(of(log.events, 'tool_result')[0]!.status).toBe('completed');
+    expect(of(log.events, 'reminder')).toEqual([]);
+    expectPaired(log.events);
+  });
+
+  test('a stop while a write waits for the plan answers the call and ends the run', async () => {
+    const ac = new AbortController();
+    const p = later();
+    const { log, opts } = setup([{ blocks: [toolUse('c1', 'bash', { command: 'echo x > b.txt' })] }], { signal: ac.signal, permission: ws, plan: { text: p.text, reminder } });
+    const run = runPrompt(opts, 'task');
+    setTimeout(() => ac.abort(), 20);
+    expect((await run).subtype).toBe('interrupted');
+    expect(of(log.events, 'tool_result')[0]).toMatchObject({ status: 'not_started' });
     expectPaired(log.events);
   });
 });
