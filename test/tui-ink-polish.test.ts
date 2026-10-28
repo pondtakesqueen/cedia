@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DISMISS_NOTE, noticeLines, PermissionDialog } from '../src/clients/tui-ink/permission-dialogs.tsx';
+import { DISMISS_NOTE, noticeBlocks, noticeLines, PermissionDialog } from '../src/clients/tui-ink/permission-dialogs.tsx';
 import { completedNames, isComplete, reconcileOnboarding, saveOnboarding } from '../src/clients/tui-ink/onboarding.ts';
 import { activeContext, findCommand, IDLE_OVERLAY, resolveBindings, vimInputGate } from '../src/clients/tui-ink/keybindings/resolver.ts';
 import { keybindingsPath, watchKeybindings } from '../src/clients/tui-ink/keybindings/loader.ts';
@@ -168,14 +168,21 @@ describe('ink key context', () => {
   test('a denial notice names the tool fields and offers no allow or deny caption', async () => {
     expect(noticeLines('bash', { command: 'rm -rf x' }).map((line) => line.label)).toEqual(['command']);
     expect(noticeLines('bash', { command: 'ls', timeout_ms: 1000 }).map((line) => line.label)).toEqual(['command', 'timeout_ms']);
-    expect(noticeLines('edit', {
+    expect(noticeBlocks('edit', {
       path: 'a.ts',
-      edits: [{ old_text: 'a', new_text: 'b' }, { old_text: 'c', new_text: 'd' }],
-    }).map((line) => line.label)).toEqual(['path', 'old_text', 'new_text', 'edits']);
-    expect(noticeLines('write', { path: 'a.ts', content: 'hello\nworld' })).toEqual([
-      { label: 'path', value: 'a.ts' },
-      { label: 'lines', value: '2' },
-      { label: 'content', value: '11 chars, hello\nworld' },
+      edits: [{ old_text: 'old line', new_text: 'new line' }, { old_text: 'c', new_text: 'd' }],
+    })).toEqual([
+      { kind: 'field', label: 'path', value: 'a.ts' },
+      { kind: 'removed', text: 'old line' },
+      { kind: 'added', text: 'new line' },
+      { kind: 'field', label: 'edits', value: '2' },
+    ]);
+    expect(noticeBlocks('write', { path: 'a.ts', content: 'hello\nworld\nthird' })).toEqual([
+      { kind: 'field', label: 'path', value: 'a.ts' },
+      { kind: 'field', label: 'lines', value: '3' },
+      { kind: 'preview', text: 'hello' },
+      { kind: 'preview', text: 'world' },
+      { kind: 'preview', text: 'third' },
     ]);
     expect(noticeLines('WebFetch', { url: 'https://example.test' }).map((line) => line.label)).toEqual(['url']);
     expect(noticeLines('web_fetch', { url: 'https://example.test', offset: 12 }).map((line) => line.label)).toEqual(['url', 'offset']);
@@ -184,7 +191,11 @@ describe('ink key context', () => {
       { label: 'args', value: '--dry' },
       { label: 'file', value: 'SKILL.md' },
     ]);
-    expect(noticeLines('enterPlanMode', { plan: 'ship the polish', action: 'enter' }).map((line) => line.label)).toEqual(['action', 'plan']);
+    expect(noticeBlocks('enterPlanMode', { plan: 'ship the polish\nthen rest', action: 'enter' })).toEqual([
+      { kind: 'field', label: 'action', value: 'enter' },
+      { kind: 'preview', text: 'ship the polish' },
+      { kind: 'preview', text: 'then rest' },
+    ]);
     expect(noticeLines('filesystem', { op: 'rename', path: 'a', destination: 'b' }).map((line) => line.label)).toEqual(['op', 'path', 'destination']);
     expect(noticeLines('sed', { expression: 's/a/b/', path: 'x.ts' }).map((line) => line.label)).toEqual(['expression', 'path']);
     expect(noticeLines('grep', { pattern: 'x' })[0]?.label).toBe('input');
@@ -201,8 +212,8 @@ describe('ink key context', () => {
     stdout.rows = 24;
     stdout.on('data', (d: Buffer) => { out += d.toString(); });
     const { unmount } = render(React.createElement(PermissionDialog, {
-      tool: 'bash',
-      input: { command: 'rm -rf x' },
+      tool: 'edit',
+      input: { path: 'a.ts', old_text: 'foo', new_text: 'bar' },
       reason: 'blocked',
       rule: 'read-only',
     }), {
@@ -213,8 +224,10 @@ describe('ink key context', () => {
     await Bun.sleep(200);
     unmount();
     const text = out.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
-    expect(text).toContain('bash denied');
-    expect(text).toContain('command: rm -rf x');
+    expect(text).toContain('edit denied');
+    expect(text).toContain('path: a.ts');
+    expect(text).toContain('- foo');
+    expect(text).toContain('+ bar');
     expect(text).toContain(DISMISS_NOTE);
     expect(text).not.toContain('[Allow]');
     expect(text).not.toContain('[Deny]');

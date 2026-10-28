@@ -103,16 +103,16 @@ Date: 2026-10-26. Scope: `src/clients/tui-ink/app.tsx` (ink TUI, default) vs his
 | Bash | ✅ | |
 | PowerShell | N/A | no PowerShell tool |
 | FileEdit | ✅ (edit) | |
-| FileWrite | ⚠️ | label only, no specialized dialog |
+| FileWrite | ✅ | path + line count + content preview |
 | WebFetch | ✅ | |
 | Notebook | ❌ | no NotebookEdit tool |
-| Skill | ⚠️ | label only |
+| Skill | ✅ | name / args / file fields |
 | AskUserQuestion | ✅ | |
-| EnterPlanMode | ⚠️ | label only |
-| ExitPlanMode | ⚠️ | label only |
-| Filesystem | ⚠️ | label only |
-| Sed | ⚠️ | label only |
-| Fallback | ⚠️ | label only |
+| EnterPlanMode | ✅ | action + plan preview |
+| ExitPlanMode | ✅ | action + plan preview |
+| Filesystem | ✅ | op / path / destination fields |
+| Sed | ✅ | expression + path |
+| Fallback | ⚠️ | JSON / input dump |
 
 ### 4. Codex CLI comparison (general knowledge)
 
@@ -204,3 +204,8 @@ Codex CLI (OpenAI) TUI features:
 
 - Transcript windowing uses `visibleWindow` with a height budget, message overscan of 3, and a `createHeightCache` map keyed by index/width/text length/role.
 - Still a windowed slice, not a recycled VirtualMessageList component pool.
+
+## Update 2026-10-28 (ink permission layouts)
+
+- Denial notices use `NoticeBlock` layouts: edit shows `-`/`+` diff rows, write and plan mode show a capped content preview, other tools keep specialized fields.
+- Still one dialog shell; no Allow/Deny captions (denial-only).

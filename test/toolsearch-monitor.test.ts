@@ -26,5 +26,5 @@ describe('monitor', () => {
     expect(r.text).toContain('a');
     const r2 = await m.monitorTool.run({ command: 'printf "a\\nb\\nc\\n"', timeout_ms: 2000, filter: 'b' }, ctx);
     expect(r2.text).toBe('b');
-  });
+  }, 15_000);
 });

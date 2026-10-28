@@ -52,6 +52,12 @@ export function toolLabel(tool: string): string {
 
 export type NoticeLine = { label: string; value: string };
 
+export type NoticeBlock =
+  | { kind: 'field'; label: string; value: string }
+  | { kind: 'removed'; text: string }
+  | { kind: 'added'; text: string }
+  | { kind: 'preview'; text: string };
+
 export const NOTICE_FIELDS: Record<string, readonly string[]> = {
   bash: ['command', 'timeout_ms'],
   edit: ['path', 'old_text', 'new_text', 'edits'],
@@ -66,6 +72,8 @@ export const NOTICE_FIELDS: Record<string, readonly string[]> = {
 export const DISMISS_NOTE = 'Esc or Enter closes this notice. The call was already denied.';
 
 const CAP = 200;
+const PREVIEW_LINES = 6;
+const LINE_CAP = 120;
 
 function cap(value: string): string {
   return value.length > CAP ? value.slice(0, CAP) : value;
@@ -80,77 +88,142 @@ function textOf(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-function pushLine(lines: NoticeLine[], label: string, value: string | undefined) {
+function pushField(blocks: NoticeBlock[], label: string, value: string | undefined) {
   if (value === undefined) return;
-  lines.push({ label, value: cap(value) });
+  blocks.push({ kind: 'field', label, value: cap(value) });
 }
 
-export function noticeLines(tool: string, input: unknown): NoticeLine[] {
+function clipLine(line: string): string {
+  return line.length > LINE_CAP ? `${line.slice(0, LINE_CAP)}…` : line;
+}
+
+function pushPreview(blocks: NoticeBlock[], text: string) {
+  const lines = text.split('\n');
+  const shown = lines.slice(0, PREVIEW_LINES);
+  for (const line of shown) blocks.push({ kind: 'preview', text: clipLine(line) });
+  if (lines.length > PREVIEW_LINES) {
+    blocks.push({ kind: 'preview', text: `… +${lines.length - PREVIEW_LINES} more lines` });
+  }
+}
+
+function pushDiff(blocks: NoticeBlock[], oldText: string | undefined, newText: string | undefined) {
+  if (oldText !== undefined) {
+    for (const line of oldText.split('\n').slice(0, PREVIEW_LINES)) {
+      blocks.push({ kind: 'removed', text: clipLine(line) });
+    }
+  }
+  if (newText !== undefined) {
+    for (const line of newText.split('\n').slice(0, PREVIEW_LINES)) {
+      blocks.push({ kind: 'added', text: clipLine(line) });
+    }
+  }
+}
+
+export function noticeBlocks(tool: string, input: unknown): NoticeBlock[] {
   const label = toolLabel(tool);
   const fields = NOTICE_FIELDS[label];
   const record = asRecord(input);
   if (!fields || !record) {
     if (input == null) return [];
-    if (typeof input === 'string') return [{ label: 'input', value: cap(input) }];
-    try { return [{ label: 'input', value: cap(JSON.stringify(input)) }]; }
-    catch { return [{ label: 'input', value: cap(String(input)) }]; }
+    if (typeof input === 'string') return [{ kind: 'field', label: 'input', value: cap(input) }];
+    try { return [{ kind: 'field', label: 'input', value: cap(JSON.stringify(input)) }]; }
+    catch { return [{ kind: 'field', label: 'input', value: cap(String(input)) }]; }
   }
-  const lines: NoticeLine[] = [];
+  const blocks: NoticeBlock[] = [];
   if (label === 'bash') {
-    pushLine(lines, 'command', textOf(record.command));
-    if (typeof record.timeout_ms === 'number') pushLine(lines, 'timeout_ms', String(record.timeout_ms));
-    return lines;
+    pushField(blocks, 'command', textOf(record.command));
+    if (typeof record.timeout_ms === 'number') pushField(blocks, 'timeout_ms', String(record.timeout_ms));
+    return blocks;
   }
   if (label === 'edit') {
-    pushLine(lines, 'path', textOf(record.path));
+    pushField(blocks, 'path', textOf(record.path));
     const edits = Array.isArray(record.edits) ? record.edits : [];
     const first = edits[0] && typeof edits[0] === 'object' ? edits[0] as Record<string, unknown> : null;
-    pushLine(lines, 'old_text', textOf(first?.old_text) ?? textOf(record.old_text));
-    pushLine(lines, 'new_text', textOf(first?.new_text) ?? textOf(record.new_text));
-    if (edits.length > 1) pushLine(lines, 'edits', String(edits.length));
-    return lines;
+    const oldText = textOf(first?.old_text) ?? textOf(record.old_text);
+    const newText = textOf(first?.new_text) ?? textOf(record.new_text);
+    pushDiff(blocks, oldText, newText);
+    if (edits.length > 1) pushField(blocks, 'edits', String(edits.length));
+    return blocks;
   }
   if (label === 'write') {
-    pushLine(lines, 'path', textOf(record.path));
+    pushField(blocks, 'path', textOf(record.path));
     if (typeof record.content === 'string') {
       const n = record.content.split('\n').length;
-      pushLine(lines, 'lines', String(n));
-      pushLine(lines, 'content', `${record.content.length} chars, ${record.content.slice(0, 80)}`);
+      pushField(blocks, 'lines', String(n));
+      pushPreview(blocks, record.content);
     }
-    return lines;
+    return blocks;
   }
   if (label === 'web_fetch') {
-    pushLine(lines, 'url', textOf(record.url));
-    if (typeof record.offset === 'number') pushLine(lines, 'offset', String(record.offset));
-    return lines;
+    pushField(blocks, 'url', textOf(record.url));
+    if (typeof record.offset === 'number') pushField(blocks, 'offset', String(record.offset));
+    return blocks;
   }
   if (label === 'skill') {
     const name = textOf(record.name) ?? textOf(record.skill);
-    pushLine(lines, 'name', name);
-    pushLine(lines, 'args', textOf(record.args) ?? textOf(record.arguments));
-    if (typeof record.file === 'string') pushLine(lines, 'file', record.file);
-    return lines;
+    pushField(blocks, 'name', name);
+    pushField(blocks, 'args', textOf(record.args) ?? textOf(record.arguments));
+    if (typeof record.file === 'string') pushField(blocks, 'file', record.file);
+    return blocks;
   }
   if (label === 'plan mode') {
-    pushLine(lines, 'action', textOf(record.action) ?? textOf(record.mode));
-    pushLine(lines, 'plan', textOf(record.plan) ?? textOf(record.prompt) ?? textOf(record.message));
-    return lines;
+    pushField(blocks, 'action', textOf(record.action) ?? textOf(record.mode));
+    const plan = textOf(record.plan) ?? textOf(record.prompt) ?? textOf(record.message);
+    if (plan) pushPreview(blocks, plan);
+    return blocks;
   }
   if (label === 'filesystem') {
-    pushLine(lines, 'op', textOf(record.op) ?? textOf(record.operation) ?? textOf(record.command));
-    pushLine(lines, 'path', textOf(record.path) ?? textOf(record.src) ?? textOf(record.source));
-    pushLine(lines, 'destination', textOf(record.destination) ?? textOf(record.dest) ?? textOf(record.to));
-    return lines;
+    pushField(blocks, 'op', textOf(record.op) ?? textOf(record.operation) ?? textOf(record.command));
+    pushField(blocks, 'path', textOf(record.path) ?? textOf(record.src) ?? textOf(record.source));
+    pushField(blocks, 'destination', textOf(record.destination) ?? textOf(record.dest) ?? textOf(record.to));
+    return blocks;
   }
   if (label === 'sed') {
-    pushLine(lines, 'expression', textOf(record.expression) ?? textOf(record.expr) ?? textOf(record.command));
-    pushLine(lines, 'path', textOf(record.path) ?? textOf(record.file));
-    return lines;
+    pushField(blocks, 'expression', textOf(record.expression) ?? textOf(record.expr) ?? textOf(record.command));
+    pushField(blocks, 'path', textOf(record.path) ?? textOf(record.file));
+    return blocks;
   }
   const name = textOf(record.name) ?? textOf(record.skill);
-  pushLine(lines, 'name', name);
-  if (typeof record.file === 'string') pushLine(lines, 'file', record.file);
-  return lines;
+  pushField(blocks, 'name', name);
+  if (typeof record.file === 'string') pushField(blocks, 'file', record.file);
+  return blocks;
+}
+
+/** Field rows only; diff/preview layouts live in `noticeBlocks`. */
+export function noticeLines(tool: string, input: unknown): NoticeLine[] {
+  return noticeBlocks(tool, input)
+    .filter((b): b is Extract<NoticeBlock, { kind: 'field' }> => b.kind === 'field')
+    .map((b) => ({ label: b.label, value: b.value }));
+}
+
+function renderBlock(
+  block: NoticeBlock,
+  i: number,
+  screenReader: boolean,
+  T: ReturnType<typeof inkTheme>['tokens'],
+): React.ReactNode {
+  if (block.kind === 'field') {
+    return React.createElement(Text, { key: `f-${block.label}-${i}` }, `${block.label}: ${block.value}`);
+  }
+  if (block.kind === 'removed') {
+    return React.createElement(
+      Text,
+      { key: `r-${i}`, color: screenReader ? undefined : T.diffRemoved },
+      `- ${block.text}`,
+    );
+  }
+  if (block.kind === 'added') {
+    return React.createElement(
+      Text,
+      { key: `a-${i}`, color: screenReader ? undefined : T.diffAdded },
+      `+ ${block.text}`,
+    );
+  }
+  return React.createElement(
+    Text,
+    { key: `p-${i}`, dimColor: !screenReader, color: screenReader ? undefined : T.code },
+    block.text,
+  );
 }
 
 export function PermissionDialog(props: PermissionDialogProps): React.ReactElement {
@@ -158,12 +231,12 @@ export function PermissionDialog(props: PermissionDialogProps): React.ReactEleme
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
   const label = toolLabel(tool);
   const T = inkTheme(cediaHome()).tokens;
-  const lines = noticeLines(tool, input);
+  const blocks = noticeBlocks(tool, input);
   return React.createElement(
     Box,
     { flexDirection: 'column', borderStyle: screenReader ? undefined : 'single', borderColor: screenReader ? undefined : T.borderActive, paddingX: 1 },
     React.createElement(Text, { bold: !screenReader, color: screenReader ? undefined : T.accent }, `${label} denied`),
-    ...lines.map((line, i) => React.createElement(Text, { key: `${line.label}-${i}` }, `${line.label}: ${line.value}`)),
+    ...blocks.map((block, i) => renderBlock(block, i, screenReader, T)),
     reason ? React.createElement(Text, { color: screenReader ? undefined : T.error }, reason) : null,
     rule ? React.createElement(Text, { dimColor: !screenReader }, `rule: ${rule}`) : null,
     React.createElement(Text, { dimColor: !screenReader }, DISMISS_NOTE),
