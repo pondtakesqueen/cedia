@@ -1,14 +1,19 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
-export type MagicDoc = { path: string; title: string; header: string };
+// A living doc is a Markdown file that names itself with a `# LIVING DOC: <title>` line and
+// keeps one section between LIVING markers that cedia may rewrite. Files written for the
+// older names (`# MAGIC DOC:` and the MAGIC markers) are still found and updated.
+export type LivingDoc = { path: string; title: string; header: string };
 
-const HEADER_RE = /^#\s*MAGIC DOC:\s*(.+)$/m;
-const START = '<!-- MAGIC:START -->';
-const END = '<!-- MAGIC:END -->';
+const HEADER_RE = /^#\s*(?:LIVING|MAGIC) DOC:\s*(.+)$/m;
+const MARKERS = [
+  { start: '<!-- LIVING:START -->', end: '<!-- LIVING:END -->' },
+  { start: '<!-- MAGIC:START -->', end: '<!-- MAGIC:END -->' },
+];
 
-export function findMagicDocs(root: string): MagicDoc[] {
-  const out: MagicDoc[] = [];
+export function findLivingDocs(root: string): LivingDoc[] {
+  const out: LivingDoc[] = [];
   const walk = (dir: string) => {
     let entries: string[];
     try {
@@ -41,24 +46,26 @@ export function findMagicDocs(root: string): MagicDoc[] {
   return out;
 }
 
-export function updateMagicSection(path: string, content: string): boolean {
+// Where the rewritable section is: `inner` is just after the start marker, `end` just after
+// the end marker. The LIVING markers win when a file has both.
+export function livingSection(text: string): { start: number; inner: number; close: number; end: number } | undefined {
+  for (const m of MARKERS) {
+    const i = text.indexOf(m.start);
+    const j = text.indexOf(m.end);
+    if (i >= 0 && j >= 0 && j > i) return { start: i, inner: i + m.start.length, close: j, end: j + m.end.length };
+  }
+  return undefined;
+}
+
+export function updateLivingSection(path: string, content: string): boolean {
   if (!existsSync(path)) return false;
   const text = readFileSync(path, 'utf8');
-  const i = text.indexOf(START);
-  const j = text.indexOf(END);
-  if (i < 0 || j < 0 || j < i) return false;
-  const next = text.slice(0, i + START.length) + '\n' + content.trim() + '\n' + text.slice(j);
-  writeFileSync(path, next);
+  const s = livingSection(text);
+  if (!s) return false;
+  writeFileSync(path, text.slice(0, s.inner) + '\n' + content.trim() + '\n' + text.slice(s.close));
   return true;
 }
 
-export function magicSection(text: string): { start: number; end: number } | undefined {
-  const i = text.indexOf(START);
-  const j = text.indexOf(END);
-  if (i < 0 || j < 0 || j < i) return undefined;
-  return { start: i, end: j + END.length };
-}
-
-export function relativeMagicDocs(root: string): MagicDoc[] {
-  return findMagicDocs(root).map((d) => ({ ...d, path: relative(root, d.path) }));
+export function relativeLivingDocs(root: string): LivingDoc[] {
+  return findLivingDocs(root).map((d) => ({ ...d, path: relative(root, d.path) }));
 }

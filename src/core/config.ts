@@ -58,7 +58,9 @@ export type Settings = {
   desktop?: Record<string, unknown>;
   // The user's hooks (core/hooks.ts). User settings only: a repo must not run code outside the sandbox.
   hooks?: Hooks;
-  // AutoDream: consolidate project memory between sessions (default off). User settings only.
+  // Consolidate project memory between sessions (default off). User settings only.
+  consolidateMemory?: boolean;
+  // The old name of consolidateMemory, still read (with a note on stderr) so an older settings file loads.
   autoDream?: boolean;
   // Output style name (default/explanatory/learning or user style).
   outputStyle?: string;
@@ -96,6 +98,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   mcpServers: 'any',
   desktop: 'any',
   hooks: 'any',
+  consolidateMemory: 'any',
   autoDream: 'any',
   outputStyle: 'any',
   promptSuggestions: 'any',
@@ -266,10 +269,17 @@ export function loadTodo(flag?: string): boolean {
   return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).todo ?? false);
 }
 
-// autoDream: flag > user settings > off.
-export function loadAutoDream(flag?: string): boolean {
-  if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--auto-dream must be on or off: ${flag}`);
-  return flag ? flag === 'on' : (readSettings(join(cediaHome(), 'settings.json')).autoDream ?? false);
+// consolidateMemory: flag > user settings (`autoDream`, its old name, when the new one is absent) > off.
+export function loadConsolidateMemory(flag?: string, warn: (line: string) => void = (l) => console.error(l)): boolean {
+  if (flag !== undefined && flag !== 'on' && flag !== 'off') throw new Error(`--consolidate-memory must be on or off: ${flag}`);
+  if (flag) return flag === 'on';
+  const s = readSettings(join(cediaHome(), 'settings.json'));
+  if (s.consolidateMemory !== undefined) return s.consolidateMemory;
+  if (s.autoDream !== undefined) {
+    warn('cedia: settings key autoDream is now consolidateMemory; autoDream is still read for now');
+    return s.autoDream;
+  }
+  return false;
 }
 
 // promptSuggestions: flag > user settings > off.

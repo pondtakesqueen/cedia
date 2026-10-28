@@ -12,7 +12,7 @@ import { modelLine, modelList } from './core/providers/models.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
 import { memoryPath, MemoryStore } from './core/project/memory.ts';
 import { TeamStore, teamLine } from './core/project/teams.ts';
-import { findMagicDocs } from './core/project/magicdocs.ts';
+import { findLivingDocs } from './core/project/livingdocs.ts';
 import { fetchMdmSettings } from './core/project/mdm-remote.ts';
 import { listRemoteSessions, runRemote, fetchRemoteSession } from './core/project/remote.ts';
 import { voiceInput } from './core/project/voice.ts';
@@ -23,7 +23,7 @@ import { loadOutputStyles, getStyle, stylesDir } from './core/output-styles/styl
 import { isAlive, listBgSessions, recordStart, recordStop, bgPath, daemonPidPath, readBgEvents } from './core/project/background.ts';
 import { installPlugin, uninstallPlugin, setPluginEnabled, updatePlugin, listInstalled, loadManifest, discoverPlugins, addMarketplace, removeMarketplace, updateMarketplace, loadMarketplaces } from './core/plugins/plugins.ts';
 import { consolidateMemory } from './core/project/consolidate.ts';
-import { extractMemories } from './core/memory/extract.ts';
+import { gatherNotes } from './core/memory/gather.ts';
 import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Schedule } from './core/project/schedules.ts';
 import { commandList, loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
@@ -210,7 +210,11 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'threads') return threads(argv.slice(1));
   if (argv[0] === 'memory') return memory(argv.slice(1));
   if (argv[0] === 'teams') return teamsCmd(argv.slice(1));
-  if (argv[0] === 'magic-docs') return magicDocsCmd(argv.slice(1));
+  if (argv[0] === 'living-docs') return livingDocsCmd(argv.slice(1));
+  if (argv[0] === 'magic-docs') {
+    console.error('cedia: magic-docs is now living-docs; the old name still works for now');
+    return livingDocsCmd(argv.slice(1));
+  }
   if (argv[0] === 'mdm') return mdmCmd(argv.slice(1));
   if (argv[0] === 'serve') return serveCmd(argv.slice(1));
   if (argv[0] === 'remote') return remoteCmd(argv.slice(1));
@@ -266,6 +270,7 @@ export async function main(argv: string[]): Promise<number> {
       triage: { type: 'string' },
       ask: { type: 'string' },
       todo: { type: 'string' },
+      'consolidate-memory': { type: 'string' },
       'auto-dream': { type: 'string' },
       'prompt-suggestions': { type: 'string' },
       browser: { type: 'string' },
@@ -930,7 +935,7 @@ function schedules(argv: string[]): number {
 async function memory(argv: string[]): Promise<number> {
   let parsed;
   try {
-    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' }, model: { type: 'string' }, json: { type: 'boolean' }, thread: { type: 'string' }, 'auto-dream': { type: 'string' } } });
+    parsed = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' }, model: { type: 'string' }, json: { type: 'boolean' }, thread: { type: 'string' } } });
   } catch (e) {
     console.error(`cedia: ${(e as Error).message} (put -- before a note that starts with -)`);
     return 2;
@@ -963,7 +968,7 @@ async function memory(argv: string[]): Promise<number> {
       return 0;
     }
     if (cmd === 'extract' && rest.length === 0) {
-      const r = await extractMemories({ cwd, ...(values.model ? { model: values.model } : {}), ...(values.thread ? { thread: values.thread } : {}), force: true });
+      const r = await gatherNotes({ cwd, ...(values.model ? { model: values.model } : {}), ...(values.thread ? { thread: values.thread } : {}), force: true });
       if (values.json) console.log(JSON.stringify(r));
       else console.log(`extracted: ${r.added} note${r.added === 1 ? '' : 's'} added (${r.sessionsScanned} session${r.sessionsScanned === 1 ? '' : 's'} scanned)`);
       return 0;
@@ -1396,15 +1401,15 @@ function teamsCmd(argv: string[]): number {
   return 2;
 }
 
-function magicDocsCmd(argv: string[]): number {
+function livingDocsCmd(argv: string[]): number {
   const [sub, ...rest] = argv;
   const root = rest[0] || process.cwd();
   if (sub === 'list' || !sub) {
-    const docs = findMagicDocs(root);
-    if (docs.length === 0) { console.log('no magic docs'); return 0; }
+    const docs = findLivingDocs(root);
+    if (docs.length === 0) { console.log('no living docs'); return 0; }
     for (const d of docs) console.log(`${d.title}  ${d.path}`);
     return 0;
   }
-  console.error('usage: cedia magic-docs [list] [root]');
+  console.error('usage: cedia living-docs [list] [root]');
   return 2;
 }
