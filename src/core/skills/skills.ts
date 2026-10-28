@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { inside, real, repoRoot, SECRET_NAME } from '../project/instructions.ts';
+import { enabledPlugins } from '../plugins/plugins.ts';
 import { redactSecrets } from '../safety/secrets.ts';
 import { inert } from '../trust/frame.ts';
 import type { ToolSpec } from '../tools/registry.ts';
@@ -15,8 +16,22 @@ import type { ToolSpec } from '../tools/registry.ts';
 // like its AGENTS.md: a skill whose folder resolves outside the repository is left out, its files are read only
 // inside its folder and never when they look like secrets, and all of it is redacted and made inert. Neither kind
 // can widen what the permission mode and the sandbox allow.
+//
+// An enabled plugin's skills (skills/<name>/SKILL.md) and commands (commands/<name>.md, a Claude Code slash command:
+// front matter, then the prompt) are listed as `<plugin>:<name>`, after the repository's. They are a third party's
+// text, so they are treated as a repository's are: read only inside the plugin's folder, redacted and made inert.
 
-export type Skill = { name: string; description: string; dir: string; source: 'user' | 'repository'; argumentHint?: string };
+export type Skill = {
+  name: string;
+  description: string;
+  dir: string;
+  source: 'user' | 'repository' | 'plugin';
+  argumentHint?: string;
+  // The plugin a `plugin` skill came from.
+  plugin?: string;
+  // A command's own file in `dir`, which holds its instructions in place of SKILL.md; a command has no other files.
+  file?: string;
+};
 
 // `cedia commands --json`: what a client offers when the person types `/`. Each skill is a command; `/<name> <text>`
 // sent as a prompt asks the writer to load that skill first (skillCommand).
@@ -25,6 +40,8 @@ export type CommandList = { commands: CommandEntry[] };
 
 export const SKILL_DIRS = ['.agents/skills', '.claude/skills', '.cursor/skills'];
 const NAME = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+// A command is named by its file, as in Claude Code (`clean_gone.md`).
+const COMMAND_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MAX_DESCRIPTION = 1024;
 const MAX_SKILLS = 50;
 // The most the list may take of the first turn.
@@ -60,25 +77,65 @@ export function frontMatter(text: string): { fields: Record<string, string>; bod
   return { fields, body: text.slice(m[0].length) };
 }
 
-function readSkill(dir: string, source: Skill['source']): Skill | undefined {
+function readSkill(dir: string, source: Skill['source'], plugin?: { name: string; command?: string }): Skill | undefined {
   try {
-    // SKILL.md itself must be in the folder too: a link to a file elsewhere would put that file's text in the turn.
-    const path = real(join(dir, 'SKILL.md'));
+    // SKILL.md (or the command's file) must be in the folder too: a link to a file elsewhere would put that file's
+    // text in the turn.
+    const file = plugin?.command ? `${plugin.command}.md` : 'SKILL.md';
+    const path = real(join(dir, file));
     const folder = real(dir);
     if (!path || !folder || !inside(folder, path)) return undefined;
     const st = statSync(path);
     if (!st.isFile() || st.size > MAX_FILE_BYTES) return undefined;
-    const fm = frontMatter(readFileSync(path, 'utf8'));
+    const text = readFileSync(path, 'utf8');
+    // A command may have no front matter; then its first line describes it, as in Claude Code.
+    const fm = frontMatter(text) ?? (plugin?.command ? { fields: {}, body: text } : undefined);
     if (!fm) return undefined;
-    const name = fm.fields.name ?? basename(dir);
+    const own = plugin?.command ?? fm.fields.name ?? basename(dir);
+    const first = plugin?.command ? (fm.body.split('\n').find((l) => l.trim()) ?? '').replace(/^#+\s*/, '') : '';
     // Redacted before it is cut, so a cut cannot split a secret past the redaction.
-    const description = redactSecrets((fm.fields.description ?? '').replace(/\s+/g, ' ').trim()).text;
-    if (!NAME.test(name) || !description) return undefined;
+    const description = redactSecrets((fm.fields.description ?? first).replace(/\s+/g, ' ').trim()).text;
+    if (!(plugin?.command ? COMMAND_NAME : NAME).test(own) || !description) return undefined;
     const hint = redactSecrets((fm.fields['argument-hint'] ?? '').replace(/\s+/g, ' ').trim()).text.slice(0, 200);
-    return { name, description: description.slice(0, MAX_DESCRIPTION), dir, source, ...(hint ? { argumentHint: hint } : {}) };
+    return {
+      name: plugin ? `${plugin.name}:${own}` : own,
+      description: description.slice(0, MAX_DESCRIPTION),
+      dir,
+      source,
+      ...(hint ? { argumentHint: hint } : {}),
+      ...(plugin ? { plugin: plugin.name } : {}),
+      ...(plugin?.command ? { file } : {}),
+    };
   } catch {
     return undefined;
   }
+}
+
+// An enabled plugin's skills, then its commands, each only from inside the plugin's folder.
+function pluginSkills(home: string): Skill[] {
+  const found: Skill[] = [];
+  for (const p of enabledPlugins(home)) {
+    const root = real(p.installPath);
+    if (!root) continue;
+    for (const d of subdirs(join(root, 'skills'))) {
+      const at = real(d);
+      const skill = at && inside(root, at) ? readSkill(at, 'plugin', { name: p.name }) : undefined;
+      if (skill) found.push(skill);
+    }
+    const commands = real(join(root, 'commands'));
+    if (!commands || !inside(root, commands)) continue;
+    let files: string[] = [];
+    try {
+      files = readdirSync(commands).filter((f) => f.endsWith('.md')).sort();
+    } catch {
+      files = [];
+    }
+    for (const f of files) {
+      const skill = readSkill(commands, 'plugin', { name: p.name, command: f.slice(0, -3) });
+      if (skill) found.push(skill);
+    }
+  }
+  return found;
 }
 
 const subdirs = (dir: string): string[] => {
@@ -114,6 +171,7 @@ export function loadSkills(cwd: string, home: string): Skill[] {
       if (d === root) break;
     }
   }
+  found.push(...pluginSkills(home));
   const seen = new Set<string>();
   return found.filter((s) => !seen.has(s.name) && seen.add(s.name)).slice(0, MAX_SKILLS);
 }
@@ -124,7 +182,7 @@ export function skillsBlock(skills: Skill[], max = MAX_SKILLS_BLOCK): string {
   const lines: string[] = [];
   let used = 0;
   for (const s of skills) {
-    const line = `- ${s.name}${s.source === 'user' ? ' (the user\'s)' : ' (the repository\'s)'}: ${inert(s.description)}`;
+    const line = `- ${s.name}${s.source === 'user' ? ' (the user\'s)' : s.source === 'plugin' ? ' (a plugin\'s)' : ' (the repository\'s)'}: ${inert(s.description)}`;
     if (used + line.length > max) break;
     lines.push(line);
     used += line.length + 1;
@@ -190,17 +248,23 @@ export function skillTool(skills: Skill[]): ToolSpec {
     async run(input) {
       const skill = byName.get(String(input.name ?? ''));
       if (!skill) return { text: `no skill ${String(input.name ?? '')}; the skills are: ${[...byName.keys()].join(', ')}`, isError: true };
-      if (typeof input.file === 'string' && input.file) {
+      if (typeof input.file === 'string' && input.file && !skill.file) {
         const f = skillFile(skill, input.file);
         return 'error' in f ? { text: f.error, isError: true } : { text: inert(f.text), isError: false };
       }
-      const f = skillFile(skill, 'SKILL.md');
+      const f = skillFile(skill, skill.file ?? 'SKILL.md');
       if ('error' in f) return { text: f.error, isError: true };
       const body = (frontMatter(f.text)?.body ?? f.text).trim();
-      const files = skillFiles(real(skill.dir) ?? skill.dir);
-      const where = skill.source === 'repository' ? ` Its folder is ${inert(skill.dir)}.` : '';
+      const files = skill.file ? [] : skillFiles(real(skill.dir) ?? skill.dir);
+      const where = skill.source !== 'user' && !skill.file ? ` Its folder is ${inert(skill.dir)}.` : '';
+      const from = skill.source === 'user' ? 'from the user' : skill.source === 'plugin' ? `from the ${inert(skill.plugin ?? '')} plugin` : 'from the repository';
+      // A Claude Code command stands for the text after it with $ARGUMENTS,
+      // and runs each !`command` first, putting its output in the prompt; here the model runs them.
+      const args =
+        (skill.file && /\$ARGUMENTS|\$\d/.test(body) ? ' Where it says $ARGUMENTS (or $1, $2, ...), read the text the user wrote after the command.' : '') +
+        (skill.file && /!`[^`]+`/.test(body) ? ' Where it shows !`command`, run that command with bash first and use its output there.' : '');
       return {
-        text: `Skill ${skill.name}, ${skill.source === 'user' ? 'from the user' : 'from the repository'}: how to do this kind of task.${where}\n\n${inert(body)}${files.length ? `\n\nFiles in this skill (read one with the skill tool and \`file\`): ${inert(files.join(', '))}` : ''}`,
+        text: `Skill ${skill.name}, ${from}: how to do this kind of task.${where}${args}\n\n${inert(body)}${files.length ? `\n\nFiles in this skill (read one with the skill tool and \`file\`): ${inert(files.join(', '))}` : ''}`,
         isError: false,
       };
     },
@@ -214,7 +278,7 @@ export const commandList = (skills: Skill[]): CommandList => ({
 // A prompt that starts with `/<skill>`: the person picked that skill from the command list. The prompt goes as
 // typed, with a line asking the writer to load the skill first; any other prompt, `/` or not, is left alone.
 export function skillCommand(prompt: string, skills: Skill[]): string | undefined {
-  const m = /^\/([a-z0-9-]+)(?:\s|$)/.exec(prompt);
+  const m = /^\/((?:[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9_-]+)|[a-z0-9-]+)(?:\s|$)/.exec(prompt);
   const skill = m && skills.find((s) => s.name === m[1]);
   if (!skill) return undefined;
   const rest = prompt.slice(m[0].length).trim();
