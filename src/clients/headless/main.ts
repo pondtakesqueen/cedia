@@ -120,7 +120,7 @@ export type HeadlessArgs = {
   // auto (default): the writer's model first says whether the message is work a plan helps (a greeting or a
   // question is not); always: every prompt is planned; never: none is.
   planWhen?: string;
-  // "on": the writer starts reading while the plan is written (core/roles.ts, planComing); default settings, off.
+  // "on": the writer starts reading while the plan is written (core/roles.ts, planComing); default settings, on.
   planOverlap?: string;
   // The model that says whether a message needs the planner (default: the code model).
   triage?: string;

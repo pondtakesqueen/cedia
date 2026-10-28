@@ -1,0 +1,285 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.cases.test.ts b/shell.cases.test.ts
+--- a/shell.cases.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/shell.cases.test.ts	2026-10-28 19:59:39.775810945 +0000
+@@ -0,0 +1,43 @@
++import { expect, test } from 'bun:test';
++import { simpleCommands } from './shell.ts';
++
++test('a substitution inside a word keeps the word whole', () => {
++  expect(simpleCommands('r$(true)m -rf /')).toContainEqual(['rm', '-rf', '/']);
++  expect(simpleCommands('r`true`m -rf /')).toContainEqual(['rm', '-rf', '/']);
++  expect(simpleCommands('"r$(true)m" -rf /')).toContainEqual(['rm', '-rf', '/']);
++});
++
++test('a substitution as a redirect target does not drop the next word', () => {
++  expect(simpleCommands('> $(echo f) rm -rf /')).toContainEqual(['rm', '-rf', '/']);
++  expect(simpleCommands('>"$(echo f)" rm -rf /')).toContainEqual(['rm', '-rf', '/']);
++});
++
++test('escaped backticks nest inside backticks', () => {
++  expect(simpleCommands('echo `echo \\`rm -rf x\\` `')).toContainEqual(['rm', '-rf', 'x']);
++});
++
++test('bash flags with values and -- before the script', () => {
++  expect(simpleCommands("bash -c -- 'rm x'")).toEqual([['rm', 'x']]);
++  expect(simpleCommands("bash --rcfile f -c 'rm x'")).toEqual([['rm', 'x']]);
++  expect(simpleCommands('bash -lc "ls; id"')).toEqual([['ls'], ['id']]);
++  expect(simpleCommands('bash -o pipefail -c "ls"')).toEqual([['ls']]);
++});
++
++test('env -S and xargs -i take no value word', () => {
++  expect(simpleCommands("env -S 'rm -rf /'")).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands('xargs -i rm -rf {}')).toEqual([['rm', '-rf', '{}']]);
++});
++
++test('process substitution, pipes, redirect forms and quoted keywords', () => {
++  expect(simpleCommands('diff <(rm x) y')).toEqual([['diff', 'y'], ['rm', 'x']]);
++  expect(simpleCommands('echo a >| out')).toEqual([['echo', 'a']]);
++  expect(simpleCommands('make |& tee log')).toEqual([['make'], ['tee', 'log']]);
++  expect(simpleCommands('"if" rm -rf /')).toEqual([['if', 'rm', '-rf', '/']]);
++  expect(simpleCommands('"A=1" rm -rf /')).toEqual([['A=1', 'rm', '-rf', '/']]);
++});
++
++test('substitutions in double quotes and unclosed substitutions', () => {
++  expect(simpleCommands('echo "$(rm -rf /)"')).toEqual([['echo'], ['rm', '-rf', '/']]);
++  expect(simpleCommands('echo $(ls')).toEqual([['echo'], ['ls']]);
++  expect(simpleCommands('echo "$(ls')).toBeNull();
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.ts b/shell.ts
+--- a/shell.ts	2026-10-28 19:52:57.595481897 +0000
++++ b/shell.ts	2026-10-28 19:59:39.783805146 +0000
+@@ -14,9 +14,15 @@
+   ['setsid', {}],
+   ['stdbuf', { value: ['-i', '-o', '-e', '--input', '--output', '--error'] }],
+   ['timeout', { value: ['-s', '-k', '--signal', '--kill-after'], positional: 1 }],
+-  ['xargs', { value: ['-a', '-d', '-E', '-e', '-I', '-i', '-L', '-l', '-n', '-P', '-s', '--arg-file', '--delimiter', '--eof', '--replace', '--max-lines', '--max-args', '--max-procs', '--max-chars', '--process-slot-var'] }],
++  ['xargs', { value: ['-a', '-d', '-E', '-I', '-L', '-n', '-P', '-s', '--arg-file', '--delimiter', '--max-args', '--max-procs', '--max-chars', '--process-slot-var'] }],
+ ]);
+ 
++type Word = { text: string; plain: number; sub: boolean };
++type Frame = { kind: '(' | '$(' | '`' | '\\`'; cur: Word[]; buf: string; inWord: boolean; plain: number; inDouble: boolean; sub: boolean };
++
++const REDIRECT = /^(?:\d+|&)?(?:<<<|<<|<>|<&|>&|>>|>\||<|>)/;
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
+ 
+ // Splits a shell command line into the argv of each simple command, so a permission policy can check every
+ // command a line would run. It is not a full shell parser; it must never hide a command from the policy.
+@@ -37,5 +43,216 @@
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  const slots: Word[][] = [];
++  const frames: Frame[] = [];
++  let cur: Word[] = [];
++  let buf = '';
++  let inWord = false;
++  let plain = -1;
++  let inSingle = false;
++  let inDouble = false;
++  let sub = false;
++
++  const newSlot = () => {
++    cur = [];
++    slots.push(cur);
++  };
++  const append = (s: string, quoted: boolean) => {
++    if (quoted && plain < 0) plain = buf.length;
++    buf += s;
++    inWord = true;
++  };
++  const flushWord = () => {
++    if (inWord) cur.push({ text: buf, plain: plain < 0 ? buf.length : plain, sub });
++    buf = '';
++    inWord = false;
++    plain = -1;
++    sub = false;
++  };
++  const open = (kind: Frame['kind']) => {
++    frames.push({ kind, cur, buf, inWord, plain, inDouble, sub });
++    buf = '';
++    inWord = false;
++    plain = -1;
++    inDouble = false;
++    sub = false;
++    newSlot();
++  };
++  const close = () => {
++    const f = frames.pop()!;
++    cur = f.cur;
++    buf = f.buf;
++    inWord = f.inWord;
++    plain = f.plain;
++    inDouble = f.inDouble;
++    sub = f.sub;
++    if (f.kind !== '(') {
++      inWord = true;
++      sub = true;
++    }
++  };
++
++  newSlot();
++  for (let i = 0; i < command.length; i++) {
++    const c = command[i];
++    const next = command[i + 1];
++    if (inSingle) {
++      if (c === "'") inSingle = false;
++      else append(c, true);
++    } else if (inDouble) {
++      if (c === '"') inDouble = false;
++      else if (c === '\\' && next !== undefined) {
++        if (next !== '\n') append(next, true);
++        i++;
++      } else if (c === '$' && next === '(') {
++        open('$(');
++        i++;
++      } else if (c === '`') {
++        if (frames[frames.length - 1]?.kind === '`') {
++          flushWord();
++          close();
++        } else open('`');
++      } else append(c, true);
++    } else if (c === "'") {
++      inSingle = true;
++      append('', true);
++    } else if (c === '"') {
++      inDouble = true;
++      append('', true);
++    } else if (c === '\\' && next === '`' && frames[frames.length - 1]?.kind.endsWith('`')) {
++      if (frames[frames.length - 1].kind === '\\`') {
++        flushWord();
++        close();
++      } else open('\\`');
++      i++;
++    } else if (c === '\\' && next !== undefined) {
++      if (next !== '\n') append(next, true);
++      i++;
++    } else if (c === ' ' || c === '\t') {
++      flushWord();
++    } else if (c === ';' || c === '\n') {
++      flushWord();
++      newSlot();
++    } else if (c === '&') {
++      if (inWord && plain < 0 && /[<>]$/.test(buf)) append(c, false);
++      else if (next === '>') {
++        flushWord();
++        append(c, false);
++      } else {
++        flushWord();
++        newSlot();
++      }
++    } else if (c === '|') {
++      if (inWord && plain < 0 && buf.endsWith('>')) append(c, false);
++      else {
++        flushWord();
++        newSlot();
++      }
++    } else if (c === '<' || c === '>') {
++      if (inWord && (plain >= 0 || !/^[\d&<>]*$/.test(buf))) flushWord();
++      append(c, false);
++    } else if (c === '$' && next === '(') {
++      open('$(');
++      i++;
++    } else if (c === '(') {
++      if (inWord && plain < 0 && /[<>]$/.test(buf)) {
++        buf = buf.slice(0, -1);
++        if (buf === '') inWord = false;
++        open('$(');
++      } else {
++        flushWord();
++        open('(');
++      }
++    } else if (c === '`') {
++      if (frames[frames.length - 1]?.kind === '`') {
++        flushWord();
++        close();
++      } else open('`');
++    } else if (c === ')') {
++      flushWord();
++      const top = frames[frames.length - 1]?.kind;
++      if (top === '$(') close();
++      else if (top === '(') {
++        close();
++        newSlot();
++      } else newSlot();
++    } else append(c, false);
++  }
++
++  if (inSingle || inDouble || frames.some(f => f.inDouble)) return null;
++  flushWord();
++  while (frames.length) {
++    close();
++    flushWord();
++  }
++
++  const out: string[][] = [];
++  for (const words of slots) {
++    const r = expand(words);
++    if (r === null) return null;
++    out.push(...r);
++  }
++  return out;
++}
++
++// Applies the rules after the split: drops redirections, skips assignments and keywords, unwraps wrappers and shells.
++function expand(words: Word[]): string[][] | null {
++  const args: Word[] = [];
++  for (let i = 0; i < words.length; i++) {
++    const { text, plain, sub } = words[i];
++    const m = REDIRECT.exec(text.slice(0, plain));
++    if (!m) args.push(words[i]);
++    else if (m[0].length === text.length && plain === text.length && !sub) i++;
++  }
++
++  const isAssign = (w: Word) => {
++    const m = /^[A-Za-z_]\w*=/.exec(w.text);
++    return !!m && m[0].length <= w.plain;
++  };
++  const isKeyword = (w: Word) => w.plain === w.text.length && KEYWORDS.has(w.text);
++
++  let w = args.filter(x => x.text || !x.sub);
++  for (;;) {
++    while (w.length && (isAssign(w[0]) || isKeyword(w[0]))) w = w.slice(1);
++    if (!w.length) return [];
++    const name = w[0].text.split('/').pop()!;
++
++    const wrapper = WRAPPERS.get(name);
++    if (wrapper) {
++      let i = 1;
++      while (i < w.length && w[i].text.startsWith('-')) {
++        const split = name === 'env' ? /^(-S|--split-string=?)(.*)$/.exec(w[i].text) : null;
++        if (split) {
++          const tail = split[2] ? w.slice(i + 1) : w.slice(i + 2);
++          return simpleCommands([split[2] || w[i + 1]?.text || '', ...tail.map(x => x.text)].join(' '));
++        }
++        if (w[i].text === '--') {
++          i++;
++          break;
++        }
++        i += wrapper.value?.includes(w[i].text) ? 2 : 1;
++      }
++      w = w.slice(i + (wrapper.positional ?? 0));
++      continue;
++    }
++
++    if (SHELLS.has(name)) {
++      let i = 1;
++      let hasC = false;
++      while (i < w.length && /^[-+]/.test(w[i].text)) {
++        const flag = w[i].text;
++        if (flag === '--') {
++          i++;
++          break;
++        }
++        if (/^-[A-Za-z]*c[A-Za-z]*$/.test(flag)) hasC = true;
++        i += /^[-+][oO]$/.test(flag) || flag === '--rcfile' || flag === '--init-file' ? 2 : 1;
++      }
++      if (hasC && i < w.length) return simpleCommands(w[i].text);
++      return [w.map(x => x.text)];
++    }
++
++    if (name === 'eval') return simpleCommands(w.slice(1).map(x => x.text).join(' '));
++    return [w.map(x => x.text)];
++  }
+ }

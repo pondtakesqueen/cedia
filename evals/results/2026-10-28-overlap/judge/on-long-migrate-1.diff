@@ -1,0 +1,264 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/handlers/orders/cancelOrder.ts b/src/handlers/orders/cancelOrder.ts
+--- a/src/handlers/orders/cancelOrder.ts	2026-10-28 19:56:34.901470610 +0000
++++ b/src/handlers/orders/cancelOrder.ts	2026-10-28 19:57:34.327797689 +0000
+@@ -2,18 +2,12 @@
+ import { HttpError } from '../../errors.ts';
+ 
+ // Cancels an open order and puts its units back in stock.
+-export function cancelOrder(req: { id: string }, done: (err: Error | null, res?: Row) => void): void {
+-  db.get('orders', req.id, (err, order) => {
+-    if (err) return done(err);
+-    if (!order) return done(new HttpError(404, `no order ${req.id}`));
+-    if (order.status !== 'open') return done(new HttpError(409, `order ${req.id} is ${order.status}`));
+-    db.get('stock', order.sku as string, (err2, stock) => {
+-      if (err2) return done(err2);
+-      const units = ((stock?.units as number | undefined) ?? 0) + (order.quantity as number);
+-      db.put('stock', { id: order.sku as string, units }, (err3) => {
+-        if (err3) return done(err3);
+-        db.put('orders', { ...order, status: 'cancelled' }, done);
+-      });
+-    });
+-  });
++export async function cancelOrder(req: { id: string }): Promise<Row> {
++  const order = await db.promises.get('orders', req.id);
++  if (!order) throw new HttpError(404, `no order ${req.id}`);
++  if (order.status !== 'open') throw new HttpError(409, `order ${req.id} is ${order.status}`);
++  const stock = await db.promises.get('stock', order.sku as string);
++  const units = ((stock?.units as number | undefined) ?? 0) + (order.quantity as number);
++  await db.promises.put('stock', { id: order.sku as string, units });
++  return db.promises.put('orders', { ...order, status: 'cancelled' });
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/handlers/orders/createOrder.ts b/src/handlers/orders/createOrder.ts
+--- a/src/handlers/orders/createOrder.ts	2026-10-28 19:56:34.901430669 +0000
++++ b/src/handlers/orders/createOrder.ts	2026-10-28 19:57:34.335861599 +0000
+@@ -1,19 +1,13 @@
+ import { db, type Row } from '../../db.ts';
+ import { HttpError } from '../../errors.ts';
+ 
+-export function createOrder(req: { id: string; user: string; sku: string; quantity: number }, done: (err: Error | null, res?: Row) => void): void {
+-  if (!Number.isInteger(req.quantity) || req.quantity < 1) return done(new HttpError(400, 'quantity must be a positive integer'));
+-  db.get('users', req.user, (err, user) => {
+-    if (err) return done(err);
+-    if (!user || user.active === false) return done(new HttpError(404, `no user ${req.user}`));
+-    db.get('stock', req.sku, (err2, stock) => {
+-      if (err2) return done(err2);
+-      const have = (stock?.units as number | undefined) ?? 0;
+-      if (have < req.quantity) return done(new HttpError(409, `only ${have} ${req.sku} left`));
+-      db.put('stock', { id: req.sku, units: have - req.quantity }, (err3) => {
+-        if (err3) return done(err3);
+-        db.put('orders', { id: req.id, user: req.user, sku: req.sku, quantity: req.quantity, status: 'open' }, done);
+-      });
+-    });
+-  });
++export async function createOrder(req: { id: string; user: string; sku: string; quantity: number }): Promise<Row> {
++  if (!Number.isInteger(req.quantity) || req.quantity < 1) throw new HttpError(400, 'quantity must be a positive integer');
++  const user = await db.promises.get('users', req.user);
++  if (!user || user.active === false) throw new HttpError(404, `no user ${req.user}`);
++  const stock = await db.promises.get('stock', req.sku);
++  const have = (stock?.units as number | undefined) ?? 0;
++  if (have < req.quantity) throw new HttpError(409, `only ${have} ${req.sku} left`);
++  await db.promises.put('stock', { id: req.sku, units: have - req.quantity });
++  return db.promises.put('orders', { id: req.id, user: req.user, sku: req.sku, quantity: req.quantity, status: 'open' });
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/handlers/orders/listOrders.ts b/src/handlers/orders/listOrders.ts
+--- a/src/handlers/orders/listOrders.ts	2026-10-28 19:56:34.901459475 +0000
++++ b/src/handlers/orders/listOrders.ts	2026-10-28 19:57:34.344457319 +0000
+@@ -2,9 +2,7 @@
+ import { HttpError } from '../../errors.ts';
+ 
+ // A user's orders, newest id first, optionally only one status.
+-export function listOrders(req: { user: string; status?: string }, done: (err: Error | null, res?: Row[]) => void): void {
+-  db.query('orders', (o) => o.user === req.user && (!req.status || o.status === req.status), (err, rows) => {
+-    if (err) return done(err);
+-    done(null, (rows ?? []).sort((a, b) => b.id.localeCompare(a.id)));
+-  });
++export async function listOrders(req: { user: string; status?: string }): Promise<Row[]> {
++  const rows = await db.promises.query('orders', (o) => o.user === req.user && (!req.status || o.status === req.status));
++  return rows.sort((a, b) => b.id.localeCompare(a.id));
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/handlers/reports/summary.ts b/src/handlers/reports/summary.ts
+--- a/src/handlers/reports/summary.ts	2026-10-28 19:56:34.901470610 +0000
++++ b/src/handlers/reports/summary.ts	2026-10-28 19:57:34.352423732 +0000
+@@ -2,19 +2,15 @@
+ import { HttpError } from '../../errors.ts';
+ 
+ // Counts per order status and total units ordered, over all orders of active users.
+-export function summary(_req: {}, done: (err: Error | null, res?: { byStatus: Record<string, number>; units: number }) => void): void {
+-  db.query('users', (u) => u.active !== false, (err, users) => {
+-    if (err) return done(err);
+-    const active = new Set((users ?? []).map((u) => u.id));
+-    db.query('orders', (o) => active.has(o.user as string), (err2, orders) => {
+-      if (err2) return done(err2);
+-      const byStatus: Record<string, number> = {};
+-      let units = 0;
+-      for (const o of orders ?? []) {
+-        byStatus[o.status as string] = (byStatus[o.status as string] ?? 0) + 1;
+-        units += o.quantity as number;
+-      }
+-      done(null, { byStatus, units });
+-    });
+-  });
++export async function summary(_req: {}): Promise<{ byStatus: Record<string, number>; units: number }> {
++  const users = await db.promises.query('users', (u) => u.active !== false);
++  const active = new Set(users.map((u) => u.id));
++  const orders = await db.promises.query('orders', (o) => active.has(o.user as string));
++  const byStatus: Record<string, number> = {};
++  let units = 0;
++  for (const o of orders) {
++    byStatus[o.status as string] = (byStatus[o.status as string] ?? 0) + 1;
++    units += o.quantity as number;
++  }
++  return { byStatus, units };
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/handlers/stock/adjustStock.ts b/src/handlers/stock/adjustStock.ts
+--- a/src/handlers/stock/adjustStock.ts	2026-10-28 19:56:34.901525030 +0000
++++ b/src/handlers/stock/adjustStock.ts	2026-10-28 19:57:34.360617249 +0000
+@@ -2,12 +2,10 @@
+ import { HttpError } from '../../errors.ts';
+ 
+ // Adds delta units (negative to remove); stock never goes below zero.
+-export function adjustStock(req: { sku: string; delta: number }, done: (err: Error | null, res?: Row) => void): void {
+-  if (!Number.isInteger(req.delta) || req.delta === 0) return done(new HttpError(400, 'delta must be a non-zero integer'));
+-  db.get('stock', req.sku, (err, stock) => {
+-    if (err) return done(err);
+-    const units = ((stock?.units as number | undefined) ?? 0) + req.delta;
+-    if (units < 0) return done(new HttpError(409, `stock of ${req.sku} would be ${units}`));
+-    db.put('stock', { id: req.sku, units }, done);
+-  });
++export async function adjustStock(req: { sku: string; delta: number }): Promise<Row> {
++  if (!Number.isInteger(req.delta) || req.delta === 0) throw new HttpError(400, 'delta must be a non-zero integer');
++  const stock = await db.promises.get('stock', req.sku);
++  const units = ((stock?.units as number | undefined) ?? 0) + req.delta;
++  if (units < 0) throw new HttpError(409, `stock of ${req.sku} would be ${units}`);
++  return db.promises.put('stock', { id: req.sku, units });
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/handlers/stock/transferStock.ts b/src/handlers/stock/transferStock.ts
+--- a/src/handlers/stock/transferStock.ts	2026-10-28 19:56:34.901470610 +0000
++++ b/src/handlers/stock/transferStock.ts	2026-10-28 19:57:34.367797691 +0000
+@@ -2,21 +2,13 @@
+ import { HttpError } from '../../errors.ts';
+ 
+ // Moves units of one sku to another sku's count (a repack). Both rows are written, source first.
+-export function transferStock(req: { from: string; to: string; units: number }, done: (err: Error | null, res?: { from: Row; to: Row }) => void): void {
+-  if (req.from === req.to) return done(new HttpError(400, 'from and to are the same'));
+-  db.get('stock', req.from, (err, a) => {
+-    if (err) return done(err);
+-    const have = (a?.units as number | undefined) ?? 0;
+-    if (have < req.units) return done(new HttpError(409, `only ${have} ${req.from} left`));
+-    db.get('stock', req.to, (err2, b) => {
+-      if (err2) return done(err2);
+-      db.put('stock', { id: req.from, units: have - req.units }, (err3, from) => {
+-        if (err3) return done(err3);
+-        db.put('stock', { id: req.to, units: ((b?.units as number | undefined) ?? 0) + req.units }, (err4, to) => {
+-          if (err4) return done(err4);
+-          done(null, { from: from!, to: to! });
+-        });
+-      });
+-    });
+-  });
++export async function transferStock(req: { from: string; to: string; units: number }): Promise<{ from: Row; to: Row }> {
++  if (req.from === req.to) throw new HttpError(400, 'from and to are the same');
++  const a = await db.promises.get('stock', req.from);
++  const have = (a?.units as number | undefined) ?? 0;
++  if (have < req.units) throw new HttpError(409, `only ${have} ${req.from} left`);
++  const b = await db.promises.get('stock', req.to);
++  const from = await db.promises.put('stock', { id: req.from, units: have - req.units });
++  const to = await db.promises.put('stock', { id: req.to, units: ((b?.units as number | undefined) ?? 0) + req.units });
++  return { from, to };
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/handlers/users/createUser.ts b/src/handlers/users/createUser.ts
+--- a/src/handlers/users/createUser.ts	2026-10-28 19:56:34.901430669 +0000
++++ b/src/handlers/users/createUser.ts	2026-10-28 19:57:34.375797691 +0000
+@@ -1,11 +1,9 @@
+ import { db, type Row } from '../../db.ts';
+ import { HttpError } from '../../errors.ts';
+ 
+-export function createUser(req: { id: string; name: string }, done: (err: Error | null, res?: Row) => void): void {
+-  if (!req.name.trim()) return done(new HttpError(400, 'name is required'));
+-  db.get('users', req.id, (err, existing) => {
+-    if (err) return done(err);
+-    if (existing) return done(new HttpError(409, `user ${req.id} exists`));
+-    db.put('users', { id: req.id, name: req.name.trim(), active: true }, done);
+-  });
++export async function createUser(req: { id: string; name: string }): Promise<Row> {
++  if (!req.name.trim()) throw new HttpError(400, 'name is required');
++  const existing = await db.promises.get('users', req.id);
++  if (existing) throw new HttpError(409, `user ${req.id} exists`);
++  return db.promises.put('users', { id: req.id, name: req.name.trim(), active: true });
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/handlers/users/deactivateUser.ts b/src/handlers/users/deactivateUser.ts
+--- a/src/handlers/users/deactivateUser.ts	2026-10-28 19:56:34.901419235 +0000
++++ b/src/handlers/users/deactivateUser.ts	2026-10-28 19:57:34.401081272 +0000
+@@ -2,23 +2,11 @@
+ import { HttpError } from '../../errors.ts';
+ 
+ // Deactivates the user and cancels their open orders, one at a time.
+-export function deactivateUser(req: { id: string }, done: (err: Error | null, res?: { cancelled: number }) => void): void {
+-  db.get('users', req.id, (err, user) => {
+-    if (err) return done(err);
+-    if (!user) return done(new HttpError(404, `no user ${req.id}`));
+-    db.put('users', { ...user, active: false }, (err2) => {
+-      if (err2) return done(err2);
+-      db.query('orders', (o) => o.user === req.id && o.status === 'open', (err3, orders) => {
+-        if (err3) return done(err3);
+-        const list = orders ?? [];
+-        let i = 0;
+-        const next = (): void => {
+-          if (i === list.length) return done(null, { cancelled: list.length });
+-          const o = list[i++]!;
+-          db.put('orders', { ...o, status: 'cancelled' }, (err4) => (err4 ? done(err4) : next()));
+-        };
+-        next();
+-      });
+-    });
+-  });
++export async function deactivateUser(req: { id: string }): Promise<{ cancelled: number }> {
++  const user = await db.promises.get('users', req.id);
++  if (!user) throw new HttpError(404, `no user ${req.id}`);
++  await db.promises.put('users', { ...user, active: false });
++  const orders = await db.promises.query('orders', (o) => o.user === req.id && o.status === 'open');
++  for (const o of orders) await db.promises.put('orders', { ...o, status: 'cancelled' });
++  return { cancelled: orders.length };
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/handlers/users/getUser.ts b/src/handlers/users/getUser.ts
+--- a/src/handlers/users/getUser.ts	2026-10-28 19:56:34.901060397 +0000
++++ b/src/handlers/users/getUser.ts	2026-10-28 19:57:34.383975671 +0000
+@@ -1,10 +1,8 @@
+ import { db, type Row } from '../../db.ts';
+ import { HttpError } from '../../errors.ts';
+ 
+-export function getUser(req: { id: string }, done: (err: Error | null, res?: Row) => void): void {
+-  db.get('users', req.id, (err, user) => {
+-    if (err) return done(err);
+-    if (!user || user.active === false) return done(new HttpError(404, `no user ${req.id}`));
+-    done(null, user);
+-  });
++export async function getUser(req: { id: string }): Promise<Row> {
++  const user = await db.promises.get('users', req.id);
++  if (!user || user.active === false) throw new HttpError(404, `no user ${req.id}`);
++  return user;
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/handlers/users/renameUser.ts b/src/handlers/users/renameUser.ts
+--- a/src/handlers/users/renameUser.ts	2026-10-28 19:56:34.901407357 +0000
++++ b/src/handlers/users/renameUser.ts	2026-10-28 19:57:34.392906220 +0000
+@@ -1,13 +1,11 @@
+ import { db, type Row } from '../../db.ts';
+ import { HttpError } from '../../errors.ts';
+ 
+-export function renameUser(req: { id: string; name: string }, done: (err: Error | null, res?: Row) => void): void {
+-  db.get('users', req.id, (err, user) => {
+-    if (err) return done(err);
+-    if (!user) return done(new HttpError(404, `no user ${req.id}`));
+-    const name = req.name.trim();
+-    if (!name) return done(new HttpError(400, 'name is required'));
+-    if (name === user.name) return done(null, user);
+-    db.put('users', { ...user, name }, done);
+-  });
++export async function renameUser(req: { id: string; name: string }): Promise<Row> {
++  const user = await db.promises.get('users', req.id);
++  if (!user) throw new HttpError(404, `no user ${req.id}`);
++  const name = req.name.trim();
++  if (!name) throw new HttpError(400, 'name is required');
++  if (name === user.name) return user;
++  return db.promises.put('users', { ...user, name });
+ }

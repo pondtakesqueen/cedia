@@ -1,0 +1,292 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/admin/audit.ts b/src/admin/audit.ts
+--- a/src/admin/audit.ts	2026-10-28 19:58:09.540584651 +0000
++++ b/src/admin/audit.ts	2026-10-28 19:58:58.571802696 +0000
+@@ -1,4 +1,4 @@
+-// Lines written through oldLog before 1.4 had no level prefix; the parser below accepts both.
++// Lines written by the legacy logger before 1.4 had no level prefix; the parser below accepts both.
+ export function parseLine(line: string): { level: string; msg: string } {
+   const m = /^(DEBUG|INFO|WARN|ERROR) (.*)$/.exec(line);
+   return m ? { level: m[1]!.toLowerCase(), msg: m[2]! } : { level: 'info', msg: line };
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/auth/login.ts b/src/auth/login.ts
+--- a/src/auth/login.ts	2026-10-28 19:58:09.540750506 +0000
++++ b/src/auth/login.ts	2026-10-28 19:58:58.459802690 +0000
+@@ -1,7 +1,7 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // auth/login: the login step.
+ export function run(user = "ann"): void {
+-  oldLog('info', `login ${user}`);
+-  oldLog('warn', 'slow login');
++  log.info(`login ${user}`);
++  log.warn('slow login');
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/auth/logout.ts b/src/auth/logout.ts
+--- a/src/auth/logout.ts	2026-10-28 19:58:09.540734487 +0000
++++ b/src/auth/logout.ts	2026-10-28 19:58:58.452119923 +0000
+@@ -1,6 +1,6 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // auth/logout: the logout step.
+ export function run(user = "ann"): void {
+-  oldLog('info', `logout ${user}`);
++  log.info(`logout ${user}`);
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/auth/tokens.ts b/src/auth/tokens.ts
+--- a/src/auth/tokens.ts	2026-10-28 19:58:09.540689958 +0000
++++ b/src/auth/tokens.ts	2026-10-28 19:58:58.443842241 +0000
+@@ -1,7 +1,7 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // auth/tokens: the tokens step.
+ export function run(): void {
+-  oldLog('debug', 'token refreshed');
+-  oldLog('error', 'token expired');
++  log.debug('token refreshed');
++  log.error('token expired');
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/billing/invoice.ts b/src/billing/invoice.ts
+--- a/src/billing/invoice.ts	2026-10-28 19:58:09.541214249 +0000
++++ b/src/billing/invoice.ts	2026-10-28 19:58:58.563802696 +0000
+@@ -1,9 +1,6 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // billing/invoice: the invoice step.
+ export function run(id = "i7", amount = 1200): void {
+-  oldLog(
+-    'info',
+-    `invoice ${id} for ${amount}`,
+-  );
++  log.info(`invoice ${id} for ${amount}`);
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/billing/refund.ts b/src/billing/refund.ts
+--- a/src/billing/refund.ts	2026-10-28 19:58:09.541130618 +0000
++++ b/src/billing/refund.ts	2026-10-28 19:58:58.547802695 +0000
+@@ -1,6 +1,6 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // billing/refund: the refund step.
+ export function run(amount = 900): void {
+-  oldLog('warn', `refund over limit: ${amount}`);
++  log.warn(`refund over limit: ${amount}`);
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/billing/tax.ts b/src/billing/tax.ts
+--- a/src/billing/tax.ts	2026-10-28 19:58:09.541197417 +0000
++++ b/src/billing/tax.ts	2026-10-28 19:58:58.555833487 +0000
+@@ -1,6 +1,6 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // billing/tax: the tax step.
+ export function run(): void {
+-  oldLog('debug', 'tax table loaded');
++  log.debug('tax table loaded');
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/cache/disk.ts b/src/cache/disk.ts
+--- a/src/cache/disk.ts	2026-10-28 19:58:09.540794786 +0000
++++ b/src/cache/disk.ts	2026-10-28 19:58:58.476758074 +0000
+@@ -1,6 +1,6 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // cache/disk: the disk step.
+ export function run(path = "/var/c"): void {
+-  oldLog('error', `disk full: ${path}`);
++  log.error(`disk full: ${path}`);
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/cache/memory.ts b/src/cache/memory.ts
+--- a/src/cache/memory.ts	2026-10-28 19:58:09.540750506 +0000
++++ b/src/cache/memory.ts	2026-10-28 19:58:58.468335033 +0000
+@@ -1,7 +1,7 @@
+-import { oldLog as legacyLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // cache/memory: the memory step.
+ export function run(): void {
+-  legacyLog('debug', 'cache miss');
+-  legacyLog('info', 'cache warmed');
++  log.debug('cache miss');
++  log.info('cache warmed');
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/compat.ts b/src/compat.ts
+--- a/src/compat.ts	2026-10-28 19:58:09.541246914 +0000
++++ b/src/compat.ts	2026-10-28 19:58:58.579802697 +0000
+@@ -1,3 +1,2 @@
+-// Old entry points kept for modules that have not moved yet.
+-export { oldLog } from './log.ts';
++// Old entry points kept for compatibility.
+ export const VERSION = '1.4.0';
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/http/errors.ts b/src/http/errors.ts
+--- a/src/http/errors.ts	2026-10-28 19:58:09.540863995 +0000
++++ b/src/http/errors.ts	2026-10-28 19:58:58.503802692 +0000
+@@ -1,6 +1,6 @@
+-import { oldLog, type Level } from '../log.ts';
++import { log, type Level } from '../log.ts';
+ 
+ // http/errors: the errors step.
+ export function run(status = 503, level: Level = status >= 500 ? "error" : "warn"): void {
+-  oldLog(level, `status ${status}`);
++  log.at(level, `status ${status}`);
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/http/routes.ts b/src/http/routes.ts
+--- a/src/http/routes.ts	2026-10-28 19:58:09.540794786 +0000
++++ b/src/http/routes.ts	2026-10-28 19:58:58.487802691 +0000
+@@ -1,9 +1,6 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // http/routes: the routes step.
+ export function run(method = "GET", path = "/x"): void {
+-  oldLog(
+-    'debug',
+-    `route ${method} ${path}`,
+-  );
++  log.debug(`route ${method} ${path}`);
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/http/server.ts b/src/http/server.ts
+--- a/src/http/server.ts	2026-10-28 19:58:09.540845644 +0000
++++ b/src/http/server.ts	2026-10-28 19:58:58.495802692 +0000
+@@ -1,6 +1,6 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // http/server: the server step.
+ export function run(port = 8080): void {
+-  oldLog('info', `listening on ${port}`);
++  log.info(`listening on ${port}`);
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/jobs/queue.ts b/src/jobs/queue.ts
+--- a/src/jobs/queue.ts	2026-10-28 19:58:09.540657986 +0000
++++ b/src/jobs/queue.ts	2026-10-28 19:58:58.421383442 +0000
+@@ -1,6 +1,6 @@
+-import { oldLog, type Level } from '../log.ts';
++import { log, type Level } from '../log.ts';
+ 
+ // jobs/queue: the queue step.
+ export function run(level: Level = "warn"): void {
+-  oldLog(level, 'queue drained');
++  log.at(level, 'queue drained');
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/jobs/retry.ts b/src/jobs/retry.ts
+--- a/src/jobs/retry.ts	2026-10-28 19:58:09.540584651 +0000
++++ b/src/jobs/retry.ts	2026-10-28 19:58:58.403802686 +0000
+@@ -1,7 +1,7 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // jobs/retry: the retry step.
+ export function run(n = 3): void {
+-  oldLog('warn', `retry ${n}`);
+-  oldLog('error', 'giving up');
++  log.warn(`retry ${n}`);
++  log.error('giving up');
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/jobs/schedule.ts b/src/jobs/schedule.ts
+--- a/src/jobs/schedule.ts	2026-10-28 19:58:09.540647407 +0000
++++ b/src/jobs/schedule.ts	2026-10-28 19:58:58.415802687 +0000
+@@ -1,6 +1,6 @@
+-import { oldLog } from '../compat.ts';
++import { log } from '../log.ts';
+ 
+ // jobs/schedule: the schedule step.
+ export function run(): void {
+-  oldLog('info', 'schedule loaded');
++  log.info('schedule loaded');
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/log.ts b/src/log.ts
+--- a/src/log.ts	2026-10-28 19:58:09.541214249 +0000
++++ b/src/log.ts	2026-10-28 19:58:58.599802698 +0000
+@@ -18,7 +18,3 @@
+   at: (level: Level, msg: string) => write(level, msg),
+ };
+ 
+-/** @deprecated Use log.<level>(msg), or log.at(level, msg) when the level is a variable. */
+-export function oldLog(level: Level, msg: string): void {
+-  write(level, msg);
+-}
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/mail/bounce.ts b/src/mail/bounce.ts
+--- a/src/mail/bounce.ts	2026-10-28 19:58:09.540863995 +0000
++++ b/src/mail/bounce.ts	2026-10-28 19:58:58.513214600 +0000
+@@ -1,6 +1,6 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // mail/bounce: the bounce step.
+ export function run(): void {
+-  oldLog('error', 'hard bounce');
++  log.error('hard bounce');
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/mail/send.ts b/src/mail/send.ts
+--- a/src/mail/send.ts	2026-10-28 19:58:09.541084825 +0000
++++ b/src/mail/send.ts	2026-10-28 19:58:58.521028344 +0000
+@@ -1,7 +1,7 @@
+-import { oldLog } from '../compat.ts';
++import { log } from '../log.ts';
+ 
+ // mail/send: the send step.
+ export function run(to = "a@b.c"): void {
+-  oldLog('info', `mail to ${to}`);
+-  oldLog('warn', 'mail queue slow');
++  log.info(`mail to ${to}`);
++  log.warn('mail queue slow');
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/search/index.ts b/src/search/index.ts
+--- a/src/search/index.ts	2026-10-28 19:58:09.541084825 +0000
++++ b/src/search/index.ts	2026-10-28 19:58:58.531802694 +0000
+@@ -1,6 +1,6 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // search/index: the index step.
+ export function run(count = 42): void {
+-  oldLog('info', `indexed ${count} docs`);
++  log.info(`indexed ${count} docs`);
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/search/query.ts b/src/search/query.ts
+--- a/src/search/query.ts	2026-10-28 19:58:09.541130618 +0000
++++ b/src/search/query.ts	2026-10-28 19:58:58.539802694 +0000
+@@ -1,6 +1,6 @@
+-import { oldLog as legacyLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // search/query: the query step.
+ export function run(q = "mug"): void {
+-  legacyLog('debug', `query "${q}"`);
++  log.debug(`query "${q}"`);
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/users/delete.ts b/src/users/delete.ts
+--- a/src/users/delete.ts	2026-10-28 19:58:09.540657986 +0000
++++ b/src/users/delete.ts	2026-10-28 19:58:58.428706366 +0000
+@@ -1,13 +1,7 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // users/delete: the delete step.
+ export function run(id = "u1"): void {
+-  oldLog(
+-    'warn',
+-    `deleting ${id}`,
+-  );
+-  oldLog(
+-    'info',
+-    'deleted',
+-  );
++  log.warn(`deleting ${id}`);
++  log.info('deleted');
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/users/profile.ts b/src/users/profile.ts
+--- a/src/users/profile.ts	2026-10-28 19:58:09.540689958 +0000
++++ b/src/users/profile.ts	2026-10-28 19:58:58.435802688 +0000
+@@ -1,6 +1,6 @@
+-import { oldLog } from '../log.ts';
++import { log } from '../log.ts';
+ 
+ // users/profile: the profile step.
+ export function run(): void {
+-  oldLog('info', 'profile saved');
++  log.info('profile saved');
+ }

@@ -1,0 +1,108 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse-edge.test.ts b/sse-edge.test.ts
+--- a/sse-edge.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/sse-edge.test.ts	2026-10-28 19:56:36.207794234 +0000
+@@ -0,0 +1,37 @@
++import { expect, test } from 'bun:test';
++import { readSse, streamFromString, type SseMessage } from './sse.ts';
++
++async function all(text: string, chunk = 7): Promise<SseMessage[]> {
++  const out: SseMessage[] = [];
++  for await (const m of readSse(streamFromString(text, chunk))) out.push(m);
++  return out;
++}
++
++test('a lone \\r at the end of the body does not drop pending data', async () => {
++  expect(await all('data: a\r\n\r', 100)).toEqual([{ data: 'a' }]);
++  expect(await all('data: a\r\n\r', 1)).toEqual([{ data: 'a' }]);
++});
++
++test('breaking out early cancels the upstream body', async () => {
++  let cancelled = false;
++  const enc = new TextEncoder();
++  const body = new ReadableStream<Uint8Array>({
++    pull(c) {
++      c.enqueue(enc.encode('data: x\n\n'));
++    },
++    cancel() {
++      cancelled = true;
++    },
++  });
++  for await (const m of readSse(body)) {
++    expect(m).toEqual({ data: 'x' });
++    break;
++  }
++  expect(cancelled).toBe(true);
++});
++
++test('many lines and one long line are split in linear time', async () => {
++  expect((await all('data: a\n\n'.repeat(100000), 1 << 20)).length).toBe(100000);
++  const long = 'data: ' + 'x'.repeat(200000) + '\n\n';
++  expect(await all(long, 64)).toEqual([{ data: 'x'.repeat(200000) }]);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse.ts b/sse.ts
+--- a/sse.ts	2026-10-28 19:55:05.729640461 +0000
++++ b/sse.ts	2026-10-28 19:56:43.671794677 +0000
+@@ -15,7 +15,62 @@
+ // - When the body ends without a final blank line, data lines still pending (including a last line with no
+ //   newline) are yielded as one last message.
+ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseMessage> {
+-  throw new Error('not implemented');
++  const reader = body.getReader();
++  const decoder = new TextDecoder();
++  let pending: string[] = [];
++  let ended = false;
++  let event: string | undefined;
++  let data: string[] = [];
++
++  // Builds the pending message, if any, and resets the event and data state.
++  const take = (): SseMessage | undefined => {
++    const message = data.length > 0 ? (event !== undefined ? { event, data: data.join('\n') } : { data: data.join('\n') }) : undefined;
++    event = undefined;
++    data = [];
++    return message;
++  };
++
++  const processLine = (raw: string): SseMessage | undefined => {
++    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
++    if (line === '') return take();
++    if (line.startsWith(':')) return undefined;
++    const idx = line.indexOf(':');
++    const field = idx === -1 ? line : line.slice(0, idx);
++    let value = idx === -1 ? '' : line.slice(idx + 1);
++    if (value.startsWith(' ')) value = value.slice(1);
++    if (field === 'event') event = value;
++    else if (field === 'data') data.push(value);
++    return undefined;
++  };
++
++  try {
++    while (true) {
++      const { done, value } = await reader.read();
++      if (done) break;
++      const text = decoder.decode(value, { stream: true });
++      // Scan only the new text; a partial line waits in `pending` until its \n arrives.
++      let start = 0;
++      let nl;
++      while ((nl = text.indexOf('\n', start)) !== -1) {
++        const line = pending.length > 0 ? pending.join('') + text.slice(start, nl) : text.slice(start, nl);
++        pending = [];
++        start = nl + 1;
++        const message = processLine(line);
++        if (message) yield message;
++      }
++      if (start < text.length) pending.push(text.slice(start));
++    }
++    ended = true;
++
++    const tail = pending.join('') + decoder.decode();
++    const last = tail !== '' ? processLine(tail) : undefined;
++    const message = last ?? take();
++    if (message) yield message;
++  } finally {
++    // The consumer stopped early or failed: close the body so the provider connection is released.
++    if (!ended) await reader.cancel();
++    reader.releaseLock();
++  }
+ }
+ 
+ export function streamFromString(text: string, chunkSize = 7): ReadableStream<Uint8Array> {
