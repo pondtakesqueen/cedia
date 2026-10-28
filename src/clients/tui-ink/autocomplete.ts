@@ -99,6 +99,48 @@ export function highlightQuery(text: string, query: string): TextRun[] {
   return runs.length ? runs : [{ text, hit: false }];
 }
 
+export type PaintMark = { text: string; hit: boolean; selected: boolean };
+
+export function paintRuns(
+  text: string,
+  opts: { query?: string; selection?: { start: number; end: number } },
+): PaintMark[] {
+  const base = highlightQuery(text, opts.query?.trim() ?? '');
+  const sel = opts.selection;
+  const hasSel = !!sel && sel.end > sel.start;
+  const out: PaintMark[] = [];
+  let pos = 0;
+  for (const run of base) {
+    if (!hasSel || !sel) {
+      out.push({ text: run.text, hit: run.hit, selected: false });
+      pos += run.text.length;
+      continue;
+    }
+    let i = 0;
+    while (i < run.text.length) {
+      const abs = pos + i;
+      const selected = abs >= sel.start && abs < sel.end;
+      let j = i + 1;
+      while (j < run.text.length) {
+        const a = pos + j;
+        if ((a >= sel.start && a < sel.end) !== selected) break;
+        j++;
+      }
+      out.push({ text: run.text.slice(i, j), hit: run.hit, selected });
+      i = j;
+    }
+    pos += run.text.length;
+  }
+  const merged: PaintMark[] = [];
+  for (const mark of out) {
+    if (!mark.text) continue;
+    const prev = merged[merged.length - 1];
+    if (prev && prev.hit === mark.hit && prev.selected === mark.selected) prev.text += mark.text;
+    else merged.push({ ...mark });
+  }
+  return merged.length ? merged : [{ text, hit: false, selected: false }];
+}
+
 export function highlightSpans(name: string, hits: number[]): { text: string; hit: boolean }[] {
   const hitSet = new Set(hits);
   const spans: { text: string; hit: boolean }[] = [];

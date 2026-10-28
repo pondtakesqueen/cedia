@@ -10,7 +10,7 @@ import { completedNames, isComplete, reconcileOnboarding, saveOnboarding } from 
 import { activeContext, findCommand, IDLE_OVERLAY, resolveBindings, vimInputGate } from '../src/clients/tui-ink/keybindings/resolver.ts';
 import { keybindingsPath, watchKeybindings } from '../src/clients/tui-ink/keybindings/loader.ts';
 import { cancelStep, offsetForIndex, rowMapFromWalk, selectionBounds } from '../src/clients/tui-ink/row-map.ts';
-import { highlightQuery, offsetAt } from '../src/clients/tui-ink/autocomplete.ts';
+import { highlightQuery, offsetAt, paintRuns } from '../src/clients/tui-ink/autocomplete.ts';
 
 const stops: Array<() => void> = [];
 afterEach(() => {
@@ -20,14 +20,24 @@ afterEach(() => {
 describe('ink key context', () => {
   test('transcript search is not Chat, so enter is not submit', () => {
     const search = { ...IDLE_OVERLAY, transcriptSearch: true };
+    const bindings = resolveBindings([]);
     expect(activeContext(search)).toBe('Transcript');
     expect(activeContext(IDLE_OVERLAY)).toBe('Chat');
-    expect(findCommand(resolveBindings([]), 'enter', activeContext(search))).toBeUndefined();
-    expect(findCommand(resolveBindings([]), 'enter', 'Chat')).toBe('submit');
+    expect(findCommand(bindings, 'enter', activeContext(search))).toBe('jump');
+    expect(findCommand(bindings, 'enter', 'Chat')).toBe('submit');
+    expect(findCommand(bindings, 'escape', 'Confirmation')).toBe('dismiss');
+    expect(findCommand(bindings, 'tab', 'Settings')).toBe('nextTab');
+    expect(findCommand(bindings, 'enter', 'Autocomplete')).toBe('accept');
     expect(vimInputGate('Transcript', false)).toEqual({ captured: true, suppressSubmit: false });
     expect(vimInputGate('Autocomplete', false)).toEqual({ captured: false, suppressSubmit: true });
     expect(vimInputGate('Chat', false)).toEqual({ captured: false, suppressSubmit: false });
     expect(vimInputGate('Chat', true)).toEqual({ captured: true, suppressSubmit: false });
+  });
+
+  test('a keybindings override rebinds an overlay key', () => {
+    const bindings = resolveBindings([{ key: 'enter', command: 'close', context: 'Transcript' }]);
+    expect(findCommand(bindings, 'enter', 'Transcript')).toBe('close');
+    expect(findCommand(bindings, 'enter', 'Chat')).toBe('submit');
   });
 
   test('the first true overlay wins', () => {
@@ -86,6 +96,24 @@ describe('ink key context', () => {
     expect(highlightQuery('nope', 'zz')).toEqual([{ text: 'nope', hit: false }]);
   });
 
+  test('paintRuns composes selection and search hits', () => {
+    expect(paintRuns('abcdef', { query: 'cd', selection: { start: 1, end: 5 } })).toEqual([
+      { text: 'a', hit: false, selected: false },
+      { text: 'b', hit: false, selected: true },
+      { text: 'cd', hit: true, selected: true },
+      { text: 'e', hit: false, selected: true },
+      { text: 'f', hit: false, selected: false },
+    ]);
+    expect(paintRuns('hello', { query: 'ell' })).toEqual([
+      { text: 'h', hit: false, selected: false },
+      { text: 'ell', hit: true, selected: false },
+      { text: 'o', hit: false, selected: false },
+    ]);
+    expect(paintRuns('hi', { selection: { start: 0, end: 2 } })).toEqual([
+      { text: 'hi', hit: false, selected: true },
+    ]);
+  });
+
   test('offsetAt uses the same character wrap as the row estimate', () => {
     expect(offsetAt('Hello', 10, 0, 2)).toBe(2);
     expect(offsetAt('Hello', 10, 0, 99)).toBe(5);
@@ -103,13 +131,21 @@ describe('ink key context', () => {
       path: 'a.ts',
       edits: [{ old_text: 'a', new_text: 'b' }, { old_text: 'c', new_text: 'd' }],
     }).map((line) => line.label)).toEqual(['path', 'old_text', 'new_text', 'edits']);
-    expect(noticeLines('write', { path: 'a.ts', content: 'hello' })).toContainEqual({ label: 'content', value: '5 chars, hello' });
+    expect(noticeLines('write', { path: 'a.ts', content: 'hello\nworld' })).toEqual([
+      { label: 'path', value: 'a.ts' },
+      { label: 'lines', value: '2' },
+      { label: 'content', value: '11 chars, hello\nworld' },
+    ]);
     expect(noticeLines('WebFetch', { url: 'https://example.test' }).map((line) => line.label)).toEqual(['url']);
     expect(noticeLines('web_fetch', { url: 'https://example.test', offset: 12 }).map((line) => line.label)).toEqual(['url', 'offset']);
-    expect(noticeLines('skill', { skill: 'poteto', file: 'SKILL.md' })).toEqual([
+    expect(noticeLines('skill', { skill: 'poteto', args: '--dry', file: 'SKILL.md' })).toEqual([
       { label: 'name', value: 'poteto' },
+      { label: 'args', value: '--dry' },
       { label: 'file', value: 'SKILL.md' },
     ]);
+    expect(noticeLines('enterPlanMode', { plan: 'ship the polish', action: 'enter' }).map((line) => line.label)).toEqual(['action', 'plan']);
+    expect(noticeLines('filesystem', { op: 'rename', path: 'a', destination: 'b' }).map((line) => line.label)).toEqual(['op', 'path', 'destination']);
+    expect(noticeLines('sed', { expression: 's/a/b/', path: 'x.ts' }).map((line) => line.label)).toEqual(['expression', 'path']);
     expect(noticeLines('grep', { pattern: 'x' })[0]?.label).toBe('input');
     expect(noticeLines('bash', { command: 'x'.repeat(250) })[0]?.value).toHaveLength(200);
     expect(DISMISS_NOTE.includes('Allow')).toBe(false);

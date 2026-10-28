@@ -193,3 +193,9 @@ Codex CLI (OpenAI) TUI features:
 - Mouse, wheel, selection, and copy use the display-message index from the paint walk. Hit rows, including assistant rows, highlight the query.
 - A denial notice lists bash, edit, write, web_fetch, and skill fields. It does not print Allow or Deny.
 - Onboarding is complete only when every `ONBOARDING_STEPS` name is recorded. `reconcileOnboarding` only appends.
+
+## Update 2026-10-28 (ink TUI polish round 2)
+
+- Denial notices name plan mode, filesystem, and sed fields; write shows a line count; skill shows args.
+- Overlay keys resolve through `DEFAULT_BINDINGS` for Autocomplete, Confirmation, Select, Settings, MessageSelector, HistorySearch, and Transcript, so `keybindings.json` can rebind them.
+- Transcript paint composes selection and search hits via `paintRuns`, using theme tokens for selection and hit chrome.
