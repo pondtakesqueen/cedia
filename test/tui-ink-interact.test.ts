@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { App } from '../src/clients/tui-ink/app.tsx';
 import { acceptTrust } from '../src/clients/tui-ink/onboarding.ts';
 import type { TuiArgs } from '../src/clients/tui-ink/args.ts';
+import { inkRenderOptions } from '../src/clients/tui-ink/render-options.ts';
 
 const strip = (s: string) =>
   s
@@ -55,12 +56,15 @@ function start(opts: { rows?: number; script?: unknown[]; files?: string[] } = {
     sandbox: 'off',
     spawn: 'off',
   } as unknown as TuiArgs;
-  const { unmount } = render(React.createElement(App, { args }), {
+  // Tests accumulate stdout and assert on the concatenated buffer. Ink's
+  // Frame-diff only writes changed rows, which would garble that buffer — keep
+  // full-frame paints in the harness; production still uses incrementalRendering.
+  const { unmount } = render(React.createElement(App, { args }), inkRenderOptions({
     stdin: stdin as unknown as NodeJS.ReadableStream,
     stdout,
-    exitOnCtrlC: false,
     interactive: true,
-  });
+    incrementalRendering: false,
+  }));
   return {
     dir,
     write: (s: string) => {
