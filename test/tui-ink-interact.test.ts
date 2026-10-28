@@ -21,6 +21,8 @@ type Harness = {
   dir: string;
   write: (s: string) => void;
   frame: () => string;
+  // Everything written so far, escapes and all.
+  raw: () => string;
   drain: () => void;
   stop: () => void;
 };
@@ -73,6 +75,7 @@ function start(opts: { rows?: number; script?: unknown[]; files?: string[] } = {
     // Only the latest screenful: ink repaints the whole screen each frame,
     // so the tail is the current frame without earlier history.
     frame: () => strip(out),
+    raw: () => out,
     drain: () => {
       out = '';
     },
@@ -429,6 +432,43 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       expect(h.frame()).toContain('› draft!');
     } finally {
       h.stop();
+    }
+  }, 30000);
+
+  test('a turn that ends while the terminal is in the background sends a notification, and not while it has focus', async () => {
+    const saved = { TERM_PROGRAM: process.env.TERM_PROGRAM, TMUX: process.env.TMUX, KITTY_WINDOW_ID: process.env.KITTY_WINDOW_ID };
+    process.env.TERM_PROGRAM = 'iTerm.app';
+    delete process.env.TMUX;
+    delete process.env.KITTY_WINDOW_ID;
+    const h = start({ script: [{ blocks: [{ type: 'text', text: 'first reply' }] }] });
+    try {
+      await Bun.sleep(500);
+      // The TUI asks the terminal for focus reports.
+      expect(h.raw()).toContain('\x1b[?1004h');
+      h.write('\x1b[O');
+      await Bun.sleep(100);
+      h.write('one');
+      await Bun.sleep(300);
+      h.write('\r');
+      for (let i = 0; i < 40 && !h.frame().includes('first reply'); i++) await Bun.sleep(250);
+      await Bun.sleep(300);
+      expect(h.raw()).toMatch(/\x1b\]9;cedia: Done in \d+s\x07/);
+      // Back in front: the next turn ends without one.
+      h.drain();
+      h.write('\x1b[I');
+      await Bun.sleep(100);
+      h.write('two');
+      await Bun.sleep(300);
+      h.write('\r');
+      // Each run replays the script from its start: the second turn has ended once two end lines show.
+      const ended = () => (h.frame().split('▌ two')[1] ?? '').includes('✓ Done');
+      for (let i = 0; i < 40 && !ended(); i++) await Bun.sleep(250);
+      await Bun.sleep(300);
+      expect(ended()).toBe(true);
+      expect(h.raw()).not.toContain('\x1b]9;');
+    } finally {
+      h.stop();
+      for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     }
   }, 30000);
 });

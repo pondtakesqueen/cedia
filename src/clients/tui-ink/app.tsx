@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Box, Text, useInput, useApp, useWindowSize, useStdin } from 'ink';
+import { Box, Text, useInput, useApp, useWindowSize, useStdin, useStdout } from 'ink';
 import { selectedPrefix, useCediaScreenReader } from './a11y.ts';
 import { readPicks, savePick, pickBoost } from './picks.ts';
 import { sinceLabel } from './when.ts';
@@ -37,6 +37,7 @@ import { cancelStep, messageFullySelected, offsetForIndex, rowMapFromWalk, selec
 import { createHeightCache, heightCacheKey, visibleWindow } from './visible-window.ts';
 import { assignRecycleSlots, messageSlotKey, type RecycleSlot } from './virtual-list.ts';
 import { onTerminalResume } from './terminal-resume.ts';
+import { FOCUS_OFF, FOCUS_ON, NOTIFY_MODES, channelFor, focusFrom, notifyModeFrom, notifySequence, shouldNotify, turnNotice, type Focus } from './notify.ts';
 import { matchesKey } from '@mariozechner/pi-tui';
 import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
@@ -125,6 +126,7 @@ const INK_COMMANDS: { name: string; description: string }[] = [
   { name: 'trust', description: 'accept trust' },
   { name: 'onboarding', description: 'onboarding status' },
   { name: 'statusline', description: 'run a status line command' },
+  { name: 'notify', description: 'tell you when a turn ends while you look away (auto | bell | off)' },
 ];
 
 const INPUT_PLACEHOLDERS = [
@@ -463,7 +465,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           ['run', ['/plan', '/quick', '/model', '/goal', '/effort', '/permission']],
           ['project', ['/commit', '/pr', '/review', '/memory', '/skills', '/mcp']],
           ['view', ['/clear', '/transcript', '/search', '/settings', '/doctor', '/theme', '/palette', '/actions', '/copy', '/export', '/compact', '/tasks', '/agents', '/branch', '/status', '/cost', '/context']],
-          ['other', ['/help', '/quit', '/vim', '/hooks', '/btw', '/suggest', '/trust', '/onboarding', '/statusline', '/output-style', '/config']],
+          ['other', ['/help', '/quit', '/vim', '/hooks', '/btw', '/suggest', '/trust', '/onboarding', '/statusline', '/output-style', '/config', '/notify']],
         ];
         const byName = new Map(INK_COMMANDS.map((c) => [c.name, c.description]));
         say(groups.map(([g, names]) => `${g}: ${names.map((n) => `${n} — ${byName.get(n.slice(1)) ?? ''}`).join(' · ')}`).join('\n'));
@@ -897,6 +899,21 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         say(`theme: ${themeName} (dark | light)`);
         return;
       }
+      case 'notify': {
+        const m = rest[0];
+        if (m && !(NOTIFY_MODES as readonly string[]).includes(m)) { say(`unknown notify mode: ${m} (${NOTIFY_MODES.join(' | ')})`); return; }
+        if (m) {
+          try {
+            const pp = join(cediaHome(), 'settings.json');
+            const raw = fsExists(pp) ? JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown> : {};
+            raw.notify = m;
+            fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
+          } catch (e) { say((e as Error).message, 'red'); return; }
+        }
+        const mode = notifyModeFrom(cediaHome());
+        say(`notify: ${mode}${mode === 'off' ? '' : ` (${channelFor(mode)}, when this terminal is in the background)`}`);
+        return;
+      }
       case 'settings':
       case 'config': {
         setSettingsTab('status');
@@ -999,6 +1016,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   }, [args, messages, running, store, thread, exit, spent, context, goal, transcriptExpanded, openDialog, model, permission, effort, switchThread, vimMode]);
 
   // queued: a prompt that waited for the last turn; what the person is typing now stays in the prompt.
+  // Whether this terminal has focus, from its focus reports (notify.ts); a turn that ends unseen says so.
+  const focusRef = useRef<Focus>('unknown');
+  // The terminal Ink draws on (process.stdout outside tests): escapes that are not drawing go to it as well.
+  const termOutRef = useRef<NodeJS.WritableStream | undefined>(undefined);
+  const attention = (body: string | undefined, ms: number) => {
+    const mode = notifyModeFrom(cediaHome());
+    if (!body || !shouldNotify(mode, focusRef.current, ms)) return;
+    try { (termOutRef.current ?? process.stdout).write(notifySequence(channelFor(mode), 'cedia', body)); } catch {}
+  };
   const submit = useCallback(async (text: string, planWhen?: 'always' | 'never', queued = false) => {
     if (!text.trim()) return;
     // A prompt sent while a turn runs waits its turn (like cc): it runs when this one ends, and Esc puts it back
@@ -1122,6 +1148,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (result.subtype === 'asked' && result.question) {
         push({ role: 'system', text: askedBannerText(result.question) });
       }
+      attention(turnNotice(result.subtype, Date.now() - turnStart, result.question?.question), Date.now() - turnStart);
       if (loadPromptSuggestions(args.promptSuggestions)) {
         void (async () => {
           try {
@@ -1133,6 +1160,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
     } catch (e) {
       setMessages((m) => [...m, { role: 'system', text: `✗ error: ${(e as Error).message}`, tone: 'red' }]);
+      if (!stop.signal.aborted) attention(`Failed: ${(e as Error).message}`, Date.now() - turnStart);
     } finally {
       busyRef.current = false;
       setRunning(false);
@@ -1164,6 +1192,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
 
   const { stdin } = useStdin();
+  const { stdout: termOut } = useStdout();
+  termOutRef.current = termOut;
   React.useEffect(() => {
     const home = cediaHome();
     setLoadedKeybindings(loadKeybindings(home));
@@ -1249,13 +1279,18 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         push({ role: 'system', text: 'copied selection' });
       }
     };
+    const onFocus = (data: Buffer) => { const f = focusFrom(data.toString()); if (f) focusRef.current = f; };
     stdin.on('data', handler);
+    stdin.on('data', onFocus);
     process.stdout.write('\x1b[?1000h\x1b[?1006h');
+    termOut.write(FOCUS_ON);
     return () => {
       stdin.off('data', handler);
+      stdin.off('data', onFocus);
       process.stdout.write('\x1b[?1000l\x1b[?1006l');
+      termOut.write(FOCUS_OFF);
     };
-  }, [stdin]);
+  }, [stdin, termOut]);
 
   syncOnboardingRef.current = (openTrust = false) => {
     try {
@@ -1835,6 +1870,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             Bun.spawnSync([editor, tmp], { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' });
           });
           process.stdout.write('\x1b[?1000h\x1b[?1006h');
+          (termOutRef.current ?? process.stdout).write(FOCUS_ON);
           const edited = fsRead(tmp, 'utf8').replace(/\n+$/, '');
           setInput(edited);
           inputRef.current = edited;
