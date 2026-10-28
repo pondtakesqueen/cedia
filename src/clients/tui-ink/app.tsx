@@ -865,13 +865,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         const lvl = rest[0];
         if (!lvl) { say(`effort: ${effort ?? '(default)'}`); return; }
         if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(lvl)) { say(`unknown effort: ${lvl} (low | medium | high | xhigh | max)`); return; }
+        // For this session only: settings.json has no effort key, and one there would fail every run.
         setEffort(lvl as 'low' | 'medium' | 'high' | 'xhigh' | 'max');
-        try {
-          const pp = join(cediaHome(), 'settings.json');
-          const raw = JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown>;
-          raw.effort = lvl;
-          fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
-        } catch { /* session-only if settings unwritable */ }
         say(`effort: ${lvl} (takes effect next turn)`);
         return;
       }
@@ -880,15 +875,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'fast': {
-        try {
-          const pp = join(cediaHome(), 'settings.json');
-          let raw: Record<string, unknown> = {};
-          try { raw = JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown>; } catch {}
-          const cur = raw.fast === true;
-          raw.fast = !cur;
-          fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
-          say(`fast mode: ${raw.fast ? 'on' : 'off'}`);
-        } catch (e) { say(`fast mode: ${(e as Error).message}`, 'red'); }
+        // Fast mode is a model of its own (a "(fast)" entry in /model), not a setting.
+        say('fast mode: pick a "(fast)" model with /model');
         return;
       }
       case 'export': {
