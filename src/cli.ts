@@ -1021,9 +1021,14 @@ function doctor(argv: string[]): number {
 function settings(argv: string[]): number {
   let parsed;
   try {
-    parsed = parseArgs({ args: argv, options: { json: { type: 'boolean' }, cwd: { type: 'string' } } });
+    parsed = parseArgs({ args: argv, options: { source: { type: 'string', default: 'user' }, json: { type: 'boolean' }, cwd: { type: 'string' } } });
   } catch (e) {
     console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  // The managed tiers are gone; a client that still asks for --source user gets what it asked for.
+  if (parsed.values.source !== 'user') {
+    console.error(`cedia: unknown --source ${parsed.values.source}: only user settings remain`);
     return 2;
   }
   let data: unknown;
