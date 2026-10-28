@@ -49,8 +49,14 @@ export async function daemonCmd(argv: string[]): Promise<number> {
     console.error(`--interval takes seconds above 0: ${parsed.values.interval}`);
     return 2;
   }
-  const show = (prefix: string, tick: { reaped: string[]; started: { bg: string; thread: string }[]; fired: { schedule: string; thread: string; bg: string }[]; running: number }) =>
-    console.log(parsed.values.json ? JSON.stringify({ daemon: prefix, ...tick }) : `${prefix}: ${tick.started.length} started, ${tick.fired.length} fired, ${tick.reaped.length} reaped, ${tick.running} running`);
+  const show = (prefix: string, tick: { reaped: string[]; started: { bg: string; thread: string }[]; fired: { schedule: string; thread: string; bg: string }[]; running: number; yielded?: number }) =>
+    console.log(
+      parsed.values.json
+        ? JSON.stringify({ daemon: prefix, ...tick })
+        : tick.yielded !== undefined
+          ? `${prefix}: yielded to the desktop's daemon (pid ${tick.yielded})`
+          : `${prefix}: ${tick.started.length} started, ${tick.fired.length} fired, ${tick.reaped.length} reaped, ${tick.running} running`,
+    );
   if (parsed.values.once) {
     show('once', await pumpDaemon({ home, slug, cwd, maxRuns, spawn: spawnDetached }));
     return 0;

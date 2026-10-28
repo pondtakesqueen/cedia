@@ -7,6 +7,7 @@ import { cediaHome } from '../config.ts';
 import { selfSpawnArgs } from '../self.ts';
 import { projectKey, sessionPath } from '../session/log.ts';
 import { daemonPid, daemonStart, daemonStop, isAlive, listBgSessions, recordStart, recordStop } from './background.ts';
+import { desktopLockHolder } from './desktop-lock.ts';
 import { refreshMdmIfStale } from './mdm-remote.ts';
 import { schedulesPath, ScheduleStore } from './schedules.ts';
 import { threadsDir, ThreadStore } from './threads.ts';
@@ -18,6 +19,8 @@ export type DaemonTick = {
   started: { bg: string; thread: string }[];
   fired: { schedule: string; thread: string; bg: string }[];
   running: number;
+  // The desktop's daemon held its lock, so this pass did nothing: its pid.
+  yielded?: number;
 };
 
 export type DaemonDeps = {
@@ -34,6 +37,10 @@ export type DaemonDeps = {
 export async function pumpDaemon(deps: DaemonDeps): Promise<DaemonTick> {
   const { home, slug, cwd, maxRuns } = deps;
   const tick: DaemonTick = { at: new Date().toISOString(), reaped: [], started: [], fired: [], running: 0 };
+  // Where the desktop's daemon runs, it runs the queued threads and the schedules: a pass then starts nothing, and
+  // reaps nothing either, since the runs may be the desktop's to record.
+  const desktop = desktopLockHolder(home);
+  if (desktop) return { ...tick, yielded: desktop.pid };
   const threads = new ThreadStore(threadsDir(home, slug));
   const schedules = new ScheduleStore(schedulesPath(home, slug));
   // Org policy rolls out on its own: refetch the managed cache when older than the poll interval.

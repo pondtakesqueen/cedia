@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listBgSessions, recordStart } from '../src/core/project/background.ts';
 import { pumpDaemon } from '../src/core/project/daemon.ts';
+import { desktopLockHolder, desktopLockPath } from '../src/core/project/desktop-lock.ts';
 import { schedulesPath, ScheduleStore } from '../src/core/project/schedules.ts';
 import { threadsDir, ThreadStore } from '../src/core/project/threads.ts';
 
@@ -83,6 +84,37 @@ describe('daemon pump', () => {
   });
 });
 
+describe('desktop lock', () => {
+  const lock = (home: string, body: string) => {
+    mkdirSync(home, { recursive: true });
+    writeFileSync(desktopLockPath(home), body);
+  };
+  test('a pass yields to a live desktop daemon: nothing starts, fires or is reaped', async () => {
+    const { home, slug, threads, schedules, spawned, deps } = setup();
+    threads.open('job', { by: 'coordinator' });
+    const t = threads.open('scheduled');
+    schedules.add({ first: new Date(Date.now() - 60_000), prompt: 'go', thread: t }, new Date(Date.now() - 120_000));
+    recordStart(home, slug, { id: 'bg-dead', thread: 't-00000000', pid: 2147483647, logPath: '/tmp/y' });
+    lock(home, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+    const tick = await pumpDaemon(deps);
+    expect(tick).toMatchObject({ yielded: process.pid, started: [], fired: [], reaped: [] });
+    expect(spawned).toEqual([]);
+  });
+  test('a lock whose process is gone, or that does not parse, holds nothing', async () => {
+    const { home, threads, deps } = setup();
+    threads.open('job', { by: 'coordinator' });
+    lock(home, JSON.stringify({ pid: 2147483647, at: 'x' }));
+    expect(desktopLockHolder(home)).toBeNull();
+    lock(home, 'not json');
+    expect(desktopLockHolder(home)).toBeNull();
+    lock(home, JSON.stringify({ pid: -1 }));
+    expect(desktopLockHolder(home)).toBeNull();
+    const tick = await pumpDaemon(deps);
+    expect(tick.yielded).toBeUndefined();
+    expect(tick.started).toHaveLength(1);
+  });
+});
+
 describe('cedia daemon (offline)', () => {
   const BIN = join(import.meta.dir, '..', 'bin', 'cedia');
   const run = (args: string[]) => {
@@ -95,6 +127,14 @@ describe('cedia daemon (offline)', () => {
     const r = run(['daemon', '--once', '--json']);
     expect(r.code).toBe(0);
     expect(JSON.parse(r.out)).toMatchObject({ daemon: 'once', started: [], fired: [], reaped: [], running: 0 });
+  });
+  test('--once says it yielded when the desktop holds the lock', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-daemon-cli-'));
+    const home = join(dir, 'home');
+    mkdirSync(home, { recursive: true });
+    writeFileSync(desktopLockPath(home), JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+    const p = Bun.spawnSync([BIN, 'daemon', '--once', '--cwd', dir], { env: { ...process.env, CEDIA_HOME: home }, stdin: 'ignore' });
+    expect(p.stdout.toString().trim()).toBe(`once: yielded to the desktop's daemon (pid ${process.pid})`);
   });
   test('status with no daemon, stop with no daemon, and an unknown subcommand', () => {
     expect(run(['daemon', 'status']).out).toBe('daemon: not running');
