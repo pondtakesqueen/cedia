@@ -7,6 +7,7 @@ import { bindingSummary } from './keybindings/summary.ts';
 import { buildAutoItems, highlightSpans, paintRuns, truncateDescription, truncateLongText, estimateLines, offsetAt, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
+import { collapses, expandPastes, pasteToken } from './line-edit.ts';
 import Markdown, { mdPlain, spanProps } from './markdown.tsx';
 import { deniedRow, doneRow, intentRow, resultRow, rowProps, rowText, thinkingRow, type RowLine } from './rows.ts';
 import { inkTheme, type ThemeTokens } from './theme-tokens.ts';
@@ -275,6 +276,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const recycleSlotsRef = useRef<RecycleSlot[]>([]);
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
   const historyRef = useRef<string[]>([]);
+  // Long pastes by their token in the prompt (line-edit.ts); kept for the session, so a recalled prompt still expands.
+  const pastesRef = useRef(new Map<string, string>());
+  const onPaste = useCallback((text: string) => {
+    if (!collapses(text)) return text;
+    const token = pasteToken(pastesRef.current.size + 1, text);
+    pastesRef.current.set(token, text);
+    return token;
+  }, []);
   const histPos = useRef(-1);
   const [historySearch, setHistorySearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
   const [transcriptSearch, setTranscriptSearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
@@ -444,7 +453,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         ];
         const byName = new Map(INK_COMMANDS.map((c) => [c.name, c.description]));
         say(groups.map(([g, names]) => `${g}: ${names.map((n) => `${n} — ${byName.get(n.slice(1)) ?? ''}`).join(' · ')}`).join('\n'));
-        say('keys: Esc stops a turn · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Ctrl+G external editor · Tab completes · Shift+Tab permission · Meta+P model · Meta+O fast · Meta+T thinking · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · \\+Enter newline' + (bindingHints ? ` · custom keys: ${bindingHints}` : ''));
+        say('keys: Esc stops a turn · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Ctrl+G external editor · Tab completes · Shift+Tab permission · Meta+P model · Meta+O fast · Meta+T thinking · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · Alt+Enter or \\+Enter newline · Ctrl+A/E/U/K/W edit the line' + (bindingHints ? ` · custom keys: ${bindingHints}` : ''));
         return;
       }
       case 'historyUp':
@@ -993,7 +1002,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       setInput('');
       return;
     }
-    const trimmedText = text.trim();
+    // A long paste stands in the prompt as a token; the model and commands get its text.
+    const trimmedText = expandPastes(text, pastesRef.current).trim();
     if (pendingRef.current) {
       const p = pendingRef.current;
       pendingRef.current = undefined;
@@ -1074,7 +1084,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     turnStartRef.current = turnStart;
     try {
       const result = await runHeadless(
-        { ...args, model: model ?? args.model, permission: permission ?? args.permission, ...(effort ? { effort } : {}), cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', note: (t: string) => { if (t.trim()) push({ role: 'system', text: t.trim(), dim: true }); }, ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
+        { ...args, model: model ?? args.model, permission: permission ?? args.permission, ...(effort ? { effort } : {}), cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: expandPastes(text, pastesRef.current), outputFormat: 'stream-json', note: (t: string) => { if (t.trim()) push({ role: 'system', text: t.trim(), dim: true }); }, ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
         handleChunk,
       );
       setThread(result.thread ?? thread);
@@ -1693,6 +1703,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       return;
     }
     if (key.tab && suggestion) { setInput(suggestion); setSuggestion(null); return; }
+    // alt+enter / shift+enter put a newline in the prompt (vim-input.tsx); they never submit.
+    if (key.return && (key.meta || key.shift)) return;
     if (!running) {
       const id = inkKeyId(input, key);
       const bindings = resolveBindings(loadedKeybindings);
@@ -2195,7 +2207,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               {/* A short terminal (under 16 rows) keeps the prompt flat: the frame's two rows go to the transcript. */}
               <Box borderStyle={screenReader || rows < 16 ? undefined : 'round'} borderColor={border} paddingX={1} marginX={screenReader || rows < 16 ? 0 : 1}>
                 <Text color={screenReader ? undefined : modeColor}>{screenReader ? 'prompt: ' : '› '}</Text>
-                <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={gate.captured} suppressSubmit={gate.suppressSubmit} />
+                <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={gate.captured} suppressSubmit={gate.suppressSubmit} onPaste={onPaste} />
               </Box>
               <StatusBar
                 T={T}
