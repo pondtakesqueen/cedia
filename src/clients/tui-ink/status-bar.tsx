@@ -28,14 +28,17 @@ export function StatusBar(props: {
   running?: boolean;
   elapsedMs?: number;
   spinner?: string;
+  // A passing word that takes the left side, such as "Press Ctrl+C again to exit".
+  hint?: string;
 }): React.ReactElement {
-  const { T, mode, modeColor, model, effort, images, tokens, windowSize, spend, vimMode, activity, running, elapsedMs, spinner } = props;
+  const { T, mode, modeColor, model, effort, images, tokens, windowSize, spend, vimMode, activity, running, elapsedMs, spinner, hint } = props;
   const screenReader = useCediaScreenReader();
   const pct = tokens !== undefined && windowSize ? Math.min(99, Math.round((tokens / windowSize) * 100)) : undefined;
   const money = typeof spend === 'number' ? `$${spend.toFixed(2)}` : '';
   const vim = vimMode && vimMode !== 'insert' ? vimMode : '';
   if (screenReader) {
     const parts = [
+      hint ?? '',
       running && activity ? `${activity}, esc stops` : `mode ${mode}`,
       model,
       effort ? `effort ${effort}` : '',
@@ -49,7 +52,9 @@ export function StatusBar(props: {
   const meterColor = pct !== undefined && pct >= 95 ? T.error : pct !== undefined && pct >= 80 ? T.accent : T.primary;
   return (
     <Box justifyContent="space-between" paddingX={2}>
-      {running && activity ? (
+      {hint ? (
+        <Text wrap="truncate" color={T.textMuted}>{hint}</Text>
+      ) : running && activity ? (
         <Text wrap="truncate">
           <Text color={T.accent}>{spinner ?? '●'} </Text>
           <Text color={T.textMuted}>{activity}</Text>

@@ -166,3 +166,9 @@ export function offsetAt(text: string, width: number, rowInSpan: number, col: nu
   }
   return text.length;
 }
+
+/** The first row a menu of `rows` shows so the selected item stays on screen, scrolling one row at a time. */
+export function menuStart(selected: number, rows: number, count: number): number {
+  if (count <= rows) return 0;
+  return Math.max(0, Math.min(selected - rows + 1, count - rows)) || 0;
+}

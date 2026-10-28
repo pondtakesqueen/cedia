@@ -360,4 +360,45 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       h.stop();
     }
   }, 30000);
+  test('a prompt sent during a turn waits for it, and esc puts it back in the prompt', async () => {
+    const h = start({ script: [{ hang: true }] });
+    try {
+      await Bun.sleep(500);
+      h.write('first');
+      await Bun.sleep(200);
+      h.write('\r');
+      await Bun.sleep(600);
+      h.write('later');
+      await Bun.sleep(200);
+      h.write('\r');
+      await Bun.sleep(400);
+      expect(h.frame()).toContain('⧗ later');
+      h.drain();
+      h.write('\x1b');
+      for (let i = 0; i < 20 && !h.frame().includes('› later'); i++) await Bun.sleep(200);
+      expect(h.frame()).toContain('› later');
+      // One more key paints a fresh frame: the queue line is gone from it.
+      h.drain();
+      h.write('!');
+      await Bun.sleep(400);
+      const back = h.frame();
+      expect(back).toContain('› later!');
+      expect(back).not.toContain('⧗ later');
+    } finally {
+      h.stop();
+    }
+  }, 30000);
+
+  test('ctrl+c on an empty prompt asks for a second press before leaving', async () => {
+    const h = start();
+    try {
+      await Bun.sleep(500);
+      h.drain();
+      h.write('\x03');
+      await Bun.sleep(300);
+      expect(h.frame()).toContain('Press Ctrl+C again to exit');
+    } finally {
+      h.stop();
+    }
+  }, 30000);
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { fuzzyMatch, buildAutoItems, highlightSpans, truncateDescription, truncateLongText, estimateLines, type AutoItem } from '../src/clients/tui-ink/autocomplete.ts';
+import { fuzzyMatch, buildAutoItems, menuStart, highlightSpans, truncateDescription, truncateLongText, estimateLines, type AutoItem } from '../src/clients/tui-ink/autocomplete.ts';
 
 const cmds = (names: string[]): AutoItem[] => names.map((n) => ({ value: n, name: `/${n}`, description: `${n} does things` }));
 
@@ -78,5 +78,15 @@ describe('autocomplete', () => {
     expect(out).toContain('lines …');
     expect(out.startsWith('a'.repeat(100))).toBe(true);
     expect(out.endsWith('c'.repeat(100))).toBe(true);
+  });
+});
+
+describe('menuStart', () => {
+  test('keeps the selected item on screen', () => {
+    expect(menuStart(0, 7, 51)).toBe(0);
+    expect(menuStart(6, 7, 51)).toBe(0);
+    expect(menuStart(9, 7, 51)).toBe(3);
+    expect(menuStart(50, 7, 51)).toBe(44);
+    expect(menuStart(2, 7, 3)).toBe(0);
   });
 });

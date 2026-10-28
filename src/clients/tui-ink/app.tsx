@@ -4,7 +4,7 @@ import { selectedPrefix, useCediaScreenReader } from './a11y.ts';
 import { readPicks, savePick, pickBoost } from './picks.ts';
 import { sinceLabel } from './when.ts';
 import { bindingSummary } from './keybindings/summary.ts';
-import { buildAutoItems, highlightSpans, paintRuns, truncateDescription, truncateLongText, estimateLines, offsetAt, type AutoItem } from './autocomplete.ts';
+import { buildAutoItems, menuStart, highlightSpans, paintRuns, truncateDescription, truncateLongText, estimateLines, offsetAt, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import { collapses, expandPastes, pasteToken } from './line-edit.ts';
@@ -276,6 +276,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const recycleSlotsRef = useRef<RecycleSlot[]>([]);
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
   const historyRef = useRef<string[]>([]);
+  const queueRef = useRef<{ text: string; at: number }[]>([]);
+  const [queued, setQueued] = useState<string[]>([]);
+  const submitRef = useRef<(text: string) => Promise<void>>(async () => {});
   // Long pastes by their token in the prompt (line-edit.ts); kept for the session, so a recalled prompt still expands.
   const pastesRef = useRef(new Map<string, string>());
   const onPaste = useCallback((text: string) => {
@@ -355,7 +358,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       delete toolStartByCallRef.current[e.callId];
       delete toolNameByCallRef.current[e.callId];
       setMessages((prev) => {
-        const i = prev.findIndex((m) => m.callId === e.callId);
+        // The newest row of that call: a scripted model may reuse an id from an earlier turn.
+        const i = prev.findLastIndex((m) => m.callId === e.callId);
         if (i < 0) return [...prev, row];
         const next = prev.slice();
         next[i] = row;
@@ -986,8 +990,18 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
   const submit = useCallback(async (text: string, planWhen?: 'always' | 'never') => {
     if (!text.trim()) return;
+    // A prompt sent while a turn runs waits its turn (like cc): it runs when this one ends, and Esc puts it back
+    // in the prompt. The same text twice in one tick is the double fire below, not two prompts.
+    if (running) {
+      const q = queueRef.current;
+      if (q.at(-1)?.text === text && Date.now() - (q.at(-1)?.at ?? 0) < 100) return;
+      q.push({ text, at: Date.now() });
+      setQueued(q.map((x) => x.text));
+      setInput('');
+      inputRef.current = '';
+      return;
+    }
     if (busyRef.current) return; // same-tick double fire (VimInput + keybinding both submit Enter)
-    if (running) { push({ role: 'system', text: 'a turn is running: wait for it, or stop it with Esc' }); return; }
     if (Date.now() - lastActivityRef.current > 5 * 60 * 1000) {
       push({ role: 'system', text: 'resumed after idle' });
     }
@@ -1119,8 +1133,23 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         lastCostThresholdRef.current = Math.floor(newSpent);
       }
       lastActivityRef.current = Date.now();
+      const waiting = queueRef.current.map((x) => x.text);
+      queueRef.current = [];
+      setQueued([]);
+      if (waiting.length && stop.signal.aborted) {
+        const back = [...waiting, inputRef.current].filter((t) => t.trim()).join('\n');
+        setInput(back);
+        inputRef.current = back;
+      } else if (waiting.length) {
+        const [next, ...rest] = waiting;
+        queueRef.current = rest.map((t) => ({ text: t, at: 0 }));
+        setQueued(rest);
+        // After this render lets go of running, so the next prompt starts a turn of its own.
+        setTimeout(() => { void submitRef.current(next!); }, 0);
+      }
     }
   }, [args, running, thread, handleCommand, goal, picker, closeDialog, permission, model, effort, effModel]);
+  submitRef.current = submit;
 
 
 
@@ -1394,11 +1423,23 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       setAutoDismissed(true);
     }
   };
+  // Leaving takes the key twice within two seconds (like cc), so a stray ctrl+c on an empty prompt costs nothing.
+  const exitArmedRef = useRef<{ key: string; at: number } | null>(null);
+  const [exitHint, setExitHint] = useState<string | null>(null);
+  const exitOrArm = (keyName: string) => {
+    const armed = exitArmedRef.current;
+    if (armed && armed.key === keyName && Date.now() - armed.at < 2000) { exit(); return; }
+    exitArmedRef.current = { key: keyName, at: Date.now() };
+    setExitHint(`Press ${keyName} again to exit`);
+    setTimeout(() => {
+      if (exitArmedRef.current?.key === keyName && Date.now() - exitArmedRef.current.at >= 2000) { exitArmedRef.current = null; setExitHint(null); }
+    }, 2050);
+  };
   const applyCancel = (step: ReturnType<typeof cancelStep>) => {
     if (step === 'abort-turn') { stopRef.current?.abort(); setActivity('stopping…'); return; }
     if (step === 'close-overlay') { closeOverlay(ctx); return; }
     if (step === 'clear-input') { setInput(''); inputRef.current = ''; return; }
-    exit();
+    exitOrArm('Ctrl+C');
   };
   chordDispatchRef.current = (command) => {
     if (command === 'scrollTop') { setScrollOffset(maxScrollOffset); return; }
@@ -1452,8 +1493,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (mentionOpen) {
         const sel = Math.min(mentionSelected, mentionItems.length - 1);
         if (autoCmd === 'cancel') { setMentionDismissed(true); return; }
-        if (autoCmd === 'selectUp') { setMentionSelected((s) => Math.max(0, s - 1)); return; }
-        if (autoCmd === 'selectDown') { setMentionSelected((s) => Math.min(mentionItems.length - 1, s + 1)); return; }
+        if (autoCmd === 'selectUp') { setMentionSelected((s) => (s <= 0 ? mentionItems.length - 1 : s - 1)); return; }
+        if (autoCmd === 'selectDown') { setMentionSelected((s) => (s >= mentionItems.length - 1 ? 0 : s + 1)); return; }
         if (autoCmd === 'accept') {
           const item = mentionItems[sel];
           if (item) {
@@ -1469,8 +1510,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (autoOpen) {
         const sel = Math.min(autoSelected, autoItems.length - 1);
         if (autoCmd === 'cancel') { setAutoDismissed(true); return; }
-        if (autoCmd === 'selectUp') { setAutoSelected((s) => Math.max(0, s - 1)); return; }
-        if (autoCmd === 'selectDown') { setAutoSelected((s) => Math.min(autoItems.length - 1, s + 1)); return; }
+        if (autoCmd === 'selectUp') { setAutoSelected((s) => (s <= 0 ? autoItems.length - 1 : s - 1)); return; }
+        if (autoCmd === 'selectDown') { setAutoSelected((s) => (s >= autoItems.length - 1 ? 0 : s + 1)); return; }
         if (autoCmd === 'accept') {
           const item = autoItems[sel];
           if (item) { notePick(item.value); setInput(`/${item.value} `); setAutoDismissed(true); }
@@ -1688,7 +1729,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       return;
     }
     if (key.ctrl && input === 'd' && !running && inputRef.current.length === 0) {
-      exit();
+      exitOrArm('Ctrl+D');
       return;
     }
     if (key.tab && key.shift && !running) {
@@ -2144,10 +2185,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <Box flexDirection="column" paddingX={1}>
             {(() => {
               const maxRows = Math.max(3, Math.min(7, overlayBudget));
-              const shown = mentionItems.slice(0, maxRows);
+              const selAt = Math.min(mentionSelected, mentionItems.length - 1);
+              const first = menuStart(selAt, maxRows, mentionItems.length);
+              const shown = mentionItems.slice(first, first + maxRows);
               return (<>
               {shown.map((it, i) => {
-              const sel = i === Math.min(mentionSelected, mentionItems.length - 1);
+              const sel = first + i === selAt;
               return (
                 <Text key={`${it.name}::${i}`} wrap="truncate">
                   <Text color={screenReader ? undefined : (sel ? T.primary : undefined)}>{selectedPrefix(sel, screenReader)}</Text>
@@ -2158,7 +2201,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 </Text>
               );
               })}
-              {mentionItems.length > maxRows ? <Text dimColor={!screenReader}>  {mentionItems.length - maxRows} more…</Text> : null}
+              {mentionItems.length > maxRows ? <Text dimColor={!screenReader}>  {first + 1}–{first + shown.length} of {mentionItems.length}</Text> : null}
               </>);
             })()}
           </Box>
@@ -2167,11 +2210,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <Box flexDirection="column" paddingX={1} marginX={screenReader ? 0 : 1} borderStyle={screenReader ? undefined : 'round'} borderColor={T.border}>
             {(() => {
               const maxRows = Math.max(3, Math.min(7, overlayBudget));
-              const shown = autoItems.slice(0, maxRows);
+              const selAt = Math.min(autoSelected, autoItems.length - 1);
+              const first = menuStart(selAt, maxRows, autoItems.length);
+              const shown = autoItems.slice(first, first + maxRows);
               const nameWidth = Math.min(18, Math.max(...shown.map((it) => it.name.length)));
               return (<>
               {shown.map((it, i) => {
-              const sel = i === Math.min(autoSelected, autoItems.length - 1);
+              const sel = first + i === selAt;
               const maxDesc = Math.max(10, columns - nameWidth - 12);
               const plain = it.name.startsWith('/') ? it.name.slice(1) : it.name;
               return (
@@ -2186,12 +2231,20 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               );
             })}
             <Box justifyContent="flex-end">
-              <Text color={screenReader ? undefined : T.textFaint}>{Math.min(maxRows, autoItems.length)} of {autoItems.length} · ↑↓ · tab · ⏎</Text>
+              <Text color={screenReader ? undefined : T.textFaint}>{autoItems.length > shown.length ? `${first + 1}–${first + shown.length} of ${autoItems.length} · ` : ''}↑↓ · tab · ⏎</Text>
             </Box>
               </>);
             })()}
           </Box>
         ) : null}
+        {queued.map((q, i) => (
+          <Box key={`queued-${i}`} paddingX={2}>
+            <Text wrap="truncate" color={screenReader ? undefined : T.textMuted}>
+              {screenReader ? 'queued: ' : '⧗ '}{q.replace(/\s+/g, ' ')}
+              {i === 0 && !screenReader ? <Text color={T.textFaint}>  runs when this turn ends · esc puts it back</Text> : null}
+            </Text>
+          </Box>
+        ))}
         {notice ? (
           <Box justifyContent="flex-end" paddingX={1}>
             <Text color={screenReader ? undefined : T.warning}>{notice}</Text>
@@ -2224,6 +2277,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 running={running}
                 elapsedMs={running ? Date.now() - turnStartRef.current : 0}
                 spinner={SPINNER_FRAMES[spin % SPINNER_FRAMES.length]}
+                hint={exitHint ?? undefined}
               />
             </>
           );

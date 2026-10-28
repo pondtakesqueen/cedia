@@ -75,6 +75,7 @@ export function editDiff(input: unknown, output: string): { added: number; remov
 }
 
 const MAX_DIFF = 6;
+const BASH_LINES = 3;
 
 export function resultRow(
   tool: string,
@@ -90,6 +91,8 @@ export function resultRow(
   const nonEmpty = text.split('\n').filter((l) => l.trim());
   const sub = (s: string, style: RowStyle = 'muted') =>
     detail.push({ spans: [{ text: '  └ ', style: 'faint' }, { text: clip(s.replace(/\t/g, '  '), Math.max(10, width - 6)), style }] });
+  const more = (s: string, style: RowStyle = 'muted') =>
+    detail.push({ spans: [{ text: '    ', style: 'faint' }, { text: clip(s.replace(/\t/g, '  '), Math.max(10, width - 6)), style }] });
   if (output.isError) {
     sub(nonEmpty[0] ?? 'failed', 'err');
   } else if (tool === 'read') {
@@ -116,7 +119,9 @@ export function resultRow(
     if (output.exitCode !== undefined && output.exitCode !== 0) sum.push({ text: `exit ${output.exitCode}`, style: 'err' });
     // The bash tool closes its output with "[exit N]" and marks stderr; the row already says how it ended.
     const shown = nonEmpty.filter((l) => !/^\[exit -?\d+/.test(l) && l !== '[stderr]' && l !== '(no output)');
-    if (shown.length) sub(shown.length > 1 ? `${shown[0]}  (+${shown.length - 1} lines)` : shown[0]!);
+    // The first lines show under the call, as a terminal would; the rest is a count.
+    shown.slice(0, BASH_LINES).forEach((l, i) => (i === 0 ? sub(l) : more(l)));
+    if (shown.length > BASH_LINES) more(`… +${shown.length - BASH_LINES} lines`, 'faint');
   } else if (nonEmpty.length > 1) {
     sum.push({ text: `${nonEmpty.length} lines`, style: 'muted' });
   } else if (nonEmpty.length === 1) {
