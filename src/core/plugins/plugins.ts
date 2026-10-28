@@ -39,12 +39,16 @@ function writeJson(path: string, value: unknown) {
   writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 }
 
+// A plugin's name becomes a directory under ~/.cedia/plugins that install replaces and uninstall deletes, so it is
+// one path segment: "../.." in a downloaded plugin.json would have install delete a directory outside it.
+const PLUGIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
 export function loadManifest(dir: string): PluginManifest | null {
   const p = join(dir, 'plugin.json');
   if (!existsSync(p)) return null;
   try {
     const m = JSON.parse(readFileSync(p, 'utf8')) as Partial<PluginManifest>;
-    if (typeof m.name !== 'string') return null;
+    if (typeof m.name !== 'string' || !PLUGIN_NAME.test(m.name)) return null;
     return {
       name: m.name,
       version: m.version ?? '0.0.0',

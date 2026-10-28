@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -24,6 +24,20 @@ describe('plugins (offline)', () => {
     Bun.spawnSync([BIN, 'plugin', 'uninstall', 'demo'], { env });
     const listed3 = Bun.spawnSync([BIN, 'plugin', 'list'], { env });
     expect(listed3.stdout.toString()).toContain('no plugins');
+  });
+
+  test('a plugin whose name is a path is refused and nothing outside the plugins directory is touched', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-plug-'));
+    const home = join(dir, '.home');
+    const keep = join(home, 'keep');
+    mkdirSync(keep, { recursive: true });
+    writeFileSync(join(keep, 'note'), 'x');
+    const fx = join(dir, 'fx');
+    mkdirSync(fx, { recursive: true });
+    writeFileSync(join(fx, 'plugin.json'), JSON.stringify({ name: '../keep' }));
+    const inst = Bun.spawnSync([BIN, 'plugin', 'install', fx], { env: { ...process.env, CEDIA_HOME: home } });
+    expect(inst.exitCode).not.toBe(0);
+    expect(existsSync(join(keep, 'note'))).toBe(true);
   });
 
   test('marketplace add/list/remove', () => {
