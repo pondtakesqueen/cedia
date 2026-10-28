@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import type { EventId, NewEvent, SessionEvent } from '../types.ts';
 
@@ -56,9 +56,23 @@ export function projectRoot(cwd: string): string {
   return common && basename(common) === '.git' ? dirname(common) : cwd;
 }
 
+// A workspace of several repository roots (the desktop's multi-repo project): `CEDIA_ROOTS`, separated by colons,
+// the primary root first. Each is a repository's project root; duplicates are dropped.
+export function workspaceRoots(env: NodeJS.ProcessEnv = process.env): string[] {
+  const roots = (env.CEDIA_ROOTS ?? '').split(':').filter(Boolean).map((r) => projectRoot(resolve(r)));
+  return [...new Set(roots)];
+}
+
 // The slug threads and sessions are filed under. Snapshots stay per working directory: each worktree has its own
-// tree to diff.
-export const projectKey = (cwd: string) => process.env.CEDIA_PROJECT || projectSlug(projectRoot(cwd));
+// tree to diff. In a workspace, every root's threads, sessions, memory and schedules are filed under the primary
+// root's slug, so a single-root project's files stay where they are when roots are added.
+export const projectKey = (cwd: string) => process.env.CEDIA_PROJECT || projectSlug(keyRoot(cwd));
+
+function keyRoot(cwd: string): string {
+  const here = projectRoot(cwd);
+  const roots = workspaceRoots();
+  return roots.includes(here) ? roots[0]! : here;
+}
 
 export function sessionPath(cwd: string, id: string, home = process.env.CEDIA_HOME ?? join(homedir(), '.cedia')): string {
   return join(home, 'sessions', projectKey(cwd), `${id}.jsonl`);

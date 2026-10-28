@@ -6,7 +6,7 @@ import { resolveModel } from '../../core/providers/catalog.ts';
 import type { FauxStep } from '../../core/providers/faux.ts';
 import { missingKeyNote } from '../../core/providers/http.ts';
 import { providerFor } from '../../core/providers/index.ts';
-import { projectKey, projectRoot, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
+import { projectKey, projectRoot, projectSlug, SessionLog, sessionExists, sessionPath, workspaceRoots } from '../../core/session/log.ts';
 import { DAILY_SPEND_WARN_USD, daySpendUsd } from '../../core/session/select.ts';
 import { dayOf } from '../../core/session/usage.ts';
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadMaxEffort, capEffort, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
@@ -225,12 +225,17 @@ function warnDaySpend(cwd: string, home: string, say: (text: string) => void) {
 }
 
 export async function runHeadless(given: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
-  // The profile named, else the one the thread was opened with; its defaults go under the flags.
-  const recorded = () => {
+  const threadRecord = () => {
     const st = new ThreadStore(threadsDir(cediaHome(), projectKey(given.cwd)));
-    return given.thread && st.has(given.thread) ? st.read(given.thread).profile : undefined;
+    return given.thread && !given.noSessionFile && st.has(given.thread) ? st.read(given.thread) : undefined;
   };
-  const profileName = given.profile ?? (given.thread && !given.noSessionFile ? recorded() : undefined);
+  // A thread opened in another root of the workspace runs there (or in a worktree of it), whatever directory the
+  // client started cedia in.
+  const root = threadRecord()?.root;
+  if (root && projectRoot(given.cwd) !== projectRoot(root)) given = { ...given, cwd: root };
+  // The profile named, else the one the thread was opened with; its defaults go under the flags.
+  const recorded = () => threadRecord()?.profile;
+  const profileName = given.profile ?? recorded();
   const profile = profileName ? { name: profileName, ...resolveProfile(profileName, loadProfiles()) } : undefined;
   // Workspace roots (cedian): tell the coordinator which roots it may open threads in.
   if (profile?.name === 'coordinator' && process.env.CEDIA_ROOTS) {
@@ -413,12 +418,18 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   // Started inside the run's try below, so they are closed however it ends.
   let mcp: McpServers | undefined;
   const readInstructions = () => instructionsBlock(loadInstructions(args.cwd));
+  // The workspace's other roots, for the writer to read (core/prompts.ts).
+  const otherRoots = () => {
+    const here = projectRoot(args.cwd);
+    const roots = workspaceRoots().filter((r) => r !== here);
+    return roots.length ? { roots } : {};
+  };
   // Fresh per session: instructions and memory are re-read where the preamble is built, so a post-handoff
   // session sees what changed mid-run.
   const reviewPreamble = () => {
     const mem = readRemembered();
     const ins = readInstructions();
-    return preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(ins ? { instructions: ins } : {}), ...(mem ? { memory: mem } : {}), ...(skillList ? { skills: skillList } : {}), ...(styleModifier ? { outputStyle: styleModifier } : {}) });
+    return preamble(args.cwd, { mode: 'read-only', sandbox, ...(context ? { context } : {}), ...(ins ? { instructions: ins } : {}), ...(mem ? { memory: mem } : {}), ...(skillList ? { skills: skillList } : {}), ...(styleModifier ? { outputStyle: styleModifier } : {}), ...otherRoots() });
   };
   // Where each writer session of this run started in its log, for the change the run made.
   const writerRuns: { log: SessionLog; from: number }[] = [];
@@ -441,7 +452,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const basePreamble = () => {
     const mem = readRemembered();
     const ins = readInstructions();
-    return preamble(args.cwd, { mode: policy.mode, ...(policy.plan ? { plan: { ask: !!(store && threadId) } } : {}), unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(ins ? { instructions: ins } : {}), ...(mem ? { memory: mem } : {}), ...(skillList ? { skills: skillList } : {}), ...(styleModifier ? { outputStyle: styleModifier } : {}), ...(profile?.instructions ? { profile: { name: profile.name, instructions: profile.instructions } } : {}) });
+    return preamble(args.cwd, { mode: policy.mode, ...(policy.plan ? { plan: { ask: !!(store && threadId) } } : {}), unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(ins ? { instructions: ins } : {}), ...(mem ? { memory: mem } : {}), ...(skillList ? { skills: skillList } : {}), ...(styleModifier ? { outputStyle: styleModifier } : {}), ...(profile?.instructions ? { profile: { name: profile.name, instructions: profile.instructions } } : {}), ...otherRoots() });
   };
 
   const ac = new AbortController();
@@ -514,7 +525,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const mcpRead = mcpTools.filter((t) => t.effect === 'read');
     // A resumed session that had the browser keeps the tool when this run has none, and a call says so.
     const browserTools = browser ? [browser.tool] : header?.tools.some((d) => d.name === BROWSER_TOOL) ? [browserStub] : [];
-    const extra = [...(spawnOn ? [spawnHere] : []), ...((askOn || policy.plan) && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(store && threadId ? [teamTool(new TeamStore(), threadId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened, projectRoot(args.cwd))] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...browserTools, ...mcpTools];
+    const extra = [...(spawnOn ? [spawnHere] : []), ...((askOn || policy.plan) && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(store && threadId ? [teamTool(new TeamStore(), threadId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened, projectRoot(args.cwd), workspaceRoots())] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...browserTools, ...mcpTools];
     // The advisor and the classifier answer in one reply, with no tools, in a session of their own.
     const helper = opts.role === 'advisor' || opts.role === 'classifier' || opts.role === 'triage';
     const tools = helper ? [] : reviewer ? [...REVIEW_TOOLS, ...(withSkill ? [skill] : []), webFetchRead, ...mcpRead] : child ? [...CORE_TOOLS, ...(child.recall ? [child.recall] : []), ...(withSkill ? [skill] : []), webFetch, ...mcpRead] : header ? [...CORE_TOOLS, ...extra].filter((t) => header.tools.some((d) => d.name === t.name)) : [...CORE_TOOLS, ...extra];

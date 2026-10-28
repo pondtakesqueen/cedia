@@ -62,7 +62,7 @@ export function modeNote(mode: PermissionMode, unlock: Guard[], plan?: { ask: bo
 // Per-session facts go in the first user turn, never in the cached system prompt.
 export function preamble(
   cwd: string,
-  opts: { mode?: PermissionMode; plan?: { ask: boolean }; unlock?: Guard[]; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] }; context?: string; instructions?: string; memory?: string; skills?: string; profile?: { name: string; instructions: string }; outputStyle?: string } = {},
+  opts: { mode?: PermissionMode; plan?: { ask: boolean }; unlock?: Guard[]; checks?: string[]; sandbox?: { on: boolean; allowedDomains: string[] }; context?: string; instructions?: string; memory?: string; skills?: string; profile?: { name: string; instructions: string }; outputStyle?: string; roots?: string[] } = {},
   now = new Date(),
 ): string {
   const lines = [`working directory: ${cwd}`, `date: ${now.toISOString().slice(0, 10)}`, `platform: ${process.platform}`, `permission: ${modeNote(opts.mode ?? 'read-only', opts.unlock ?? [], opts.plan)}`];
@@ -72,6 +72,9 @@ export function preamble(
         ? `sandbox: shell commands may write only inside the working directory and the temp dir ($TMPDIR, which is not always /tmp: put scratch files there or in the working directory), and reach only these hosts: ${opts.sandbox.allowedDomains.join(', ') || 'none'}. A blocked write or connection is the sandbox, not a bug to work around.`
         : 'sandbox: off',
     );
+  // The workspace's other repositories (a multi-repo project): there to read, while a change to one is a thread
+  // of its own in that root.
+  if (opts.roots?.length) lines.push(`other repositories of this workspace, to read only (a change there is another thread's work): ${opts.roots.join(', ')}`);
   if (opts.checks?.length)
     lines.push(`checks: after changing files, run ${opts.checks.map((c) => `\`${c}\``).join(' and ')} exactly as written (no pipes). The task is not done until one passes after your last change.`);
   const env = `<environment>\n${lines.join('\n')}\n</environment>`;
