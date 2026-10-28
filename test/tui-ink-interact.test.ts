@@ -59,6 +59,7 @@ function start(opts: { rows?: number; script?: unknown[]; files?: string[] } = {
     stdin: stdin as unknown as NodeJS.ReadableStream,
     stdout,
     exitOnCtrlC: false,
+    interactive: true,
   });
   return {
     dir,
