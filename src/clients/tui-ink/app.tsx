@@ -37,6 +37,7 @@ import { cancelStep, messageFullySelected, offsetForIndex, rowMapFromWalk, selec
 import { createHeightCache, heightCacheKey, visibleWindow } from './visible-window.ts';
 import { assignRecycleSlots, messageSlotKey, type RecycleSlot } from './virtual-list.ts';
 import { onTerminalResume } from './terminal-resume.ts';
+import { runOwnerShell, shellCommand, shellEnd, shellNote, type ShellRun } from './shell.ts';
 import { FOCUS_OFF, FOCUS_ON, NOTIFY_MODES, channelFor, focusFrom, notifyModeFrom, notifySequence, shouldNotify, turnNotice, type Focus } from './notify.ts';
 import { matchesKey } from '@mariozechner/pi-tui';
 import { TeamStore } from '../../core/project/teams.ts';
@@ -469,7 +470,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         ];
         const byName = new Map(INK_COMMANDS.map((c) => [c.name, c.description]));
         say(groups.map(([g, names]) => `${g}: ${names.map((n) => `${n} — ${byName.get(n.slice(1)) ?? ''}`).join(' · ')}`).join('\n'));
-        say('keys: Esc stops a turn · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Ctrl+G external editor · Tab completes · Shift+Tab permission · Meta+P model · Meta+O fast · Meta+T thinking · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · Alt+Enter or \\+Enter newline · Ctrl+A/E/U/K/W edit the line' + (bindingHints ? ` · custom keys: ${bindingHints}` : ''));
+        say('keys: Esc stops a turn · !<command> runs it in your shell · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Ctrl+G external editor · Tab completes · Shift+Tab permission · Meta+P model · Meta+O fast · Meta+T thinking · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · Alt+Enter or \\+Enter newline · Ctrl+A/E/U/K/W edit the line' + (bindingHints ? ` · custom keys: ${bindingHints}` : ''));
         return;
       }
       case 'historyUp':
@@ -1018,12 +1019,70 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // queued: a prompt that waited for the last turn; what the person is typing now stays in the prompt.
   // Whether this terminal has focus, from its focus reports (notify.ts); a turn that ends unseen says so.
   const focusRef = useRef<Focus>('unknown');
+  // `!` commands run since the last prompt went to the model (shell.ts): their output goes with the next one.
+  const shellRunsRef = useRef<ShellRun[]>([]);
   // The terminal Ink draws on (process.stdout outside tests): escapes that are not drawing go to it as well.
   const termOutRef = useRef<NodeJS.WritableStream | undefined>(undefined);
   const attention = (body: string | undefined, ms: number) => {
     const mode = notifyModeFrom(cediaHome());
     if (!body || !shouldNotify(mode, focusRef.current, ms)) return;
     try { (termOutRef.current ?? process.stdout).write(notifySequence(channelFor(mode), 'cedia', body)); } catch {}
+  };
+  // What waited while a turn or a `!` command ran: back in the prompt when it was stopped, else the next prompt.
+  const drainQueue = (aborted: boolean) => {
+    const waiting = queueRef.current.map((x) => x.text);
+    queueRef.current = [];
+    setQueued([]);
+    if (waiting.length && aborted) {
+      const back = [...waiting, inputRef.current].filter((t) => t.trim()).join('\n');
+      setInput(back);
+      inputRef.current = back;
+    } else if (waiting.length) {
+      const [next, ...rest] = waiting;
+      queueRef.current = rest.map((t) => ({ text: t, at: 0 }));
+      setQueued(rest);
+      // After this render lets go of running, so the next prompt starts a turn of its own.
+      setTimeout(() => { void submitRef.current(next!, undefined, true); }, 0);
+    }
+  };
+  const runShell = async (text: string, command: string) => {
+    busyRef.current = true;
+    push({ role: 'user', text });
+    historyRef.current.push(text);
+    histPos.current = -1;
+    if (!command) { busyRef.current = false; push({ role: 'system', text: '!<command> runs it in your shell here; its output goes with your next message' }); return; }
+    setRunning(true);
+    setActivity('running your command');
+    const stop = new AbortController();
+    stopRef.current = stop;
+    turnStartRef.current = Date.now();
+    const callId = `owner-shell-${Date.now()}`;
+    push(rowMsg(intentRow('bash', { command }, rowWidth()), { status: 'running', callId }));
+    try {
+      const run = await runOwnerShell(command, args.cwd, stop.signal);
+      shellRunsRef.current.push(run);
+      const failed = run.exitCode !== 0;
+      const row = rowMsg(
+        resultRow('bash', { command }, { text: run.ended ? `${run.output}\n${shellEnd(run)}`.trim() : run.output, ...(run.exitCode !== null ? { exitCode: run.exitCode } : {}) }, run.ms, rowWidth()),
+        { status: failed ? 'error' : 'success', callId },
+      );
+      setMessages((prev) => {
+        const i = prev.findLastIndex((m) => m.callId === callId);
+        if (i < 0) return [...prev, row];
+        const next = prev.slice();
+        next[i] = row;
+        return next;
+      });
+      push({ role: 'system', text: 'the output goes with your next message', dim: true });
+    } catch (e) {
+      push({ role: 'system', text: `✗ ${(e as Error).message}`, tone: 'red' });
+    } finally {
+      busyRef.current = false;
+      setRunning(false);
+      setActivity('');
+      lastActivityRef.current = Date.now();
+      drainQueue(stop.signal.aborted);
+    }
   };
   const submit = useCallback(async (text: string, planWhen?: 'always' | 'never', queued = false) => {
     if (!text.trim()) return;
@@ -1070,6 +1129,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       push({ role: 'user', text });
       clearDraft();
       handleCommand(trimmedText.slice(1));
+      return;
+    }
+    const command = shellCommand(trimmedText);
+    if (command !== undefined) {
+      clearDraft();
+      await runShell(text, command);
       return;
     }
     busyRef.current = true;
@@ -1129,12 +1194,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     };
     const stop = new AbortController();
     stopRef.current = stop;
+    const takeShellNote = () => { const note = shellNote(shellRunsRef.current); shellRunsRef.current = []; return note; };
     let resultCost = 0;
     const turnStart = Date.now();
     turnStartRef.current = turnStart;
     try {
       const result = await runHeadless(
-        { ...args, model: model ?? args.model, permission: permission ?? args.permission, ...(effort ? { effort } : {}), cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: expandPastes(text, pastesRef.current), outputFormat: 'stream-json', note: (t: string) => { if (t.trim()) push({ role: 'system', text: t.trim(), dim: true }); }, ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
+        { ...args, model: model ?? args.model, permission: permission ?? args.permission, ...(effort ? { effort } : {}), cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: takeShellNote() + expandPastes(text, pastesRef.current), outputFormat: 'stream-json', note: (t: string) => { if (t.trim()) push({ role: 'system', text: t.trim(), dim: true }); }, ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
         handleChunk,
       );
       setThread(result.thread ?? thread);
@@ -1171,20 +1237,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         lastCostThresholdRef.current = Math.floor(newSpent);
       }
       lastActivityRef.current = Date.now();
-      const waiting = queueRef.current.map((x) => x.text);
-      queueRef.current = [];
-      setQueued([]);
-      if (waiting.length && stop.signal.aborted) {
-        const back = [...waiting, inputRef.current].filter((t) => t.trim()).join('\n');
-        setInput(back);
-        inputRef.current = back;
-      } else if (waiting.length) {
-        const [next, ...rest] = waiting;
-        queueRef.current = rest.map((t) => ({ text: t, at: 0 }));
-        setQueued(rest);
-        // After this render lets go of running, so the next prompt starts a turn of its own.
-        setTimeout(() => { void submitRef.current(next!, undefined, true); }, 0);
-      }
+      drainQueue(stop.signal.aborted);
     }
   }, [args, running, thread, handleCommand, goal, picker, closeDialog, permission, model, effort, effModel]);
   submitRef.current = submit;
@@ -2305,13 +2358,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         {trustOpen ? null : (() => {
           const mode = permission ?? args.permission ?? 'auto';
           const modeColor = mode === 'plan' ? T.thinking : mode === 'read-only' ? T.textMuted : T.primary;
-          // The box says what the prompt will do: brand while a turn runs, violet in plan mode, amber in vim normal.
-          const border = running ? T.primary : vimMode !== 'insert' ? T.accent : mode === 'plan' ? T.thinking : T.border;
+          // The box says what the prompt will do: brand while a turn runs, amber for a `!` shell command or in vim
+          // normal, violet in plan mode.
+          const shellMode = !running && input.trimStart().startsWith('!');
+          const border = running ? T.primary : shellMode || vimMode !== 'insert' ? T.accent : mode === 'plan' ? T.thinking : T.border;
           return (
             <>
               {/* A short terminal (under 16 rows) keeps the prompt flat: the frame's two rows go to the transcript. */}
               <Box borderStyle={screenReader || rows < 16 ? undefined : 'round'} borderColor={border} paddingX={1} marginX={screenReader || rows < 16 ? 0 : 1}>
-                <Text color={screenReader ? undefined : modeColor}>{screenReader ? 'prompt: ' : '› '}</Text>
+                {shellMode
+                  ? <Text color={screenReader ? undefined : T.accent}>{screenReader ? 'shell command: ' : '$ '}</Text>
+                  : <Text color={screenReader ? undefined : modeColor}>{screenReader ? 'prompt: ' : '› '}</Text>}
                 <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={gate.captured} suppressSubmit={gate.suppressSubmit} onPaste={onPaste} />
               </Box>
               <StatusBar

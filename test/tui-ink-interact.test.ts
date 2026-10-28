@@ -9,6 +9,8 @@ import { App } from '../src/clients/tui-ink/app.tsx';
 import { acceptTrust } from '../src/clients/tui-ink/onboarding.ts';
 import type { TuiArgs } from '../src/clients/tui-ink/args.ts';
 import { inkRenderOptions } from '../src/clients/tui-ink/render-options.ts';
+import { ThreadStore, threadsDir } from '../src/core/project/threads.ts';
+import { projectKey } from '../src/core/session/log.ts';
 
 const strip = (s: string) =>
   s
@@ -469,6 +471,32 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
     } finally {
       h.stop();
       for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+  }, 30000);
+
+  test('a ! prompt runs in the shell, shows as a Bash row and its output goes with the next prompt', async () => {
+    const h = start({ script: [{ blocks: [{ type: 'text', text: 'seen it' }] }] });
+    try {
+      await Bun.sleep(500);
+      h.write('!echo hi-from-shell');
+      await Bun.sleep(300);
+      // The prompt says it is a shell command.
+      expect(h.frame()).toContain('$ !echo hi-from-shell');
+      h.write('\r');
+      for (let i = 0; i < 40 && !h.frame().includes('goes with your next message'); i++) await Bun.sleep(100);
+      expect(h.frame()).toMatch(/✓ Bash\s+echo hi-from-shell/);
+      expect(h.frame()).toContain('└ hi-from-shell');
+      h.write('what did it say');
+      await Bun.sleep(300);
+      h.write('\r');
+      for (let i = 0; i < 40 && !h.frame().includes('seen it'); i++) await Bun.sleep(250);
+      const store = new ThreadStore(threadsDir(join(h.dir, 'home'), projectKey(h.dir)));
+      const prompts = store.list().flatMap((t) => t.runs.map((r) => r.prompt));
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain('<owner-shell>\n$ echo hi-from-shell\n(exit 0)\nhi-from-shell\n</owner-shell>');
+      expect(prompts[0]!.endsWith('what did it say')).toBe(true);
+    } finally {
+      h.stop();
     }
   }, 30000);
 });
