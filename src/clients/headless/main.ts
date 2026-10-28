@@ -52,7 +52,7 @@ import { changedLines, fixPrompt, parseVerdict, reviewPrompt, SMALL_CHANGE_LINES
 import { existingTests, leavesTestsAlone, PROTECTED_TEST_REASON } from '../../core/trust/tests.ts';
 import { goalContinuePrompt, goalPlanPrompt, goalPrompt, judgeWithPlan, MAX_GOAL_ROUNDS, parseCriteria, parseGoal, strategistPrompt, withCriteria, type GoalRound } from '../../core/trust/goal.ts';
 import { addUsage, hitRatio, ZERO_USAGE, type Effort, type JsonObject, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
-import { runClaudeCode } from './claude-code.ts';
+import { startClaudeCode, type WarmClaudeCode } from './claude-code.ts';
 import { encode } from '../../protocol/index.ts';
 import { inert } from '../../core/trust/frame.ts';
 
@@ -598,18 +598,39 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const r = await sideStep(role, choice, prompt);
     return { ...r, step: { ...r.step, ms: Date.now() - t0 } };
   };
+  // A Claude Code step for a role: its tools and effort. The review goes without Claude Code's git status snapshot,
+  // which is taken when the process starts and would predate the change once the step starts ahead of its prompt.
+  const claudeCodeStep = (role: 'plan' | 'review', choice: Extract<RoleChoice, { via: 'claude-code' }>) => ({
+    model: choice.model,
+    // The claude-code path bypasses runPrompt, so the max-effort ceiling is applied here; the cedia path
+    // is capped centrally in runPrompt (writer, spawn children, plan/review steps, escalation).
+    effort: capEffort(choice.effort, loadMaxEffort()),
+    cwd: args.cwd,
+    allowed: ['Read', 'Grep', 'Glob', ...(role === 'review' ? GIT_READS : []), ...checks.map((c) => `Bash(${c})`)],
+    signal: ac.signal,
+    ...(role === 'review' ? { gitStatus: false } : {}),
+  });
+  // Claude Code steps started before their prompt is ready (the plan while the triage reads the message, the review
+  // while the writer works), so its start-up is spent then; each is run once or cancelled before it sends anything.
+  const warmed: Partial<Record<'plan' | 'review', WarmClaudeCode>> = {};
+  const warm = (role: 'plan' | 'review', choice: RoleChoice | undefined) => {
+    if (choice?.via === 'claude-code' && privacy !== 'zdr' && !warmed[role]) warmed[role] = startClaudeCode(claudeCodeStep(role, choice));
+  };
+  const unwarm = (role: 'plan' | 'review') => {
+    warmed[role]?.cancel();
+    delete warmed[role];
+  };
   const sideStep = async (role: 'plan' | 'review', choice: RoleChoice, prompt: string): Promise<{ ok: boolean; text: string; step: Step }> => {
     if (choice.via === 'claude-code') {
-      // The claude-code path bypasses runPrompt, so the max-effort ceiling is applied here; the cedia path
-      // is capped centrally in runPrompt (writer, spawn children, plan/review steps, escalation).
-      const effort = capEffort(choice.effort, loadMaxEffort());
-      const step: Step = { model: `claude-code:${choice.model}@${effort}`, via: 'claude-code', sessionId: '' };
+      const cc = claudeCodeStep(role, choice);
+      const step: Step = { model: `claude-code:${choice.model}@${cc.effort}`, via: 'claude-code', sessionId: '' };
       if (privacy === 'zdr') {
         say(`cedia: privacy is zdr, so the ${role} step does not go to Claude Code\n`);
         return { ok: false, text: '', step };
       }
-      const allowed = ['Read', 'Grep', 'Glob', ...(role === 'review' ? GIT_READS : []), ...checks.map((c) => `Bash(${c})`)];
-      const r = await runClaudeCode({ prompt, model: choice.model, effort, cwd: args.cwd, allowed, signal: ac.signal });
+      const started = warmed[role] ?? startClaudeCode(cc);
+      delete warmed[role];
+      const r = await started.run(prompt);
       if (!r.ok && !ac.signal.aborted) say(`cedia: the ${role} step in Claude Code failed: ${r.error}\n`);
       return { ok: r.ok, text: r.text, step: { ...step, sessionId: r.sessionId, ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}), ...(r.turns !== undefined ? { requests: r.turns } : {}), ...(r.apiMs !== undefined ? { apiMs: r.apiMs } : {}) } };
     }
@@ -919,6 +940,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     store.append(threadId, { kind: 'run', id: runId, prompt: args.prompt.slice(0, 500), cwd: args.cwd, ...(tree ? { tree } : {}), ...(from ? { from } : {}), permission, ...(images.length ? { images } : {}) });
   }
   try {
+    if (roles.plan && planWhen !== 'never') warm('plan', roles.plan);
     const servers = args.noMcp ? {} : loadMcp();
     if (Object.keys(servers).length) {
       mcp = await startMcp(servers);
@@ -937,6 +959,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const triaged = planWhen === 'auto' && roles.plan !== undefined && !resumed?.question;
     const direct = triaged && !(await triage());
     const wantsPlan = planWhen !== 'never' && !direct;
+    if (!wantsPlan) unwarm('plan');
     if (roles.plan && !wantsPlan) say('cedia: no plan for this one\n');
     if (roles.plan && wantsPlan) {
       // With worktrees on, the planner may split the work into parts that cedia hands to work sub-threads before the
@@ -977,6 +1000,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const last = resumed?.sessions.findLast((s) => s.role === 'code' && !resumed.rewound.includes(s.sessionId));
     const lastLog = resumed && last?.model === model.ref && last.path && sessionExists(last.path) ? SessionLog.load(last.path) : undefined;
     let result: HeadlessResult;
+    warm('review', roles.review);
     // A session whose cache has expired costs its whole context to resume; past a size, a new session from where
     // the thread stopped is cheaper, so the run says both prices and takes the cheaper.
     const freshTokens = resumed ? Math.ceil((systemFor(model).length + JSON.stringify(toolDefs(CORE_TOOLS)).length + basePreamble().length + resumeNote(resumed).length + task.length) / 4) : 0;
@@ -1036,6 +1060,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const patch = roles.review && result.subtype === 'success' && result.evidence?.changed.length ? changesPatch() : undefined;
     const small = direct && patch !== undefined && changedLines(patch) <= SMALL_CHANGE_LINES;
     if (small) say(`cedia: a small change to a message the triage sent straight to the writer; no review\n`);
+    if (!(roles.review && result.subtype === 'success' && result.evidence?.changed.length && !small)) unwarm('review');
     if (roles.review && result.subtype === 'success' && result.evidence?.changed.length && !small) {
       const r = await side('review', roles.review, reviewPrompt(args.prompt, result.evidence, patch));
       // A review cut off by a stop said nothing about the change: it was interrupted, not without a verdict.
@@ -1133,6 +1158,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     if (store && threadId) store.append(threadId, { run: runId, kind: 'state', state: 'failed', result: (e as Error).message });
     throw e;
   } finally {
+    unwarm('plan');
+    unwarm('review');
     await diagnoser?.close();
     await mcp?.close();
     await browser?.close();
