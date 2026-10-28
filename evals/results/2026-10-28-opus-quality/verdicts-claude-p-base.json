@@ -1,0 +1,464 @@
+[
+ {
+  "task": "tb-dedup",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 5,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 9,
+    "scope": 6,
+    "tests": 1,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both are correct for hashable items; B is the more idiomatic one-liner and leaves fewer stray artifacts than A.",
+   "defects_A": [
+    "No tests added",
+    "Stray .pytest_cache and __pycache__ files included in the diff",
+    "Unhashable items raise TypeError (solution.py:5)"
+   ],
+   "defects_B": [
+    "No tests added",
+    "Stray .pytest_cache files included in the diff",
+    "Unhashable items raise TypeError (solution.py:2)"
+   ]
+  },
+  "cost": 0.051420400000000005
+ },
+ {
+  "task": "tb-dedup",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 9,
+    "scope": 8,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 7,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Same behavior on hashable items; A is a concise idiomatic one-liner with fewer stray artifacts than B.",
+   "defects_A": [
+    "solution.py:2 fails with TypeError on unhashable items such as lists",
+    "no tests added",
+    ".pytest_cache files left in the diff"
+   ],
+   "defects_B": [
+    "solution.py:4 fails with TypeError on unhashable items such as lists",
+    "no tests added",
+    ".pytest_cache and __pycache__ binaries left in the diff",
+    "verbose loop where dict.fromkeys would do"
+   ]
+  },
+  "cost": 0.0512356
+ },
+ {
+  "task": "hard-csv-stream",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 10,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both match parseCsv on the edge cases I traced, but B keeps a SyntaxError latched, uses faster slice-based scanning, and has broader random and exhaustive-split tests.",
+   "defects_A": [
+    "csv.ts:141 push does not remember a thrown SyntaxError, so later calls continue from a half-parsed state",
+    "csv.ts:148 field is built one character at a time through a switch, which is slower than slicing runs",
+    "csv.test.ts:107 relative timing assertion may be flaky"
+   ],
+   "defects_B": [
+    "csv.test.ts:67 literal invisible BOM characters in test sources hurt readability"
+   ]
+  },
+  "cost": 0.086128
+ },
+ {
+  "task": "hard-csv-stream",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 8
+   },
+   "winner": "A",
+   "why": "Both match parseCsv, but A's errors are sticky, its chunk handling is faster, and its tests are broader (random splits, long-field scaling).",
+   "defects_A": [],
+   "defects_B": [
+    "csv.ts:141 push does not latch a SyntaxError; later push calls continue from a broken state and may return rows",
+    "csv.test.ts:96 scaling test compares timings between runs, so it can be flaky and doesn't cover a single long quoted field"
+   ]
+  },
+  "cost": 0.084735
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 8,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B handles the phantom trailing line and keeps re-indentation closer to the doc comment; otherwise the two are near-equivalent and neither adds tests.",
+   "defects_A": [
+    "edit.ts:31-45 whole-line windows can match the phantom empty element after the final newline",
+    "edit.ts:58 trimStart fallback flattens the indentation of new_text lines that lack old_text's indent",
+    "no tests added"
+   ],
+   "defects_B": [
+    "edit.ts:31 new_text of just a newline becomes one blank line rather than a deletion",
+    "edit.ts:56 whitespace-only new_text lines are kept as written rather than normalised",
+    "no tests added"
+   ]
+  },
+  "cost": 0.0598722
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A excludes the phantom empty line after a trailing newline and keeps the indent swap simpler; B can match that phantom line. Neither adds tests.",
+   "defects_A": [
+    "no tests added for new behaviour, edit.test.ts",
+    "lines not starting with old indent are left unchanged in indentation tier, edit.ts:56"
+   ],
+   "defects_B": [
+    "no tests added for new behaviour, edit.test.ts",
+    "tier 2/3 windows include the phantom empty line after a trailing newline, edit.ts:31,44",
+    "lines not starting with old indent are flattened to file indent, losing relative indentation, edit.ts:58"
+   ]
+  },
+  "cost": 0.0596324
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B also handles expired entries counting toward max and size, and synchronous throws from fn, with tests for each; A fixes the core bugs but leaves those cases open.",
+   "defects_A": [
+    "memo.ts:113 expired entries still count toward max/size and can evict live keys",
+    "memo.ts:113-114 a synchronous throw from fn evicts a key and adds nothing",
+    "no test covers expiry versus max"
+   ],
+   "defects_B": [
+    "memo.ts:140-143 prune() scans the whole cache on every miss and size read (O(n))"
+   ]
+  },
+  "cost": 0.0592473
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 8,
+    "scope": 9,
+    "tests": 6,
+    "security": 8
+   },
+   "winner": "A",
+   "why": "A also prunes expired entries (so size and eviction ignore them) and handles a synchronous throw from fn, with tests for both; B misses those.",
+   "defects_A": [],
+   "defects_B": [
+    "memo.ts:~33: expired entries are never pruned, so they count toward max and size and can evict live keys",
+    "memo.ts:~114: a synchronous throw from fn escapes as an exception after a key was already evicted, instead of returning a rejected promise",
+    "memo.bugs.test.ts: no tests for expiry versus max, a synchronous throw, or a call after invalidate while an earlier call is in flight"
+   ]
+  },
+  "cost": 0.0589455
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 8
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 5
+   },
+   "winner": "A",
+   "why": "A unpacks `bash -o opt -c script`, while B stops at the option's value and hides the script from the policy; neither adds tests.",
+   "defects_A": [
+    "no tests added for new behaviour, shell.test.ts untouched"
+   ],
+   "defects_B": [
+    "shell.ts:165-168 shell flag scan does not skip the value of -o/-O, so `bash -o pipefail -c \"rm -rf /\"` is not unpacked and the inner command is hidden",
+    "shell.ts:165 `+` flags such as `+x` stop the scan, so `bash +x -c ...` hides the script",
+    "no tests added for new behaviour, shell.test.ts untouched"
+   ]
+  },
+  "cost": 0.0990097
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 4
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 7
+   },
+   "winner": "B",
+   "why": "B unpacks `bash -o opt -c ...`, where A hides the inner command from the policy; both add no tests.",
+   "defects_A": [
+    "shell.ts expand: `bash -o pipefail -c \"rm -rf /\"` is not unpacked because the option value stops the flag loop, so the inner command is hidden",
+    "no tests added",
+    "\\r is not treated as whitespace"
+   ],
+   "defects_B": [
+    "no tests added"
+   ]
+  },
+  "cost": 0.0942847
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 10,
+    "tests": 2,
+    "security": 5
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Equivalent parsing, but B cancels the body on early consumer exit while A leaves the stream open.",
+   "defects_A": [
+    "sse.ts:50-52 finally only releaseLock; early break does not cancel the body, leaving the connection open",
+    "no tests added"
+   ],
+   "defects_B": [
+    "no tests added"
+   ]
+  },
+  "cost": 0.040840400000000006
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 10,
+    "tests": 1,
+    "security": 6
+   },
+   "winner": "A",
+   "why": "Both implement the same parsing correctly, but A cancels the body on early consumer exit while B leaves the stream open.",
+   "defects_A": [
+    "no tests added"
+   ],
+   "defects_B": [
+    "sse.ts:51 releaseLock without reader.cancel() leaves the body stream/connection open when the consumer stops early",
+    "sse.ts:38-40 re-slices the buffer for every line, which is quadratic on large chunks",
+    "no tests added"
+   ]
+  },
+  "cost": 0.0410888
+ },
+ {
+  "task": "hard-window",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 10,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Both are correct on normal input; A also keeps sparse-array behaviour identical and tests more edge cases, while B has a randomized oracle test but changes the sparse-array error message and leaves it untested.",
+   "defects_A": [
+    "window.ts:129 sparse arrays fall back to the quadratic path (not realistic input)"
+   ],
+   "defects_B": [
+    "window.ts:89 sparse arrays with events throw a different TypeError message than the original",
+    "window.kept.test.ts has no sparse-array test and no test for a window too small to change t"
+   ]
+  },
+  "cost": 0.0560729
+ },
+ {
+  "task": "hard-window",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 9,
+    "tests": 6,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both are correct and fast, but B tests the contract edge cases (float rounding, -0, huge values, sparse arrays, validation order) that A leaves untested.",
+   "defects_A": [
+    "No tests for float rounding, -0, huge values or sparse arrays, which are cases the task said to keep (window.kept.test.ts)",
+    "Sparse-array error message differs from the original, and the sparse handling is untested (window.ts:89)"
+   ],
+   "defects_B": [
+    "Timing test uses unseeded Math.random, so it is non-deterministic (window.edge.test.ts:115)"
+   ]
+  },
+  "cost": 0.0596081
+ }
+]
