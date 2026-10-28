@@ -373,6 +373,12 @@ describe('settings keys', () => {
     expect(() => checkSettings([])).toThrow('settings must be a JSON object');
   });
 
+  test('theme is the terminal UI’s dark or light, which /theme writes', () => {
+    expect(checkSettings({ theme: 'light' })).toEqual({ theme: 'light' });
+    expect(checkSettings({ theme: 'dark' })).toEqual({ theme: 'dark' });
+    expect(() => checkSettings({ theme: 'solarized' })).toThrow('"theme" must be "dark" or "light"');
+  });
+
   test('desktop is the desktop app’s own object: cedia accepts any shape inside it, and only an object', () => {
     const s = { roles: { code: 'deepseek' }, desktop: { theme: 'system', keymap: 'macos', layout: { panes: ['agent', 'review'] } } };
     expect(checkSettings(s)).toEqual(s);

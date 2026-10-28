@@ -819,24 +819,10 @@ export class CediaTui {
           this.say(lines.join('\\n'));
           break;
         }
-        case 'effort': {
-          const lvl = rest[0];
-          const pp = join(cediaHome(), 'settings.json');
-          if (!lvl) {
-            let raw: Record<string, unknown> = {};
-            try { raw = JSON.parse(readFileSync(pp, 'utf8')) as Record<string, unknown>; } catch {}
-            this.say(dim(`effort: ${String(raw.effort ?? '(default)')}`));
-            break;
-          }
-          try {
-            let raw: Record<string, unknown> = {};
-            try { raw = JSON.parse(readFileSync(pp, 'utf8')) as Record<string, unknown>; } catch {}
-            raw.effort = lvl;
-            writeFileSync(pp, JSON.stringify(raw, null, 2) + '\\n');
-            this.say(green(`effort: ${lvl}`));
-          } catch (e) { this.say(red((e as Error).message)); }
+        case 'effort':
+          // settings.json has no effort key, and one there would fail every run.
+          this.say(dim('effort: start a session with --effort <level>'));
           break;
-        }
         case 'branch': {
           try {
             const r = Bun.spawnSync(['git', 'branch', '-a'], { cwd: this.args.cwd });
@@ -867,16 +853,10 @@ export class CediaTui {
         case 'compact':
           this.say(dim('compaction/handoff runs automatically when the context grows long (--handoff-at, --handoff). Use /thread to inspect sessions.'));
           break;
-        case 'fast': {
-          const pp = join(cediaHome(), 'settings.json');
-          let raw: Record<string, unknown> = {};
-          try { raw = JSON.parse(readFileSync(pp, 'utf8')) as Record<string, unknown>; } catch {}
-          const cur = raw.fast === true;
-          raw.fast = !cur;
-          try { writeFileSync(pp, JSON.stringify(raw, null, 2) + '\\n'); this.say(green(`fast mode: ${raw.fast ? 'on' : 'off'}`)); }
-          catch (e) { this.say(red((e as Error).message)); }
+        case 'fast':
+          // Fast mode is a model of its own (a "(fast)" entry in /model), not a setting.
+          this.say(dim('fast mode: pick a "(fast)" model with /model'));
           break;
-        }
         case 'export': {
           if (!this.thread) { this.say(dim('no thread yet')); break; }
           const t = this.store.read(this.thread);

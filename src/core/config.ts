@@ -70,6 +70,8 @@ export type Settings = {
   // levels above it resolve down to it. Flags choose under it, never over. User settings only
   // (or CEDIA_MAX_EFFORT).
   maxEffort?: Effort;
+  // The terminal UI's colors: "dark" (the default) or "light". cedia's run never reads it; /theme writes it.
+  theme?: 'dark' | 'light';
 };
 
 // Every key cedia knows, with the keys allowed inside the objects it reads. A key that is not here is a typo or a
@@ -99,6 +101,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   promptSuggestions: 'any',
   localModels: 'any',
   maxEffort: 'any',
+  theme: 'any',
 };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -110,6 +113,7 @@ export function checkSettings(value: unknown): Settings {
     if (!allowed) throw new Error(`unknown setting "${key}" (known: ${Object.keys(SETTINGS_KEYS).join(', ')})`);
     if (key === 'desktop' && !isObject(inner)) throw new Error('"desktop" must be an object');
     if (key === 'hooks') checkHooks(inner);
+    if (key === 'theme' && inner !== 'dark' && inner !== 'light') throw new Error(`"theme" must be "dark" or "light": ${JSON.stringify(inner)}`);
     if (allowed === 'any') continue;
     if (!isObject(inner)) throw new Error(`"${key}" must be an object`);
     const unknown = Object.keys(inner).find((k) => !allowed.includes(k));
