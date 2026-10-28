@@ -25,6 +25,8 @@ describe('ink transcript rows', () => {
   test('bash shows its output without the exit marker, and a failing exit on the line', () => {
     expect(plain(resultRow('bash', { command: 'node t.js' }, { text: '5\n[exit 0]', exitCode: 0 }, 200, 80))).toEqual(['● Bash  node t.js', '  └ 5']);
     expect(plain(resultRow('bash', { command: 'false' }, { text: '(no output)\n[exit 1]', exitCode: 1 }, 0, 80))[0]).toBe('● Bash  false · exit 1');
+    // The first three lines show, the rest is a count.
+    expect(plain(resultRow('bash', { command: 'seq 5' }, { text: '1\n2\n3\n4\n5\n[exit 0]', exitCode: 0 }, 0, 80))).toEqual(['● Bash  seq 5', '  └ 1', '    2', '    3', '    … +2 lines']);
   });
 
   test('read counts lines; an error shows its first line under the call', () => {

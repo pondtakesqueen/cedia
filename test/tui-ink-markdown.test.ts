@@ -61,4 +61,15 @@ describe('ink markdown lines', () => {
     const { mdPlain } = await import('../src/clients/tui-ink/markdown.tsx');
     expect(mdPlain('use snake_case_name and 2 * 3')).toBe('use snake_case_name and 2 * 3');
   });
+
+  test('code inside bold is code, and the rest stays bold', async () => {
+    const { inline } = await import('../src/clients/tui-ink/markdown.tsx');
+    expect(inline('fix **the `add` bug** now')).toEqual([
+      { text: 'fix ', style: 'text' },
+      { text: 'the ', style: 'bold' },
+      { text: 'add', style: 'code' },
+      { text: ' bug', style: 'bold' },
+      { text: ' now', style: 'text' },
+    ]);
+  });
 });

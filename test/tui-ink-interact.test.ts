@@ -325,4 +325,110 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       h.stop();
     }
   }, 60000);
+  test('the prompt takes Thai and emoji, a held backspace, alt+enter and a bracketed paste', async () => {
+    const h = start();
+    try {
+      await Bun.sleep(500);
+      h.write('สวัสดี 🎉 abc');
+      await Bun.sleep(300);
+      // One chunk of three backspaces, as a held key sends them: each one counts.
+      h.write('\x7f\x7f\x7f');
+      await Bun.sleep(400);
+      h.drain();
+      h.write('\x1b\r');
+      await Bun.sleep(200);
+      h.write('next');
+      await Bun.sleep(400);
+      const typedFrame = h.frame();
+      expect(typedFrame).toContain('› สวัสดี 🎉');
+      expect(typedFrame).not.toContain('abc');
+      expect(typedFrame).toMatch(/│ {3}next/);
+      // A paste with newlines stays in the prompt; it does not submit its first line.
+      h.drain();
+      h.write('\x1b[200~one\rtwo\x1b[201~');
+      await Bun.sleep(400);
+      const pasted = h.frame();
+      expect(pasted).toContain('nextone');
+      expect(pasted).toMatch(/│ {3}two/);
+      expect(pasted).not.toContain('▌');
+      // A long paste shows as a token.
+      h.drain();
+      h.write(`\x1b[200~${Array.from({ length: 30 }, (_, i) => `row ${i}`).join('\n')}\x1b[201~`);
+      await Bun.sleep(400);
+      expect(h.frame()).toContain('[Pasted text #1 +30 lines]');
+    } finally {
+      h.stop();
+    }
+  }, 30000);
+  test('a prompt sent during a turn waits for it, and esc puts it back in the prompt', async () => {
+    const h = start({ script: [{ hang: true }] });
+    try {
+      await Bun.sleep(500);
+      h.write('first');
+      await Bun.sleep(200);
+      h.write('\r');
+      await Bun.sleep(600);
+      h.write('later');
+      await Bun.sleep(200);
+      h.write('\r');
+      await Bun.sleep(400);
+      expect(h.frame()).toContain('⧗ later');
+      h.drain();
+      h.write('\x1b');
+      for (let i = 0; i < 20 && !h.frame().includes('› later'); i++) await Bun.sleep(200);
+      expect(h.frame()).toContain('› later');
+      // One more key paints a fresh frame: the queue line is gone from it.
+      h.drain();
+      h.write('!');
+      await Bun.sleep(400);
+      const back = h.frame();
+      expect(back).toContain('› later!');
+      expect(back).not.toContain('⧗ later');
+    } finally {
+      h.stop();
+    }
+  }, 30000);
+
+  test('ctrl+c on an empty prompt asks for a second press before leaving', async () => {
+    const h = start();
+    try {
+      await Bun.sleep(500);
+      h.drain();
+      h.write('\x03');
+      await Bun.sleep(300);
+      expect(h.frame()).toContain('Press Ctrl+C again to exit');
+    } finally {
+      h.stop();
+    }
+  }, 30000);
+  test('a waiting prompt runs when the turn ends and leaves the draft being typed alone', async () => {
+    const h = start({
+      script: [
+        { blocks: [{ type: 'tool_use', id: 's1', name: 'sleep', input: { duration_ms: 1500 } }] },
+        { blocks: [{ type: 'text', text: 'answered' }] },
+      ],
+    });
+    try {
+      await Bun.sleep(500);
+      h.write('first');
+      await Bun.sleep(200);
+      h.write('\r');
+      await Bun.sleep(400);
+      h.write('second');
+      await Bun.sleep(200);
+      h.write('\r');
+      await Bun.sleep(200);
+      h.write('draft');
+      // Each turn reads the script afresh, so the second one sleeps and answers too.
+      const secondDone = () => /▌ second[\s\S]*✓ Done/.test(h.frame());
+      for (let i = 0; i < 40 && !secondDone(); i++) await Bun.sleep(250);
+      expect(secondDone()).toBe(true);
+      h.drain();
+      h.write('!');
+      await Bun.sleep(400);
+      expect(h.frame()).toContain('› draft!');
+    } finally {
+      h.stop();
+    }
+  }, 30000);
 });

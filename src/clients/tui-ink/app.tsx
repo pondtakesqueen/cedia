@@ -4,9 +4,10 @@ import { selectedPrefix, useCediaScreenReader } from './a11y.ts';
 import { readPicks, savePick, pickBoost } from './picks.ts';
 import { sinceLabel } from './when.ts';
 import { bindingSummary } from './keybindings/summary.ts';
-import { buildAutoItems, highlightSpans, paintRuns, truncateDescription, truncateLongText, estimateLines, offsetAt, type AutoItem } from './autocomplete.ts';
+import { buildAutoItems, menuStart, highlightSpans, paintRuns, truncateDescription, truncateLongText, estimateLines, offsetAt, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
+import { collapses, expandPastes, pasteToken } from './line-edit.ts';
 import Markdown, { mdPlain, spanProps } from './markdown.tsx';
 import { deniedRow, doneRow, intentRow, resultRow, rowProps, rowText, thinkingRow, type RowLine } from './rows.ts';
 import { inkTheme, type ThemeTokens } from './theme-tokens.ts';
@@ -142,6 +143,16 @@ const shortCwd = (cwd: string): string => {
   } catch { return cwd; }
 };
 
+/** A path that fits in `width` cells: its last parts stay, the front gives way to "…". */
+export function fitPath(path: string, width: number): string {
+  if (path.length <= width) return path;
+  const parts = path.split('/');
+  let out = parts.pop() ?? '';
+  while (parts.length && parts[parts.length - 1]!.length + out.length + 3 <= width) out = `${parts.pop()}/${out}`;
+  const fitted = `…/${out}`;
+  return fitted.length <= width ? fitted : `…${path.slice(-(Math.max(1, width - 1)))}`;
+}
+
 const themedColorFor = (T: ThemeTokens, role: Msg['role']): string | undefined =>
   role === 'user' ? undefined : role === 'assistant' ? T.text : T.textMuted;
 
@@ -275,6 +286,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const recycleSlotsRef = useRef<RecycleSlot[]>([]);
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
   const historyRef = useRef<string[]>([]);
+  const queueRef = useRef<{ text: string; at: number }[]>([]);
+  const [queued, setQueued] = useState<string[]>([]);
+  const submitRef = useRef<(text: string, planWhen?: 'always' | 'never', queued?: boolean) => Promise<void>>(async () => {});
+  // Long pastes by their token in the prompt (line-edit.ts); kept for the session, so a recalled prompt still expands.
+  const pastesRef = useRef(new Map<string, string>());
+  const onPaste = useCallback((text: string) => {
+    if (!collapses(text)) return text;
+    const token = pasteToken(pastesRef.current.size + 1, text);
+    pastesRef.current.set(token, text);
+    return token;
+  }, []);
   const histPos = useRef(-1);
   const [historySearch, setHistorySearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
   const [transcriptSearch, setTranscriptSearch] = useState<{ open: boolean; query: string; selected: number }>({ open: false, query: '', selected: 0 });
@@ -346,7 +368,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       delete toolStartByCallRef.current[e.callId];
       delete toolNameByCallRef.current[e.callId];
       setMessages((prev) => {
-        const i = prev.findIndex((m) => m.callId === e.callId);
+        // The newest row of that call: a scripted model may reuse an id from an earlier turn.
+        const i = prev.findLastIndex((m) => m.callId === e.callId);
         if (i < 0) return [...prev, row];
         const next = prev.slice();
         next[i] = row;
@@ -444,7 +467,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         ];
         const byName = new Map(INK_COMMANDS.map((c) => [c.name, c.description]));
         say(groups.map(([g, names]) => `${g}: ${names.map((n) => `${n} — ${byName.get(n.slice(1)) ?? ''}`).join(' · ')}`).join('\n'));
-        say('keys: Esc stops a turn · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Ctrl+G external editor · Tab completes · Shift+Tab permission · Meta+P model · Meta+O fast · Meta+T thinking · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · \\+Enter newline' + (bindingHints ? ` · custom keys: ${bindingHints}` : ''));
+        say('keys: Esc stops a turn · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Ctrl+G external editor · Tab completes · Shift+Tab permission · Meta+P model · Meta+O fast · Meta+T thinking · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · Alt+Enter or \\+Enter newline · Ctrl+A/E/U/K/W edit the line' + (bindingHints ? ` · custom keys: ${bindingHints}` : ''));
         return;
       }
       case 'historyUp':
@@ -975,10 +998,21 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     }
   }, [args, messages, running, store, thread, exit, spent, context, goal, transcriptExpanded, openDialog, model, permission, effort, switchThread, vimMode]);
 
-  const submit = useCallback(async (text: string, planWhen?: 'always' | 'never') => {
+  // queued: a prompt that waited for the last turn; what the person is typing now stays in the prompt.
+  const submit = useCallback(async (text: string, planWhen?: 'always' | 'never', queued = false) => {
     if (!text.trim()) return;
+    // A prompt sent while a turn runs waits its turn (like cc): it runs when this one ends, and Esc puts it back
+    // in the prompt. The same text twice in one tick is the double fire below, not two prompts.
+    if (running) {
+      const q = queueRef.current;
+      if (q.at(-1)?.text === text && Date.now() - (q.at(-1)?.at ?? 0) < 100) return;
+      q.push({ text, at: Date.now() });
+      setQueued(q.map((x) => x.text));
+      setInput('');
+      inputRef.current = '';
+      return;
+    }
     if (busyRef.current) return; // same-tick double fire (VimInput + keybinding both submit Enter)
-    if (running) { push({ role: 'system', text: 'a turn is running: wait for it, or stop it with Esc' }); return; }
     if (Date.now() - lastActivityRef.current > 5 * 60 * 1000) {
       push({ role: 'system', text: 'resumed after idle' });
     }
@@ -993,13 +1027,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       setInput('');
       return;
     }
-    const trimmedText = text.trim();
+    const clearDraft = () => { if (!queued) { setInput(''); inputRef.current = ''; } };
+    // A long paste stands in the prompt as a token; the model and commands get its text.
+    const trimmedText = expandPastes(text, pastesRef.current).trim();
     if (pendingRef.current) {
       const p = pendingRef.current;
       pendingRef.current = undefined;
       const stop = new AbortController();
-      setInput('');
-      inputRef.current = '';
+      clearDraft();
       if (/^(y|yes)$/i.test(trimmedText)) { void p.yes(stop.signal); return; }
       push({ role: 'system', text: `not done: ${p.what}` });
       if (/^(n|no)$/i.test(trimmedText)) return;
@@ -1007,14 +1042,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     }
     if (text.trim().startsWith('/')) {
       push({ role: 'user', text });
-      setInput('');
-      inputRef.current = '';
+      clearDraft();
       handleCommand(trimmedText.slice(1));
       return;
     }
     busyRef.current = true;
     setMessages((m) => [...m, { role: 'user', text }]);
-    setInput('');
+    clearDraft();
     historyRef.current.push(text);
     histPos.current = -1;
     setRunning(true);
@@ -1074,7 +1108,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     turnStartRef.current = turnStart;
     try {
       const result = await runHeadless(
-        { ...args, model: model ?? args.model, permission: permission ?? args.permission, ...(effort ? { effort } : {}), cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', note: (t: string) => { if (t.trim()) push({ role: 'system', text: t.trim(), dim: true }); }, ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
+        { ...args, model: model ?? args.model, permission: permission ?? args.permission, ...(effort ? { effort } : {}), cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: expandPastes(text, pastesRef.current), outputFormat: 'stream-json', note: (t: string) => { if (t.trim()) push({ role: 'system', text: t.trim(), dim: true }); }, ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
         handleChunk,
       );
       setThread(result.thread ?? thread);
@@ -1109,8 +1143,23 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         lastCostThresholdRef.current = Math.floor(newSpent);
       }
       lastActivityRef.current = Date.now();
+      const waiting = queueRef.current.map((x) => x.text);
+      queueRef.current = [];
+      setQueued([]);
+      if (waiting.length && stop.signal.aborted) {
+        const back = [...waiting, inputRef.current].filter((t) => t.trim()).join('\n');
+        setInput(back);
+        inputRef.current = back;
+      } else if (waiting.length) {
+        const [next, ...rest] = waiting;
+        queueRef.current = rest.map((t) => ({ text: t, at: 0 }));
+        setQueued(rest);
+        // After this render lets go of running, so the next prompt starts a turn of its own.
+        setTimeout(() => { void submitRef.current(next!, undefined, true); }, 0);
+      }
     }
   }, [args, running, thread, handleCommand, goal, picker, closeDialog, permission, model, effort, effModel]);
+  submitRef.current = submit;
 
 
 
@@ -1384,11 +1433,23 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       setAutoDismissed(true);
     }
   };
+  // Leaving takes the key twice within two seconds (like cc), so a stray ctrl+c on an empty prompt costs nothing.
+  const exitArmedRef = useRef<{ key: string; at: number } | null>(null);
+  const [exitHint, setExitHint] = useState<string | null>(null);
+  const exitOrArm = (keyName: string) => {
+    const armed = exitArmedRef.current;
+    if (armed && armed.key === keyName && Date.now() - armed.at < 2000) { exit(); return; }
+    exitArmedRef.current = { key: keyName, at: Date.now() };
+    setExitHint(`Press ${keyName} again to exit`);
+    setTimeout(() => {
+      if (exitArmedRef.current?.key === keyName && Date.now() - exitArmedRef.current.at >= 2000) { exitArmedRef.current = null; setExitHint(null); }
+    }, 2050);
+  };
   const applyCancel = (step: ReturnType<typeof cancelStep>) => {
     if (step === 'abort-turn') { stopRef.current?.abort(); setActivity('stopping…'); return; }
     if (step === 'close-overlay') { closeOverlay(ctx); return; }
     if (step === 'clear-input') { setInput(''); inputRef.current = ''; return; }
-    exit();
+    exitOrArm('Ctrl+C');
   };
   chordDispatchRef.current = (command) => {
     if (command === 'scrollTop') { setScrollOffset(maxScrollOffset); return; }
@@ -1442,8 +1503,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (mentionOpen) {
         const sel = Math.min(mentionSelected, mentionItems.length - 1);
         if (autoCmd === 'cancel') { setMentionDismissed(true); return; }
-        if (autoCmd === 'selectUp') { setMentionSelected((s) => Math.max(0, s - 1)); return; }
-        if (autoCmd === 'selectDown') { setMentionSelected((s) => Math.min(mentionItems.length - 1, s + 1)); return; }
+        if (autoCmd === 'selectUp') { setMentionSelected((s) => (s <= 0 ? mentionItems.length - 1 : s - 1)); return; }
+        if (autoCmd === 'selectDown') { setMentionSelected((s) => (s >= mentionItems.length - 1 ? 0 : s + 1)); return; }
         if (autoCmd === 'accept') {
           const item = mentionItems[sel];
           if (item) {
@@ -1459,8 +1520,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (autoOpen) {
         const sel = Math.min(autoSelected, autoItems.length - 1);
         if (autoCmd === 'cancel') { setAutoDismissed(true); return; }
-        if (autoCmd === 'selectUp') { setAutoSelected((s) => Math.max(0, s - 1)); return; }
-        if (autoCmd === 'selectDown') { setAutoSelected((s) => Math.min(autoItems.length - 1, s + 1)); return; }
+        if (autoCmd === 'selectUp') { setAutoSelected((s) => (s <= 0 ? autoItems.length - 1 : s - 1)); return; }
+        if (autoCmd === 'selectDown') { setAutoSelected((s) => (s >= autoItems.length - 1 ? 0 : s + 1)); return; }
         if (autoCmd === 'accept') {
           const item = autoItems[sel];
           if (item) { notePick(item.value); setInput(`/${item.value} `); setAutoDismissed(true); }
@@ -1678,7 +1739,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       return;
     }
     if (key.ctrl && input === 'd' && !running && inputRef.current.length === 0) {
-      exit();
+      exitOrArm('Ctrl+D');
       return;
     }
     if (key.tab && key.shift && !running) {
@@ -1693,6 +1754,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       return;
     }
     if (key.tab && suggestion) { setInput(suggestion); setSuggestion(null); return; }
+    // alt+enter / shift+enter put a newline in the prompt (vim-input.tsx); they never submit.
+    if (key.return && (key.meta || key.shift)) return;
     if (!running) {
       const id = inkKeyId(input, key);
       const bindings = resolveBindings(loadedKeybindings);
@@ -1797,12 +1860,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <Text color={screenReader ? undefined : T.primary} bold={!screenReader}>{screenReader ? 'cedia' : '◆ cedia'}</Text>
             <Text color={screenReader ? undefined : T.textMuted}>  {versionInfo().version}</Text>
           </Text>
-          <Text>
+          <Text wrap="truncate">
             <Text>  {effModel?.label ?? model ?? 'auto'}</Text>
-            <Text color={screenReader ? undefined : T.textMuted}> · </Text>
-            <Text>{shortCwd(args.cwd)}</Text>
             {branch ? <Text color={screenReader ? undefined : T.thinking}>{screenReader ? ` · branch ${branch}` : ` · ⎇ ${branch}`}</Text> : null}
           </Text>
+          <Text color={screenReader ? undefined : T.textMuted}>  {fitPath(shortCwd(args.cwd), Math.max(10, columns - 4))}</Text>
           <Text> </Text>
           <Text wrap="truncate">
             {([['/help', 'commands'], ['ctrl+p', 'palette'], ['esc', 'stop a turn'], ['alt+t', 'thinking']] as const).map(([k, v], i) => (
@@ -1817,7 +1879,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         <Box paddingX={1} flexShrink={0}>
           <Text wrap="truncate" color={screenReader ? undefined : T.textMuted}>
             <Text color={screenReader ? undefined : T.primary}>{screenReader ? '' : '◆ '}</Text>
-            cedia · {effModel?.label ?? model ?? 'auto'} · {shortCwd(args.cwd)}{branch ? (screenReader ? ` · branch ${branch}` : ` · ⎇ ${branch}`) : ''}
+            {(() => {
+              const lead = `cedia · ${effModel?.label ?? model ?? 'auto'}${branch ? (screenReader ? ` · branch ${branch}` : ` · ⎇ ${branch}`) : ''}`;
+              // The path goes last and gives way first: it takes what the line has left.
+              return `${lead} · ${fitPath(shortCwd(args.cwd), Math.max(10, columns - lead.length - 8))}`;
+            })()}
           </Text>
         </Box>
       )}
@@ -1918,12 +1984,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           box by default, which squeezed rows into each other). */}
       <Box flexDirection="column" flexShrink={0}>
         {trustOpen ? (
-          <Box flexDirection="column" paddingX={1}>
-            <Text color={screenReader ? undefined : T.warning} bold={!screenReader}>Accessing workspace:</Text>
-            <Text>{shortCwd(args.cwd)}</Text>
+          <Box flexDirection="column" paddingX={1} marginX={screenReader ? 0 : 1} borderStyle={screenReader ? undefined : 'round'} borderColor={screenReader ? undefined : T.warning}>
+            <Text color={screenReader ? undefined : T.warning} bold={!screenReader}>Do you trust the files in this folder?</Text>
+            <Text bold={!screenReader}>{fitPath(shortCwd(args.cwd), Math.max(10, columns - 8))}</Text>
+            <Text> </Text>
             <Text wrap="wrap">Quick safety check: is this a project you created or one you trust? If not, take a moment to review what is in this folder first.</Text>
             <Text wrap="wrap">cedia will be able to read, edit, and execute files here.</Text>
-            <Text dimColor={!screenReader}>Security guide: least privilege · deny-list enforced · snapshots can undo edits</Text>
+            <Text dimColor={!screenReader} wrap="wrap">Security guide: least privilege · deny-list enforced · snapshots can undo edits</Text>
+            <Text> </Text>
             {(["No, exit", "Yes, I trust this folder"] as const).map((label, i) => (
               <Text key={label} color={screenReader ? undefined : (i === trustSelected ? T.primary : undefined)}>{selectedPrefix(i === trustSelected, screenReader)}{label}</Text>
             ))}
@@ -2132,10 +2200,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <Box flexDirection="column" paddingX={1}>
             {(() => {
               const maxRows = Math.max(3, Math.min(7, overlayBudget));
-              const shown = mentionItems.slice(0, maxRows);
+              const selAt = Math.min(mentionSelected, mentionItems.length - 1);
+              const first = menuStart(selAt, maxRows, mentionItems.length);
+              const shown = mentionItems.slice(first, first + maxRows);
               return (<>
               {shown.map((it, i) => {
-              const sel = i === Math.min(mentionSelected, mentionItems.length - 1);
+              const sel = first + i === selAt;
               return (
                 <Text key={`${it.name}::${i}`} wrap="truncate">
                   <Text color={screenReader ? undefined : (sel ? T.primary : undefined)}>{selectedPrefix(sel, screenReader)}</Text>
@@ -2146,7 +2216,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 </Text>
               );
               })}
-              {mentionItems.length > maxRows ? <Text dimColor={!screenReader}>  {mentionItems.length - maxRows} more…</Text> : null}
+              {mentionItems.length > maxRows ? <Text dimColor={!screenReader}>  {first + 1}–{first + shown.length} of {mentionItems.length}</Text> : null}
               </>);
             })()}
           </Box>
@@ -2155,11 +2225,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <Box flexDirection="column" paddingX={1} marginX={screenReader ? 0 : 1} borderStyle={screenReader ? undefined : 'round'} borderColor={T.border}>
             {(() => {
               const maxRows = Math.max(3, Math.min(7, overlayBudget));
-              const shown = autoItems.slice(0, maxRows);
+              const selAt = Math.min(autoSelected, autoItems.length - 1);
+              const first = menuStart(selAt, maxRows, autoItems.length);
+              const shown = autoItems.slice(first, first + maxRows);
               const nameWidth = Math.min(18, Math.max(...shown.map((it) => it.name.length)));
               return (<>
               {shown.map((it, i) => {
-              const sel = i === Math.min(autoSelected, autoItems.length - 1);
+              const sel = first + i === selAt;
               const maxDesc = Math.max(10, columns - nameWidth - 12);
               const plain = it.name.startsWith('/') ? it.name.slice(1) : it.name;
               return (
@@ -2174,18 +2246,27 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               );
             })}
             <Box justifyContent="flex-end">
-              <Text color={screenReader ? undefined : T.textFaint}>{Math.min(maxRows, autoItems.length)} of {autoItems.length} · ↑↓ · tab · ⏎</Text>
+              <Text color={screenReader ? undefined : T.textFaint}>{autoItems.length > shown.length ? `${first + 1}–${first + shown.length} of ${autoItems.length} · ` : ''}↑↓ · tab · ⏎</Text>
             </Box>
               </>);
             })()}
           </Box>
         ) : null}
+        {queued.map((q, i) => (
+          <Box key={`queued-${i}`} paddingX={2}>
+            <Text wrap="truncate" color={screenReader ? undefined : T.textMuted}>
+              {screenReader ? 'queued: ' : '⧗ '}{q.replace(/\s+/g, ' ')}
+              {i === 0 && !screenReader ? <Text color={T.textFaint}>  runs when this turn ends · esc puts it back</Text> : null}
+            </Text>
+          </Box>
+        ))}
         {notice ? (
           <Box justifyContent="flex-end" paddingX={1}>
             <Text color={screenReader ? undefined : T.warning}>{notice}</Text>
           </Box>
         ) : null}
-        {(() => {
+        {/* The trust question owns the screen until it is answered (like cc): no prompt under it. */}
+        {trustOpen ? null : (() => {
           const mode = permission ?? args.permission ?? 'auto';
           const modeColor = mode === 'plan' ? T.thinking : mode === 'read-only' ? T.textMuted : T.primary;
           // The box says what the prompt will do: brand while a turn runs, violet in plan mode, amber in vim normal.
@@ -2195,7 +2276,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               {/* A short terminal (under 16 rows) keeps the prompt flat: the frame's two rows go to the transcript. */}
               <Box borderStyle={screenReader || rows < 16 ? undefined : 'round'} borderColor={border} paddingX={1} marginX={screenReader || rows < 16 ? 0 : 1}>
                 <Text color={screenReader ? undefined : modeColor}>{screenReader ? 'prompt: ' : '› '}</Text>
-                <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={gate.captured} suppressSubmit={gate.suppressSubmit} />
+                <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={gate.captured} suppressSubmit={gate.suppressSubmit} onPaste={onPaste} />
               </Box>
               <StatusBar
                 T={T}
@@ -2212,6 +2293,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 running={running}
                 elapsedMs={running ? Date.now() - turnStartRef.current : 0}
                 spinner={SPINNER_FRAMES[spin % SPINNER_FRAMES.length]}
+                hint={exitHint ?? undefined}
               />
             </>
           );
