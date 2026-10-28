@@ -372,13 +372,13 @@ export async function main(argv: string[]): Promise<number> {
       return 2;
     }
     const tuiChoice = values.tui ?? process.env.CEDIA_TUI ?? 'ink';
-    if (tuiChoice === 'ink') {
-      const { runInkTui } = await import('./clients/tui-ink/index.ts');
-      return await runInkTui(base as TuiArgs);
+    if (tuiChoice !== 'ink') {
+      console.error(`cedia: unknown TUI "${tuiChoice}": the pi-tui client was removed; ink is the only one`);
+      return 2;
     }
     // Loaded only here, so a headless run never pays for the terminal library.
-    const { runTui } = await import('./clients/tui/main.ts');
-    return runTui(base);
+    const { runInkTui } = await import('./clients/tui-ink/index.ts');
+    return await runInkTui(base as TuiArgs);
   }
   if (!prompt && !process.stdin.isTTY) prompt = (await new Response(Bun.stdin.stream()).text()).trim();
   if (!prompt) {
