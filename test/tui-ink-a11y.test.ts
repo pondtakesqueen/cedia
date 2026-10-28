@@ -4,6 +4,7 @@ import { render } from 'ink';
 import { PassThrough } from 'node:stream';
 import { envScreenReader, selectedPrefix } from '../src/clients/tui-ink/a11y.ts';
 import { DISMISS_NOTE, PermissionDialog } from '../src/clients/tui-ink/permission-dialogs.tsx';
+import { INK_THEMES } from '../src/clients/tui-ink/theme-tokens.ts';
 import { StatusBar } from '../src/clients/tui-ink/status-bar.tsx';
 import { inkRenderOptions } from '../src/clients/tui-ink/render-options.ts';
 
@@ -95,12 +96,15 @@ describe('ink a11y', () => {
     stdout.rows = 4;
     stdout.on('data', (d: Buffer) => { out += d.toString(); });
     const { unmount } = render(React.createElement(StatusBar, {
-      cwd: '/tmp/proj',
+      T: INK_THEMES.dark,
+      mode: 'workspace',
+      modeColor: INK_THEMES.dark.primary,
+      model: 'Sonnet 5.5',
+      effort: 'high',
       tokens: 1200,
       windowSize: 200_000,
       spend: 0.12,
       vimMode: 'normal',
-      hint: 'ctrl+p commands',
     }), {
       stdout,
       exitOnCtrlC: false,
@@ -111,9 +115,12 @@ describe('ink a11y', () => {
     await Bun.sleep(150);
     unmount();
     const text = strip(out);
-    expect(text).toContain('/tmp/proj');
-    expect(text).toContain('vim:normal');
-    expect(text).toContain('ctrl+p commands');
+    expect(text).toContain('mode workspace');
+    expect(text).toContain('effort high');
+    expect(text).toContain('vim normal');
+    expect(text).toContain('context 1%');
+    expect(text).toContain('$0.12');
+    expect(text).not.toMatch(/[▰▱◐]/);
     expect(text).not.toMatch(/[┌┐└┘│─]/);
   });
 });

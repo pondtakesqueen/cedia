@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { INK_THEMES, resolveThemeName, inkTheme } from '../src/clients/tui-ink/theme-tokens.ts';
+import { INK_THEMES, resolveThemeName, inkTheme, tokensFor, truecolor } from '../src/clients/tui-ink/theme-tokens.ts';
 
 describe('ink theme tokens', () => {
   test('both themes define the full token set', () => {
@@ -27,5 +27,14 @@ describe('ink theme tokens', () => {
   test('inkTheme reads settings.json or falls back', () => {
     const t = inkTheme('/nonexistent-home-xyz');
     expect(t.name).toBe('dark');
+  });
+
+  test('without truecolor the bands take exact 256-color entries, so add and remove stay apart', () => {
+    expect(truecolor({ COLORTERM: 'truecolor' })).toBe(true);
+    expect(truecolor({ TERM: 'xterm-256color', TERM_PROGRAM: 'Apple_Terminal' })).toBe(false);
+    const t = tokensFor('dark', { TERM: 'xterm-256color' });
+    expect(t.diffAddedBg).not.toBe(t.diffRemovedBg);
+    expect(t.diffAddedBg).toBe('#003300');
+    expect(tokensFor('dark', { COLORTERM: 'truecolor' })).toEqual(INK_THEMES.dark);
   });
 });

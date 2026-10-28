@@ -235,8 +235,8 @@ export function PermissionDialog(props: PermissionDialogProps): React.ReactEleme
   const blocks = noticeBlocks(tool, input);
   return React.createElement(
     Box,
-    { flexDirection: 'column', borderStyle: screenReader ? undefined : 'single', borderColor: screenReader ? undefined : T.borderActive, paddingX: 1 },
-    React.createElement(Text, { bold: !screenReader, color: screenReader ? undefined : T.accent }, `${label} denied`),
+    { flexDirection: 'column', borderStyle: screenReader ? undefined : 'round', borderColor: screenReader ? undefined : T.error, paddingX: 1, marginX: screenReader ? 0 : 1 },
+    React.createElement(Text, { bold: !screenReader, color: screenReader ? undefined : T.error }, `${screenReader ? '' : '✗ '}${label} denied`),
     ...blocks.map((block, i) => renderBlock(block, i, screenReader, T)),
     reason ? React.createElement(Text, { color: screenReader ? undefined : T.error }, reason) : null,
     rule ? React.createElement(Text, { dimColor: !screenReader }, `rule: ${rule}`) : null,

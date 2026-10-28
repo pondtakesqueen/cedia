@@ -4,9 +4,10 @@ import { selectedPrefix, useCediaScreenReader } from './a11y.ts';
 import { buildAutoItems, highlightSpans, paintRuns, truncateDescription, truncateLongText, estimateLines, offsetAt, loadFrecency, recordPick, frecencyBonus, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
-import Markdown from './markdown.tsx';
+import Markdown, { mdPlain, spanProps } from './markdown.tsx';
+import { deniedRow, doneRow, intentRow, resultRow, rowProps, rowText, thinkingRow, type RowLine } from './rows.ts';
 import { inkTheme, type ThemeTokens } from './theme-tokens.ts';
-import { PermissionDialog, toolLabel } from './permission-dialogs.tsx';
+import { PermissionDialog } from './permission-dialogs.tsx';
 import { askedBannerText } from './asked.ts';
 import { StatusBar } from './status-bar.tsx';
 import { runHeadless } from '../headless/main.ts';
@@ -55,7 +56,19 @@ import { tmpdir } from 'node:os';
 import { loadProjectUsage } from './usage-summary.ts';
 import type { VimMode } from './vim-input.tsx';
 
-type Msg = { role: 'user' | 'assistant' | 'tool' | 'system'; text: string; status?: 'running' | 'success' | 'error'; dim?: boolean; tone?: 'red' };
+// A row of the transcript. text is what shows (search, selection and the row budget count it); a row with lines
+// paints those styled spans instead, and they join to the same text. A thinking row keeps its full text in
+// thinking and gets its text and lines when it is shown, collapsed or expanded.
+type Msg = {
+  role: 'user' | 'assistant' | 'tool' | 'system';
+  text: string;
+  status?: 'running' | 'success' | 'error';
+  dim?: boolean;
+  tone?: 'red' | 'accent';
+  lines?: RowLine[];
+  callId?: string;
+  thinking?: { text: string; ms?: number };
+};
 
 const INK_COMMANDS: { name: string; description: string }[] = [
   { name: 'help', description: 'these commands and keys' },
@@ -128,7 +141,9 @@ const shortCwd = (cwd: string): string => {
 };
 
 const themedColorFor = (T: ThemeTokens, role: Msg['role']): string | undefined =>
-  role === 'user' ? undefined : role === 'assistant' ? T.text : role === 'tool' ? T.textMuted : T.warning;
+  role === 'user' ? undefined : role === 'assistant' ? T.text : T.textMuted;
+
+const rowMsg = (lines: RowLine[], extra: Partial<Msg> = {}): Msg => ({ role: 'tool', text: rowText(lines), lines, ...extra });
 
 function paintedWidth(role: Msg['role'] | undefined, columns: number, screenReader: boolean): number {
   const bar = role === 'user' && !screenReader ? 2 : 0;
@@ -237,6 +252,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     } catch { return null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model]);
+  // The branch for the header; read again after each turn, which may have switched it.
+  const branch = React.useMemo(() => {
+    try { return currentBranch(args.cwd); } catch { return undefined; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [args.cwd, running]);
+  const turnStartRef = useRef(0);
   const stopRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
   const pendingRef = useRef<{ what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined>(undefined);
@@ -275,7 +296,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   }, []);
   const [suggestion, setSuggestion] = useState<string | null>(null);
   const [thinkingText, setThinkingText] = useState('');
-  const [showThinking, setShowThinking] = useState(true);
+  // Thinking shows as one line ("∴ Thought for 2.1s"); alt+t expands every thinking row.
+  const [showThinking, setShowThinking] = useState(false);
   const [spin, setSpin] = useState(0);
   useEffect(() => {
     if (!running) return;
@@ -294,6 +316,48 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
 
   const push = (m: Msg) => setMessages((prev) => [...prev, m]);
+  const thinkingStartRef = useRef<number | undefined>(undefined);
+  // What the running turn did, for the line that ends it.
+  const turnRef = useRef<{ tools: number; files: Set<string> }>({ tools: 0, files: new Set() });
+  const rowWidth = () => Math.max(20, columnsRef.current - 4);
+  // One row per tool call: it appears running at the call's intent and becomes its result in place.
+  const applyToolEvent = (e: SessionEvent) => {
+    if (e.kind === 'assistant') {
+      // The reply names every call's input, so a call denied before its intent still shows what it was.
+      for (const b of e.blocks) if (b.type === 'tool_use') toolInputByCallRef.current[b.callId ?? b.id] = b.input;
+    } else if (e.kind === 'tool_intent') {
+      toolInputByCallRef.current[e.callId] = e.input;
+      toolStartByCallRef.current[e.callId] = Date.now();
+      toolNameByCallRef.current[e.callId] = e.tool;
+      turnRef.current.tools += 1;
+      push(rowMsg(intentRow(e.tool, e.input, rowWidth()), { status: 'running', callId: e.callId }));
+      setActivity(`running ${e.tool}`);
+    } else if (e.kind === 'tool_result') {
+      const tool = toolNameByCallRef.current[e.callId];
+      // A denied or unstarted call has no intent: its denial row (if any) already says what happened.
+      if (tool === undefined) return;
+      const started = toolStartByCallRef.current[e.callId];
+      const row = rowMsg(
+        resultRow(tool, toolInputByCallRef.current[e.callId], e.output, started !== undefined ? Date.now() - started : undefined, rowWidth()),
+        { status: e.output.isError ? 'error' : 'success', callId: e.callId },
+      );
+      delete toolStartByCallRef.current[e.callId];
+      delete toolNameByCallRef.current[e.callId];
+      setMessages((prev) => {
+        const i = prev.findIndex((m) => m.callId === e.callId);
+        if (i < 0) return [...prev, row];
+        const next = prev.slice();
+        next[i] = row;
+        return next;
+      });
+    } else if (e.kind === 'snapshot') {
+      for (const f of e.changed) turnRef.current.files.add(f);
+    } else if (e.kind === 'permission' && e.decision === 'deny') {
+      const input = toolInputByCallRef.current[e.callId];
+      setPermissionDialog({ tool: e.tool, input, reason: e.reason, rule: e.rule });
+      push(rowMsg(deniedRow(e.tool, input, e.rule, e.reason, rowWidth()), { status: 'error', callId: e.callId }));
+    }
+  };
   const [notice, setNotice] = useState<string | null>(null);
   const keyHintLabels: Record<string, string> = {
     cancel: 'cancel/close', submit: 'send', historyUp: 'older input', historyDown: 'newer input',
@@ -576,15 +640,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           const log = SessionLog.create({ id, path: sessionPath(args.cwd, id) });
           log.listeners.push((e) => {
             if (e.kind === 'assistant') for (const b of (e as { blocks?: { type: string; text?: string }[] }).blocks ?? []) if (b.type === 'text' && b.text?.trim()) push({ role: 'assistant', text: (b.text as string) });
-            if (e.kind === 'tool_intent' || e.kind === 'tool_result' || e.kind === 'permission') {
-              // mirror pi-tui onEvent minimally
-              if (e.kind === 'tool_intent') push({ role: 'tool', text: `● ${(e as { tool: string }).tool} running`, status: 'running' });
-              if (e.kind === 'tool_result') push({ role: 'tool', text: `  ⎿ ${(e as { output: { text: string } }).output.text.split('\\n')[0]?.slice(0, 120) ?? ''}`, status: (e as { output: { isError?: boolean } }).output.isError ? 'error' : 'success' });
-              if (e.kind === 'permission' && (e as { decision: string }).decision === 'deny') {
-                setPermissionDialog({ tool: (e as { tool: string }).tool, input: undefined, reason: (e as { reason?: string }).reason, rule: (e as { rule?: string }).rule });
-                push({ role: 'system', text: `✗ ${toolLabel((e as { tool: string }).tool)} denied by ${(e as { rule?: string }).rule ?? ''}${(e as { reason?: string }).reason ? `: ${(e as { reason?: string }).reason}` : ''}` });
-              }
-            }
+            if (e.kind === 'tool_intent' || e.kind === 'tool_result' || e.kind === 'permission') applyToolEvent(e);
             // no requestRender in ink; state update triggers render
           });
           const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(require('node:fs').readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
@@ -991,6 +1047,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     setActivity('starting');
     setThinkingText('');
     thinkingRef.current = '';
+    turnRef.current = { tools: 0, files: new Set() };
     let buffer = '';
     const handleChunk = (chunk: string) => {
       buffer += chunk;
@@ -1014,6 +1071,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               setActivity('writing');
             } else if (e.type === 'thinking_start') {
               setActivity('thinking');
+              thinkingStartRef.current = Date.now();
               thinkingRef.current = '';
               setThinkingText('');
             } else if (e.type === 'thinking_delta') {
@@ -1023,36 +1081,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               const t = thinkingRef.current.trim();
               thinkingRef.current = '';
               setThinkingText('');
-              if (t) push({ role: 'system', text: t, dim: true });
+              const began = thinkingStartRef.current;
+              thinkingStartRef.current = undefined;
+              if (t) push({ role: 'system', text: t, thinking: { text: t, ...(began !== undefined ? { ms: Date.now() - began } : {}) } });
             }
           } else if (m.type === 'event') {
             const e = m.event as SessionEvent;
-            if (e.kind === 'tool_intent') {
-              toolInputByCallRef.current[e.callId] = e.input;
-              toolStartByCallRef.current[e.callId] = Date.now();
-              toolNameByCallRef.current[e.callId] = e.tool;
-              setMessages((prev) => [...prev, { role: 'tool', text: `● ${e.tool} ${String(e.input?.command ?? e.input?.path ?? '').slice(0, 80)}`, status: 'running' }]);
-              setActivity(`running ${e.tool}`);
-            }
-            if (e.kind === 'tool_result') {
-              const lines = e.output.text.split('\n');
-              const first = lines.find((l) => l.trim()) ?? '';
-              const exit = e.output.exitCode !== undefined ? ` exit=${e.output.exitCode}` : '';
-              const started = toolStartByCallRef.current[e.callId];
-              const took = started !== undefined ? ` · ${((Date.now() - started) / 1000).toFixed(1)}s` : '';
-              delete toolStartByCallRef.current[e.callId];
-              const toolName = toolNameByCallRef.current[e.callId] ?? '';
-              delete toolNameByCallRef.current[e.callId];
-              const looksDiff = /^(edit|write|filewrite|sed)$/i.test(toolName) && lines.some((l, i) => i > 0 && /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
-              const body = looksDiff ? lines.slice(0, 40).join('\n').slice(0, 1500) : `${first.slice(0, 120)}`;
-              setMessages((prev) => [...prev, { role: 'tool', text: `  ⎿ ${e.output.isError ? 'ERR ' : ''}${body}${exit}${took}`, status: e.output.isError ? 'error' : 'success' }]);
-            }
             if (e.kind === 'request') setActivity('waiting for model');
-            if (e.kind === 'snapshot' && e.changed.length) setMessages((prev) => [...prev, { role: 'system', text: `changed ${e.changed.join(', ')}` }]);
-            if (e.kind === 'permission' && e.decision === 'deny') {
-              setPermissionDialog({ tool: e.tool, input: toolInputByCallRef.current[e.callId], reason: e.reason, rule: e.rule });
-              setMessages((prev) => [...prev, { role: 'system', text: `✗ ${toolLabel(e.tool)} denied by ${e.rule}${e.reason ? `: ${e.reason}` : ''}` }]);
-            }
+            else applyToolEvent(e);
           }
         } catch {}
       }
@@ -1061,9 +1097,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     stopRef.current = stop;
     let resultCost = 0;
     const turnStart = Date.now();
+    turnStartRef.current = turnStart;
     try {
       const result = await runHeadless(
-        { ...args, model: model ?? args.model, permission: permission ?? args.permission, ...(effort ? { effort } : {}), cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
+        { ...args, model: model ?? args.model, permission: permission ?? args.permission, ...(effort ? { effort } : {}), cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: text, outputFormat: 'stream-json', note: (t: string) => { if (t.trim()) push({ role: 'system', text: t.trim(), dim: true }); }, ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
         handleChunk,
       );
       setThread(result.thread ?? thread);
@@ -1071,7 +1108,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       resultCost = result.costUsd ?? 0;
       setSpent((prev) => prev + resultCost);
       if (typeof result.timing?.outputTokPerSec === 'number') setLastRate(result.timing.outputTokPerSec);
-      setMessages((m) => [...m, { role: 'system', dim: true, text: `✳ done · ${result.numTurns} turn${result.numTurns === 1 ? '' : 's'} · ${effModel?.label ?? model ?? 'auto'} · ${((Date.now() - turnStart) / 1000).toFixed(1)}s${typeof result.timing?.outputTokPerSec === 'number' ? ` · ${Math.round(result.timing.outputTokPerSec)} tok/s` : ''} · $${result.costUsd.toFixed(4)}` }]);
+      push(rowMsg(doneRow({ subtype: result.subtype, ms: Date.now() - turnStart, tools: turnRef.current.tools, files: turnRef.current.files.size, costUsd: result.costUsd }), { role: 'system' }));
       // A run that ended asking waits for the owner: surface the question with its options, answered by the
       // next prompt. (The PermissionDialog overlay stays for a future binding; text carries it for now.)
       if (result.subtype === 'asked' && result.question) {
@@ -1252,7 +1289,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // to this budget so the chat box always stays on screen (like cc's modals).
   const overlayBudget = Math.max(4, rows - 12);
   const screenReader = useCediaScreenReader();
-  const displayMessages = transcriptExpanded ? messages.filter((m) => showThinking || !m.dim) : messages.filter((m) => m.role !== 'tool' && (showThinking || !m.dim));
+  const displayMessages = React.useMemo(
+    () =>
+      messages
+        .filter((m) => transcriptExpanded || m.role !== 'tool')
+        .map((m) => {
+          if (!m.thinking) return m;
+          const lines = thinkingRow(m.thinking.text, m.thinking.ms, showThinking);
+          return { ...m, text: rowText(lines), lines };
+        }),
+    [messages, transcriptExpanded, showThinking],
+  );
   const windowSize = Math.max(5, rows - 6);
   // Full message range: the height-budgeted slice below decides what fits,
   // so the offset may travel to the very first message (count-based windows
@@ -1268,12 +1315,20 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   React.useEffect(() => {
     heightCacheRef.current.clear();
   }, [columns, displayMessages.length, screenReader, transcriptExpanded, showThinking]);
-  const heightAt = (index: number): number => {
+  // One blank row where the transcript changes hands: before each prompt, between the reply's words and its
+  // tool calls, and before the line that ends a turn. Thinking belongs with the reply it precedes. A short
+  // terminal (under 16 rows) spends no rows on gaps.
+  const group = (m: Msg | undefined) => (!m ? '' : m.role === 'assistant' || m.thinking ? 'reply' : m.role === 'user' ? 'user' : 'work');
+  const gapBefore = (index: number): number =>
+    screenReader || index === 0 || rows < 16 ? 0 : group(displayMessages[index]) !== group(displayMessages[index - 1]) || displayMessages[index]?.role === 'user' ? 1 : 0;
+  const heightAt = (index: number): number => gapBefore(index) + rowsAt(index);
+  const rowsAt = (index: number): number => {
     const msg = displayMessages[index];
-    const text = truncateLongText(msg?.text ?? '');
+    const raw = msg?.text ?? '';
     const width = paintedWidth(msg?.role, columns, screenReader);
-    const key = heightCacheKey(index, width, text.length, msg?.role ?? '');
-    return heightCacheRef.current.lines(key, () => estimateLines(text, width));
+    const key = heightCacheKey(index, width, raw.length, msg?.role ?? '');
+    // A reply shows as rendered markdown: count the rows of what paints, not of the source.
+    return heightCacheRef.current.lines(key, () => estimateLines(truncateLongText(msg?.role === 'assistant' ? mdPlain(raw) : raw), width));
   };
   const { start: renderStart, end: renderEnd } = visibleWindow({
     count: displayMessages.length,
@@ -1301,19 +1356,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   selectingRef.current = selecting;
   displayRef.current = displayMessages;
   {
-    const bands: WalkBand[] = [{ kind: 'chrome', rows: 2 }];
+    const bands: WalkBand[] = [{ kind: 'chrome', rows: 1 }];
     if (displayMessages.length > 0 && (scrollOffset > 0 || aboveHidden > 0)) bands.push({ kind: 'chrome', rows: 1 });
     for (let i = renderStart; i < renderEnd; i++) {
+      if (gapBefore(i)) bands.push({ kind: 'chrome', rows: gapBefore(i) });
       bands.push({
         kind: 'message',
         index: i,
-        rows: heightAt(i),
+        rows: rowsAt(i),
       });
     }
-    if (thinkingText && showThinking) {
-      bands.push({ kind: 'chrome', rows: estimateLines(thinkingText.slice(-500), Math.max(10, columns - 2)) });
-    }
-    if (running && activity) bands.push({ kind: 'chrome', rows: 1 });
+    if (thinkingText) bands.push({ kind: 'chrome', rows: 1 });
     rowMapRef.current = rowMapFromWalk(bands);
   }
   // Transcript search hits (derived): global indices into displayMessages.
@@ -1708,7 +1761,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     if (key.meta && (input === 't' || input === 'T')) {
       const next = !showThinking;
       setShowThinking(next);
-      push({ role: 'system', text: `thinking ${next ? 'shown' : 'hidden'}` });
+      push({ role: 'system', text: `thinking ${next ? 'expanded' : 'collapsed'}` });
       return;
     }
     if (key.ctrl && (input === 'f' || input === 'F')) {
@@ -1767,23 +1820,38 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const termRows = Math.max(10, rows || 24);
   return (
     <Box flexDirection="column" height={screenReader ? undefined : termRows}>
-      <Box flexDirection="column" paddingX={1}>
-          <Box flexDirection="row">
-            {screenReader ? null : (
-              <Box flexDirection="column" marginRight={1}>
-                <Text color={T.primary}>██</Text>
-                <Text color={T.primary}>██</Text>
-              </Box>
-            )}
-            <Box flexDirection="column">
-              <Text bold={screenReader ? false : true}>cedia {versionInfo().version}</Text>
-              <Text dimColor={!screenReader}>{effModel?.label ?? model ?? 'auto'} · {shortCwd(args.cwd)}</Text>
-              {displayMessages.length === 0 ? <Text dimColor={!screenReader}>/help for commands · Esc stops a turn</Text> : null}
-            </Box>
-          </Box>
-      </Box>
+      {displayMessages.length === 0 ? (
+        <Box flexDirection="column" flexShrink={0} paddingX={1} marginTop={screenReader ? 0 : 1}>
+          <Text>
+            <Text color={screenReader ? undefined : T.primary} bold={!screenReader}>{screenReader ? 'cedia' : '◆ cedia'}</Text>
+            <Text color={screenReader ? undefined : T.textMuted}>  {versionInfo().version}</Text>
+          </Text>
+          <Text>
+            <Text>  {effModel?.label ?? model ?? 'auto'}</Text>
+            <Text color={screenReader ? undefined : T.textMuted}> · </Text>
+            <Text>{shortCwd(args.cwd)}</Text>
+            {branch ? <Text color={screenReader ? undefined : T.thinking}>{screenReader ? ` · branch ${branch}` : ` · ⎇ ${branch}`}</Text> : null}
+          </Text>
+          <Text> </Text>
+          <Text wrap="truncate">
+            {([['/help', 'commands'], ['ctrl+p', 'palette'], ['esc', 'stop a turn'], ['alt+t', 'thinking']] as const).map(([k, v], i) => (
+              <Text key={k}>
+                <Text color={screenReader ? undefined : T.textMuted}>{i === 0 ? '  ' : '   '}{k}</Text>
+                <Text color={screenReader ? undefined : T.textFaint}> {v}</Text>
+              </Text>
+            ))}
+          </Text>
+        </Box>
+      ) : (
+        <Box paddingX={1} flexShrink={0}>
+          <Text wrap="truncate" color={screenReader ? undefined : T.textMuted}>
+            <Text color={screenReader ? undefined : T.primary}>{screenReader ? '' : '◆ '}</Text>
+            cedia · {effModel?.label ?? model ?? 'auto'} · {shortCwd(args.cwd)}{branch ? (screenReader ? ` · branch ${branch}` : ` · ⎇ ${branch}`) : ''}
+          </Text>
+        </Box>
+      )}
       {displayMessages.length === 0 ? null : (
-        <Box paddingX={1}>
+        <Box paddingX={1} flexShrink={0}>
           {scrollOffset > 0 || aboveHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↑ '}{aboveHidden} more above</Text> : null}
         </Box>
       )}
@@ -1809,13 +1877,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const full = capped;
             if (screenReader) {
               return (
-                <Box key={`slot-${slot.slot}`} flexDirection="column">
+                <Box key={`slot-${slot.slot}`} flexDirection="column" flexShrink={0}>
                   <Text wrap="wrap">{m.role}: {m.text}</Text>
                 </Box>
               );
             }
               return (
-            <Box key={`slot-${slot.slot}`} flexDirection="column" backgroundColor={fullySelected ? T.selectedBg : isUserRow ? T.userRowBg : undefined}>
+            <Box key={`slot-${slot.slot}`} flexDirection="column" flexShrink={0} marginTop={gapBefore(globalIdx)} backgroundColor={fullySelected ? T.selectedBg : isUserRow ? T.userRowBg : undefined}>
 
               {hasSel || queryHit ? (
                 <Text wrap="wrap">
@@ -1829,39 +1897,55 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                   ))}
                 </Text>
               ) : m.role === 'assistant' ? (
-                <Markdown>{m.text}</Markdown>
-              ) : m.role === 'tool' && !isToolError && full.split('\n').some((l) => /^[+-]/.test(l)) ? (
+                <Markdown T={T}>{m.text}</Markdown>
+              ) : m.lines ? (
                 <Box flexDirection="column">
-                  {full.split('\n').slice(0, 12).map((ln, li) => {
-                    const diff = /^[+](?![+][+])/.test(ln) ? T.diffAdded : /^-(?!--)/.test(ln) ? T.diffRemoved : undefined;
-                    return <Text key={li} wrap="truncate" color={screenReader ? undefined : diff} dimColor={screenReader ? false : (!diff && li > 0)}>{ln.slice(0, Math.max(20, columns - 6))}</Text>;
+                  {m.lines.map((ln, li) => {
+                    const used = ln.spans.reduce((n, sp) => n + sp.text.length, 0);
+                    return (
+                      <Text key={li} wrap="truncate" color={T.text} backgroundColor={ln.band === 'add' ? T.diffAddedBg : ln.band === 'del' ? T.diffRemovedBg : undefined}>
+                        {ln.spans.map((sp, si) =>
+                          sp.style === 'status' ? (
+                            <Text key={si} color={m.status === 'running' ? T.accent : m.status === 'error' ? T.error : T.success}>
+                              {m.status === 'running' ? SPINNER_FRAMES[spin % SPINNER_FRAMES.length] : m.status === 'error' ? '✗' : '✓'}
+                            </Text>
+                          ) : (
+                            <Text key={si} {...(rowProps(sp.style, T) ?? spanProps(sp.style as Parameters<typeof spanProps>[0], T))}>{sp.text}</Text>
+                          ),
+                        )}
+                        {ln.band ? ' '.repeat(Math.max(0, contentWidth - used)) : null}
+                      </Text>
+                    );
                   })}
-                  {full.split('\n').length > 12 ? <Text dimColor={!screenReader}>…{full.split('\n').length - 12} more lines</Text> : null}
                 </Box>
               ) : isUserRow && !screenReader ? (
                 <>{(userLines ?? [capped]).map((ln, li) => (
                   <Text key={li} wrap="wrap" backgroundColor={T.userRowBg}>
-                    <Text color={T.primary}>│ </Text>{ln}
+                    <Text color={T.primary}>▌ </Text>{ln}
                   </Text>
                 ))}</>
               ) : (
-                <Text color={screenReader ? undefined : isToolError ? T.error : m.tone === 'red' ? T.error : m.dim ? undefined : themedColorFor(T, m.role)} dimColor={screenReader ? false : !!m.dim} wrap="wrap">{full}</Text>
+                <Text color={screenReader ? undefined : isToolError || m.tone === 'red' ? T.error : m.tone === 'accent' ? T.accent : themedColorFor(T, m.role)} dimColor={screenReader ? false : !!m.dim} wrap="wrap">{full}</Text>
               )}
             </Box>
             );
           })}
               </>
           )}
-          {thinkingText && showThinking ? <Text dimColor={!screenReader} wrap="wrap">{thinkingText.slice(-500)}</Text> : null}
-          {running && activity ? (
-            <Text color={screenReader ? undefined : T.primary}>{screenReader ? '' : `${SPINNER_FRAMES[spin % SPINNER_FRAMES.length]} `}{activity}</Text>
+          {thinkingText ? (
+            <Text wrap="truncate" color={screenReader ? undefined : T.thinking} italic={!screenReader}>
+              {screenReader ? 'thinking: ' : '∴ '}{thinkingText.trim().split('\n').pop()}
+            </Text>
           ) : null}
       </Box>
       {displayMessages.length === 0 ? null : (
-        <Box paddingX={1}>
+        <Box paddingX={1} flexShrink={0}>
           {renderEnd < displayMessages.length || belowHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↓ '}{belowHidden} more below</Text> : null}
         </Box>
       )}
+      {/* Everything under the transcript keeps its rows; only the transcript gives way (Yoga shrinks every
+          box by default, which squeezed rows into each other). */}
+      <Box flexDirection="column" flexShrink={0}>
         {trustOpen ? (
           <Box flexDirection="column" paddingX={1}>
             <Text color={screenReader ? undefined : T.warning} bold={!screenReader}>Accessing workspace:</Text>
@@ -2097,27 +2181,30 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           </Box>
         ) : null}
         {autoOpen ? (
-          <Box flexDirection="column" paddingX={1}>
+          <Box flexDirection="column" paddingX={1} marginX={screenReader ? 0 : 1} borderStyle={screenReader ? undefined : 'round'} borderColor={T.border}>
             {(() => {
               const maxRows = Math.max(3, Math.min(7, overlayBudget));
               const shown = autoItems.slice(0, maxRows);
+              const nameWidth = Math.min(18, Math.max(...shown.map((it) => it.name.length)));
               return (<>
               {shown.map((it, i) => {
               const sel = i === Math.min(autoSelected, autoItems.length - 1);
-              const maxDesc = Math.max(10, columns - it.name.length - 8);
+              const maxDesc = Math.max(10, columns - nameWidth - 12);
               const plain = it.name.startsWith('/') ? it.name.slice(1) : it.name;
               return (
-                <Text key={`${it.name}::${i}`} wrap="truncate">
-                  <Text color={screenReader ? undefined : (sel ? T.primary : undefined)}>{selectedPrefix(sel, screenReader)}</Text>
-                  {it.name.startsWith('/') ? <Text dimColor={!screenReader}>/</Text> : null}
+                <Text key={`${it.name}::${i}`} wrap="truncate" backgroundColor={screenReader || !sel ? undefined : T.selectedBg}>
+                  {screenReader ? <Text>{selectedPrefix(sel, screenReader)}</Text> : null}
+                  {it.name.startsWith('/') ? <Text color={screenReader ? undefined : T.textMuted}>/</Text> : null}
                   {highlightSpans(plain, it.hits).map((sp, si) => (
-                    <Text key={si} color={screenReader ? undefined : (sp.hit ? T.primary : undefined)} bold={screenReader ? false : sp.hit}>{sp.text}</Text>
+                    <Text key={si} color={screenReader ? undefined : (sp.hit ? T.primary : T.text)} bold={screenReader ? false : (sp.hit || sel)}>{sp.text}</Text>
                   ))}
-                  <Text dimColor={!screenReader}>  {truncateDescription(it.description, maxDesc)}</Text>
+                  <Text color={screenReader ? undefined : T.textMuted}>{' '.repeat(Math.max(2, nameWidth - it.name.length + 3))}{truncateDescription(it.description, maxDesc)}</Text>
                 </Text>
               );
             })}
-            {autoItems.length > maxRows ? <Text dimColor={!screenReader}>  {autoItems.length - maxRows} more…</Text> : null}
+            <Box justifyContent="flex-end">
+              <Text color={screenReader ? undefined : T.textFaint}>{Math.min(maxRows, autoItems.length)} of {autoItems.length} · ↑↓ · tab · ⏎</Text>
+            </Box>
               </>);
             })()}
           </Box>
@@ -2126,28 +2213,40 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <Box justifyContent="flex-end" paddingX={1}>
             <Text color={screenReader ? undefined : T.warning}>{notice}</Text>
           </Box>
-        ) : ((args.images?.length ?? 0) > 0 || effort) ? (
-          <Box justifyContent="flex-end" paddingX={1}>
-            <Text dimColor={!screenReader}>
-              {(args.images ?? []).slice(0, 3).map((p) => `[Image ${(args.images ?? []).indexOf(p) + 1}]`).join(' ')}{effort ? `  ◐ ${effort}` : ''}
-            </Text>
-          </Box>
         ) : null}
-        <Box paddingX={1}>
-          <Text color={screenReader ? undefined : T.primary}>{screenReader ? 'prompt: ' : '› '}</Text>
-          <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={gate.captured} suppressSubmit={gate.suppressSubmit} />
-        </Box>
-        {effModel || effort ? (
-          <Box paddingX={1}>
-            <Text>
-              {effModel ? <Text>{effModel.label}</Text> : null}
-              {effModel?.provider ? <Text dimColor={!screenReader}> {effModel.provider}</Text> : null}
-              {effort ? <Text color={screenReader ? undefined : T.warning}>  ◐ {effort}</Text> : null}
-            </Text>
-          </Box>
-        ) : null}
-        <StatusBar cwd={shortCwd(args.cwd)} tokens={context} windowSize={effModel?.window} spend={spent} vimMode={vimMode} activity={activity} running={running} hint="ctrl+p commands" />
+        {(() => {
+          const mode = permission ?? args.permission ?? 'auto';
+          const modeColor = mode === 'plan' ? T.thinking : mode === 'read-only' ? T.textMuted : T.primary;
+          // The box says what the prompt will do: brand while a turn runs, violet in plan mode, amber in vim normal.
+          const border = running ? T.primary : vimMode !== 'insert' ? T.accent : mode === 'plan' ? T.thinking : T.border;
+          return (
+            <>
+              {/* A short terminal (under 16 rows) keeps the prompt flat: the frame's two rows go to the transcript. */}
+              <Box borderStyle={screenReader || rows < 16 ? undefined : 'round'} borderColor={border} paddingX={1} marginX={screenReader || rows < 16 ? 0 : 1}>
+                <Text color={screenReader ? undefined : modeColor}>{screenReader ? 'prompt: ' : '› '}</Text>
+                <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={gate.captured} suppressSubmit={gate.suppressSubmit} />
+              </Box>
+              <StatusBar
+                T={T}
+                mode={mode}
+                modeColor={modeColor}
+                model={effModel?.label ?? model ?? 'auto'}
+                effort={effort}
+                images={args.images?.length ?? 0}
+                tokens={context}
+                windowSize={effModel?.window}
+                spend={spent}
+                vimMode={vimMode}
+                activity={activity}
+                running={running}
+                elapsedMs={running ? Date.now() - turnStartRef.current : 0}
+                spinner={SPINNER_FRAMES[spin % SPINNER_FRAMES.length]}
+              />
+            </>
+          );
+        })()}
         {statusLineOutput ? <Text dimColor={!screenReader}>{statusLineOutput}</Text> : null}
+      </Box>
     </Box>
   );
 }
