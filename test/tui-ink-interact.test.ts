@@ -32,7 +32,8 @@ type Harness = {
 const savedEnv: Record<string, string | undefined> = {};
 let harnessCount = 0;
 
-function start(opts: { rows?: number; script?: unknown[]; files?: string[] } = {}): Harness {
+// before: sets up the project (threads, logs) once the directory exists, and may add to the args.
+function start(opts: { rows?: number; script?: unknown[]; files?: string[]; before?: (dir: string, home: string) => Record<string, unknown> | void } = {}): Harness {
   const dir = mkdtempSync(join(tmpdir(), 'cedia-ink-it-'));
   for (const f of opts.files ?? []) writeFileSync(join(dir, f), 'x\n');
   const home = join(dir, 'home');
@@ -59,6 +60,7 @@ function start(opts: { rows?: number; script?: unknown[]; files?: string[] } = {
     planWhen: 'never',
     sandbox: 'off',
     spawn: 'off',
+    ...(opts.before?.(dir, home) ?? {}),
   } as unknown as TuiArgs;
   // Tests accumulate stdout and assert on the concatenated buffer. Ink's
   // Frame-diff only writes changed rows, which would garble that buffer — keep
@@ -495,6 +497,57 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       expect(prompts).toHaveLength(1);
       expect(prompts[0]).toContain('<owner-shell>\n$ echo hi-from-shell\n(exit 0)\nhi-from-shell\n</owner-shell>');
       expect(prompts[0]!.endsWith('what did it say')).toBe(true);
+    } finally {
+      h.stop();
+    }
+  }, 30000);
+
+  test('/agents opens the sub-thread view, ← → step between sub-threads and Esc goes back', async () => {
+    const h = start({
+      before: (dir, home) => {
+        const store = new ThreadStore(threadsDir(home, projectKey(dir)));
+        const parent = store.open('split the parser work');
+        const a = store.open('port the lexer', { parent, now: new Date(Date.now() - 60_000) });
+        const b = store.open('write parser tests', { parent, now: new Date(Date.now() - 30_000) });
+        const log = join(dir, 'b.jsonl');
+        writeFileSync(log, [
+          { id: 'e1', parentId: null, at: '2026-01-01T00:00:00Z', kind: 'tool_intent', callId: 'c1', tool: 'read', input: { path: 'src/parser.ts' } },
+          { id: 'e2', parentId: 'e1', at: '2026-01-01T00:00:01Z', kind: 'tool_result', callId: 'c1', status: 'done', output: { text: 'x' } },
+          { id: 'e3', parentId: 'e2', at: '2026-01-01T00:00:02Z', kind: 'tool_intent', callId: 'c2', tool: 'bash', input: { command: 'bun test parser' } },
+        ].map((e) => JSON.stringify(e)).join('\n') + '\n');
+        store.append(a, { kind: 'state', state: 'done', result: 'lexer ported, 12 tests pass' });
+        store.append(b, { kind: 'session', sessionId: 's-b', model: 'faux', role: 'code', why: 'start', path: log });
+        store.append(b, { kind: 'todo', items: [{ text: 'list the cases', state: 'done' }, { text: 'write them', state: 'doing' }] });
+        return { thread: parent };
+      },
+    });
+    try {
+      await Bun.sleep(500);
+      h.write('/agents');
+      await Bun.sleep(300);
+      h.write('\x1b');
+      await Bun.sleep(200);
+      h.write('\r');
+      await Bun.sleep(600);
+      // It opens on the one still working, with its steps and its latest calls (the last still running).
+      let f = h.frame();
+      expect(f).toContain('Sub-thread 2 of 2');
+      expect(f).toContain('write parser tests');
+      expect(f).toContain('◐ write them');
+      expect(f).toMatch(/✓ Read\s+src\/parser\.ts/);
+      expect(f).toMatch(/● Bash\s+bun test parser/);
+      expect(f).toContain('← → other sub-threads');
+      h.drain();
+      h.write('\x1b[C');
+      await Bun.sleep(400);
+      f = h.frame();
+      expect(f).toContain('Sub-thread 1 of 2');
+      expect(f).toContain('port the lexer');
+      expect(f).toContain('lexer ported, 12 tests pass');
+      h.drain();
+      h.write('\x1b');
+      await Bun.sleep(400);
+      expect(h.frame()).not.toContain('Sub-thread 1 of 2');
     } finally {
       h.stop();
     }

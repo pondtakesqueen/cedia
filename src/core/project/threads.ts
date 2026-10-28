@@ -102,6 +102,8 @@ export type Thread = {
   todo?: TodoItem[];
   // The open question while the thread is asking.
   question?: { sessionId: string; question: string; options?: string[]; at: string };
+  // When it was opened (its first event) and when anything last happened to it.
+  openedAt: string;
   updatedAt: string;
 };
 
@@ -254,6 +256,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
     runs: [],
     rewound: [],
     running: false,
+    openedAt: events[0]?.at ?? '',
     updatedAt: events.at(-1)?.at ?? '',
   };
   const delivered = new Set<string>();

@@ -37,6 +37,7 @@ import { cancelStep, messageFullySelected, offsetForIndex, rowMapFromWalk, selec
 import { createHeightCache, heightCacheKey, visibleWindow } from './visible-window.ts';
 import { assignRecycleSlots, messageSlotKey, type RecycleSlot } from './virtual-list.ts';
 import { onTerminalResume } from './terminal-resume.ts';
+import { SUBTHREAD_HINT, childThreads, recentCalls, subthreadLines } from './subthreads.ts';
 import { runOwnerShell, shellCommand, shellEnd, shellNote, type ShellRun } from './shell.ts';
 import { FOCUS_OFF, FOCUS_ON, NOTIFY_MODES, channelFor, focusFrom, notifyModeFrom, notifySequence, shouldNotify, turnNotice, type Focus } from './notify.ts';
 import { matchesKey } from '@mariozechner/pi-tui';
@@ -109,8 +110,8 @@ const INK_COMMANDS: { name: string; description: string }[] = [
   { name: 'resume', description: 'go on with a thread' },
   { name: 'branch', description: 'git branches' },
   { name: 'copy', description: 'copy the last reply' },
-  { name: 'tasks', description: 'sub-threads / task list' },
-  { name: 'agents', description: 'sub-threads of this thread' },
+  { name: 'tasks', description: 'alias for /agents' },
+  { name: 'agents', description: 'watch this thread\'s sub-threads, even mid-turn (← → between them)' },
   { name: 'compact', description: 'show handoff/compaction status' },
   { name: 'fast', description: 'toggle fast mode' },
   { name: 'export', description: 'export this thread to a file' },
@@ -306,6 +307,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [messageSelector, setMessageSelector] = useState<{ open: boolean; selected: number }>({ open: false, selected: 0 });
   const [picker, setPicker] = useState<{ title: string; items: { value: string; label: string }[]; onPick: (v: string) => void } | null>(null);
   const [pickerSelected, setPickerSelected] = useState(0);
+  // The sub-thread view (subthreads.ts): the sub-threads it steps through and which one shows. It reads the store
+  // again each second while open, since sub-threads run beside the turn.
+  const [subView, setSubView] = useState<{ ids: string[]; at: number } | null>(null);
+  const [subTick, setSubTick] = useState(0);
+  useEffect(() => {
+    if (!subView) return;
+    const t = setInterval(() => setSubTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [subView !== null]);
   const [permissionDialog, setPermissionDialog] = useState<{ tool: string; input?: unknown; reason?: string; rule?: string } | null>(null);
   const toolInputByCallRef = useRef<Record<string, unknown>>({});
   const toolStartByCallRef = useRef<Record<string, number>>({});
@@ -465,7 +475,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           ['thread', ['/new', '/thread', '/resume', '/rename', '/fork', '/rewind', '/undo', '/redo', '/diff']],
           ['run', ['/plan', '/quick', '/model', '/goal', '/effort', '/permission']],
           ['project', ['/commit', '/pr', '/review', '/memory', '/skills', '/mcp']],
-          ['view', ['/clear', '/transcript', '/search', '/settings', '/doctor', '/theme', '/palette', '/actions', '/copy', '/export', '/compact', '/tasks', '/agents', '/branch', '/status', '/cost', '/context']],
+          ['view', ['/clear', '/transcript', '/search', '/settings', '/doctor', '/theme', '/palette', '/actions', '/copy', '/export', '/compact', '/agents', '/tasks', '/branch', '/status', '/cost', '/context']],
           ['other', ['/help', '/quit', '/vim', '/hooks', '/btw', '/suggest', '/trust', '/onboarding', '/statusline', '/output-style', '/config', '/notify']],
         ];
         const byName = new Map(INK_COMMANDS.map((c) => [c.name, c.description]));
@@ -960,8 +970,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       case 'tasks':
       case 'agents': {
         if (!thread) { say('no thread yet'); return; }
-        const children = store.list().filter((t) => (t as { parent?: string }).parent === thread);
-        say(children.length ? children.map((t) => `${t.id}  ${t.title}`).join('\n') : 'no sub-threads');
+        const children = childThreads(store.list(), thread);
+        if (!children.length) { say('no sub-threads'); return; }
+        // It opens on the first one still going, else the newest.
+        const live = children.findIndex((t) => t.running || t.state === 'working' || t.state === 'asking');
+        setSubView({ ids: children.map((t) => t.id), at: live >= 0 ? live : children.length - 1 });
         return;
       }
       case 'vim': {
@@ -1088,6 +1101,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     if (!text.trim()) return;
     // A prompt sent while a turn runs waits its turn (like cc): it runs when this one ends, and Esc puts it back
     // in the prompt. The same text twice in one tick is the double fire below, not two prompts.
+    // The sub-thread view only reads, so it opens mid-turn instead of waiting: that is when sub-threads run.
+    if (running && /^\/(agents|tasks)\s*$/.test(text.trim())) {
+      setInput('');
+      inputRef.current = '';
+      handleCommand(text.trim().slice(1));
+      return;
+    }
     if (running) {
       const q = queueRef.current;
       if (q.at(-1)?.text === text && Date.now() - (q.at(-1)?.at ?? 0) < 100) return;
@@ -1488,6 +1508,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const ctx = activeContext({
     permissionNotice: permissionDialog !== null,
     picker: focusedDialog === 'picker' && picker !== null,
+    subthreads: subView !== null,
     settings: settingsOpen,
     messageSelector: focusedDialog === 'messageSelector',
     historySearch: focusedDialog === 'historySearch',
@@ -1504,6 +1525,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const closeOverlay = (which: LiveContext) => {
     if (which === 'Confirmation') { setPermissionDialog(null); return; }
     if (which === 'Select') { closeDialog('picker'); setPicker(null); setPickerSelected(0); return; }
+    if (which === 'Task') { setSubView(null); return; }
     if (which === 'Settings') { closeSettingsStep(); return; }
     if (which === 'MessageSelector') {
       setMessageSelector({ open: false, selected: 0 });
@@ -1638,6 +1660,27 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           if (item) { picker.onPick(item.value); }
           closeDialog('picker'); setPicker(null); setPickerSelected(0);
           if (inputRef.current === before) { setInput(''); inputRef.current = ''; }
+          return;
+        }
+        return;
+      }
+      if (ctx === 'Task' && subView) {
+        if (overlayCmd === 'close') { setSubView(null); return; }
+        if (overlayCmd === 'prev' || overlayCmd === 'next') {
+          const step = overlayCmd === 'next' ? 1 : -1;
+          // New sub-threads join the end as the thread opens them.
+          const ids = thread ? childThreads(store.list(), thread).map((t) => t.id) : subView.ids;
+          const known = [...subView.ids, ...ids.filter((id) => !subView.ids.includes(id))];
+          setSubView({ ids: known, at: (subView.at + step + known.length) % known.length });
+          return;
+        }
+        if (overlayCmd === 'accept') {
+          if (running) { push({ role: 'system', text: 'a turn is running: Enter goes on with a sub-thread once it ends' }); return; }
+          const id = subView.ids[subView.at]!;
+          const parent = thread;
+          setSubView(null);
+          switchThread(id);
+          push({ role: 'system', text: `going on with ${id}, a sub-thread${parent ? ` of ${parent} (/thread ${parent} goes back)` : ''}` });
           return;
         }
         return;
@@ -2086,6 +2129,29 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             ))}
             <Text dimColor={!screenReader}>Enter to confirm · Esc to cancel</Text>
           </Box>
+        ) : null}
+        {subView ? (
+          (() => {
+            void subTick;
+            const id = subView.ids[subView.at]!;
+            let lines: RowLine[];
+            try {
+              const t = store.read(id);
+              lines = subthreadLines(t, { at: subView.at, of: subView.ids.length }, recentCalls(t.sessions.at(-1)?.path), columns - 6, overlayBudget);
+            } catch (e) {
+              lines = [{ spans: [{ text: `${id}: ${(e as Error).message}`, style: 'err' }] }];
+            }
+            return (
+              <Box flexDirection="column" borderStyle={screenReader ? undefined : 'round'} borderColor={screenReader ? undefined : T.borderActive} paddingX={1} marginX={screenReader ? 0 : 1}>
+                {lines.map((ln, li) => (
+                  <Text key={li} wrap="truncate" color={T.text}>
+                    {ln.spans.map((sp, si) => <Text key={si} {...(screenReader ? {} : (rowProps(sp.style, T) ?? spanProps(sp.style as Parameters<typeof spanProps>[0], T)))}>{sp.text}</Text>)}
+                  </Text>
+                ))}
+                <Text dimColor={!screenReader}>{SUBTHREAD_HINT}</Text>
+              </Box>
+            );
+          })()
         ) : null}
         {focusedDialog === 'picker' && picker ? (
           (() => {
