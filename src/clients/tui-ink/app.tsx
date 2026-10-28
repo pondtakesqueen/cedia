@@ -1,11 +1,11 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useWindowSize, useStdin, useIsScreenReaderEnabled } from 'ink';
-import { buildAutoItems, highlightSpans, truncateDescription, truncateLongText, estimateLines, loadFrecency, recordPick, frecencyBonus, type AutoItem } from './autocomplete.ts';
+import { buildAutoItems, highlightQuery, highlightSpans, truncateDescription, truncateLongText, estimateLines, offsetAt, loadFrecency, recordPick, frecencyBonus, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
 import { inkTheme, type ThemeTokens } from './theme-tokens.ts';
-import { PermissionDialog, permissionDialogFor, toolLabel } from './permission-dialogs.tsx';
+import { PermissionDialog, toolLabel } from './permission-dialogs.tsx';
 import { askedBannerText } from './asked.ts';
 import { StatusBar } from './status-bar.tsx';
 import { runHeadless } from '../headless/main.ts';
@@ -24,13 +24,14 @@ import { cediaHome, loadPromptSuggestions, loadRoles, isMode, loadPolicy, loadPr
 import { modelLabel } from '../../core/providers/models.ts';
 import { versionInfo } from '../../protocol/version.ts';
 import { runStatusLineCommand } from '../tui/statusline.ts';
-import { loadKeybindings } from './keybindings/loader.ts';
-import { resolveBindings } from './keybindings/resolver.ts';
+import { loadKeybindings, watchKeybindings } from './keybindings/loader.ts';
+import { activeContext, findCommand, resolveBindings, vimInputGate, type LiveContext } from './keybindings/resolver.ts';
+import { cancelStep, offsetForIndex, rowMapFromWalk, selectionBounds, type InkSelection, type RowMap, type WalkBand } from './row-map.ts';
 import { matchesKey } from '@mariozechner/pi-tui';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
-import { acceptTrust, isComplete, loadOnboarding, markStep, ONBOARDING_STEPS } from './onboarding.ts';
+import { acceptTrust, completedNames, isComplete, loadOnboarding, markStep, ONBOARDING_STEPS, reconcileOnboarding, saveOnboarding } from './onboarding.ts';
 import { workingDiff } from '../../core/project/git.ts';
 import { MemoryStore, memoryPath } from '../../core/project/memory.ts';
 import { loadSkills } from '../../core/skills/skills.ts';
@@ -123,6 +124,16 @@ const shortCwd = (cwd: string): string => {
 const themedColorFor = (T: ThemeTokens, role: Msg['role']): string | undefined =>
   role === 'user' ? undefined : role === 'assistant' ? T.text : role === 'tool' ? T.textMuted : T.warning;
 
+function paintedWidth(role: Msg['role'] | undefined, columns: number, screenReader: boolean): number {
+  const bar = role === 'user' && !screenReader ? 2 : 0;
+  return Math.max(10, columns - 2 - bar);
+}
+
+function paintedCol(termCol: number, role: Msg['role'] | undefined, screenReader: boolean): number {
+  const bar = role === 'user' && !screenReader ? 2 : 0;
+  return Math.max(0, termCol - 1 - bar);
+}
+
 export type DialogKind = 'picker' | 'historySearch' | 'messageSelector' | null;
 
 const DIALOG_PRIORITY: Record<NonNullable<DialogKind>, number> = {
@@ -158,6 +169,13 @@ function inkKeyId(input: string, key: any): string | undefined {
   return mods.length ? `${mods.join('+')}+${name}` : name;
 }
 
+function normKey(id: string): string {
+  const parts = id.toLowerCase().split('+').filter((p) => p.length > 0);
+  const name = parts.pop() ?? '';
+  parts.sort();
+  return parts.length ? `${parts.join('+')}+${name}` : name;
+}
+
 export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const { exit } = useApp();
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -175,6 +193,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const lastActivityRef = useRef(Date.now());
   const [thread, setThread] = useState<string | undefined>(args.thread);
   const [permission, setPermission] = useState<string | undefined>(args.permission);
+  const permissionRef = useRef(permission);
+  permissionRef.current = permission;
+  const syncOnboardingRef = useRef<(openTrust?: boolean) => void>(() => {});
   // Theme tokens (opencode-style design tokens, cedia's own values).
   // Bumped when /theme writes, so the whole TUI repaints immediately.
   const [themeTick, setThemeTick] = useState(0);
@@ -262,8 +283,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     return () => clearInterval(t);
   }, [running]);
   const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-  const [selection, setSelection] = useState<{ aMsg: number; aCol: number; bMsg: number; bCol: number } | null>(null);
+  const [selection, setSelection] = useState<InkSelection | null>(null);
   const [selecting, setSelecting] = useState(false);
+  const rowMapRef = useRef<RowMap>(rowMapFromWalk([]));
+  const displayRef = useRef<Msg[]>([]);
+  const columnsRef = useRef(80);
+  const screenReaderRef = useRef(false);
+  const selectionRef = useRef<InkSelection | null>(null);
+  const selectingRef = useRef(false);
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
 
   const push = (m: Msg) => setMessages((prev) => [...prev, m]);
@@ -423,10 +450,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       case 'search': {
-        const term = rest.join(' ').trim().toLowerCase();
-        if (!term) { say('/search <term>'); return; }
-        const hits = messages.filter((m) => m.text.toLowerCase().includes(term));
-        say(hits.length ? hits.map((m) => m.text).join('\n') : 'no matches');
+        const term = rest.join(' ').trim();
+        setTranscriptSearch({ open: true, query: term, selected: 0 });
         return;
       }
       case 'actions': {
@@ -698,20 +723,28 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'trust': {
         acceptTrust(cediaHome());
+        setTrustOpen(false);
+        syncOnboardingRef.current();
         push({ role: 'system', text: 'trust accepted' });
         return;
       }
       case 'onboarding': {
-        if (rest[0] === 'accept') { acceptTrust(cediaHome()); setNotice(null); setTrustOpen(false); push({ role: 'system', text: 'trust accepted' }); return; }
+        if (rest[0] === 'accept') {
+          acceptTrust(cediaHome());
+          setTrustOpen(false);
+          syncOnboardingRef.current();
+          push({ role: 'system', text: 'trust accepted' });
+          return;
+        }
         if (rest[0] && rest[0] !== 'accept') {
           try { markStep(rest[0]); } catch {}
           setNotice(null);
         }
         try {
           const s = loadOnboarding(cediaHome());
-          const done = new Set(s.completed);
+          const done = completedNames(s);
           const theme = (() => { try { return String((readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>)?.theme ?? '(not set)'); } catch { return '(unreadable)'; } })();
-          const keyNames = ['ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'].filter((k) => !!process.env[k]);
+          const keyNames = ['ANTHROPIC_API_KEY', 'CEDIA_ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'].filter((k) => !!process.env[k]);
           const detail: Record<string, string> = {
             preflight: `bun ${Bun.version} · ${process.platform}`,
             theme: String(theme),
@@ -719,7 +752,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             trust: s.hasTrustDialogAccepted ? 'accepted' : 'pending — /onboarding accept',
             terminal: `${process.env.TERM ?? '?'} · ${process.env.COLORTERM ?? 'no truecolor'}`,
           };
-          const rows = ONBOARDING_STEPS.map((st) => `${done.has(st) || (st === 'trust' && s.hasTrustDialogAccepted) ? '✓' : '○'} ${st} — ${detail[st] ?? ''}`);
+          const rows = ONBOARDING_STEPS.map((st) => `${done.has(st) ? '✓' : '○'} ${st} — ${detail[st] ?? ''}`);
           push({ role: 'system', text: ['onboarding:', ...rows, isComplete(cediaHome()) ? 'complete' : 'use /onboarding <step> to mark one done'].join('\n') });
         } catch (e) { push({ role: 'system', text: `onboarding: ${(e as Error).message}` }); }
         return;
@@ -804,6 +837,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
           } catch { /* ignore */ }
           setThemeTick((n) => n + 1);
+          syncOnboardingRef.current();
           say(`theme: ${t}`);
           return;
         }
@@ -1086,67 +1120,88 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     if (process.env.CEDIA_MDM_URL) void fetchMdmSettings().then((d) => { if (Object.keys(d).length) { /* cached by server; reload not needed */ } }).catch(() => {});
   }, []);
   React.useEffect(() => {
-    setLoadedKeybindings(loadKeybindings(cediaHome()));
+    const home = cediaHome();
+    setLoadedKeybindings(loadKeybindings(home));
+    return watchKeybindings(home, setLoadedKeybindings);
   }, []);
   React.useEffect(() => {
     if (!stdin) return;
+    const pointer = (termCol: number, termRow: number) => {
+      const hit = rowMapRef.current.rowAt(termRow - 1);
+      if (!hit) return;
+      const msg = displayRef.current[hit.index];
+      const text = truncateLongText(msg?.text ?? '');
+      const col = offsetAt(
+        text,
+        paintedWidth(msg?.role, columnsRef.current, screenReaderRef.current),
+        hit.rowInSpan,
+        paintedCol(termCol, msg?.role, screenReaderRef.current),
+      );
+      return { index: hit.index, col };
+    };
     const handler = (data: Buffer) => {
       const s = data.toString();
-      // wheel
-      if (/\x1b\[<64;/.test(s)) setScrollOffset((o) => Math.min(o + 3, Math.max(0, messages.length - Math.max(5, rows - 6))));
+      if (/\x1b\[<64;/.test(s)) {
+        const maxOff = Math.max(0, displayRef.current.length - 1);
+        setScrollOffset((o) => Math.min(maxOff, o + 3));
+      }
       if (/\x1b\[<65;/.test(s)) setScrollOffset((o) => Math.max(0, o - 3));
-      // left button press: \x1b[<0;COL;ROW M  ; drag (motion): \x1b[<32;COL;ROW M ; release: ...m
       const press = /\x1b\[<0;(\d+);(\d+)M/.exec(s);
       if (press) {
-        const col = parseInt(press[1]!, 10);
-        const row = parseInt(press[2]!, 10);
-        const idx = Math.max(0, Math.min(messages.length - 1, row - 2 + scrollOffset));
-        const msg = messages[idx];
-        const c = Math.max(0, Math.min((msg?.text.length ?? 1) - 1, col - 1));
-        setSelection({ aMsg: idx, aCol: c, bMsg: idx, bCol: c });
-        setSelecting(true);
+        const at = pointer(parseInt(press[1]!, 10), parseInt(press[2]!, 10));
+        if (at) {
+          const next = { aMsg: at.index, aCol: at.col, bMsg: at.index, bCol: at.col };
+          selectionRef.current = next;
+          selectingRef.current = true;
+          setSelection(next);
+          setSelecting(true);
+        }
       }
       const drag = /\x1b\[<32;(\d+);(\d+)M/.exec(s);
-      if (drag && selecting) {
-        const col = parseInt(drag[1]!, 10);
-        const row = parseInt(drag[2]!, 10);
-        const idx = Math.max(0, Math.min(messages.length - 1, row - 2 + scrollOffset));
-        const msg = messages[idx];
-        const c = Math.max(0, Math.min((msg?.text.length ?? 1) - 1, col - 1));
-        setSelection((sel) => (sel ? { ...sel, bMsg: idx, bCol: c } : null));
+      if (drag && selectingRef.current) {
+        const at = pointer(parseInt(drag[1]!, 10), parseInt(drag[2]!, 10));
+        if (at) {
+          setSelection((sel) => {
+            if (!sel) return null;
+            const next = { ...sel, bMsg: at.index, bCol: at.col };
+            selectionRef.current = next;
+            return next;
+          });
+        }
       }
       const release = /\x1b\[<0;(\d+);(\d+)m/.exec(s);
-      if (release && selecting) {
+      if (release && selectingRef.current) {
+        selectingRef.current = false;
         setSelecting(false);
-        if (!selection) return;
-        if (selection.aMsg === selection.bMsg && selection.aCol === selection.bCol) { setSelection(null); return; }
-        const lo = Math.min(selection.aMsg, selection.bMsg);
-          const hi = Math.max(selection.aMsg, selection.bMsg);
-          const parts: string[] = [];
-          for (let i = lo; i <= hi; i++) {
-            const m = messages[i];
-            if (!m) continue;
-            if (lo === hi) {
-              const a = Math.min(selection.aCol, selection.bCol);
-              const b = Math.max(selection.aCol, selection.bCol) + 1;
-              parts.push(m.text.slice(a, b));
-            } else if (i === lo) {
-              const a = selection.aMsg <= selection.bMsg ? selection.aCol : 0;
-              parts.push(m.text.slice(a));
-            } else if (i === hi) {
-              const b = selection.aMsg <= selection.bMsg ? selection.bCol + 1 : m.text.length;
-              parts.push(m.text.slice(0, b));
-            } else {
-              parts.push(m.text);
-            }
-          }
-          const text = parts.join('\n');
-          if (!text) { setSelection(null); return; }
-          try {
-            const proc = Bun.spawn(['pbcopy'], { stdin: new TextEncoder().encode(text) });
-            void proc.exited;
-          } catch {}
-          push({ role: 'system', text: 'copied selection' });
+        const sel = selectionRef.current;
+        if (!sel) return;
+        if (sel.aMsg === sel.bMsg && sel.aCol === sel.bCol) {
+          selectionRef.current = null;
+          setSelection(null);
+          return;
+        }
+        const lo = Math.min(sel.aMsg, sel.bMsg);
+        const hi = Math.max(sel.aMsg, sel.bMsg);
+        const parts: string[] = [];
+        for (let i = lo; i <= hi; i++) {
+          const m = displayRef.current[i];
+          if (!m) continue;
+          const text = truncateLongText(m.text);
+          const bounds = selectionBounds(sel, i, text.length);
+          if (!bounds || bounds.end <= bounds.start) continue;
+          parts.push(text.slice(bounds.start, bounds.end));
+        }
+        const text = parts.join('\n');
+        if (!text) {
+          selectionRef.current = null;
+          setSelection(null);
+          return;
+        }
+        try {
+          const proc = Bun.spawn(['pbcopy'], { stdin: new TextEncoder().encode(text) });
+          void proc.exited;
+        } catch {}
+        push({ role: 'system', text: 'copied selection' });
       }
     };
     stdin.on('data', handler);
@@ -1155,19 +1210,44 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       stdin.off('data', handler);
       process.stdout.write('\x1b[?1000l\x1b[?1006l');
     };
-  }, [stdin, messages.length, selecting, selection, scrollOffset]);
+  }, [stdin]);
 
-  React.useEffect(() => {
+  syncOnboardingRef.current = (openTrust = false) => {
     try {
-      const pending = ONBOARDING_STEPS.filter((x: string) => !loadOnboarding().completed.includes(x));
-      if (!loadOnboarding().hasTrustDialogAccepted) {
+      const home = cediaHome();
+      const prev = loadOnboarding(home);
+      let themeOk = false;
+      try {
+        const raw = readSettings(join(home, 'settings.json')) as { theme?: unknown };
+        themeOk = raw.theme === 'dark' || raw.theme === 'light';
+      } catch { themeOk = false; }
+      const next = reconcileOnboarding(prev, {
+        preflight: typeof Bun !== 'undefined' && Bun.version.length > 0,
+        theme: themeOk,
+        apiKey: ['ANTHROPIC_API_KEY', 'CEDIA_ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'].some((name) => !!process.env[name]),
+        trust: prev.hasTrustDialogAccepted === true,
+        terminal: Boolean(process.stdout.isTTY) && (process.stdout.columns ?? 0) >= 20,
+      });
+      const same = JSON.stringify(prev.completed ?? []) === JSON.stringify(next.completed)
+        && !!prev.hasTrustDialogAccepted === !!next.hasTrustDialogAccepted;
+      if (!same) saveOnboarding(next, home);
+      if (openTrust && !next.hasTrustDialogAccepted) {
         setTrustOpen(true);
         setTrustSelected(1);
-      } else if (pending.length) {
-        setNotice(`onboarding: ${pending.join(', ')} pending — /onboarding accept`);
+        return;
+      }
+      if (!next.hasTrustDialogAccepted) return;
+      if (!isComplete(home)) {
+        const names = completedNames(next);
+        const pending = ONBOARDING_STEPS.filter((step) => !names.has(step));
+        const mode = permissionRef.current ?? 'auto';
+        setNotice(`onboarding: ${pending.join(', ')} pending — /onboarding accept. Shift+Tab cycles the permission setting. This run is ${mode}.`);
+      } else {
+        setNotice((n) => (n?.startsWith('onboarding:') ? null : n));
       }
     } catch {}
-  }, []);
+  };
+  React.useEffect(() => { syncOnboardingRef.current(true); }, []);
   React.useEffect(() => {
     let cmd: string | undefined;
     try {
@@ -1203,9 +1283,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   let heightStart = heightEnd;
   {
     let used = 0;
-    const w = Math.max(10, columns - 2);
     while (heightStart > 0) {
-      const h = estimateLines(displayMessages[heightStart - 1]?.text ?? '', w);
+      const msg = displayMessages[heightStart - 1];
+      const h = estimateLines(truncateLongText(msg?.text ?? ''), paintedWidth(msg?.role, columns, screenReader));
       if (used + h > heightBudget && heightStart < heightEnd) break;
       used += h;
       heightStart--;
@@ -1214,19 +1294,31 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const renderStart = Math.max(0, heightStart - 1);
   const renderEnd = heightEnd;
 
-  // While an overlay with its own text state owns the keyboard, VimInput must
-  // ignore keys (otherwise typing in the overlay also types into the editor).
-  // The autocomplete/mention/picker dropdowns filter on the editor text itself,
-  // so they are NOT captured here.
-  // Every overlay that consumes Enter must capture the editor too: otherwise
-  // VimInput's own Enter handler submits the stale editor text alongside the
-  // overlay action (double submit with two different texts).
-  const inputCaptured = permissionDialog !== null || messageSelector.open || trustOpen
-    || historySearch.open || settingsOpen || transcriptSearch.open
-    || (focusedDialog === 'picker' && picker !== null);
   const visibleMessages = displayMessages.slice(renderStart, renderEnd);
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
+  columnsRef.current = columns;
+  screenReaderRef.current = screenReader;
+  selectionRef.current = selection;
+  selectingRef.current = selecting;
+  displayRef.current = displayMessages;
+  {
+    const bands: WalkBand[] = [{ kind: 'chrome', rows: 2 }];
+    if (displayMessages.length > 0 && (scrollOffset > 0 || aboveHidden > 0)) bands.push({ kind: 'chrome', rows: 1 });
+    for (let i = renderStart; i < renderEnd; i++) {
+      const msg = displayMessages[i];
+      bands.push({
+        kind: 'message',
+        index: i,
+        rows: estimateLines(truncateLongText(msg?.text ?? ''), paintedWidth(msg?.role, columns, screenReader)),
+      });
+    }
+    if (thinkingText && showThinking) {
+      bands.push({ kind: 'chrome', rows: estimateLines(thinkingText.slice(-500), Math.max(10, columns - 2)) });
+    }
+    if (running && activity) bands.push({ kind: 'chrome', rows: 1 });
+    rowMapRef.current = rowMapFromWalk(bands);
+  }
   // Transcript search hits (derived): global indices into displayMessages.
   const searchHits: number[] = (() => {
     const q = transcriptSearch.query.trim().toLowerCase();
@@ -1235,14 +1327,55 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     displayMessages.forEach((m, i) => { if (m.text.toLowerCase().includes(q)) out.push(i); });
     return out;
   })();
+  const ctx = activeContext({
+    permissionNotice: permissionDialog !== null,
+    picker: focusedDialog === 'picker' && picker !== null,
+    settings: settingsOpen,
+    messageSelector: focusedDialog === 'messageSelector',
+    historySearch: focusedDialog === 'historySearch',
+    transcriptSearch: transcriptSearch.open,
+    autocomplete: mentionOpen || autoOpen,
+  });
+  const gate = vimInputGate(ctx, trustOpen);
+  const closeSettingsStep = () => {
+    if (editingKey) { setEditingKey(null); setEditValue(''); return; }
+    if (settingsTab === 'config' && settingsQuery) { setSettingsQuery(''); return; }
+    setSettingsOpen(false);
+    setSettingsQuery('');
+  };
+  const closeOverlay = (which: LiveContext) => {
+    if (which === 'Confirmation') { setPermissionDialog(null); return; }
+    if (which === 'Select') { closeDialog('picker'); setPicker(null); setPickerSelected(0); return; }
+    if (which === 'Settings') { closeSettingsStep(); return; }
+    if (which === 'MessageSelector') {
+      setMessageSelector({ open: false, selected: 0 });
+      closeDialog('messageSelector');
+      return;
+    }
+    if (which === 'HistorySearch') {
+      setHistorySearch({ open: false, query: '', selected: 0 });
+      closeDialog('historySearch');
+      return;
+    }
+    if (which === 'Transcript') { setTranscriptSearch({ open: false, query: '', selected: 0 }); return; }
+    if (which === 'Autocomplete') {
+      if (mentionOpen) { setMentionDismissed(true); return; }
+      setAutoDismissed(true);
+    }
+  };
+  const applyCancel = (step: ReturnType<typeof cancelStep>) => {
+    if (step === 'abort-turn') { stopRef.current?.abort(); setActivity('stopping…'); return; }
+    if (step === 'close-overlay') { closeOverlay(ctx); return; }
+    if (step === 'clear-input') { setInput(''); inputRef.current = ''; return; }
+    exit();
+  };
   useInput((input, key) => {
-    // Trust dialog blocks everything until answered (like cc's workspace trust).
     if (trustOpen) {
       if (key.upArrow || key.downArrow) { setTrustSelected((s) => (s === 0 ? 1 : 0)); return; }
       if (input === 'y' || input === 'Y') {
         acceptTrust(cediaHome());
         setTrustOpen(false);
-        setNotice(null);
+        syncOnboardingRef.current();
         push({ role: 'system', text: 'trust accepted' });
         return;
       }
@@ -1255,7 +1388,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         if (trustSelected === 1) {
           acceptTrust(cediaHome());
           setTrustOpen(false);
-          setNotice(null);
+          syncOnboardingRef.current();
           push({ role: 'system', text: 'trust accepted' });
         } else {
           push({ role: 'system', text: 'not trusted: leaving' });
@@ -1265,173 +1398,215 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       return;
     }
-    // Ctrl+C owns the lifecycle (ink's exitOnCtrlC is off): abort a turn,
-    // else clear the editor, else leave — like pi-tui.
     if (key.ctrl && input === 'c') {
-      if (running) { stopRef.current?.abort(); setActivity('stopping…'); return; }
-      if (focusedDialog || permissionDialog || settingsOpen) return;
-      if (inputRef.current) { setInput(''); inputRef.current = ''; return; }
-      exit();
+      applyCancel(cancelStep({
+        running,
+        overlay: ctx !== 'Chat',
+        editorEmpty: inputRef.current.length === 0,
+      }));
       return;
     }
-    // Ctrl+D with an empty editor leaves (like pi-tui).
-    if (key.ctrl && input === 'd' && !running && !inputRef.current && !focusedDialog && !permissionDialog && !settingsOpen) {
-      exit();
-      return;
-    }
-    if (permissionDialog) {
-      if (key.escape || key.return) { setPermissionDialog(null); return; }
-      return;
-    }
-    // Shift+Tab cycles the permission mode, like cc's mode switcher hint.
-    if (key.tab && key.shift && !running) {
-      const modes = ['auto', 'plan', 'read-only', 'workspace'];
-      const next = modes[(modes.indexOf(permission ?? 'auto') + 1) % modes.length]!;
-      setPermission(next);
-      push({ role: 'system', text: `permission mode: ${next}` });
-      return;
-    }
-    if (focusedDialog === 'picker' && picker) {
-      if (key.escape) { closeDialog('picker'); setPicker(null); setPickerSelected(0); return; }
-      if (key.upArrow) { setPickerSelected((s) => Math.max(0, s - 1)); return; }
-      if (key.downArrow) { setPickerSelected((s) => Math.min(picker.items.length - 1, s + 1)); return; }
-      if (key.return) {
-        const before = inputRef.current;
-        const item = picker.items[pickerSelected];
-        if (item) { picker.onPick(item.value); }
-        closeDialog('picker'); setPicker(null); setPickerSelected(0);
-        if (inputRef.current === before) { setInput(''); inputRef.current = ''; }
-        return;
-      }
-      return;
-    }
-    // @-file mentions (like cc): ↑/↓ navigate, Enter/Tab accept, Esc dismiss.
-    if (mentionOpen) {
-      const sel = Math.min(mentionSelected, mentionItems.length - 1);
-      if (key.escape) { setMentionDismissed(true); return; }
-      if (key.upArrow) { setMentionSelected((s) => Math.max(0, s - 1)); return; }
-      if (key.downArrow) { setMentionSelected((s) => Math.min(mentionItems.length - 1, s + 1)); return; }
-      if (key.return || key.tab) {
-        const item = mentionItems[sel];
-        if (item) {
-          notePick(item.value);
-          const next = input.replace(/@[\w./-]*$/, `${item.value} `);
-          setInput(next);
-          setMentionDismissed(true);
+    if (ctx === 'Autocomplete') {
+      if (mentionOpen) {
+        const sel = Math.min(mentionSelected, mentionItems.length - 1);
+        if (key.escape) { setMentionDismissed(true); return; }
+        if (key.upArrow) { setMentionSelected((s) => Math.max(0, s - 1)); return; }
+        if (key.downArrow) { setMentionSelected((s) => Math.min(mentionItems.length - 1, s + 1)); return; }
+        if (key.return || key.tab) {
+          const item = mentionItems[sel];
+          if (item) {
+            notePick(item.value);
+            const next = input.replace(/@[\w./-]*$/, `${item.value} `);
+            setInput(next);
+            setMentionDismissed(true);
+          }
+          return;
         }
         return;
       }
-      // Typing filters the list (handled by derivation); other keys fall through.
-    }
-    // Compact autocomplete dropdown (like cc): ↑/↓ navigate, Enter/Tab accept, Esc dismiss.
-    if (autoOpen) {
-      const sel = Math.min(autoSelected, autoItems.length - 1);
-      if (key.escape) { setAutoDismissed(true); return; }
-      if (key.upArrow) { setAutoSelected((s) => Math.max(0, s - 1)); return; }
-      if (key.downArrow) { setAutoSelected((s) => Math.min(autoItems.length - 1, s + 1)); return; }
-      if (key.return || key.tab) {
-        const item = autoItems[sel];
-        if (item) { notePick(item.value); setInput(`/${item.value} `); setAutoDismissed(true); }
+      if (autoOpen) {
+        const sel = Math.min(autoSelected, autoItems.length - 1);
+        if (key.escape) { setAutoDismissed(true); return; }
+        if (key.upArrow) { setAutoSelected((s) => Math.max(0, s - 1)); return; }
+        if (key.downArrow) { setAutoSelected((s) => Math.min(autoItems.length - 1, s + 1)); return; }
+        if (key.return || key.tab) {
+          const item = autoItems[sel];
+          if (item) { notePick(item.value); setInput(`/${item.value} `); setAutoDismissed(true); }
+          return;
+        }
         return;
       }
-      // Typing filters the list (handled by derivation); other keys fall through.
-    }
-    // Tab re-opens a dismissed dropdown.
-    if (key.tab && !running && input.trim().startsWith('/') && !autoOpen && !mentionOpen && !focusedDialog && !settingsOpen) {
-      setAutoDismissed(false);
       return;
     }
-    if (key.tab && suggestion) { setInput(suggestion); setSuggestion(null); return; }
-    if (settingsOpen) {
-      if (key.escape) {
-        if (editingKey) { setEditingKey(null); setEditValue(''); return; }
-        if (settingsTab === 'config' && settingsQuery) { setSettingsQuery(''); return; }
-        setSettingsOpen(false);
-        setSettingsQuery('');
+    if (ctx !== 'Chat') {
+      if (ctx === 'Confirmation') {
+        if (key.escape || key.return) setPermissionDialog(null);
         return;
       }
-      const tabs: Array<'status' | 'config' | 'usage' | 'stats'> = ['status', 'config', 'usage', 'stats'];
-      if (key.tab) {
-        setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
-        setConfigSelected(0);
+      if (ctx === 'Select' && picker) {
+        if (key.escape) { closeDialog('picker'); setPicker(null); setPickerSelected(0); return; }
+        if (key.upArrow) { setPickerSelected((s) => Math.max(0, s - 1)); return; }
+        if (key.downArrow) { setPickerSelected((s) => Math.min(picker.items.length - 1, s + 1)); return; }
+        if (key.return) {
+          const before = inputRef.current;
+          const item = picker.items[pickerSelected];
+          if (item) { picker.onPick(item.value); }
+          closeDialog('picker'); setPicker(null); setPickerSelected(0);
+          if (inputRef.current === before) { setInput(''); inputRef.current = ''; }
+          return;
+        }
         return;
       }
-      if (key.leftArrow || key.rightArrow) {
-        if (key.rightArrow) setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
-        else setSettingsTab((t) => tabs[(tabs.indexOf(t) - 1 + tabs.length) % tabs.length]!);
-        setConfigSelected(0);
-        return;
-      }
-      if (settingsTab === 'config') {
-        if (editingKey) {
+      if (ctx === 'Settings') {
+        if (key.escape) { closeSettingsStep(); return; }
+        const tabs: Array<'status' | 'config' | 'usage' | 'stats'> = ['status', 'config', 'usage', 'stats'];
+        if (key.tab) {
+          setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
+          setConfigSelected(0);
+          return;
+        }
+        if (key.leftArrow || key.rightArrow) {
+          if (key.rightArrow) setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
+          else setSettingsTab((t) => tabs[(tabs.indexOf(t) - 1 + tabs.length) % tabs.length]!);
+          setConfigSelected(0);
+          return;
+        }
+        if (settingsTab === 'config') {
+          if (editingKey) {
+            if (key.return) {
+              try {
+                const pp = join(cediaHome(), 'settings.json');
+                let raw: Record<string, unknown> = {};
+                try { raw = JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown>; } catch {}
+                let v: unknown = editValue;
+                try { v = JSON.parse(editValue); } catch {}
+                raw[editingKey] = v;
+                fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
+                push({ role: 'system', text: `setting ${editingKey} updated` });
+              } catch (e) { push({ role: 'system', text: `could not save settings: ${(e as Error).message}` }); }
+              setEditingKey(null); setEditValue(''); setSettingsQuery('');
+              return;
+            }
+            if (key.backspace || key.delete) { setEditValue((q) => q.slice(0, -1)); return; }
+            if (input && !key.ctrl && !key.meta && !key.return && input.length === 1 && input >= ' ') {
+              setEditValue((q) => q + input);
+              return;
+            }
+            return;
+          }
           if (key.return) {
             try {
+              const raw = readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>;
+              const q = settingsQuery.toLowerCase();
+              const keys = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q));
+              const target = keys[Math.min(configSelected, Math.max(0, keys.length - 1))];
+              if (target && (keys.length === 1 || configSelected < keys.length)) {
+                setEditingKey(target);
+                setEditValue(JSON.stringify(raw[target]) ?? '');
+                return;
+              }
+            } catch {}
+          }
+          if (input === ' ') {
+            try {
               const pp = join(cediaHome(), 'settings.json');
-              let raw: Record<string, unknown> = {};
-              try { raw = JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown>; } catch {}
-              let v: unknown = editValue;
-              try { v = JSON.parse(editValue); } catch { /* keep as string */ }
-              raw[editingKey] = v;
-              fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
-              push({ role: 'system', text: `setting ${editingKey} updated` });
-            } catch (e) { push({ role: 'system', text: `could not save settings: ${(e as Error).message}` }); }
-            setEditingKey(null); setEditValue(''); setSettingsQuery('');
+              const raw = readSettings(pp) as Record<string, unknown>;
+              const q = settingsQuery.toLowerCase();
+              const keys = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q));
+              const target = keys[Math.min(configSelected, Math.max(0, keys.length - 1))];
+              if (target && typeof raw[target] === 'boolean') {
+                raw[target] = !raw[target];
+                fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
+                push({ role: 'system', text: `setting ${target} = ${String(raw[target])}` });
+              }
+            } catch {}
             return;
           }
-          if (key.backspace || key.delete) { setEditValue((q) => q.slice(0, -1)); return; }
+          if (key.upArrow) {
+            setConfigSelected((s) => Math.max(0, s - 1));
+            return;
+          }
+          if (key.downArrow) {
+            try {
+              const raw = readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>;
+              const q = settingsQuery.toLowerCase();
+              const n = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q)).length;
+              setConfigSelected((s) => Math.min(Math.max(0, n - 1), s + 1));
+            } catch { setConfigSelected((s) => s + 1); }
+            return;
+          }
+          if (key.backspace || key.delete) { setSettingsQuery((q) => q.slice(0, -1)); return; }
           if (input && !key.ctrl && !key.meta && !key.return && input.length === 1 && input >= ' ') {
-            setEditValue((q) => q + input);
+            setSettingsQuery((q) => q + input);
             return;
           }
+        }
+        return;
+      }
+      if (ctx === 'MessageSelector') {
+        const runs = thread ? runLines(store.read(thread)) : [];
+        if (key.escape) { setMessageSelector({ open: false, selected: 0 });
+          closeDialog('messageSelector'); return; }
+        if (key.upArrow) { setMessageSelector((m) => ({ ...m, selected: Math.max(0, m.selected - 1) })); return; }
+        if (key.downArrow) {
+          if (!runs.length) return;
+          setMessageSelector((m) => ({ ...m, selected: Math.min(runs.length - 1, m.selected + 1) }));
           return;
         }
         if (key.return) {
-          try {
-            const raw = readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>;
-            const q = settingsQuery.toLowerCase();
-            const keys = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q));
-            const target = keys[Math.min(configSelected, Math.max(0, keys.length - 1))];
-            if (target && (keys.length === 1 || configSelected < keys.length)) {
-              setEditingKey(target);
-              setEditValue(JSON.stringify(raw[target]) ?? '');
-              return;
-            }
-          } catch { /* fall through */ }
-        }
-        if (input === ' ') {
-          // Space toggles a boolean setting immediately; otherwise it is swallowed.
-          try {
-            const pp = join(cediaHome(), 'settings.json');
-            const raw = readSettings(pp) as Record<string, unknown>;
-            const q = settingsQuery.toLowerCase();
-            const keys = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q));
-            const target = keys[Math.min(configSelected, Math.max(0, keys.length - 1))];
-            if (target && typeof raw[target] === 'boolean') {
-              raw[target] = !raw[target];
-              fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
-              push({ role: 'system', text: `setting ${target} = ${String(raw[target])}` });
-            }
-          } catch { /* ignore */ }
+          if (!thread) { push({ role: 'system', text: 'no thread yet' }); setMessageSelector({ open: false, selected: 0 });
+          closeDialog('messageSelector'); return; }
+          const n = messageSelector.selected + 1;
+          if (!runs.length) { push({ role: 'system', text: 'no runs to rewind to' }); setMessageSelector({ open: false, selected: 0 });
+          closeDialog('messageSelector'); return; }
+          const r = rewindThread(store, thread, n, { open: (cwd) => workspaceSnapshots(cwd, cediaHome()), sessionFile: (c, sid) => `${c}/${sid}.jsonl` }, {});
+          if ('error' in r) push({ role: 'system', text: 'error: ' + r.error });
+          else { push({ role: 'system', text: rewoundText(r) }); setContext(0); }
+          setMessageSelector({ open: false, selected: 0 });
+          closeDialog('messageSelector');
           return;
         }
-        if (key.upArrow) {
-          setConfigSelected((s) => Math.max(0, s - 1));
-          return;
-        }
+        return;
+      }
+      if (ctx === 'HistorySearch') {
+        if (key.escape) { setHistorySearch({ open: false, query: '', selected: 0 }); closeDialog('historySearch'); return; }
+        if (key.upArrow) { setHistorySearch((h) => ({ ...h, selected: Math.max(0, h.selected - 1) })); return; }
         if (key.downArrow) {
-          try {
-            const raw = readSettings(join(cediaHome(), 'settings.json')) as Record<string, unknown>;
-            const q = settingsQuery.toLowerCase();
-            const n = Object.keys(raw).filter((k) => !q || k.toLowerCase().includes(q)).length;
-            setConfigSelected((s) => Math.min(Math.max(0, n - 1), s + 1));
-          } catch { setConfigSelected((s) => s + 1); }
+          const filtered = historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()));
+          if (!filtered.length) return;
+          setHistorySearch((h) => ({ ...h, selected: Math.min(filtered.length - 1, h.selected + 1) }));
           return;
         }
-        if (key.backspace || key.delete) { setSettingsQuery((q) => q.slice(0, -1)); return; }
-        if (input && !key.ctrl && !key.meta && !key.return && input.length === 1 && input >= ' ') {
-          setSettingsQuery((q) => q + input);
+        if (key.return) {
+          const filtered = historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()));
+          const selected = filtered[historySearch.selected];
+          setHistorySearch({ open: false, query: '', selected: 0 });
+          closeDialog('historySearch');
+          if (selected !== undefined) submit(selected);
           return;
         }
+        if (key.backspace || key.delete) {
+          setHistorySearch((h) => ({ ...h, query: h.query.slice(0, -1), selected: 0 }));
+          return;
+        }
+        if (input && !key.ctrl && !key.meta) {
+          setHistorySearch((h) => ({ ...h, query: h.query + input, selected: 0 }));
+          return;
+        }
+        return;
+      }
+      if (ctx === 'Transcript') {
+        if (key.escape) { setTranscriptSearch({ open: false, query: '', selected: 0 }); return; }
+        if (key.upArrow) { setTranscriptSearch((h) => ({ ...h, selected: Math.max(0, h.selected - 1) })); return; }
+        if (key.downArrow) { setTranscriptSearch((h) => ({ ...h, selected: Math.min(Math.max(0, searchHits.length - 1), h.selected + 1) })); return; }
+        if (key.return) {
+          const index = searchHits[transcriptSearch.selected];
+          if (index !== undefined) setScrollOffset(offsetForIndex(displayMessages.length, index));
+          return;
+        }
+        if (key.backspace || key.delete) { setTranscriptSearch((h) => ({ ...h, query: h.query.slice(0, -1), selected: 0 })); return; }
+        if (input && !key.ctrl && !key.meta) { setTranscriptSearch((h) => ({ ...h, query: h.query + input, selected: 0 })); return; }
+        return;
       }
       return;
     }
@@ -1451,31 +1626,45 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       setScrollOffset((o) => Math.max(0, o - windowSize));
       return;
     }
-    if (key.escape && !running) {
+    if (key.escape) {
+      if (running) { stopRef.current?.abort(); setActivity('stopping…'); return; }
       setSelection(null);
       setSelecting(false);
+      if (transcriptSearch.query) setTranscriptSearch({ open: false, query: '', selected: 0 });
+      return;
     }
-    if (!running && !focusedDialog) {
+    if (key.ctrl && input === 'd' && !running && inputRef.current.length === 0) {
+      exit();
+      return;
+    }
+    if (key.tab && key.shift && !running) {
+      const modes = ['auto', 'plan', 'read-only', 'workspace'];
+      const next = modes[(modes.indexOf(permission ?? 'auto') + 1) % modes.length]!;
+      setPermission(next);
+      push({ role: 'system', text: `permission mode: ${next}` });
+      return;
+    }
+    if (key.tab && !running && input.trim().startsWith('/')) {
+      setAutoDismissed(false);
+      return;
+    }
+    if (key.tab && suggestion) { setInput(suggestion); setSuggestion(null); return; }
+    if (!running) {
       const id = inkKeyId(input, key);
-      // Active context follows the open dialog (specific first, Global always applies).
-      const activeContext: string = permissionDialog ? 'Confirmation'
-        : settingsOpen ? 'Settings'
-        : 'Chat';
-      const resolved = resolveBindings(loadedKeybindings).filter(
-        (b) => !b.context || b.context === 'Global' || b.context === activeContext,
-      );
-      for (const b of resolved) {
-        const match = (id !== undefined && id === b.key.toLowerCase()) || matchesKey(input, b.key as any);
-        if (!match) continue;
-        const cmd = b.command;
-        // The editor owns Up/Down when it moves the cursor itself: vim
-        // non-insert modes (arrows act as hjkl) and multiline insert input
-        // (arrows move between rows). Otherwise Up/Down recalls history.
+      const bindings = resolveBindings(loadedKeybindings);
+      let cmd = id ? findCommand(bindings, id, 'Chat') : undefined;
+      if (!cmd) {
+        for (const b of bindings) {
+          if (b.context && b.context !== 'Chat' && b.context !== 'Global') continue;
+          const keyed = id !== undefined && normKey(id) === normKey(b.key);
+          if (keyed || matchesKey(input, b.key as any)) { cmd = b.command; break; }
+        }
+      }
+      if (cmd) {
         if ((cmd === 'historyUp' || cmd === 'historyDown')
           && (vimMode !== 'insert' || inputRef.current.includes('\n'))) return;
         if (cmd === 'cancel') {
-          setInput('');
-          inputRef.current = '';
+          applyCancel(cancelStep({ running: false, overlay: false, editorEmpty: inputRef.current.length === 0 }));
           return;
         }
         if (cmd === 'submit') {
@@ -1492,7 +1681,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
     }
-    // cc-style global shortcuts: palette, global search, model picker, fast mode, thinking toggle.
     if (key.ctrl && key.shift && (input === 'p' || input === 'P')) { handleCommand('palette'); return; }
     if (key.ctrl && key.shift && (input === 'f' || input === 'F')) { setTranscriptSearch({ open: true, query: '', selected: 0 }); return; }
     if (key.meta && (input === 'p' || input === 'P')) { handleCommand('model'); return; }
@@ -1503,108 +1691,30 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       push({ role: 'system', text: `thinking ${next ? 'shown' : 'hidden'}` });
       return;
     }
-    if (focusedDialog === 'messageSelector') {
-      const runs = thread ? runLines(store.read(thread)) : [];
-      if (key.escape) { setMessageSelector({ open: false, selected: 0 });
-        closeDialog('messageSelector'); return; }
-      if (key.upArrow) { setMessageSelector((m) => ({ ...m, selected: Math.max(0, m.selected - 1) })); return; }
-      if (key.downArrow) {
-        if (!runs.length) return;
-        setMessageSelector((m) => ({ ...m, selected: Math.min(runs.length - 1, m.selected + 1) }));
-        return;
-      }
-      if (key.return) {
-        if (!thread) { push({ role: 'system', text: 'no thread yet' }); setMessageSelector({ open: false, selected: 0 });
-        closeDialog('messageSelector'); return; }
-        const n = messageSelector.selected + 1;
-        if (!runs.length) { push({ role: 'system', text: 'no runs to rewind to' }); setMessageSelector({ open: false, selected: 0 });
-        closeDialog('messageSelector'); return; }
-        const r = rewindThread(store, thread, n, { open: (cwd) => workspaceSnapshots(cwd, cediaHome()), sessionFile: (c, sid) => `${c}/${sid}.jsonl` }, {});
-        if ('error' in r) push({ role: 'system', text: 'error: ' + r.error });
-        else { push({ role: 'system', text: rewoundText(r) }); setContext(0); }
-        setMessageSelector({ open: false, selected: 0 });
-        closeDialog('messageSelector');
-        return;
-      }
-      return;
-    }
-    if (focusedDialog === 'historySearch') {
-      if (key.escape) { setHistorySearch({ open: false, query: '', selected: 0 }); closeDialog('historySearch'); return; }
-      if (key.upArrow) { setHistorySearch((h) => ({ ...h, selected: Math.max(0, h.selected - 1) })); return; }
-      if (key.downArrow) {
-        const filtered = historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()));
-        if (!filtered.length) return;
-        setHistorySearch((h) => ({ ...h, selected: Math.min(filtered.length - 1, h.selected + 1) }));
-        return;
-      }
-      if (key.return) {
-        const filtered = historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()));
-        const selected = filtered[historySearch.selected];
-        setHistorySearch({ open: false, query: '', selected: 0 });
-        closeDialog('historySearch');
-        if (selected !== undefined) submit(selected);
-        return;
-      }
-      if (key.backspace || key.delete) {
-        setHistorySearch((h) => ({ ...h, query: h.query.slice(0, -1), selected: 0 }));
-        return;
-      }
-      if (input && !key.ctrl && !key.meta) {
-        setHistorySearch((h) => ({ ...h, query: h.query + input, selected: 0 }));
-        return;
-      }
-      return;
-    }
-    // Esc aborts a running turn (dialogs above have their own Esc handling).
-    if (key.escape && running) { stopRef.current?.abort(); setActivity('stopping…'); return; }
-    // Transcript search UI (like cc's in-chat find): ↑/↓ navigate matches, Enter jumps, Esc closes.
-    if (transcriptSearch.open) {
-      if (key.escape) { setTranscriptSearch({ open: false, query: '', selected: 0 }); return; }
-      if (key.upArrow) { setTranscriptSearch((h) => ({ ...h, selected: Math.max(0, h.selected - 1) })); return; }
-      if (key.downArrow) { setTranscriptSearch((h) => ({ ...h, selected: Math.min(Math.max(0, searchHits.length - 1), h.selected + 1) })); return; }
-      if (key.return) {
-        const gi = searchHits[transcriptSearch.selected];
-        if (gi !== undefined) {
-          const maxOff = Math.max(0, displayMessages.length - 1);
-          setScrollOffset(Math.min(maxOff, Math.max(0, displayMessages.length - 1 - gi - Math.floor(windowSize / 2))));
-          push({ role: 'system', text: `jumped to match ${transcriptSearch.selected + 1}/${searchHits.length}` });
-        }
-        setTranscriptSearch({ open: false, query: '', selected: 0 });
-        return;
-      }
-      if (key.backspace || key.delete) { setTranscriptSearch((h) => ({ ...h, query: h.query.slice(0, -1), selected: 0 })); return; }
-      if (input && !key.ctrl && !key.meta) { setTranscriptSearch((h) => ({ ...h, query: h.query + input, selected: 0 })); return; }
-      return;
-    }
     if (key.ctrl && (input === 'f' || input === 'F')) {
-      if (historySearch.open || focusedDialog) return;
-      setTranscriptSearch({ open: true, query: '', selected: 0 });
+      setTranscriptSearch((s) => (s.query ? { ...s, open: true } : { open: true, query: '', selected: 0 }));
       return;
     }
-    if (key.ctrl && (input === 'p' || input === 'P') && !running && !focusedDialog && !settingsOpen && !permissionDialog) {
+    if (key.ctrl && (input === 'p' || input === 'P') && !running) {
       handleCommand('palette');
       return;
     }
     if (key.ctrl && (input === 'r' || input === 'R')) {
-      if (transcriptSearch.open) return;
       setHistorySearch({ open: true, query: '', selected: 0 });
       openDialog('historySearch');
       return;
     }
-    if (key.shift && key.upArrow && !running && !focusedDialog && !settingsOpen && !permissionDialog && !transcriptSearch.open && !historySearch.open && !messageSelector.open) {
-      if (input.trim()) return; // let the editor move the cursor when typing
+    if (key.shift && key.upArrow && !running) {
+      if (input.trim()) return;
       handleCommand('actions');
       return;
     }
     if (key.ctrl && (input === 'o' || input === 'O')) {
-      if (transcriptSearch.open || historySearch.open) return;
       if (!thread) { push({ role: 'system', text: 'no thread yet' }); return; }
       setMessageSelector({ open: true, selected: 0 });
       openDialog('messageSelector');
       return;
     }
-    // External editor (like cc's ctrl+g): edit the prompt in $EDITOR.
-    // Leaves the alternate screen while editing so the editor owns the terminal.
     if (key.ctrl && (input === 'g' || input === 'G')) {
       if (running) return;
       const editor = process.env.VISUAL || process.env.EDITOR;
@@ -1660,33 +1770,18 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <>
               {visibleMessages.map((m, i) => {
             const globalIdx = renderStart + i;
-            let a = -1, b = -1;
-            if (selection) {
-              const lo = Math.min(selection.aMsg, selection.bMsg);
-              const hi = Math.max(selection.aMsg, selection.bMsg);
-              if (globalIdx >= lo && globalIdx <= hi) {
-                if (lo === hi) { a = Math.min(selection.aCol, selection.bCol); b = Math.max(selection.aCol, selection.bCol) + 1; }
-                else if (globalIdx === lo) { a = (selection.aMsg <= selection.bMsg ? selection.aCol : 0); b = m.text.length; }
-                else if (globalIdx === hi) { a = 0; b = (selection.aMsg <= selection.bMsg ? selection.bCol + 1 : m.text.length); }
-                else { a = 0; b = m.text.length; }
-              }
-            }
-            const hasSel = a >= 0 && b > a;
-            // opencode-style user row: full-width highlight with a left accent
-            // bar. ink only paints background behind actual characters, so pad
-            // each visual line to the full content width.
-            const isUserRow = m.role === 'user' && !hasSel;
+            const capped = truncateLongText(m.text);
+            const q = transcriptSearch.query.trim();
+            const queryHit = q.length > 0 && capped.toLowerCase().includes(q.toLowerCase());
+            const bounds = selection ? selectionBounds(selection, globalIdx, capped.length) : undefined;
+            const hasSel = !!bounds && bounds.end > bounds.start;
+            const isUserRow = m.role === 'user' && !hasSel && !queryHit;
             const isToolError = m.role === 'tool' && m.status === 'error';
-            const rawFull = m.text;
-            // Hard cap like cc: a pasted file must not make every frame rewrap megabytes.
-            const capped = truncateLongText(rawFull);
-            const contentWidth = Math.max(10, columns - 2 - (isUserRow && !screenReader ? 2 : 0));
+            const contentWidth = paintedWidth(m.role, columns, screenReader);
             const userLines = isUserRow && !screenReader
               ? capped.split('\n').map((ln) => ln.padEnd(Math.max(ln.length, contentWidth)))
               : null;
             const full = capped;
-            const sa = hasSel ? a : -1;
-            const sb = hasSel ? b : -1;
             if (screenReader) {
               return (
                 <Box key={globalIdx} flexDirection="column">
@@ -1695,15 +1790,21 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               );
             }
               return (
-            <Box key={globalIdx} flexDirection="column" backgroundColor={!screenReader && isUserRow ? T.userRowBg : undefined}>
-              {m.role === 'assistant' ? (
-                <Markdown>{m.text}</Markdown>
-              ) : hasSel ? (
+            <Box key={globalIdx} flexDirection="column" backgroundColor={isUserRow ? T.userRowBg : undefined}>
+              {hasSel && bounds ? (
                 <Text wrap="wrap">
-                  <Text color={themedColorFor(T, m.role)}>{full.slice(0, sa)}</Text>
-                  <Text backgroundColor="blue" color="white">{full.slice(sa, sb)}</Text>
-                  <Text color={themedColorFor(T, m.role)}>{full.slice(sb)}</Text>
+                  <Text color={themedColorFor(T, m.role)}>{full.slice(0, bounds.start)}</Text>
+                  <Text backgroundColor="blue" color="white">{full.slice(bounds.start, bounds.end)}</Text>
+                  <Text color={themedColorFor(T, m.role)}>{full.slice(bounds.end)}</Text>
                 </Text>
+              ) : queryHit ? (
+                <Text wrap="wrap">
+                  {highlightQuery(full, q).map((sp, si) => (
+                    <Text key={si} backgroundColor={sp.hit ? 'yellow' : undefined} color={sp.hit ? 'black' : themedColorFor(T, m.role)} bold={sp.hit}>{sp.text}</Text>
+                  ))}
+                </Text>
+              ) : m.role === 'assistant' ? (
+                <Markdown>{m.text}</Markdown>
               ) : m.role === 'tool' && !isToolError && full.split('\n').some((l) => /^[+-]/.test(l)) ? (
                 <Box flexDirection="column">
                   {full.split('\n').slice(0, 12).map((ln, li) => {
@@ -1844,10 +1945,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           })()
         ) : null}
         {permissionDialog ? (
-          (() => {
-            const Dialog = permissionDialogFor(permissionDialog.tool);
-            return <Dialog tool={permissionDialog.tool} input={permissionDialog.input} reason={permissionDialog.reason} rule={permissionDialog.rule} />;
-          })()
+          <PermissionDialog tool={permissionDialog.tool} input={permissionDialog.input} reason={permissionDialog.reason} rule={permissionDialog.rule} />
         ) : null}
         {settingsOpen ? (
           <Box flexDirection="column" paddingX={1}>
@@ -2012,7 +2110,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         ) : null}
         <Box paddingX={1}>
           <Text color={screenReader ? undefined : T.primary}>{screenReader ? '' : '› '}</Text>
-          <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={inputCaptured} suppressSubmit={autoOpen || mentionOpen} />
+          <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={gate.captured} suppressSubmit={gate.suppressSubmit} />
         </Box>
         {effModel || effort ? (
           <Box paddingX={1}>

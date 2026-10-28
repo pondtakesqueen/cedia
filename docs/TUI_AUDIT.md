@@ -186,3 +186,10 @@ Codex CLI (OpenAI) TUI features:
 - `/theme <dark|light>` switches live and persists.
 - Fixes: duplicate stdin handler removed (double-input bug), Esc/Ctrl+C abort, no more `unknown command /historyUp` (real input history), /model /effort /output-style /theme actually apply, shift+tab cycles permission mode.
 - New: transcript search UI (Ctrl+F), @-file mentions, visual vim mode, multiline input, thinking toggle (Meta+T), frecency-ranked autocomplete, draft stash per thread, structured diff rendering, windowed virtual list by estimated rows, input history, external editor (Ctrl+G).
+
+## Update 2026-10-27 (ink TUI polish)
+
+- Transcript search Enter jumps and leaves the overlay and the query up. Esc closes and clears the query. Idle Enter no longer submits the draft while search is open.
+- Mouse, wheel, selection, and copy use the display-message index from the paint walk. Hit rows, including assistant rows, highlight the query.
+- A denial notice lists bash, edit, write, web_fetch, and skill fields. It does not print Allow or Deny.
+- Onboarding is complete only when every `ONBOARDING_STEPS` name is recorded. `reconcileOnboarding` only appends.

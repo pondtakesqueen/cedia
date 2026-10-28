@@ -50,24 +50,79 @@ export function toolLabel(tool: string): string {
   return known.has(lower) ? lower : 'tool';
 }
 
-function previewInput(input: unknown): string {
-  if (input == null) return '';
-  if (typeof input === 'string') return input.slice(0, 200);
-  try {
-    const o = input as Record<string, unknown>;
-    const pick =
-      o.command ?? o.path ?? o.file_path ?? o.filePath ?? o.url ?? o.skill ?? o.old_string ?? o.query ?? o.pattern;
-    if (pick != null) {
-      const s = String(pick);
-      if (o.new_string != null && o.old_string != null) {
-        return `${String(o.old_string).slice(0, 80)} → ${String(o.new_string).slice(0, 80)}`.slice(0, 200);
-      }
-      return s.slice(0, 200);
-    }
-    return JSON.stringify(input).slice(0, 200);
-  } catch {
-    return String(input).slice(0, 200);
+export type NoticeLine = { label: string; value: string };
+
+export const NOTICE_FIELDS: Record<string, readonly string[]> = {
+  bash: ['command', 'timeout_ms'],
+  edit: ['path', 'old_text', 'new_text', 'edits'],
+  write: ['path', 'content'],
+  web_fetch: ['url', 'offset'],
+  skill: ['name', 'file'],
+};
+
+export const DISMISS_NOTE = 'Esc or Enter closes this notice. The call was already denied.';
+
+const CAP = 200;
+
+function cap(value: string): string {
+  return value.length > CAP ? value.slice(0, CAP) : value;
+}
+
+function asRecord(input: unknown): Record<string, unknown> | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  return input as Record<string, unknown>;
+}
+
+function textOf(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function pushLine(lines: NoticeLine[], label: string, value: string | undefined) {
+  if (value === undefined) return;
+  lines.push({ label, value: cap(value) });
+}
+
+export function noticeLines(tool: string, input: unknown): NoticeLine[] {
+  const label = toolLabel(tool);
+  const fields = NOTICE_FIELDS[label];
+  const record = asRecord(input);
+  if (!fields || !record) {
+    if (input == null) return [];
+    if (typeof input === 'string') return [{ label: 'input', value: cap(input) }];
+    try { return [{ label: 'input', value: cap(JSON.stringify(input)) }]; }
+    catch { return [{ label: 'input', value: cap(String(input)) }]; }
   }
+  const lines: NoticeLine[] = [];
+  if (label === 'bash') {
+    pushLine(lines, 'command', textOf(record.command));
+    if (typeof record.timeout_ms === 'number') pushLine(lines, 'timeout_ms', String(record.timeout_ms));
+    return lines;
+  }
+  if (label === 'edit') {
+    pushLine(lines, 'path', textOf(record.path));
+    const edits = Array.isArray(record.edits) ? record.edits : [];
+    const first = edits[0] && typeof edits[0] === 'object' ? edits[0] as Record<string, unknown> : null;
+    pushLine(lines, 'old_text', textOf(first?.old_text) ?? textOf(record.old_text));
+    pushLine(lines, 'new_text', textOf(first?.new_text) ?? textOf(record.new_text));
+    if (edits.length > 1) pushLine(lines, 'edits', String(edits.length));
+    return lines;
+  }
+  if (label === 'write') {
+    pushLine(lines, 'path', textOf(record.path));
+    if (typeof record.content === 'string') {
+      pushLine(lines, 'content', `${record.content.length} chars, ${record.content.slice(0, 80)}`);
+    }
+    return lines;
+  }
+  if (label === 'web_fetch') {
+    pushLine(lines, 'url', textOf(record.url));
+    if (typeof record.offset === 'number') pushLine(lines, 'offset', String(record.offset));
+    return lines;
+  }
+  const name = textOf(record.name) ?? textOf(record.skill);
+  pushLine(lines, 'name', name);
+  if (typeof record.file === 'string') pushLine(lines, 'file', record.file);
+  return lines;
 }
 
 export function PermissionDialog(props: PermissionDialogProps): React.ReactElement {
@@ -75,130 +130,14 @@ export function PermissionDialog(props: PermissionDialogProps): React.ReactEleme
   const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
   const label = toolLabel(tool);
   const T = inkTheme(cediaHome()).tokens;
+  const lines = noticeLines(tool, input);
   return React.createElement(
     Box,
     { flexDirection: 'column', borderStyle: screenReader ? undefined : 'single', borderColor: screenReader ? undefined : T.borderActive, paddingX: 1 },
-    React.createElement(Text, { bold: !screenReader, color: screenReader ? undefined : T.accent }, `${label} permission`),
-    React.createElement(Text, {}, `tool: ${tool || label}`),
-    React.createElement(Text, { dimColor: !screenReader }, `input: ${previewInput(input)}`),
-    reason ? React.createElement(Text, { color: screenReader ? undefined : T.error }, `denied: ${reason}`) : null,
+    React.createElement(Text, { bold: !screenReader, color: screenReader ? undefined : T.accent }, `${label} denied`),
+    ...lines.map((line, i) => React.createElement(Text, { key: `${line.label}-${i}` }, `${line.label}: ${line.value}`)),
+    reason ? React.createElement(Text, { color: screenReader ? undefined : T.error }, reason) : null,
     rule ? React.createElement(Text, { dimColor: !screenReader }, `rule: ${rule}`) : null,
-    React.createElement(Text, { dimColor: !screenReader }, '[Allow] [Deny]'),
+    React.createElement(Text, { dimColor: !screenReader }, DISMISS_NOTE),
   );
 }
-
-// Specialized per-tool components (informational overlays). Each surfaces the
-// field that matters most for its tool, plus the shared input preview.
-function detailFor(kind: string, input: unknown): string | null {
-  if (input == null || typeof input !== 'object') return null;
-  const o = input as Record<string, unknown>;
-  const str = (v: unknown) => (v == null ? null : String(v).slice(0, 120));
-  switch (kind) {
-    case 'filewrite': {
-      const p = str(o.path ?? o.file_path ?? o.filePath);
-      return p ? `file: ${p}` : null;
-    }
-    case 'skill': {
-      const s = str(o.skill ?? o.name);
-      return s ? `skill: ${s}` : null;
-    }
-    case 'planmode': {
-      const m = str(o.mode ?? o.plan);
-      return m ? `mode: ${m}` : null;
-    }
-    case 'filesystem': {
-      const p = str(o.path ?? o.dir ?? o.directory);
-      return p ? `path: ${p}` : null;
-    }
-    case 'sed': {
-      const p = str(o.pattern ?? o.expression ?? o.script);
-      return p ? `pattern: ${p}` : null;
-    }
-    default:
-      return null;
-  }
-}
-
-function Specialized(props: PermissionDialogProps & { kind: string }): React.ReactElement {
-  const { kind, tool, input, reason, rule } = props;
-  const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
-  const label = toolLabel(tool);
-  const T = inkTheme(cediaHome()).tokens;
-  const detail = detailFor(kind, input);
-  return React.createElement(
-    Box,
-    { flexDirection: 'column', borderStyle: screenReader ? undefined : 'single', borderColor: screenReader ? undefined : T.borderActive, paddingX: 1 },
-    React.createElement(Text, { bold: !screenReader, color: screenReader ? undefined : T.accent }, `${label} permission`),
-    React.createElement(Text, {}, `tool: ${tool || label}`),
-    detail ? React.createElement(Text, {}, detail) : null,
-    React.createElement(Text, { dimColor: !screenReader }, `input: ${previewInput(input)}`),
-    reason ? React.createElement(Text, { color: screenReader ? undefined : T.error }, `denied: ${reason}`) : null,
-    rule ? React.createElement(Text, { dimColor: !screenReader }, `rule: ${rule}`) : null,
-    React.createElement(Text, { dimColor: !screenReader }, '[Allow] [Deny]'),
-  );
-}
-
-export function FileWritePermissionDialog(props: PermissionDialogProps): React.ReactElement {
-  return React.createElement(Specialized, { kind: 'filewrite', ...props });
-}
-export function SkillPermissionDialog(props: PermissionDialogProps): React.ReactElement {
-  return React.createElement(Specialized, { kind: 'skill', ...props });
-}
-export function EnterPlanModePermissionDialog(props: PermissionDialogProps): React.ReactElement {
-  return React.createElement(Specialized, { kind: 'planmode', ...props });
-}
-export function ExitPlanModePermissionDialog(props: PermissionDialogProps): React.ReactElement {
-  return React.createElement(Specialized, { kind: 'planmode', ...props });
-}
-export function FilesystemPermissionDialog(props: PermissionDialogProps): React.ReactElement {
-  return React.createElement(Specialized, { kind: 'filesystem', ...props });
-}
-export function SedPermissionDialog(props: PermissionDialogProps): React.ReactElement {
-  return React.createElement(Specialized, { kind: 'sed', ...props });
-}
-export function FallbackPermissionDialog(props: PermissionDialogProps): React.ReactElement {
-  return React.createElement(PermissionDialog, props);
-}
-
-// Aliases matching common naming.
-export const FileWriteDialog = FileWritePermissionDialog;
-export const SkillDialog = SkillPermissionDialog;
-export const EnterPlanModeDialog = EnterPlanModePermissionDialog;
-export const ExitPlanModeDialog = ExitPlanModePermissionDialog;
-export const FilesystemDialog = FilesystemPermissionDialog;
-export const SedDialog = SedPermissionDialog;
-export const FallbackDialog = FallbackPermissionDialog;
-
-export function permissionDialogFor(tool: string): (props: PermissionDialogProps) => React.ReactElement {
-  const key = String(tool ?? '').toLowerCase().replace(/[\s_-]+/g, '');
-  switch (key) {
-    case 'write':
-    case 'filewrite':
-      return FileWritePermissionDialog;
-    case 'skill':
-      return SkillPermissionDialog;
-    case 'enterplanmode':
-      return EnterPlanModePermissionDialog;
-    case 'exitplanmode':
-      return ExitPlanModePermissionDialog;
-    case 'filesystem':
-    case 'fs':
-      return FilesystemPermissionDialog;
-    case 'sed':
-      return SedPermissionDialog;
-    case 'fallback':
-      return FallbackPermissionDialog;
-    default:
-      return PermissionDialog;
-  }
-}
-
-export const permissionDialogs = {
-  FileWrite: FileWritePermissionDialog,
-  Skill: SkillPermissionDialog,
-  EnterPlanMode: EnterPlanModePermissionDialog,
-  ExitPlanMode: ExitPlanModePermissionDialog,
-  Filesystem: FilesystemPermissionDialog,
-  Sed: SedPermissionDialog,
-  Fallback: FallbackPermissionDialog,
-};

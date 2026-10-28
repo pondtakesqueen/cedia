@@ -73,6 +73,32 @@ export function frecencyBonus(map: FrecencyMap, value: string): number {
   return Math.min(900, e.count * 100 + recent);
 }
 // Split a name into highlighted / plain runs for the dropdown.
+export type TextRun = { text: string; hit: boolean };
+
+export function highlightQuery(text: string, query: string): TextRun[] {
+  if (!query) return [{ text, hit: false }];
+  const lower = text.toLowerCase();
+  const needle = query.toLowerCase();
+  if (!needle) return [{ text, hit: false }];
+  const runs: TextRun[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const at = lower.indexOf(needle, i);
+    if (at < 0) {
+      const rest = text.slice(i);
+      if (rest) runs.push({ text: rest, hit: false });
+      break;
+    }
+    if (at > i) runs.push({ text: text.slice(i, at), hit: false });
+    const hit = text.slice(at, at + needle.length);
+    const prev = runs[runs.length - 1];
+    if (prev?.hit) prev.text += hit;
+    else if (hit) runs.push({ text: hit, hit: true });
+    i = at + needle.length;
+  }
+  return runs.length ? runs : [{ text, hit: false }];
+}
+
 export function highlightSpans(name: string, hits: number[]): { text: string; hit: boolean }[] {
   const hitSet = new Set(hits);
   const spans: { text: string; hit: boolean }[] = [];
@@ -111,4 +137,26 @@ export function estimateLines(text: string, width: number): number {
   let n = 0;
   for (const ln of text.split('\n')) n += Math.max(1, Math.ceil(ln.length / w));
   return n;
+}
+
+export function offsetAt(text: string, width: number, rowInSpan: number, col: number): number {
+  const w = Math.max(10, width);
+  const safeRow = Math.max(0, rowInSpan);
+  const safeCol = Math.max(0, col);
+  let seen = 0;
+  let pos = 0;
+  const lines = text.split('\n');
+  for (let li = 0; li < lines.length; li++) {
+    const ln = lines[li] ?? '';
+    const rows = Math.max(1, Math.ceil(ln.length / w));
+    if (safeRow < seen + rows) {
+      const within = safeRow - seen;
+      const rowStart = within * w;
+      const rowLen = Math.max(0, Math.min(w, ln.length - rowStart));
+      return pos + rowStart + Math.min(safeCol, rowLen);
+    }
+    seen += rows;
+    pos += ln.length + (li < lines.length - 1 ? 1 : 0);
+  }
+  return text.length;
 }

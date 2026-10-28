@@ -59,6 +59,7 @@ function start(opts: { rows?: number; script?: unknown[]; files?: string[] } = {
     stdin: stdin as unknown as NodeJS.ReadableStream,
     stdout,
     exitOnCtrlC: false,
+    interactive: true,
   });
   return {
     dir,
@@ -227,6 +228,48 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       expect(down).toContain('q2');
       expect(down).toContain('reply echo');
       expect(down).not.toContain('more below');
+    } finally {
+      h.stop();
+    }
+  }, 60000);
+
+  test('transcript search Enter jumps and keeps the query and the draft', async () => {
+    const h = start({ script: [{ blocks: [{ type: 'text', text: 'hello back' }] }] });
+    try {
+      await Bun.sleep(500);
+      h.write('hello there');
+      await Bun.sleep(200);
+      h.write('\r');
+      for (let i = 0; i < 40 && !h.frame().includes('hello back'); i++) await Bun.sleep(250);
+      h.write('draft-should-stay');
+      await Bun.sleep(300);
+      h.write('\x06');
+      await Bun.sleep(300);
+      h.drain();
+      h.write('hello');
+      await Bun.sleep(400);
+      const highlighted = h.frame();
+      expect(highlighted).toContain('search transcript: hello');
+      expect(highlighted).toContain('hello back');
+      expect(highlighted).not.toContain('│ hello there');
+      h.drain();
+      h.write('\x1b[B');
+      await Bun.sleep(300);
+      h.drain();
+      h.write('\r');
+      await Bun.sleep(500);
+      const jumped = h.frame();
+      expect(jumped).toContain('hello back');
+      expect(jumped).toContain('1 more below');
+      expect(jumped).toContain('search transcript: hello');
+      expect(jumped).toContain('› draft-should-stay');
+      h.drain();
+      h.write('\x1b');
+      await Bun.sleep(400);
+      const closed = h.frame();
+      expect(closed).not.toContain('search transcript');
+      expect(closed).toContain('› draft-should-stay');
+      expect(closed).toContain('hello back');
     } finally {
       h.stop();
     }
