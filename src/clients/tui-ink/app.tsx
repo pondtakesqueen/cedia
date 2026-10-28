@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Box, Text, useInput, useApp, useWindowSize, useStdin, useIsScreenReaderEnabled } from 'ink';
+import { Box, Text, useInput, useApp, useWindowSize, useStdin } from 'ink';
+import { selectedPrefix, useCediaScreenReader } from './a11y.ts';
 import { buildAutoItems, highlightSpans, paintRuns, truncateDescription, truncateLongText, estimateLines, offsetAt, loadFrecency, recordPick, frecencyBonus, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
@@ -1262,7 +1263,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // Rows reserved for input, status, dividers and margins — overlays are capped
   // to this budget so the chat box always stays on screen (like cc's modals).
   const overlayBudget = Math.max(4, rows - 12);
-  const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
+  const screenReader = useCediaScreenReader();
   const displayMessages = transcriptExpanded ? messages.filter((m) => showThinking || !m.dim) : messages.filter((m) => m.role !== 'tool' && (showThinking || !m.dim));
   const windowSize = Math.max(5, rows - 6);
   // Full message range: the height-budgeted slice below decides what fits,
@@ -1780,10 +1781,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     <Box flexDirection="column" height={screenReader ? undefined : termRows}>
       <Box flexDirection="column" paddingX={1}>
           <Box flexDirection="row">
-            <Box flexDirection="column" marginRight={1}>
-              <Text color={screenReader ? undefined : T.primary}>██</Text>
-              <Text color={screenReader ? undefined : T.primary}>██</Text>
-            </Box>
+            {screenReader ? null : (
+              <Box flexDirection="column" marginRight={1}>
+                <Text color={T.primary}>██</Text>
+                <Text color={T.primary}>██</Text>
+              </Box>
+            )}
             <Box flexDirection="column">
               <Text bold={screenReader ? false : true}>cedia {versionInfo().version}</Text>
               <Text dimColor={!screenReader}>{effModel?.label ?? model ?? 'auto'} · {shortCwd(args.cwd)}</Text>
@@ -1879,7 +1882,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <Text wrap="wrap">cedia will be able to read, edit, and execute files here.</Text>
             <Text dimColor={!screenReader}>Security guide: least privilege · deny-list enforced · snapshots can undo edits</Text>
             {(["No, exit", "Yes, I trust this folder"] as const).map((label, i) => (
-              <Text key={label} color={screenReader ? undefined : (i === trustSelected ? T.primary : undefined)}>{i === trustSelected ? '› ' : '  '}{label}</Text>
+              <Text key={label} color={screenReader ? undefined : (i === trustSelected ? T.primary : undefined)}>{selectedPrefix(i === trustSelected, screenReader)}{label}</Text>
             ))}
             <Text dimColor={!screenReader}>Enter to confirm · Esc to cancel</Text>
           </Box>
@@ -1895,7 +1898,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             {pVisible.map((it, i) => {
               const gi = pStart + i;
               return (
-              <Text key={gi} color={screenReader ? undefined : (gi === pickerSelected ? T.primary : undefined)} bold={screenReader ? false : (gi === pickerSelected)}>{gi === pickerSelected ? '› ' : '  '}{gi + 1}. {it.label}</Text>
+              <Text key={gi} color={screenReader ? undefined : (gi === pickerSelected ? T.primary : undefined)} bold={screenReader ? false : (gi === pickerSelected)}>{selectedPrefix(gi === pickerSelected, screenReader)}{gi + 1}. {it.label}</Text>
               );
             })}
             {pStart + pVisible.length < picker.items.length ? <Text dimColor={!screenReader}>…{picker.items.length - pStart - pVisible.length} more below</Text> : null}
@@ -2035,7 +2038,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                         const isBool = typeof v === 'boolean';
                         return (
                           <Text key={k}>
-                            <Text color={screenReader ? undefined : (gi === sel ? T.primary : undefined)}>{gi === sel ? '› ' : '  '}{labels[i]!.padEnd(w)}  </Text>
+                            <Text color={screenReader ? undefined : (gi === sel ? T.primary : undefined)}>{selectedPrefix(gi === sel, screenReader)}{labels[i]!.padEnd(w)}  </Text>
                             <Text
                               color={screenReader ? undefined : (isBool ? (v ? T.success : undefined) : (gi === sel ? T.primary : undefined))}
                               dimColor={screenReader ? false : (isBool ? !v : gi !== sel)}
@@ -2081,7 +2084,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             <Text dimColor={!screenReader}>{settingsTab === 'config' ? 'Enter/Space to change · / to search · ←/→ switch tabs · Esc to close' : '←/→ switch tabs · Esc to close'}</Text>
           </Box>
         ) : null}
-        {suggestion ? <Text dimColor={!screenReader}>💡 {suggestion} (Tab to accept)</Text> : null}
+        {suggestion ? <Text dimColor={!screenReader}>{screenReader ? 'suggestion: ' : '💡 '}{suggestion} (Tab to accept)</Text> : null}
         {mentionOpen ? (
           <Box flexDirection="column" paddingX={1}>
             {(() => {
@@ -2092,7 +2095,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               const sel = i === Math.min(mentionSelected, mentionItems.length - 1);
               return (
                 <Text key={`${it.name}::${i}`} wrap="truncate">
-                  <Text color={screenReader ? undefined : (sel ? T.primary : undefined)}>{sel ? '› ' : '  '}</Text>
+                  <Text color={screenReader ? undefined : (sel ? T.primary : undefined)}>{selectedPrefix(sel, screenReader)}</Text>
                   {highlightSpans(it.name, it.hits).map((sp, si) => (
                     <Text key={si} color={screenReader ? undefined : (sp.hit ? T.primary : undefined)} bold={screenReader ? false : sp.hit}>{sp.text}</Text>
                   ))}
@@ -2117,7 +2120,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               const plain = it.name.startsWith('/') ? it.name.slice(1) : it.name;
               return (
                 <Text key={`${it.name}::${i}`} wrap="truncate">
-                  <Text color={screenReader ? undefined : (sel ? T.primary : undefined)}>{sel ? '› ' : '  '}</Text>
+                  <Text color={screenReader ? undefined : (sel ? T.primary : undefined)}>{selectedPrefix(sel, screenReader)}</Text>
                   {it.name.startsWith('/') ? <Text dimColor={!screenReader}>/</Text> : null}
                   {highlightSpans(plain, it.hits).map((sp, si) => (
                     <Text key={si} color={screenReader ? undefined : (sp.hit ? T.primary : undefined)} bold={screenReader ? false : sp.hit}>{sp.text}</Text>
@@ -2143,7 +2146,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           </Box>
         ) : null}
         <Box paddingX={1}>
-          <Text color={screenReader ? undefined : T.primary}>{screenReader ? '' : '› '}</Text>
+          <Text color={screenReader ? undefined : T.primary}>{screenReader ? 'prompt: ' : '› '}</Text>
           <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={gate.captured} suppressSubmit={gate.suppressSubmit} />
         </Box>
         {effModel || effort ? (

@@ -1,5 +1,6 @@
 import React from 'react';
-import { Box, Text, useIsScreenReaderEnabled } from 'ink';
+import { Box, Text } from 'ink';
+import { useCediaScreenReader } from './a11y.ts';
 
 export function StatusBar(props: {
   cwd?: string;
@@ -12,7 +13,7 @@ export function StatusBar(props: {
   hint?: string;
 }): React.ReactElement {
   const { cwd, tokens, windowSize, spend, vimMode, activity, running, hint } = props;
-  const screenReader = useIsScreenReaderEnabled() || process.env.CEDIA_SCREEN_READER === '1' || process.env.CEDIA_AX_SCREEN_READER === '1';
+  const screenReader = useCediaScreenReader();
   const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : `${n}`);
   const pct = tokens !== undefined && windowSize ? ` (${Math.min(99, Math.round((tokens / windowSize) * 100))}%)` : '';
   const right = [

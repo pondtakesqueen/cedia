@@ -92,7 +92,7 @@ Date: 2026-10-26. Scope: `src/clients/tui-ink/app.tsx` (ink TUI, default) vs his
 | Vim mode (motions/text objects/find/counts/dot-repeat) | ✅ | |
 | Status line (command) | ✅ | |
 | Ink renderer (Yoga/scheduleRender/Frame diff) | ✅ | incrementalRendering + maxFps 60 + SIGCONT redraw + suspendTerminal editor |
-| Accessibility (--ax-screen-reader) | ✅ | |
+| Accessibility (--ax-screen-reader) | ✅ | env + Ink SR; no brand blocks / spoken selected: / prompt: |
 | Mouse/selection | ✅ | |
 | Resize/alt-screen | ✅ | |
 
@@ -166,7 +166,7 @@ Codex CLI (OpenAI) TUI features:
 6. Ink renderer: tune scheduleRender, Frame diff, SIGCONT, pause/resume — ✅ incrementalRendering, maxFps 60, SIGCONT redraw, suspendTerminal for Ctrl+G
 7. Vim: visual mode — ✅ `v` / `V` (line) + yank register (`y` / `p` / `P`); text objects still lighter than cc
 8. Settings: Usage tab per-model breakdown — ✅ `loadProjectUsage` / `usageReport.models`
-9. Accessibility: manual testing with screen reader
+9. Accessibility: manual testing with screen reader — ✅ automated SR render pass (CEDIA_SCREEN_READER / Ink isScreenReaderEnabled); live VoiceOver/NVDA still optional
 
 **Low priority (deferred by design):**
 10. Surveys, desktop upsell, ultrapan choice dialogs
@@ -178,7 +178,7 @@ Codex CLI (OpenAI) TUI features:
 
 **Done:** ~47 commands, virtual list, history search, message selector, transcript toggle, cost/idle dialogs, dialog priority, status line, keybindings, mouse, resize, onboarding, accessibility, resume picker, settings tabs+search, permission router (expanded labels), vim depth (motions/operators/text objects/find/counts/dot-repeat), rewind, LSP, full goal mode, classifier, spawn display, markdown, tool cards, permission dialogs, Tab autocomplete, arrow-key navigation.
 
-**Missing for 95%:** CC-product onboarding (Grove/Chrome/bypass) among the former high list; remaining medium: a11y manual pass.
+**Missing for 95%:** CC-product onboarding (Grove/Chrome/bypass) among the former high list (deferred by design).
 
 **Missing for 100% (deferred):** voice/buddy/computer-use, plugin/remote/cloud, surveys, desktop upsell, ultrapan choice, cc-specific commands. (cedia doesn't need all of these — some are cc-specific.)
 ## Update 2026-10-26 (ink TUI polish round)
@@ -230,3 +230,8 @@ Codex CLI (OpenAI) TUI features:
 
 - Settings Usage tab reads `loadProjectUsage` (per-model cost and request counts from recent session logs).
 - Vim `V` enters line-wise visual; `y`/`yw`/`yy` fill an in-process yank register; `p`/`P` paste it.
+
+## Update 2026-10-28 (ink a11y pass)
+
+- `useCediaScreenReader` / `envScreenReader` centralize CEDIA_* and INK_SCREEN_READER flags; `inkRenderOptions` passes them into Ink.
+- Screen-reader layout drops the ██ brand block and box borders, speaks `selected:` / `prompt:` / `suggestion:` instead of glyphs, and is covered by `test/tui-ink-a11y.test.ts`.
