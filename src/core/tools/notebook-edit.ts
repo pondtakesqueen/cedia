@@ -1,6 +1,5 @@
 import { readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, isAbsolute, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type { ToolSpec } from './registry.ts';
 
@@ -30,8 +29,12 @@ export const notebookEditTool: ToolSpec = {
   },
   effect: 'write_workspace',
   replay: 'unsafe',
-  async run(input, _ctx) {
-    const path = String(input.notebook_path ?? '');
+  // The path the policy checks, as edit and write give theirs: outside the working directory and git's or cedia's
+  // own config are denied.
+  pathOf: (input) => (typeof input.notebook_path === 'string' ? input.notebook_path : undefined),
+  async run(input, ctx) {
+    const given = String(input.notebook_path ?? '');
+    const path = isAbsolute(given) ? given : resolve(ctx.cwd, given);
     const mode = String(input.edit_mode ?? 'replace');
     const cellId = input.cell_id !== undefined ? String(input.cell_id) : undefined;
     const newSource = input.new_source !== undefined ? String(input.new_source) : '';
@@ -73,12 +76,8 @@ export const notebookEditTool: ToolSpec = {
 };
 
 function findCell(cells: Cell[], id: string): number {
-  // allow id as index
+  // A cell's id first; a number that matches no id is an index.
   const n = Number(id);
-  if (Number.isInteger(n) && n >= 0 && n < cells.length && String(cells[n]?.id ?? n) !== id) {
-    // only treat as index if no id matches
-  }
-  // first try id match
   const byId = cells.findIndex((c) => c.id === id);
   if (byId >= 0) return byId;
   if (Number.isInteger(n) && n >= 0 && n < cells.length) return n;

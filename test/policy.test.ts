@@ -10,6 +10,8 @@ import { REDACTED, secretPaths } from '../src/core/safety/secrets.ts';
 import { simpleCommands } from '../src/core/safety/shell.ts';
 import { bashTool } from '../src/core/tools/bash.ts';
 import { editTool, writeTool } from '../src/core/tools/edit.ts';
+import { monitorTool } from '../src/core/tools/monitor.ts';
+import { notebookEditTool } from '../src/core/tools/notebook-edit.ts';
 import { readTool } from '../src/core/tools/read.ts';
 
 const cwd = mkdtempSync(join(tmpdir(), 'cedia-policy-'));
@@ -157,6 +159,25 @@ describe('deny list', () => {
     expect(insideWorkspace('link/x', cwd)).toBe(false);
     expect(denyListed(['rm', '-rf', 'link/'], cwd)?.name).toBe('rm-outside');
     expect(decide(WS, writeTool, { path: 'link/x', content: '' }, cwd).rule).toBe('outside-workspace');
+  });
+});
+
+describe('tools that run a command or write a path besides bash, edit and write', () => {
+  test('Monitor is held to the deny list, secret paths and bash rules', () => {
+    const p: Policy = { ...WS, deny: ['bash(make release*)'], secrets: [join(homedir(), '.ssh')] };
+    const monitor = (command: string, policy = p) => decide(policy, monitorTool, { command }, cwd);
+    expect(monitor('git push --force origin main').rule).toBe('deny-list:force-push');
+    expect(monitor('rm -rf /').rule).toBe('deny-list:rm-outside');
+    expect(monitor('cat ~/.ssh/id_rsa').rule).toBe('deny-list:secret-path');
+    expect(monitor('make release').rule).toBe('deny:bash(make release*)');
+    expect(monitor('bun test --watch').rule).toBe('mode:workspace');
+    expect(monitor('bun test', RO).rule).toBe('mode:read-only');
+    expect(monitor('bun test', { ...RO, allow: ['bash(bun test*)'] }).rule).toBe('allow:bash(bun test*)');
+  });
+
+  test('NotebookEdit may not write outside the working directory', () => {
+    expect(decide(WS, notebookEditTool, { notebook_path: '/tmp/x.ipynb' }, cwd).rule).toBe('outside-workspace');
+    expect(decide(WS, notebookEditTool, { notebook_path: 'src/a.ipynb' }, cwd).rule).toBe('mode:workspace');
   });
 });
 
