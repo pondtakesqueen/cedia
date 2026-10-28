@@ -178,7 +178,7 @@ Codex CLI (OpenAI) TUI features:
 
 **Done:** ~47 commands, virtual list, history search, message selector, transcript toggle, cost/idle dialogs, dialog priority, status line, keybindings, mouse, resize, onboarding, accessibility, resume picker, settings tabs+search, permission router (expanded labels), vim depth (motions/operators/text objects/find/counts/dot-repeat), rewind, LSP, full goal mode, classifier, spawn display, markdown, tool cards, permission dialogs, Tab autocomplete, arrow-key navigation.
 
-**Missing for 95%:** specialized permission dialogs, true virtualization, keybindings contexts, onboarding completeness, selection overlay polish.
+**Missing for 95%:** CC-product onboarding (Grove/Chrome/bypass) only among the former high list; ink renderer schedule/Frame-diff tuning remains medium polish.
 
 **Missing for 100% (deferred):** voice/buddy/computer-use, plugin/remote/cloud, surveys, desktop upsell, ultrapan choice, cc-specific commands. (cedia doesn't need all of these — some are cc-specific.)
 ## Update 2026-10-26 (ink TUI polish round)
