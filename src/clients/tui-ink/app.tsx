@@ -288,7 +288,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const historyRef = useRef<string[]>([]);
   const queueRef = useRef<{ text: string; at: number }[]>([]);
   const [queued, setQueued] = useState<string[]>([]);
-  const submitRef = useRef<(text: string) => Promise<void>>(async () => {});
+  const submitRef = useRef<(text: string, planWhen?: 'always' | 'never', queued?: boolean) => Promise<void>>(async () => {});
   // Long pastes by their token in the prompt (line-edit.ts); kept for the session, so a recalled prompt still expands.
   const pastesRef = useRef(new Map<string, string>());
   const onPaste = useCallback((text: string) => {
@@ -998,7 +998,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     }
   }, [args, messages, running, store, thread, exit, spent, context, goal, transcriptExpanded, openDialog, model, permission, effort, switchThread, vimMode]);
 
-  const submit = useCallback(async (text: string, planWhen?: 'always' | 'never') => {
+  // queued: a prompt that waited for the last turn; what the person is typing now stays in the prompt.
+  const submit = useCallback(async (text: string, planWhen?: 'always' | 'never', queued = false) => {
     if (!text.trim()) return;
     // A prompt sent while a turn runs waits its turn (like cc): it runs when this one ends, and Esc puts it back
     // in the prompt. The same text twice in one tick is the double fire below, not two prompts.
@@ -1026,14 +1027,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       setInput('');
       return;
     }
+    const clearDraft = () => { if (!queued) { setInput(''); inputRef.current = ''; } };
     // A long paste stands in the prompt as a token; the model and commands get its text.
     const trimmedText = expandPastes(text, pastesRef.current).trim();
     if (pendingRef.current) {
       const p = pendingRef.current;
       pendingRef.current = undefined;
       const stop = new AbortController();
-      setInput('');
-      inputRef.current = '';
+      clearDraft();
       if (/^(y|yes)$/i.test(trimmedText)) { void p.yes(stop.signal); return; }
       push({ role: 'system', text: `not done: ${p.what}` });
       if (/^(n|no)$/i.test(trimmedText)) return;
@@ -1041,14 +1042,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     }
     if (text.trim().startsWith('/')) {
       push({ role: 'user', text });
-      setInput('');
-      inputRef.current = '';
+      clearDraft();
       handleCommand(trimmedText.slice(1));
       return;
     }
     busyRef.current = true;
     setMessages((m) => [...m, { role: 'user', text }]);
-    setInput('');
+    clearDraft();
     historyRef.current.push(text);
     histPos.current = -1;
     setRunning(true);
@@ -1155,7 +1155,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         queueRef.current = rest.map((t) => ({ text: t, at: 0 }));
         setQueued(rest);
         // After this render lets go of running, so the next prompt starts a turn of its own.
-        setTimeout(() => { void submitRef.current(next!); }, 0);
+        setTimeout(() => { void submitRef.current(next!, undefined, true); }, 0);
       }
     }
   }, [args, running, thread, handleCommand, goal, picker, closeDialog, permission, model, effort, effModel]);

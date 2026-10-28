@@ -401,4 +401,34 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       h.stop();
     }
   }, 30000);
+  test('a waiting prompt runs when the turn ends and leaves the draft being typed alone', async () => {
+    const h = start({
+      script: [
+        { blocks: [{ type: 'tool_use', id: 's1', name: 'sleep', input: { duration_ms: 1500 } }] },
+        { blocks: [{ type: 'text', text: 'answered' }] },
+      ],
+    });
+    try {
+      await Bun.sleep(500);
+      h.write('first');
+      await Bun.sleep(200);
+      h.write('\r');
+      await Bun.sleep(400);
+      h.write('second');
+      await Bun.sleep(200);
+      h.write('\r');
+      await Bun.sleep(200);
+      h.write('draft');
+      // Each turn reads the script afresh, so the second one sleeps and answers too.
+      const secondDone = () => /▌ second[\s\S]*✓ Done/.test(h.frame());
+      for (let i = 0; i < 40 && !secondDone(); i++) await Bun.sleep(250);
+      expect(secondDone()).toBe(true);
+      h.drain();
+      h.write('!');
+      await Bun.sleep(400);
+      expect(h.frame()).toContain('› draft!');
+    } finally {
+      h.stop();
+    }
+  }, 30000);
 });
