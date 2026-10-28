@@ -9,9 +9,10 @@ import { DISMISS_NOTE, noticeBlocks, noticeLines, PermissionDialog } from '../sr
 import { completedNames, isComplete, reconcileOnboarding, saveOnboarding } from '../src/clients/tui-ink/onboarding.ts';
 import { activeContext, findCommand, IDLE_OVERLAY, resolveBindings, vimInputGate } from '../src/clients/tui-ink/keybindings/resolver.ts';
 import { keybindingsPath, watchKeybindings } from '../src/clients/tui-ink/keybindings/loader.ts';
-import { cancelStep, offsetForIndex, rowMapFromWalk, selectionBounds } from '../src/clients/tui-ink/row-map.ts';
+import { cancelStep, messageFullySelected, offsetForIndex, rowMapFromWalk, selectionBounds } from '../src/clients/tui-ink/row-map.ts';
 import { highlightQuery, offsetAt, paintRuns } from '../src/clients/tui-ink/autocomplete.ts';
 import { createHeightCache, heightCacheKey, visibleWindow } from '../src/clients/tui-ink/visible-window.ts';
+import { assignRecycleSlots, messageSlotKey } from '../src/clients/tui-ink/virtual-list.ts';
 
 const stops: Array<() => void> = [];
 afterEach(() => {
@@ -81,6 +82,17 @@ describe('ink key context', () => {
     expect(selectionBounds({ aMsg: 2, aCol: 4, bMsg: 2, bCol: 1 }, 2, 10)).toEqual({ start: 1, end: 5 });
   });
 
+  test('messageFullySelected is true only for whole-message spans', () => {
+    const multi = { aMsg: 1, aCol: 2, bMsg: 3, bCol: 4 };
+    expect(messageFullySelected(multi, 1, 10)).toBe(false);
+    expect(messageFullySelected(multi, 2, 10)).toBe(true);
+    expect(messageFullySelected(multi, 3, 10)).toBe(false);
+    expect(messageFullySelected({ aMsg: 2, aCol: 0, bMsg: 2, bCol: 9 }, 2, 10)).toBe(true);
+    expect(messageFullySelected({ aMsg: 2, aCol: 1, bMsg: 2, bCol: 9 }, 2, 10)).toBe(false);
+    expect(messageFullySelected(null, 0, 5)).toBe(false);
+    expect(messageFullySelected(multi, 2, 0)).toBe(false);
+  });
+
   test('highlightQuery is a case-insensitive literal', () => {
     expect(highlightQuery('Hello hello', 'HELLO')).toEqual([
       { text: 'Hello', hit: true },
@@ -121,6 +133,24 @@ describe('ink key context', () => {
     expect(visibleWindow({ count: 0, scrollOffset: 0, budget: 10, heightAt: () => 1 })).toEqual({
       start: 0, end: 0, used: 0,
     });
+  });
+
+  test('assignRecycleSlots reuses slots for the same message key', () => {
+    const items = [
+      { role: 'user', text: 'a' },
+      { role: 'assistant', text: 'b' },
+      { role: 'user', text: 'c' },
+      { role: 'assistant', text: 'd' },
+    ];
+    const keyAt = (i: number) => messageSlotKey(items[i]!, i);
+    const first = assignRecycleSlots(1, 3, keyAt);
+    expect(first.map((s) => s.index)).toEqual([1, 2]);
+    const slotFor = Object.fromEntries(first.map((s) => [s.key, s.slot]));
+    const slid = assignRecycleSlots(2, 4, keyAt, first);
+    expect(slid.map((s) => s.index)).toEqual([2, 3]);
+    const kept = slid.find((s) => s.index === 2);
+    expect(kept?.slot).toBe(slotFor[keyAt(2)]);
+    expect(assignRecycleSlots(0, 0, keyAt)).toEqual([]);
   });
 
   test('height cache returns the same estimate until cleared', () => {

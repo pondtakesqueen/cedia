@@ -27,8 +27,9 @@ import { runStatusLineCommand } from '../tui/statusline.ts';
 import { loadKeybindings, watchKeybindings } from './keybindings/loader.ts';
 import { activeContext, findCommand, resolveBindings, vimInputGate, type LiveContext } from './keybindings/resolver.ts';
 import { ChordInterceptor, chordsFromBindings, matchChord } from './keybindings/chord.ts';
-import { cancelStep, offsetForIndex, rowMapFromWalk, selectionBounds, type InkSelection, type RowMap, type WalkBand } from './row-map.ts';
+import { cancelStep, messageFullySelected, offsetForIndex, rowMapFromWalk, selectionBounds, type InkSelection, type RowMap, type WalkBand } from './row-map.ts';
 import { createHeightCache, heightCacheKey, visibleWindow } from './visible-window.ts';
+import { assignRecycleSlots, messageSlotKey, type RecycleSlot } from './virtual-list.ts';
 import { matchesKey } from '@mariozechner/pi-tui';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
@@ -260,6 +261,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     (keys) => matchChord(keys, chordsFromBindings(resolveBindings(loadedKeybindingsRef.current), 'Chat')),
     (command) => chordDispatchRef.current(command),
   ));
+  const recycleSlotsRef = useRef<RecycleSlot[]>([]);
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
   const historyRef = useRef<string[]>([]);
   const histPos = useRef(-1);
@@ -1305,7 +1307,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     heightAt,
   });
 
-  const visibleMessages = displayMessages.slice(renderStart, renderEnd);
+  const recycleSlots = assignRecycleSlots(
+    renderStart,
+    renderEnd,
+    (i) => {
+      const msg = displayMessages[i];
+      return msg ? messageSlotKey(msg, i) : `empty:${i}`;
+    },
+    recycleSlotsRef.current,
+  );
+  recycleSlotsRef.current = recycleSlots;
   const aboveHidden = renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
   columnsRef.current = columns;
@@ -1801,13 +1812,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       <Box flexDirection="column" flexGrow={1} overflow="hidden" justifyContent="flex-end" paddingX={1}>
           {displayMessages.length === 0 ? null : (
             <>
-              {visibleMessages.map((m, i) => {
-            const globalIdx = renderStart + i;
+              {recycleSlots.map((slot) => {
+            const globalIdx = slot.index;
+            const m = displayMessages[globalIdx];
+            if (!m) return null;
             const capped = truncateLongText(m.text);
             const q = transcriptSearch.query.trim();
             const queryHit = q.length > 0 && capped.toLowerCase().includes(q.toLowerCase());
             const bounds = selection ? selectionBounds(selection, globalIdx, capped.length) : undefined;
             const hasSel = !!bounds && bounds.end > bounds.start;
+            const fullySelected = messageFullySelected(selection, globalIdx, capped.length);
             const isUserRow = m.role === 'user' && !hasSel && !queryHit;
             const isToolError = m.role === 'tool' && m.status === 'error';
             const contentWidth = paintedWidth(m.role, columns, screenReader);
@@ -1817,13 +1831,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const full = capped;
             if (screenReader) {
               return (
-                <Box key={globalIdx} flexDirection="column">
+                <Box key={`slot-${slot.slot}`} flexDirection="column">
                   <Text wrap="wrap">{m.role}: {m.text}</Text>
                 </Box>
               );
             }
               return (
-            <Box key={globalIdx} flexDirection="column" backgroundColor={isUserRow ? T.userRowBg : undefined}>
+            <Box key={`slot-${slot.slot}`} flexDirection="column" backgroundColor={fullySelected ? T.selectedBg : isUserRow ? T.userRowBg : undefined}>
+
               {hasSel || queryHit ? (
                 <Text wrap="wrap">
                   {paintRuns(full, { query: q, selection: hasSel ? bounds : undefined }).map((sp, si) => (

@@ -71,7 +71,7 @@ Date: 2026-10-26. Scope: `src/clients/tui-ink/app.tsx` (ink TUI, default) vs his
 | cc feature | cedia ink | status |
 |---|---|---|
 | REPL main screen | ✅ | |
-| Message list (Messages/VirtualMessageList) | ⚠️ windowed slicing | not true virtualization |
+| Message list (Messages/VirtualMessageList) | ✅ | height budget + overscan + slot recycle |
 | PromptInput | ✅ (VimInput) | |
 | Transcript toggle | ✅ | |
 | History search | ✅ (Ctrl+R) | |
@@ -156,11 +156,11 @@ Codex CLI (OpenAI) TUI features:
 ### 5. Summary: gaps to close for 95%+
 
 **High priority (functional gaps):**
-1. Permission router: specialized dialogs for FileWrite, Skill, PlanMode, Filesystem, Sed (not just labels)
-2. True virtualization: replace slicing with VirtualMessageList (overscan + recycling)
-3. Keybindings: add missing contexts (Autocomplete, Confirmation, Tabs, Transcript, etc.)
-4. Onboarding: add Grove, Claude-in-Chrome, bypass/auto-mode opt-in, dev channels
-5. Selection overlay: inline search highlight + message selection overlay
+1. Permission router: specialized dialogs for FileWrite, Skill, PlanMode, Filesystem, Sed — ✅ NoticeBlock layouts (diff/preview/fields)
+2. True virtualization: VirtualMessageList overscan + recycling — ✅ height cache + slot recycle
+3. Keybindings: missing contexts — ✅ overlay contexts + chord wiring (`g g`)
+4. Onboarding: add Grove, Claude-in-Chrome, bypass/auto-mode opt-in, dev channels — deferred (CC product)
+5. Selection overlay: inline search highlight + message selection overlay — ✅ paintRuns + fullySelected chrome
 
 **Medium priority (polish):**
 6. Ink renderer: tune scheduleRender, Frame diff, SIGCONT, pause/resume
@@ -178,7 +178,7 @@ Codex CLI (OpenAI) TUI features:
 
 **Done:** ~47 commands, virtual list, history search, message selector, transcript toggle, cost/idle dialogs, dialog priority, status line, keybindings, mouse, resize, onboarding, accessibility, resume picker, settings tabs+search, permission router (expanded labels), vim depth (motions/operators/text objects/find/counts/dot-repeat), rewind, LSP, full goal mode, classifier, spawn display, markdown, tool cards, permission dialogs, Tab autocomplete, arrow-key navigation.
 
-**Missing for 95%:** specialized permission dialogs, true virtualization, keybindings contexts, onboarding completeness, selection overlay polish.
+**Missing for 95%:** CC-product onboarding (Grove/Chrome/bypass) only among the former high list; ink renderer schedule/Frame-diff tuning remains medium polish.
 
 **Missing for 100% (deferred):** voice/buddy/computer-use, plugin/remote/cloud, surveys, desktop upsell, ultrapan choice, cc-specific commands. (cedia doesn't need all of these — some are cc-specific.)
 ## Update 2026-10-26 (ink TUI polish round)
@@ -203,7 +203,7 @@ Codex CLI (OpenAI) TUI features:
 ## Update 2026-10-28 (ink TUI virtual window)
 
 - Transcript windowing uses `visibleWindow` with a height budget, message overscan of 3, and a `createHeightCache` map keyed by index/width/text length/role.
-- Still a windowed slice, not a recycled VirtualMessageList component pool.
+- Slot recycle via `assignRecycleSlots` keeps stable React keys (`slot-N`) across window slides.
 
 ## Update 2026-10-28 (ink permission layouts)
 
@@ -215,3 +215,7 @@ Codex CLI (OpenAI) TUI features:
 - `ChordInterceptor` returns `none` for non-prefixes so typing is not swallowed.
 - Multi-key bindings (`g g`) resolve through `chordsFromBindings` / `matchChord`.
 - In vim normal mode, Chat runs the interceptor before single-key bindings; default `g g` scrolls to the top.
+
+## Update 2026-10-28 (ink message selection chrome)
+
+- A display message covered end-to-end by the mouse selection gets `selectedBg` row chrome via `messageFullySelected`.
