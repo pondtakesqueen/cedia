@@ -1463,6 +1463,7 @@
         "error_during_execution",
         "interrupted",
         "error_unverified_claim",
+        "error_stuck",
         "handoff",
         "asked"
       ]

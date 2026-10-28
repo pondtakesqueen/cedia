@@ -160,6 +160,7 @@ const END_MARKS: Record<string, [string, RowStyle]> = {
   error_max_budget_usd: ['✗ Hit the budget', 'err'],
   error_during_execution: ['✗ Failed', 'err'],
   error_unverified_claim: ['✗ Claimed done without proof', 'err'],
+  error_stuck: ['✗ Stopped going in circles', 'err'],
 };
 
 export function rowProps(style: RowStyle, T: { text: string; textMuted: string; textFaint: string; success: string; error: string; accent: string; thinking: string }): { color?: string; bold?: boolean; italic?: boolean } | undefined {

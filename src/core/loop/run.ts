@@ -16,6 +16,7 @@ import { redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
 import { evidence, ledgerEntries, matchCheck, repeatCheck, verified } from '../trust/ledger.ts';
+import { findStuck, stuckEnd, stuckReminder } from '../trust/stuck.ts';
 import type { Verdict } from '../trust/classifier.ts';
 import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
 import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
@@ -354,6 +355,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   const entries = () => [...inherited, ...ledgerEntries(log.events.slice(runStart), checks, opts.cwd)];
   let nudged = false;
   let emptyNudged = false;
+  // The stuck guard judges the calls since the run began, or since its reminder: one reminder, then the run ends.
+  let stuckFrom = -1;
+  let stuckNudged = false;
   const snap: { tree?: string } = {};
   // 0: working; 1: asked for the note; 2: asked again after a tool call; 'off': gave up on handing off.
   let handoff: 0 | 1 | 2 | 'off' = 0;
@@ -474,6 +478,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
   if (opts.preamble && !log.events.some((e) => e.kind === 'user')) log.append({ kind: 'reminder', as: 'user', text: opts.preamble });
   runStart = log.events.length;
+  stuckFrom = runStart;
   // Images the owner attached go with the prompt, within the session's limit.
   const images = (opts.images ?? []).slice(0, Math.max(0, MAX_IMAGES_PER_SESSION - imagesShown(log.events)));
   log.append({ kind: 'user', text: prompt, ...(images.length ? { images } : {}) });
@@ -633,6 +638,14 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       // A question for the owner ends the run once the turn's other calls are done; the answer is the next prompt.
       const asked = askedIn(log.events.slice(before), calls);
       if (asked) return { ...finish('asked', 'asked', asked.question), question: asked };
+      // Stuck guard: the same call and result over and over. One reminder; repeating on after it ends the run.
+      const stuck = handoff === 0 ? findStuck(log.events.slice(stuckFrom)) : undefined;
+      if (stuck) {
+        if (stuckNudged) return finish('error_stuck', 'error', stuckEnd(stuck));
+        stuckNudged = true;
+        log.append({ kind: 'reminder', as: 'user', text: stuckReminder(stuck) });
+        stuckFrom = log.events.length;
+      }
       // The advisor reads the turn; its note is the first thing the next request carries after the results. Its
       // time counts as model time: the run waits on a model.
       if (opts.advise && handoff === 0 && !signal.aborted) {
