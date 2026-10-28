@@ -31,7 +31,10 @@ export function buildMessages(events: SessionEvent[]): Message[] {
         break;
       case 'reminder':
         if (e.as === 'system') out.push({ role: 'system', text: e.text });
-        else pushUser({ type: 'text', text: e.text });
+        else {
+          for (const image of e.images ?? []) pushUser({ type: 'image', image });
+          pushUser({ type: 'text', text: e.text });
+        }
         break;
       case 'effort':
         out.push({ role: 'effort', effort: e.effort });

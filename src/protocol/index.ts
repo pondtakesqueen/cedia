@@ -18,6 +18,8 @@ export type { DeleteResult } from '../core/project/delete.ts';
 export type { ForkResult } from '../core/project/fork.ts';
 export type { McpCheck, McpList } from '../core/mcp/manage.ts';
 export type { CommitDraft, Committed, PrOpened, PrPlan } from '../core/project/commit.ts';
+export type { InlineEdit, InlineEditPosition, InlineEditRange } from '../core/project/inline-edit.ts';
+export type { DesktopLock } from '../core/project/desktop-lock.ts';
 export type { Capability, VersionInfo } from './version.ts';
 
 export type CoreMessage = { type: 'event'; event: SessionEvent } | { type: 'stream'; event: StreamEvent } | HeadlessResult;

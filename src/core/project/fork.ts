@@ -1,5 +1,5 @@
 import { SessionLog, sessionExists } from '../session/log.ts';
-import type { SessionEvent } from '../types.ts';
+import type { ImageRef, SessionEvent } from '../types.ts';
 import { copySession, type Run } from './rewind.ts';
 import type { RunFrom, ThreadStore } from './threads.ts';
 
@@ -20,8 +20,9 @@ import type { RunFrom, ThreadStore } from './threads.ts';
 
 export type Forked = { thread: string; run?: Run; sessionId?: string };
 
-// What `threads fork <id> <n|run|end> --json` prints.
-export type ForkResult = { thread: string; run?: string; sessionId?: string };
+// What `threads fork <id> <n|run|end> --json` prints. `images`: the forked run's, which the client sends again with
+// the edited message as `-p --image sha256:<hex>` unless the person took them off.
+export type ForkResult = { thread: string; run?: string; sessionId?: string; images?: ImageRef[] };
 
 // How many of a session's events make a conversation the model can go on from: up to the last one after which
 // no tool call waits on its result and the model is not mid-request.

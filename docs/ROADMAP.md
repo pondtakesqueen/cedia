@@ -48,6 +48,6 @@ Each feature lands with its gate report, like any other change.
 
 Agreed with the owner on 2026-10-28 (cedian `docs/CEDIAN_SPEC.md` §11 holds the order). Each lands like any other change, with its gate report when it touches a prompt, a default, the loop or a tool.
 
-- Phase B: a lock the desktop's daemon holds and `cedia daemon` yields to; images on `threads send` and `threads fork`; an inline-edit command (a selection and an instruction, answered with a diff).
+- Phase B (built 2026-10-28): a lock the desktop's daemon holds and `cedia daemon` yields to (`~/.cedia/desktop.lock`); images on `threads send` and `threads fork` (`--image`, `ForkResult.images`, `-p --image sha256:<hex>`); `cedia inline-edit` (a selection and an instruction, answered with the new text and its patch).
 - Phase C: multi-repo workspaces as SPEC describes them (`--thread` runs in the thread's root, memory and schedules keyed by the primary root's slug, extra read-only roots); the `Artifact` tool and `enableArtifact`; a write to the project's files.
 - Phase D: a completion command for tab completion (fill-in-the-middle on a fast, cheap model); the route for prompt images and video frames.

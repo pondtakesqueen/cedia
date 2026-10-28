@@ -74,7 +74,8 @@ type EventBody =
   | { kind: 'permission'; callId: string; tool: string; decision: 'allow' | 'deny'; rule: string; reason?: string }
   | { kind: 'tool_intent'; callId: string; tool: string; input: JsonObject }
   | { kind: 'tool_result'; callId: string; status: EffectStatus; output: ToolOutput }
-  | { kind: 'reminder'; text: string; as: 'system' | 'user' }
+  // images: shown before the text, on a user reminder only (the user's images on a thread message).
+  | { kind: 'reminder'; text: string; as: 'system' | 'user'; images?: ImageRef[] }
   // A user hook ran (core/hooks.ts): which, at what point, for which call, and what it decided. What it said that
   // reaches the model is in the permission, tool_result or reminder that follows.
   | { kind: 'hook'; hook: string; event: 'preToolUse' | 'postToolUse' | 'stop'; callId?: string; decision: 'allow' | 'block'; failed?: boolean; updated?: boolean; ms: number }

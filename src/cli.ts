@@ -1,5 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
+import { storeImage } from './core/images.ts';
+import { inlineEdit, parseRange, type InlineEdit } from './core/project/inline-edit.ts';
 import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
 import type { TuiArgs } from './clients/tui-ink/args.ts';
@@ -132,7 +134,8 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                             in the range; --all: every project)
        cedia threads [--all] [--cwd <dir>]  list this project's threads (--all: archived ones and side chats too)
        cedia threads show <id>              a thread's task, state, sessions, handoff note, result and messages
-       cedia threads send <id> <text>       leave a message the thread sees at its next turn; prints the message id
+       cedia threads send <id> <text> [--image <file>]...
+                                            leave a message the thread sees at its next turn; prints the message id
        cedia threads unsend <id> [<msg>...] take back your messages it has not seen yet (all of them by default)
        cedia threads rate <id> <up|down> [--session <sid>] [--note <text>]
                                             rate an answer (default: the thread's latest) for picking eval cases;
@@ -240,6 +243,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'models') return await models(argv.slice(1));
   if (argv[0] === 'mcp') return mcp(argv.slice(1));
   if (argv[0] === 'commit') return commit(argv.slice(1));
+  if (argv[0] === 'inline-edit') return inlineEditCmd(argv.slice(1));
   if (argv[0] === 'pr') return pr(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
   const { values, positionals } = parseArgs({
@@ -491,7 +495,7 @@ function threads(argv: string[]): number {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' }, side: { type: 'boolean' }, json: { type: 'boolean' } },
+    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' }, side: { type: 'boolean' }, json: { type: 'boolean' }, image: { type: 'string', multiple: true } },
   });
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(values.cwd ?? process.cwd())));
   const [cmd = 'list', id, ...rest] = positionals;
@@ -538,7 +542,13 @@ function threads(argv: string[]): number {
       return 0;
     }
     if (cmd === 'send' && id && rest.length) {
-      const mid = store.send(id, 'user', rest.join(' '));
+      // The images are stored now, so a pasted image's file needs to last only until the send returns.
+      const images = (values.image ?? []).map((path) => {
+        const ref = storeImage(readFileSync(resolve(values.cwd ?? process.cwd(), path)), path);
+        if ('error' in ref) throw new Error(`--image ${path}: ${ref.error}`);
+        return ref;
+      });
+      const mid = store.send(id, 'user', rest.join(' '), new Date(), images);
       console.log(`sent to ${id} as ${mid}`);
       return 0;
     }
@@ -581,7 +591,7 @@ function threads(argv: string[]): number {
       if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
       const r = forkThread(store, id, rest[0]!, { sessionFile: (cwd, sid) => sessionPath(cwd, sid) }, { side: values.side ?? false });
       if ('error' in r) throw new Error(r.error);
-      const out: ForkResult = { thread: r.thread, ...(r.run ? { run: r.run.id } : {}), ...(r.sessionId ? { sessionId: r.sessionId } : {}) };
+      const out: ForkResult = { thread: r.thread, ...(r.run ? { run: r.run.id } : {}), ...(r.sessionId ? { sessionId: r.sessionId } : {}), ...(r.run?.images?.length ? { images: r.run.images } : {}) };
       const at = r.run ? `at run ${JSON.stringify(r.run.prompt.split('\n')[0])}` : 'at its end';
       console.log(values.json ? JSON.stringify(out) : `forked ${id} ${at} into ${r.thread}; send ${r.run ? 'the edited message' : 'a question'} with cedia -p <text> --thread ${r.thread}`);
       return 0;
@@ -603,7 +613,7 @@ function threads(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run|end> [--side] [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id> | rename <id> <title> | delete <id> [--force] [--json]] [--cwd <dir>]');
+  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> [--image <file>]... | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run|end> [--side] [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id> | rename <id> <title> | delete <id> [--force] [--json]] [--cwd <dir>]');
   return 2;
 }
 
@@ -770,6 +780,30 @@ async function commit(argv: string[]): Promise<number> {
   } catch (e) {
     return fail((e as Error).message);
   }
+}
+
+// `cedia inline-edit`: the desktop's Cmd+K. The selection's new text and the patch it makes, from one model reply;
+// nothing is written. --stdin takes the file's text as the editor has it, unsaved changes included.
+async function inlineEditCmd(argv: string[]): Promise<number> {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { file: { type: 'string' }, range: { type: 'string' }, instruction: { type: 'string' }, stdin: { type: 'boolean' }, model: { type: 'string' }, cwd: { type: 'string' }, json: { type: 'boolean' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const { values } = parsed;
+  const range = values.range ? parseRange(values.range) : undefined;
+  if (!values.file || !range || values.instruction === undefined) {
+    console.error('usage: cedia inline-edit --file <path> --range <line:col-line:col> --instruction <text> [--stdin] [--model <ref>] [--cwd <dir>] [--json]');
+    return 2;
+  }
+  const cwd = resolve(values.cwd ?? process.cwd());
+  const r = await inlineEdit({ cwd, file: values.file, range, instruction: values.instruction, model: values.model ?? loadRoles({}).code.ref, ...(values.stdin ? { text: await Bun.stdin.text() } : {}) }).catch((e: Error): InlineEdit => ({ error: e.message }));
+  if (values.json) console.log(JSON.stringify(r));
+  else if ('error' in r) console.error(`cedia: ${r.error}`);
+  else process.stdout.write(r.patch || 'no change\n');
+  return 'error' in r ? 1 : 0;
 }
 
 // `cedia pr`: what the TUI's /pr does once the user said yes. --check says where it would go, or why it cannot,

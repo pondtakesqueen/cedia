@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildMessages } from '../src/core/context/build.ts';
-import { blobDir, imageBase64, imageProblem, MAX_IMAGES_PER_SESSION, sniffImage, storeImage, type ImageRef } from '../src/core/images.ts';
+import { blobDir, imageBase64, imageProblem, MAX_IMAGES_PER_SESSION, sniffImage, storedImage, storeImage, type ImageRef } from '../src/core/images.ts';
 import { imagesShown } from '../src/core/loop/run.ts';
 import { anthropicBody } from '../src/core/providers/anthropic.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
@@ -153,3 +153,66 @@ const existsBlobs = (h: string) => {
 function request(ref: string, messages: Message[]): WireRequest {
   return { model: resolveModel(ref), sessionId: 's', system: 'sys', tools: [], messages, maxTokens: 100 };
 }
+
+describe('images on a thread message', () => {
+  const BIN = join(import.meta.dir, '..', 'bin', 'cedia');
+  test('threads send --image stores the image, and the thread\'s next session is shown it with the message', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-img-send-'));
+    const h = join(dir, 'home');
+    const env = { ...process.env, CEDIA_HOME: h, CEDIA_FAUX_SCRIPT: join(dir, 'script.json') };
+    writeFileSync(join(dir, 'script.json'), JSON.stringify([{ blocks: [{ type: 'text', text: 'hello' }] }, { blocks: [{ type: 'text', text: 'seen' }] }]));
+    const first = Bun.spawnSync([BIN, '-m', 'faux', '--cwd', dir, '-p', 'hi', '--output-format', 'json'], { env, stdin: 'ignore' });
+    const thread = JSON.parse(first.stdout.toString()).thread as string;
+    writeFileSync(join(dir, 'shot.png'), png(40, 30));
+    writeFileSync(join(dir, 'notes.txt'), 'not an image');
+    const bad = Bun.spawnSync([BIN, 'threads', 'send', thread, 'look', '--image', 'notes.txt', '--cwd', dir], { env, stdin: 'ignore' });
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stderr.toString()).toContain('--image notes.txt: not a PNG');
+    const sent = Bun.spawnSync([BIN, 'threads', 'send', thread, 'what is wrong here?', '--image', 'shot.png', '--cwd', dir], { env, stdin: 'ignore' });
+    expect(sent.exitCode).toBe(0);
+    expect(existsBlobs(h)).toBe(1);
+    const next = Bun.spawnSync([BIN, '-m', 'faux', '--cwd', dir, '-p', 'go on', '--thread', thread, '--output-format', 'json'], { env, stdin: 'ignore' });
+    expect(JSON.parse(next.stdout.toString()).subtype).toBe('success');
+    const root = join(h, 'sessions');
+    const [project] = readdirSync(root);
+    const events = readdirSync(join(root, project!))
+      .map((f) => SessionLog.load(join(root, project!, f)).events)
+      .find((es) => es.some((e) => e.kind === 'reminder' && e.text.includes('what is wrong here?')))!;
+    const reminder = events.find((e) => e.kind === 'reminder' && e.text.includes('what is wrong here?')) as Extract<SessionEvent, { kind: 'reminder' }>;
+    expect(reminder.images).toEqual([expect.objectContaining({ mime: 'image/png', width: 40, height: 30, name: 'shot.png' })]);
+    expect(reminder.text).toContain('images="1"');
+    const user = buildMessages(events).find((m) => m.role === 'user' && m.parts.some((p) => p.type === 'image')) as Extract<Message, { role: 'user' }>;
+    expect(user.parts.map((p) => p.type)).toContain('image');
+  });
+
+  test('a reminder\'s images go before its text and count against the session\'s images', () => {
+    const ref = { sha256: 'x', mime: 'image/png', width: 1, height: 1, bytes: 1 } as ImageRef;
+    const events = [{ kind: 'reminder', as: 'user', text: 'look', images: [ref] }] as SessionEvent[];
+    expect((buildMessages(events)[0] as Extract<Message, { role: 'user' }>).parts.map((p) => p.type)).toEqual(['image', 'text']);
+    expect(imagesShown(events)).toBe(1);
+  });
+
+  test('a fork names the forked run\'s images, and -p --image sha256:<hex> shows a stored one again', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-img-fork-'));
+    const h = join(dir, 'home');
+    const env = { ...process.env, CEDIA_HOME: h, CEDIA_FAUX_SCRIPT: join(dir, 'script.json') };
+    writeFileSync(join(dir, 'script.json'), JSON.stringify([{ blocks: [{ type: 'text', text: 'one' }] }, { blocks: [{ type: 'text', text: 'two' }] }]));
+    writeFileSync(join(dir, 'shot.png'), png(40, 30));
+    const first = Bun.spawnSync([BIN, '-m', 'faux', '--cwd', dir, '-p', 'what is this?', '--image', 'shot.png', '--output-format', 'json'], { env, stdin: 'ignore' });
+    const thread = JSON.parse(first.stdout.toString()).thread as string;
+    const fork = Bun.spawnSync([BIN, 'threads', 'fork', thread, '1', '--json', '--cwd', dir], { env, stdin: 'ignore' });
+    const forked = JSON.parse(fork.stdout.toString());
+    expect(forked.images).toEqual([expect.objectContaining({ mime: 'image/png', width: 40, height: 30, name: 'shot.png' })]);
+    const sha = forked.images[0].sha256 as string;
+    const again = Bun.spawnSync([BIN, '-m', 'faux', '--cwd', dir, '-p', 'and now?', '--image', `sha256:${sha}`, '--thread', forked.thread, '--output-format', 'json'], { env, stdin: 'ignore' });
+    expect(JSON.parse(again.stdout.toString()).subtype).toBe('success');
+    const root = join(h, 'sessions');
+    const [project] = readdirSync(root);
+    const user = readdirSync(join(root, project!))
+      .flatMap((f) => SessionLog.load(join(root, project!, f)).events)
+      .find((e) => e.kind === 'user' && e.text.startsWith('and now?')) as Extract<SessionEvent, { kind: 'user' }>;
+    expect(user.images).toEqual([expect.objectContaining({ sha256: sha, width: 40, height: 30 })]);
+    expect(storedImage('sha256:' + '0'.repeat(64), h)).toEqual({ error: expect.stringContaining('no stored image') });
+    expect(storedImage('shot.png', h)).toEqual({ error: expect.stringContaining('not a stored image') });
+  });
+});
