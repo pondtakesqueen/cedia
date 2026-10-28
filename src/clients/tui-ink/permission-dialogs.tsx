@@ -55,9 +55,12 @@ export type NoticeLine = { label: string; value: string };
 export const NOTICE_FIELDS: Record<string, readonly string[]> = {
   bash: ['command', 'timeout_ms'],
   edit: ['path', 'old_text', 'new_text', 'edits'],
-  write: ['path', 'content'],
+  write: ['path', 'content', 'lines'],
   web_fetch: ['url', 'offset'],
-  skill: ['name', 'file'],
+  skill: ['name', 'args', 'file'],
+  'plan mode': ['plan', 'action'],
+  filesystem: ['op', 'path', 'destination'],
+  sed: ['expression', 'path'],
 };
 
 export const DISMISS_NOTE = 'Esc or Enter closes this notice. The call was already denied.';
@@ -110,6 +113,8 @@ export function noticeLines(tool: string, input: unknown): NoticeLine[] {
   if (label === 'write') {
     pushLine(lines, 'path', textOf(record.path));
     if (typeof record.content === 'string') {
+      const n = record.content.split('\n').length;
+      pushLine(lines, 'lines', String(n));
       pushLine(lines, 'content', `${record.content.length} chars, ${record.content.slice(0, 80)}`);
     }
     return lines;
@@ -117,6 +122,29 @@ export function noticeLines(tool: string, input: unknown): NoticeLine[] {
   if (label === 'web_fetch') {
     pushLine(lines, 'url', textOf(record.url));
     if (typeof record.offset === 'number') pushLine(lines, 'offset', String(record.offset));
+    return lines;
+  }
+  if (label === 'skill') {
+    const name = textOf(record.name) ?? textOf(record.skill);
+    pushLine(lines, 'name', name);
+    pushLine(lines, 'args', textOf(record.args) ?? textOf(record.arguments));
+    if (typeof record.file === 'string') pushLine(lines, 'file', record.file);
+    return lines;
+  }
+  if (label === 'plan mode') {
+    pushLine(lines, 'action', textOf(record.action) ?? textOf(record.mode));
+    pushLine(lines, 'plan', textOf(record.plan) ?? textOf(record.prompt) ?? textOf(record.message));
+    return lines;
+  }
+  if (label === 'filesystem') {
+    pushLine(lines, 'op', textOf(record.op) ?? textOf(record.operation) ?? textOf(record.command));
+    pushLine(lines, 'path', textOf(record.path) ?? textOf(record.src) ?? textOf(record.source));
+    pushLine(lines, 'destination', textOf(record.destination) ?? textOf(record.dest) ?? textOf(record.to));
+    return lines;
+  }
+  if (label === 'sed') {
+    pushLine(lines, 'expression', textOf(record.expression) ?? textOf(record.expr) ?? textOf(record.command));
+    pushLine(lines, 'path', textOf(record.path) ?? textOf(record.file));
     return lines;
   }
   const name = textOf(record.name) ?? textOf(record.skill);

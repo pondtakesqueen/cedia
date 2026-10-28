@@ -21,6 +21,10 @@ export type ThemeTokens = {
   backgroundElement: string;
   userRowBg: string;
   selectedBg: string;
+  selectionBg: string;
+  selectionFg: string;
+  searchHitBg: string;
+  searchHitFg: string;
   border: string;
   borderActive: string;
   diffAdded: string;
@@ -47,6 +51,10 @@ const dark: ThemeTokens = {
   backgroundElement: '#1f2335',
   userRowBg: '#343a58',
   selectedBg: '#28344a',
+  selectionBg: '#3d59a1',
+  selectionFg: '#c0caf5',
+  searchHitBg: '#e0af68',
+  searchHitFg: '#1a1b26',
   border: '#3b4261',
   borderActive: '#7aa2f7',
   diffAdded: '#9ece6a',
@@ -73,6 +81,10 @@ const light: ThemeTokens = {
   backgroundElement: '#c8c9ce',
   userRowBg: '#d5d6db',
   selectedBg: '#c8d5e8',
+  selectionBg: '#2e7de9',
+  selectionFg: '#e1e2e7',
+  searchHitBg: '#8c6c3e',
+  searchHitFg: '#e1e2e7',
   border: '#9699a8',
   borderActive: '#2e7de9',
   diffAdded: '#587539',

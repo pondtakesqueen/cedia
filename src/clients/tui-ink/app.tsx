@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useWindowSize, useStdin, useIsScreenReaderEnabled } from 'ink';
-import { buildAutoItems, highlightQuery, highlightSpans, truncateDescription, truncateLongText, estimateLines, offsetAt, loadFrecency, recordPick, frecencyBonus, type AutoItem } from './autocomplete.ts';
+import { buildAutoItems, highlightSpans, paintRuns, truncateDescription, truncateLongText, estimateLines, offsetAt, loadFrecency, recordPick, frecencyBonus, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import Markdown from './markdown.tsx';
@@ -1407,12 +1407,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       return;
     }
     if (ctx === 'Autocomplete') {
+      const autoCmd = (() => {
+        const id = inkKeyId(input, key);
+        return id ? findCommand(resolveBindings(loadedKeybindings), id, 'Autocomplete') : undefined;
+      })();
       if (mentionOpen) {
         const sel = Math.min(mentionSelected, mentionItems.length - 1);
-        if (key.escape) { setMentionDismissed(true); return; }
-        if (key.upArrow) { setMentionSelected((s) => Math.max(0, s - 1)); return; }
-        if (key.downArrow) { setMentionSelected((s) => Math.min(mentionItems.length - 1, s + 1)); return; }
-        if (key.return || key.tab) {
+        if (autoCmd === 'cancel') { setMentionDismissed(true); return; }
+        if (autoCmd === 'selectUp') { setMentionSelected((s) => Math.max(0, s - 1)); return; }
+        if (autoCmd === 'selectDown') { setMentionSelected((s) => Math.min(mentionItems.length - 1, s + 1)); return; }
+        if (autoCmd === 'accept') {
           const item = mentionItems[sel];
           if (item) {
             notePick(item.value);
@@ -1426,10 +1430,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       if (autoOpen) {
         const sel = Math.min(autoSelected, autoItems.length - 1);
-        if (key.escape) { setAutoDismissed(true); return; }
-        if (key.upArrow) { setAutoSelected((s) => Math.max(0, s - 1)); return; }
-        if (key.downArrow) { setAutoSelected((s) => Math.min(autoItems.length - 1, s + 1)); return; }
-        if (key.return || key.tab) {
+        if (autoCmd === 'cancel') { setAutoDismissed(true); return; }
+        if (autoCmd === 'selectUp') { setAutoSelected((s) => Math.max(0, s - 1)); return; }
+        if (autoCmd === 'selectDown') { setAutoSelected((s) => Math.min(autoItems.length - 1, s + 1)); return; }
+        if (autoCmd === 'accept') {
           const item = autoItems[sel];
           if (item) { notePick(item.value); setInput(`/${item.value} `); setAutoDismissed(true); }
           return;
@@ -1439,15 +1443,19 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       return;
     }
     if (ctx !== 'Chat') {
+      const overlayCmd = (() => {
+        const id = inkKeyId(input, key);
+        return id ? findCommand(resolveBindings(loadedKeybindings), id, ctx) : undefined;
+      })();
       if (ctx === 'Confirmation') {
-        if (key.escape || key.return) setPermissionDialog(null);
+        if (overlayCmd === 'dismiss') setPermissionDialog(null);
         return;
       }
       if (ctx === 'Select' && picker) {
-        if (key.escape) { closeDialog('picker'); setPicker(null); setPickerSelected(0); return; }
-        if (key.upArrow) { setPickerSelected((s) => Math.max(0, s - 1)); return; }
-        if (key.downArrow) { setPickerSelected((s) => Math.min(picker.items.length - 1, s + 1)); return; }
-        if (key.return) {
+        if (overlayCmd === 'close') { closeDialog('picker'); setPicker(null); setPickerSelected(0); return; }
+        if (overlayCmd === 'selectUp') { setPickerSelected((s) => Math.max(0, s - 1)); return; }
+        if (overlayCmd === 'selectDown') { setPickerSelected((s) => Math.min(picker.items.length - 1, s + 1)); return; }
+        if (overlayCmd === 'accept') {
           const before = inputRef.current;
           const item = picker.items[pickerSelected];
           if (item) { picker.onPick(item.value); }
@@ -1458,16 +1466,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       if (ctx === 'Settings') {
-        if (key.escape) { closeSettingsStep(); return; }
+        if (overlayCmd === 'close') { closeSettingsStep(); return; }
         const tabs: Array<'status' | 'config' | 'usage' | 'stats'> = ['status', 'config', 'usage', 'stats'];
-        if (key.tab) {
+        if (overlayCmd === 'nextTab') {
           setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
           setConfigSelected(0);
           return;
         }
-        if (key.leftArrow || key.rightArrow) {
-          if (key.rightArrow) setSettingsTab((t) => tabs[(tabs.indexOf(t) + 1) % tabs.length]!);
-          else setSettingsTab((t) => tabs[(tabs.indexOf(t) - 1 + tabs.length) % tabs.length]!);
+        if (overlayCmd === 'prevTab') {
+          setSettingsTab((t) => tabs[(tabs.indexOf(t) - 1 + tabs.length) % tabs.length]!);
           setConfigSelected(0);
           return;
         }
@@ -1545,15 +1552,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       if (ctx === 'MessageSelector') {
         const runs = thread ? runLines(store.read(thread)) : [];
-        if (key.escape) { setMessageSelector({ open: false, selected: 0 });
+        if (overlayCmd === 'close') { setMessageSelector({ open: false, selected: 0 });
           closeDialog('messageSelector'); return; }
-        if (key.upArrow) { setMessageSelector((m) => ({ ...m, selected: Math.max(0, m.selected - 1) })); return; }
-        if (key.downArrow) {
+        if (overlayCmd === 'selectUp') { setMessageSelector((m) => ({ ...m, selected: Math.max(0, m.selected - 1) })); return; }
+        if (overlayCmd === 'selectDown') {
           if (!runs.length) return;
           setMessageSelector((m) => ({ ...m, selected: Math.min(runs.length - 1, m.selected + 1) }));
           return;
         }
-        if (key.return) {
+        if (overlayCmd === 'accept') {
           if (!thread) { push({ role: 'system', text: 'no thread yet' }); setMessageSelector({ open: false, selected: 0 });
           closeDialog('messageSelector'); return; }
           const n = messageSelector.selected + 1;
@@ -1569,15 +1576,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       if (ctx === 'HistorySearch') {
-        if (key.escape) { setHistorySearch({ open: false, query: '', selected: 0 }); closeDialog('historySearch'); return; }
-        if (key.upArrow) { setHistorySearch((h) => ({ ...h, selected: Math.max(0, h.selected - 1) })); return; }
-        if (key.downArrow) {
+        if (overlayCmd === 'close') { setHistorySearch({ open: false, query: '', selected: 0 }); closeDialog('historySearch'); return; }
+        if (overlayCmd === 'selectUp') { setHistorySearch((h) => ({ ...h, selected: Math.max(0, h.selected - 1) })); return; }
+        if (overlayCmd === 'selectDown') {
           const filtered = historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()));
           if (!filtered.length) return;
           setHistorySearch((h) => ({ ...h, selected: Math.min(filtered.length - 1, h.selected + 1) }));
           return;
         }
-        if (key.return) {
+        if (overlayCmd === 'accept') {
           const filtered = historyRef.current.filter((h) => h.toLowerCase().includes(historySearch.query.toLowerCase()));
           const selected = filtered[historySearch.selected];
           setHistorySearch({ open: false, query: '', selected: 0 });
@@ -1596,10 +1603,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         return;
       }
       if (ctx === 'Transcript') {
-        if (key.escape) { setTranscriptSearch({ open: false, query: '', selected: 0 }); return; }
-        if (key.upArrow) { setTranscriptSearch((h) => ({ ...h, selected: Math.max(0, h.selected - 1) })); return; }
-        if (key.downArrow) { setTranscriptSearch((h) => ({ ...h, selected: Math.min(Math.max(0, searchHits.length - 1), h.selected + 1) })); return; }
-        if (key.return) {
+        if (overlayCmd === 'close') { setTranscriptSearch({ open: false, query: '', selected: 0 }); return; }
+        if (overlayCmd === 'selectUp') { setTranscriptSearch((h) => ({ ...h, selected: Math.max(0, h.selected - 1) })); return; }
+        if (overlayCmd === 'selectDown') { setTranscriptSearch((h) => ({ ...h, selected: Math.min(Math.max(0, searchHits.length - 1), h.selected + 1) })); return; }
+        if (overlayCmd === 'jump') {
           const index = searchHits[transcriptSearch.selected];
           if (index !== undefined) setScrollOffset(offsetForIndex(displayMessages.length, index));
           return;
@@ -1791,16 +1798,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             }
               return (
             <Box key={globalIdx} flexDirection="column" backgroundColor={isUserRow ? T.userRowBg : undefined}>
-              {hasSel && bounds ? (
+              {hasSel || queryHit ? (
                 <Text wrap="wrap">
-                  <Text color={themedColorFor(T, m.role)}>{full.slice(0, bounds.start)}</Text>
-                  <Text backgroundColor="blue" color="white">{full.slice(bounds.start, bounds.end)}</Text>
-                  <Text color={themedColorFor(T, m.role)}>{full.slice(bounds.end)}</Text>
-                </Text>
-              ) : queryHit ? (
-                <Text wrap="wrap">
-                  {highlightQuery(full, q).map((sp, si) => (
-                    <Text key={si} backgroundColor={sp.hit ? 'yellow' : undefined} color={sp.hit ? 'black' : themedColorFor(T, m.role)} bold={sp.hit}>{sp.text}</Text>
+                  {paintRuns(full, { query: q, selection: hasSel ? bounds : undefined }).map((sp, si) => (
+                    <Text
+                      key={si}
+                      backgroundColor={sp.selected ? T.selectionBg : sp.hit ? T.searchHitBg : undefined}
+                      color={sp.selected ? T.selectionFg : sp.hit ? T.searchHitFg : themedColorFor(T, m.role)}
+                      bold={sp.hit || sp.selected}
+                    >{sp.text}</Text>
                   ))}
                 </Text>
               ) : m.role === 'assistant' ? (
