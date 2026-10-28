@@ -108,14 +108,24 @@ const DEEPSEEK_PROMPT = `For this model in particular:
 - When new logic branches, loops, parses, or handles money or security, add a test of it to the test file that covers that code, in the same edit.
 - End your report with one line on what you left out or did not check.`;
 
+// Opus 5.5 writing alone lost 8 of 19 blind pairs to Claude Code on Opus and won 1 (2026-10-28): it stopped at a
+// passing check and missed rules no visible test held (failure paths, doc-comment rules, old behaviour kept). With
+// these lines, on the 7 tasks it lost, it won 2, tied 1 and lost 4, correctness went from -1.14 to +0.29 against
+// Claude Code, and it still cost 35% less on the 6 tasks both arms finished (research/NOTES.md).
+const OPUS_PROMPT = `For this model in particular, correctness comes before brevity:
+- Every rule in the task and in the doc comments of the code you change is a requirement, including the ones no visible test checks. Where you rewrite code, keep every behaviour of the old code that the task does not ask to change, odd inputs and error messages included.
+- Do not change a documented rule to make a case pass. If the doc and a case disagree, follow the doc and say so in the report.
+- Walk the failure paths of what you write before you finish: state after a thrown error, a caller that stops early or aborts (streams, listeners, timers and handles released), entries that expire or are removed, a callback that throws synchronously, and inputs at each boundary.
+- When you add or change tests, cover each behaviour you changed with a deterministic case (no wall-clock bounds or sleeps), boundaries included.`;
+
 const deepseekFlashPrice = { ...p(0.3, 1.2, 0.006), offPeak: { ...p(0.15, 0.6, 0.003), isOffPeak: deepseekOffPeak } };
 const haikuPrice = { ...p(0.1, 0.5, 0.01, 0.125), above: { tokens: 100_000, price: p(0.5, 2.5, 0.05, 0.625) } };
 
 export const CATALOG: ModelSpec[] = [
   claude('claude-fable-5-1', p(10, 50, 0.25, 12.5)),
-  claude('claude-opus-5-5', p(4, 20, 0.2, 5)),
+  claude('claude-opus-5-5', p(4, 20, 0.2, 5), { prompt: OPUS_PROMPT }),
   // Fast mode (research preview, Claude API only): up to 2.5x output tokens per second at 2x the price.
-  claude('claude-opus-5-5', p(8, 40, 0.4, 10), { ref: 'anthropic/claude-opus-5-5-fast', speed: 'fast', headers: { 'anthropic-beta': 'fast-mode-2026-02-01' } }),
+  claude('claude-opus-5-5', p(8, 40, 0.4, 10), { ref: 'anthropic/claude-opus-5-5-fast', speed: 'fast', prompt: OPUS_PROMPT, headers: { 'anthropic-beta': 'fast-mode-2026-02-01' } }),
   claude('claude-sonnet-5-5', p(2, 10, 0.1, 2.5), { defaultEffort: 'high' }),
   // Haiku starts at low and escalates to high when the done gate refuses a claim: on the gate suite that kept
   // 48/48 and cost 21% less for the typical task than medium (2026-10-22, evals/gate/README.md).

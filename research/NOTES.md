@@ -209,3 +209,18 @@ Six tasks (the five hard tasks above and hard-injection), on the Anthropic API f
 - With Opus writing in Claude Code and Haiku writing in cedia, Claude Code won most pairs: a plan and a review by Opus do not make up for the writer. On one model (above) the two harnesses were at parity.
 - Where the judge found cedia's work weaker, across every round: the tests it adds (Claude Code covered each chunk boundary and wrote tests that do not depend on time), and edge cases in security-relevant parsers (`rm>/dev/null`, `"$(rm …)"` inside double quotes in hard-shell-split). Where Claude Code's was weaker: twice on hard-redact-bugs its rule stopped redacting camelCase names such as `secretKey`.
 - Haiku sent the edit tool's fields at the top level 16 times and a broken `edits` string 4 times; cedia's input repair fixed each without a turn.
+
+## Opus 5.5 writing alone in cedia against Claude Code on Opus (2026-10-28)
+
+The 2026-10-27 Opus rows could not be judged: their diffs held only cedia's own home (`.home`, fixed in 78a7a7c) and were cut at 100k characters. Rerun on the 19 non-repository tasks of the 2026-10-24 Claude Code baseline (`claude -p --model opus`, 2.1.304), one run each, cedia at its defaults (Opus at medium, isolated home, no plan or review): 19/19 pass, no false done, $1.87 and 32 s a run on average against Claude Code's $3.92 (its own estimate) and 42 s. Sonnet judged each pair blind in both orders (`evals/results/2026-10-28-opus-quality/`): Claude Code 8 wins, cedia 1, ties 10; correctness 8.50 / 8.87, tests 5.00 / 5.53, security 8.97 / 9.24. On one model with no review, Claude Code's work was better. cedia's misses were on paths no visible test checks: a stream not cancelled when the consumer stops early (hard-sse), an error not kept after a SyntaxError (hard-csv-stream), expired entries counted and a synchronous throw not turned into a rejection (hard-memo-async), `bash -o opt -c` not unpacked (hard-shell-split), a documented dotenv rule changed to pass a case (hard-redact-bugs), old sparse-array behaviour not kept (hard-window), and timing-based tests. The base prompt's line against extra probes and edge cases, written to save turns, points the other way.
+
+The API credit ran out during the follow-up, so two arms ran on the tasks it lost with what was left, and the judge moved to the owner's Claude Code (`claude -p --model sonnet`, read-only tools, `evals/judge/tpl6-claude-p/`), re-judging the defaults arm too so all three share one judge:
+
+| arm (one run a task) | tasks | cedia : tie : CC | correctness Δ | tests Δ | quality Δ | cost (6 shared tasks) | wall |
+|---|---|---|---|---|---|---|---|
+| defaults | 7 | 0 : 0 : 7 | -1.14 | -0.92 | -0.50 | $0.62 | 36 s |
+| `--effort high` | 6 (1 lost to provider errors) | 0 : 2 : 4 | -0.50 | -0.83 | -0.59 | $0.87 | 49 s |
+| Opus lines in the system prompt (`OPUS_PROMPT`) | 7 | 2 : 1 : 4 | +0.29 | -0.71 | -0.93 | $0.87 | 46 s |
+| Claude Code, Opus | | | | | | $1.34 | 50 s |
+
+With the Opus lines the defects above were gone on hard-memo-async and hard-sse, and hard-shell-split and tb-dedup turned into wins; what still lost was test breadth (every split of a chunked input, sparse and -0 cases) and simpler structure. One run a task is thin: rerun with `--runs 3` on all 19 tasks, and on the frontier suite, once there is credit.

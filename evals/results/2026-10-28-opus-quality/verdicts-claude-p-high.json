@@ -1,0 +1,398 @@
+[
+ {
+  "task": "hard-csv-stream",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both match parseCsv on the edge cases I traced; B has cleaner code and more exhaustive split tests including empty chunks.",
+   "defects_A": [
+    "csv.test.ts:76-88 relative-timing scaling test may be flaky and weakly checks per-chunk cost",
+    "csv.ts:138-140 fallthrough into default in end() switch is awkward to read",
+    "csv.ts:97-102 numeric state constants instead of an enum"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.0833955
+ },
+ {
+  "task": "hard-csv-stream",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both implement the stream correctly; A's tests are more thorough, with every-split coverage and a firmer performance check.",
+   "defects_A": [],
+   "defects_B": [
+    "csv.test.ts:87 relative timing check is loose and may be flaky",
+    "csv.test.ts:30 split coverage limited to two-chunk and per-character splits"
+   ]
+  },
+  "cost": 0.08094359999999999
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both implement all tiers and errors correctly; B is slightly simpler (splice keeps trailing newline, helper for indent) while neither adds tests.",
+   "defects_A": [
+    "edit.ts:26 replace_all `to` is computed from the last match only, an ambiguous reading of the spec",
+    "No tests added for the new behaviour"
+   ],
+   "defects_B": [
+    "edit.ts:23 replace_all `to` is computed from the first match only, so it does not span all replaced lines",
+    "edit.ts:31 an old_text of just \"\\n\" becomes [''] and can match blank lines, an odd edge case",
+    "No tests added for the new behaviour"
+   ]
+  },
+  "cost": 0.060293000000000006
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B guards the empty-oldLines case that makes A report a bogus multi-match error; otherwise near-identical, and neither adds tests.",
+   "defects_A": [
+    "edit.ts:43: old_text of only a newline that is not in content leaves oldLines empty, so the window matches everywhere and a bogus 'matches N places' error is returned instead of 'not found'",
+    "no tests added"
+   ],
+   "defects_B": [
+    "exact replace_all reports from/to spanning first to last match, which may differ from the expected range",
+    "no tests added"
+   ]
+  },
+  "cost": 0.05994440000000001
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B also stops expired entries from counting toward max and size, and handles a synchronous throw from fn, with broader tests; A leaves expired entries occupying slots.",
+   "defects_A": [
+    "memo.ts:125 expired entries for other keys still count toward max/size, so a live key can be evicted ahead of an expired one",
+    "memo.ts:126 a synchronous throw from fn escapes as a sync exception instead of a rejected promise",
+    "memo.fixes.test.ts has no test for expiry interacting with max or size"
+   ],
+   "defects_B": [
+    "memo.test.ts appended to rather than adding a separate file (existing tests unchanged)",
+    "the sync-throw try/catch is slightly beyond what the task asked"
+   ]
+  },
+  "cost": 0.0608682
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A also prunes expired entries so they don't count toward max or evict live keys, and its tests are broader.",
+   "defects_A": [
+    "memo.ts:140-143 prune is O(n) on every miss and size read (minor)",
+    "memo.ts:158-163 sync-throw wrapping goes beyond the task (minor)"
+   ],
+   "defects_B": [
+    "memo.ts:125 expired entries are not pruned, so they can cause eviction of live LRU keys and inflate size",
+    "memo.fixes.test.ts has no test for expiry, TTL or synchronous throw",
+    "memo.ts:126 a synchronous throw from fn is not turned into a rejection"
+   ]
+  },
+  "cost": 0.0593445
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 1,
+    "security": 7
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 10,
+    "tests": 1,
+    "security": 5
+   },
+   "winner": "A",
+   "why": "Near-identical parsers, but A cancels the body on early consumer exit and avoids per-line buffer re-slicing; B leaves the stream open.",
+   "defects_A": [
+    "sse.ts: buffer grows without bound if the stream never sends a newline",
+    "no tests added"
+   ],
+   "defects_B": [
+    "sse.ts:51 finally only releases the lock and never cancels the reader, so the connection stays open on early exit",
+    "sse.ts:40-42 buffer re-sliced after each line, quadratic on many-line chunks",
+    "sse.ts: buffer grows without bound if the stream never sends a newline",
+    "no tests added"
+   ]
+  },
+  "cost": 0.0405249
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 1,
+    "security": 6
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 1,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Same parsing logic, but B cancels the body on early consumer exit while A only releases the lock and leaves the stream/connection open.",
+   "defects_A": [
+    "sse.ts:51 finally only releases the lock; an early break/return never cancels the body, so the connection stays open",
+    "no tests added"
+   ],
+   "defects_B": [
+    "no tests added, including none for early-exit cancellation"
+   ]
+  },
+  "cost": 0.052734699999999995
+ },
+ {
+  "task": "hard-window",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 8
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B preserves sparse-array behaviour via a fallback and tests it; A's sort breaks on holes, so it fails to match the original on that input.",
+   "defects_A": [
+    "window.ts:19-28 sparse arrays: holes give undefined times, so the sort comparator returns NaN and the result differs from the original, which throws or returns holes",
+    "no test for sparse arrays or -0/extreme values"
+   ],
+   "defects_B": [
+    "window.edge.test.ts:114 perf test uses unseeded Math.random, so it is slightly non-deterministic"
+   ]
+  },
+  "cost": 0.0569177
+ },
+ {
+  "task": "hard-window",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A preserves sparse-array behaviour (TypeError on holes) that B silently changes; both are otherwise correct and fast.",
+   "defects_A": [],
+   "defects_B": [
+    "window.ts:127 sparse arrays no longer throw TypeError as the original did; holes-only input returns counts instead of holes",
+    "no test covers sparse arrays"
+   ]
+  },
+  "cost": 0.0578466
+ },
+ {
+  "task": "tb-dedup",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 9,
+    "scope": 8,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 8,
+    "tests": 1,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "B also handles unhashable items while preserving order; A raises TypeError on them, though A is simpler.",
+   "defects_A": [
+    "solution.py:2 raises TypeError for unhashable items such as lists or dicts",
+    "no tests added",
+    "pytest cache artifacts left in the diff"
+   ],
+   "defects_B": [
+    "solution.py:11-13 unhashable items use an O(n^2) linear scan",
+    "no tests added",
+    "pytest cache and __pycache__ artifacts left in the diff"
+   ]
+  },
+  "cost": 0.03347
+ },
+ {
+  "task": "tb-dedup",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 6,
+    "scope": 5,
+    "tests": 1,
+    "security": 8
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 9,
+    "scope": 8,
+    "tests": 1,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B is the idiomatic, minimal dict.fromkeys solution that meets the spec; A's unhashable fallback adds complexity and O(n^2) scanning, and its diff includes __pycache__ files.",
+   "defects_A": [
+    "solution.py:11 linear scan of unhashable list is O(n^2)",
+    "no tests added",
+    "__pycache__ and .pytest_cache artifacts included in diff",
+    "no docstring or comment explaining the unhashable fallback"
+   ],
+   "defects_B": [
+    "solution.py:2 raises TypeError on unhashable items such as lists",
+    "no tests added",
+    ".pytest_cache artifacts included in diff"
+   ]
+  },
+  "cost": 0.032895999999999995
+ }
+]

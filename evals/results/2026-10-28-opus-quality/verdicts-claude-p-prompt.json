@@ -1,0 +1,465 @@
+[
+ {
+  "task": "hard-csv-stream",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both look correct; B has a simpler state machine and more exhaustive tests, including an explicit performance regression test.",
+   "defects_A": [
+    "csv.ts:160: more states and flags than needed (CarriageReturn plus crAfterQuote), so harder to follow",
+    "csv.test.ts: splits only up to two cut points and has no explicit non-growing-work test"
+   ],
+   "defects_B": [
+    "csv.test.ts: the timing assertion (<5000ms) over millions of pushes could be flaky on slow machines",
+    "csv.test.ts: rejection tests check only the SyntaxError type, not the messages"
+   ]
+  },
+  "cost": 0.09377769999999999
+ },
+ {
+  "task": "hard-csv-stream",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both implementations look correct; A's tests are more thorough (all splits, richer random alphabet, a real scaling test).",
+   "defects_A": [],
+   "defects_B": [
+    "csv.test.ts:123 scaling test is only 10k chars with no timing check, so it would not catch a per-chunk cost that grows with earlier input",
+    "csv.test.ts:27 splits cover at most two cut points, so multi-boundary cases such as \"\"-then-\\r\\n are only reached by the random test"
+   ]
+  },
+  "cost": 0.0858456
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 8,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 1,
+    "security": 9
+   },
+   "winner": "tie",
+   "why": "Both implement the three tiers and error messages correctly with near-identical behaviour and neither adds tests; the differences are minor (B slightly tidier, A reports a fuller range for replace_all).",
+   "defects_A": [
+    "no tests added",
+    "edit.ts:30 toLines('\\n') returns [] so an empty window would match everywhere"
+   ],
+   "defects_B": [
+    "no tests added",
+    "edit.ts:23 replace_all reports to/from of the first match only"
+   ]
+  },
+  "cost": 0.0721031
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both implement all three tiers and the error contract, and neither adds tests; A's line handling is slightly more robust at the edges (B's toLines drops a blank line on content that is just a newline).",
+   "defects_A": [
+    "no tests added for any tier or error path (edit.test.ts untouched)"
+   ],
+   "defects_B": [
+    "no tests added for any tier or error path (edit.test.ts untouched)",
+    "edit.ts:33-34 toLines(content) turns content '\\n' into zero lines, so a blank line is dropped in tier 2/3",
+    "edit.ts:23 exact tier uses split/join even for a single match, which is less precise than slicing at the found offset"
+   ]
+  },
+  "cost": 0.059436499999999996
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Near-identical fixes; B has slightly better comments and a broader test set, including shared-rejection and repeated sync-throw cases.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.0614045
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Near-identical memo.ts fixes; A has slightly broader tests, keeps them in the existing test file, and reads a bit cleaner.",
+   "defects_A": [],
+   "defects_B": [
+    "memo.ts:184 comma-expression size getter is slightly obscure",
+    "memo.fixes.test.ts duplicates the helpers from memo.test.ts instead of extending it"
+   ]
+  },
+  "cost": 0.0622509
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 6
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "B handles more edge cases (quoted keywords and assignments, wrappers left visible, opaque eval/sh -c scripts) so fewer commands are hidden, while A drops a bare wrapper or an eval whose script comes from a substitution; neither adds tests.",
+   "defects_A": [
+    "No tests added",
+    "Bare wrapper such as `sudo` or `env` with nothing after it returns [] and hides the command, shell.ts:171",
+    "`eval \"$(cmd)\"` drops the eval and parses an empty script, shell.ts:184",
+    "Quoted `\"if\"` or `\"A=1\"` treated as keyword or assignment, shell.ts:170",
+    "Trailing lone backslash produces an empty word, shell.ts:116"
+   ],
+   "defects_B": [
+    "No tests added",
+    "Dense operator parsing for `<<<` and `&` is hard to read, shell.ts:112-123",
+    "`\\r` is not treated as whitespace, shell.ts:61"
+   ]
+  },
+  "cost": 0.1166067
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 6,
+    "scope": 9,
+    "tests": 1,
+    "security": 6
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 5
+   },
+   "winner": "A",
+   "why": "A is more conservative about never hiding commands (substituted scripts, bare wrappers, quoted assignments, spaced redirect targets), while B drops a command after `> $(x) cmd`; neither adds tests and both share the glued `>$(x) cmd` bypass.",
+   "defects_A": [
+    "shell.ts:148 `>$(x) rm -rf /` marks the bare `>` word as an operator whose target is the next word, so `rm` is dropped and hidden",
+    "shell.ts:148 `>\"\" rm` has the same flaw: the word text equals the operator, so the next word is dropped",
+    "no tests added"
+   ],
+   "defects_B": [
+    "shell.ts:159 `> $(x) rm -rf /` drops `rm` because the substituted target creates no word, so the bare `>` consumes the next real word",
+    "shell.ts:184,194 `bash -c \"$(cmd)\"` and `eval $(cmd)` hide the shell or eval invocation itself from the policy",
+    "shell.ts:170 assignment and keyword checks ignore quoting, so `\"FOO=1\" ls` is treated as an assignment",
+    "no tests added"
+   ]
+  },
+  "cost": 0.1056472
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 2,
+    "security": 7
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 2,
+    "security": 7
+   },
+   "winner": "B",
+   "why": "Both implement the rules correctly; B is cleaner, avoids per-line buffer re-slicing, and its cancel is guarded against rejection, while neither adds tests.",
+   "defects_A": [
+    "sse.ts:68 unguarded reader.cancel() in finally can throw and mask the consumer's early exit",
+    "sse.ts:53 buffer re-sliced for every line (extra copying)",
+    "sse.ts:11 buffer is unbounded if the body never sends a newline",
+    "no tests added"
+   ],
+   "defects_B": [
+    "sse.ts:11 buffer is unbounded if the body never sends a newline",
+    "no tests added"
+   ]
+  },
+  "cost": 0.0555678
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 2,
+    "security": 8
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 10,
+    "tests": 2,
+    "security": 7
+   },
+   "winner": "A",
+   "why": "Both implement the rules equivalently, but A swallows cancel errors in cleanup and scans the buffer linearly, while B has an unguarded cancel and per-line re-slicing.",
+   "defects_A": [
+    "no tests added for the new behaviour (sse.test.ts)"
+   ],
+   "defects_B": [
+    "await reader.cancel() unguarded in finally can mask the original error (sse.ts:68)",
+    "buffer re-sliced after every line, quadratic on large chunks (sse.ts:51-53)",
+    "no tests added for the new behaviour (sse.test.ts)"
+   ]
+  },
+  "cost": 0.0432536
+ },
+ {
+  "task": "hard-window",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both are correct on the main paths, but A keeps the original behaviour for sparse arrays and has broader tests; B fakes the sparse-array error message and does not test it.",
+   "defects_A": [
+    "window.edge.test.ts:112 timing test uses Math.random, so it is non-deterministic",
+    "window.ts:129 adds a separate sparse fallback function and a Float64Array copy, which is extra code"
+   ],
+   "defects_B": [
+    "window.ts:93 hard-coded imitation of the engine's TypeError message for sparse arrays",
+    "window.contract.test.ts has no sparse-array test, no performance test, and no -0 or huge-span test"
+   ]
+  },
+  "cost": 0.0590581
+ },
+ {
+  "task": "hard-window",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 6,
+    "scope": 9,
+    "tests": 6,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B preserves sparse-array behaviour via a fallback to the original code and has broader tests (sparse, -0, rounding, perf); A hard-codes an engine error message and has no sparse or perf test.",
+   "defects_A": [
+    "window.ts:93 hard-coded V8 TypeError message imitating the sparse-array failure; brittle",
+    "no tests for sparse arrays, -0 or the 200k-event performance requirement"
+   ],
+   "defects_B": [
+    "window.edge.test.ts:112 timing test depends on machine speed and random data, so it could flake",
+    "window.ts:129 sparse-array fallback stays O(n^2), but only for sparse input"
+   ]
+  },
+  "cost": 0.0601323
+ },
+ {
+  "task": "tb-dedup",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 6,
+    "tests": 1,
+    "security": 8
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 9,
+    "scope": 7,
+    "tests": 1,
+    "security": 8
+   },
+   "winner": "A",
+   "why": "A also handles unhashable items, while B's dict.fromkeys raises TypeError on them; neither adds tests.",
+   "defects_A": [
+    "No tests added for unhashable-item path (solution.py)",
+    "Stray .pytest_cache and __pycache__ files in diff",
+    "O(n^2) scan for unhashable items (solution.py:15)"
+   ],
+   "defects_B": [
+    "Raises TypeError on unhashable items such as lists or dicts (solution.py:2)",
+    "No tests added",
+    "Stray .pytest_cache files in diff"
+   ]
+  },
+  "cost": 0.033479999999999996
+ },
+ {
+  "task": "tb-dedup",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 6,
+    "quality": 9,
+    "scope": 8,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 7,
+    "tests": 1,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "B also handles unhashable items such as lists, which A's dict.fromkeys raises TypeError on; neither adds tests.",
+   "defects_A": [
+    "solution.py:2 raises TypeError for unhashable items such as lists or dicts",
+    "no tests added",
+    "stray .pytest_cache files in the diff"
+   ],
+   "defects_B": [
+    "solution.py:11-13 unhashable fallback is O(n^2) because it scans a list",
+    "no tests added",
+    "stray .pytest_cache and __pycache__ files in the diff"
+   ]
+  },
+  "cost": 0.0344947
+ }
+]
