@@ -37,11 +37,11 @@ features worth adopting to make cedia more complete/powerful. Not a clone plan.
 14. **Computer-use tool** (desktop control) — maybe via MCP instead.
 
 ### C. Memory & context
-15. **AutoDream** consolidation (background memory consolidation with lock file).
-16. **extractMemories** background fork writing durable memories automatically.
+15. **Memory consolidation** (cedia: `consolidateMemory`) (background memory consolidation with lock file).
+16. **Note gathering** (cedia: `gatherNotes`) background fork writing durable memories automatically.
 17. **Session memory summary** (summary.md per session) — cedia has handoff note;
     could persist.
-18. **MagicDocs** (auto-updating docs with `# MAGIC DOC:` header).
+18. **Living docs** (auto-updating docs with a `# LIVING DOC:` header; cedia: `cedia living-docs`).
 19. **AgentSummary** periodic summaries for subagent UI.
 
 ### D. Settings / enterprise
@@ -86,7 +86,7 @@ features worth adopting to make cedia more complete/powerful. Not a clone plan.
 ## Recommended priority for cedia (not clone)
 
 Tier 1 (high leverage, fits cedia's philosophy):
-- AutoDream + extractMemories (memory quality)
+- Memory consolidation + note gathering (memory quality)
 - Context collapse / microcompact (cost)
 - Managed settings tier (enterprise)
 - Plugin marketplace (ecosystem)
@@ -115,7 +115,7 @@ after each phase.
 
 
 ## Tier 1 completion (documented deferrals)
-- Tier 1 #1 AutoDream: IMPLEMENTED (`cedia memory consolidate`).
+- Tier 1 #1 Memory consolidation: IMPLEMENTED (`cedia memory consolidate`).
 - Tier 1 #2 client-side microcompact: REJECTED (cache hit collapse; see research/microcompact-probe.md).
 - Tier 1 #2 server-side context_management: DEFERRED (optional, gated).
 - Tier 1 #3 MDM plist/HKLM/HKCU + remote fetch/polling: DEFERRED (platform-specific); file-based managed settings implemented.
@@ -126,5 +126,5 @@ Tier 1 status: COMPLETE (with documented deferrals).
 
 
 ## Tier 2.5 / Remote / TUI polish (documented deferrals)
-- extractMemories: IMPLEMENTED (`cedia memory extract`).
+- Note gathering: IMPLEMENTED (`cedia memory extract`).
 - Remote control (R1) and TUI polish pass: DEFERRED (large; local daemon + web UI and visual polish to be scheduled).

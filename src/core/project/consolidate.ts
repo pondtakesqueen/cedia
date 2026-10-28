@@ -11,9 +11,9 @@ import { runPrompt } from '../loop/run.ts';
 import { redactSecrets } from '../safety/secrets.ts';
 import { memoryPath, MemoryStore, rememberTool, MAX_NOTE } from './memory.ts';
 
-// AutoDream-style consolidation: between sessions, scan a project's session transcripts
+// Memory consolidation: between sessions, scan a project's session transcripts
 // and let a model keep the durable facts as project memory notes. Runs only when asked
-// (`cedia memory consolidate`) or, with autoDream on, between sessions. Never mid-session.
+// (`cedia memory consolidate`) or, with consolidateMemory on, between sessions. Never mid-session.
 
 export type ConsolidationLock = { lastConsolidatedAt: string; pid?: number };
 export type ConsolidationResult = {

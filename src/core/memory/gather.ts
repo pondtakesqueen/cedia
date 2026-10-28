@@ -9,7 +9,7 @@ import { loadPrivacy } from '../config.ts';
 import { memoryPath, MemoryStore, rememberTool, MAX_NOTE } from '../project/memory.ts';
 import { consolidateLockPath, readLock, writeLock } from '../project/consolidate.ts';
 
-export async function extractMemories(opts: { cwd: string; home?: string; model?: string; thread?: string; force?: boolean; now?: Date }) {
+export async function gatherNotes(opts: { cwd: string; home?: string; model?: string; thread?: string; force?: boolean; now?: Date }) {
   const home = opts.home ?? cediaHome();
   const slug = projectKey(opts.cwd);
   const lockPath = consolidateLockPath(home, slug);
