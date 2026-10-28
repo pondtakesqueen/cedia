@@ -88,7 +88,7 @@ Date: 2026-10-26. Scope: `src/clients/tui-ink/app.tsx` (ink TUI, default) vs his
 | Settings search | ✅ (Config tab) | |
 | Onboarding (preflight/theme/api-key/oauth/security/terminal) | ⚠️ basic | missing Grove, Claude-in-Chrome, bypass/auto-mode opt-in, dev channels |
 | Trust dialog | ✅ | |
-| Keybindings (contexts/chords/overrides) | ⚠️ | missing many contexts |
+| Keybindings (contexts/chords/overrides) | ✅ | overlay contexts + `g g` chord in vim normal |
 | Vim mode (motions/text objects/find/counts/dot-repeat) | ✅ | |
 | Status line (command) | ✅ | |
 | Ink renderer (Yoga/scheduleRender/Frame diff) | ⚠️ ink 8.x direct | no custom tuning |
@@ -209,3 +209,9 @@ Codex CLI (OpenAI) TUI features:
 
 - Denial notices use `NoticeBlock` layouts: edit shows `-`/`+` diff rows, write and plan mode show a capped content preview, other tools keep specialized fields.
 - Still one dialog shell; no Allow/Deny captions (denial-only).
+
+## Update 2026-10-28 (ink chord wiring)
+
+- `ChordInterceptor` returns `none` for non-prefixes so typing is not swallowed.
+- Multi-key bindings (`g g`) resolve through `chordsFromBindings` / `matchChord`.
+- In vim normal mode, Chat runs the interceptor before single-key bindings; default `g g` scrolls to the top.

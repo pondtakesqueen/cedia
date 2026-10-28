@@ -86,6 +86,7 @@ export const DEFAULT_BINDINGS: Binding[] = [
   { key: 'enter', command: 'jump', context: 'Transcript' },
   { key: 'up', command: 'selectUp', context: 'Transcript' },
   { key: 'down', command: 'selectDown', context: 'Transcript' },
+  { key: 'g g', command: 'scrollTop', context: 'Chat' },
 ];
 
 export function resolveBindings(overrides: Binding[]): Binding[] {
