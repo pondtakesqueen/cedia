@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { yankText, yankedText } from './yank.ts';
+import { isTextObjectChar, textObjectRange, type TextObjectKind } from './vim-textobject.ts';
 
 export type VimMode = 'insert' | 'normal' | 'visual' | 'vline';
 
@@ -46,6 +47,7 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
     setCursor((c) => Math.max(0, Math.min(c, value.length)));
   }, [value]);
   const [pendingOp, setPendingOp] = useState<'d' | 'c' | 'y' | null>(null);
+  const [pendingTextObject, setPendingTextObject] = useState<TextObjectKind | null>(null);
   const [count, setCount] = useState<number | null>(null);
 
   const clamp = (n: number) => Math.max(0, Math.min(n, value.length));
@@ -148,8 +150,9 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
       }
       // fall through to the shared motions below (they move the cursor)
     }
-    if (input === 'i') { if (vimMode === 'visual' || vimMode === 'vline') { setAnchor(null); } setVimMode('insert'); return; }
-    if (input === 'a' && vimMode === 'normal') { setCursor(Math.min(cursor + 1, value.length)); setVimMode('insert'); return; }
+    // With a pending operator, i/a start a text object (diw, ci", …) instead of insert/append.
+    if (input === 'i' && !pendingOp) { if (vimMode === 'visual' || vimMode === 'vline') { setAnchor(null); } setVimMode('insert'); return; }
+    if (input === 'a' && vimMode === 'normal' && !pendingOp) { setCursor(Math.min(cursor + 1, value.length)); setVimMode('insert'); return; }
     if (input === 'v' && vimMode === 'normal') { setAnchor(cursor); setVimMode('visual'); return; }
     if (input === 'V' && vimMode === 'normal') { setAnchor(cursor); setVimMode('vline'); return; }
     if ((input === 'p' || input === 'P') && vimMode === 'normal') {
@@ -221,41 +224,53 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
       return;
     }
     if (input === '$') { setCursor(Math.max(0, value.length - 1)); return; }
+    const applyRange = (op: 'd' | 'c' | 'y', start: number, end: number) => {
+      if (end <= start) return;
+      if (op === 'y') {
+        yankText(value.slice(start, end));
+        return;
+      }
+      onChange(value.slice(0, start) + value.slice(end));
+      setCursor(Math.min(start, Math.max(0, value.length - (end - start))));
+      if (op === 'c') setVimMode('insert');
+    };
     if (input === 'd' || input === 'c' || input === 'y') {
-      // store pending operator in a ref-like via closure? Use state via setPendingOp
       setPendingOp(input as 'd' | 'c' | 'y');
+      setPendingTextObject(null);
+      return;
+    }
+    // operator + text object lead-in (di… / da… / ci… / …)
+    if (pendingOp && !pendingTextObject && (input === 'i' || input === 'a')) {
+      setPendingTextObject(input);
+      return;
+    }
+    if (pendingOp && pendingTextObject && isTextObjectChar(input)) {
+      const op = pendingOp;
+      const kind = pendingTextObject;
+      setPendingOp(null);
+      setPendingTextObject(null);
+      const span = textObjectRange(value, cursor, kind, input);
+      if (span) applyRange(op, span.lo, span.hi);
       return;
     }
     // operator pending: apply to motion
-    if (pendingOp && (input === 'w' || input === 'b' || input === 'e' || input === 'h' || input === 'l' || input === '0' || input === '$')) {
+    if (pendingOp && !pendingTextObject && (input === 'w' || input === 'b' || input === 'e' || input === 'h' || input === 'l' || input === '0' || input === '$')) {
       const op = pendingOp;
       setPendingOp(null);
-      // compute range
-      let start = cursor, end = cursor;
       const motions: Record<string, (c: number) => number> = { h: (c) => c - 1, l: (c) => c + 1, w: nextWord, b: prevWord, e: endWord, '0': () => 0, '$': () => Math.max(0, value.length - 1) };
       const fn = motions[input];
       if (fn) {
         let nc = cursor;
         for (let i = 0; i < n; i++) nc = fn(nc);
-        start = Math.min(cursor, nc); end = Math.max(cursor, nc);
-        // for w/e include the end char
+        let start = Math.min(cursor, nc);
+        let end = Math.max(cursor, nc);
         if (input === 'w' || input === 'e') end = Math.min(value.length, end + 1);
-        if (input === 'b') { /* b moves start back */ }
-        if (op === 'y') {
-          yankText(value.slice(start, end));
-        } else if (op === 'd') {
-          onChange(value.slice(0, start) + value.slice(end));
-          setCursor(Math.min(start, value.length - 1 < 0 ? 0 : value.length - 1 >= 0 ? Math.min(start, Math.max(0, value.length - 1)) : 0));
-        } else if (op === 'c') {
-          onChange(value.slice(0, start) + value.slice(end));
-          setCursor(start);
-          setVimMode('insert');
-        }
+        applyRange(op, start, end);
       }
       return;
     }
     // dd/cc/yy
-    if (pendingOp && input === pendingOp) {
+    if (pendingOp && !pendingTextObject && input === pendingOp) {
       const op = pendingOp;
       setPendingOp(null);
       if (op === 'y') { yankText(value); }
@@ -265,7 +280,10 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
     }
     if (input === 'x') { onChange(value.slice(0, cursor) + value.slice(cursor + 1)); return; }
     // Anything unhandled clears a stale operator (d/c/y followed by nothing).
-    if (pendingOp) setPendingOp(null);
+    if (pendingOp) {
+      setPendingOp(null);
+      setPendingTextObject(null);
+    }
   });
 
   // Map a flat offset to row/col for multiline values.
