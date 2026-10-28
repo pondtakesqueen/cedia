@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { titleOf, type ThreadStore } from '../project/threads.ts';
 import type { ToolSpec } from './registry.ts';
 
@@ -11,7 +12,9 @@ export const OPEN_TOOL = 'open_thread';
 // Threads one run may open: a coordinator that splits a task into dozens would start more work than anyone reviews.
 export const MAX_OPENS = 8;
 
-export function openThreadTool(store: ThreadStore, opener: string, opened: { count: number } = { count: 0 }, root?: string): ToolSpec {
+// `roots`: the workspace's repository roots (core/session/log.ts workspaceRoots); a thread may be opened in one of
+// them or in `root`, the project root this run is in, and nowhere else.
+export function openThreadTool(store: ThreadStore, opener: string, opened: { count: number } = { count: 0 }, root?: string, roots: string[] = []): ToolSpec {
   return {
     name: OPEN_TOOL,
     description: `Open a new thread of this project for one piece of the work. It runs in a session of its own, in a worktree of its own, started for you, and sees only the task you write: give it the goal, the facts and paths it needs, what done looks like, and what to report back. Returns its id; follow it with read_thread and tell it something with message_thread. At most ${MAX_OPENS} per run.`,
@@ -31,9 +34,12 @@ export function openThreadTool(store: ThreadStore, opener: string, opened: { cou
       const task = String(input.task ?? '').trim();
       if (!task) return { text: 'task is required', isError: true };
       if (opened.count >= MAX_OPENS) return { text: `not opened: this run has opened ${opened.count} threads, the most it may`, isError: true };
-      opened.count++;
       const title = typeof input.title === 'string' ? input.title.trim() : '';
-      const chosenRoot = typeof input.root === 'string' && input.root.trim() ? input.root.trim() : root;
+      const asked = typeof input.root === 'string' && input.root.trim() ? resolve(input.root.trim()) : undefined;
+      const allowed = [...new Set([...(root ? [root] : []), ...roots])];
+      if (asked && !allowed.includes(asked)) return { text: `not opened: ${asked} is not a root of this workspace. Roots: ${allowed.join(', ') || 'none'}`, isError: true };
+      const chosenRoot = asked ?? root;
+      opened.count++;
       const id = store.open(task, { by: opener, ...(title ? { title } : {}), ...(chosenRoot ? { root: chosenRoot } : {}) });
       return { text: `Opened thread ${id} ("${titleOf(title || task)}"). It is queued and starts on its own; it will message you when it needs you.`, isError: false };
     },
