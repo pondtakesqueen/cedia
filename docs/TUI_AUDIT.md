@@ -164,7 +164,7 @@ Codex CLI (OpenAI) TUI features:
 
 **Medium priority (polish):**
 6. Ink renderer: tune scheduleRender, Frame diff, SIGCONT, pause/resume — ✅ incrementalRendering, maxFps 60, SIGCONT redraw, suspendTerminal for Ctrl+G
-7. Vim: visual mode — ✅ `v` / `V` (line) + yank register (`y` / `p` / `P`); text objects still lighter than cc
+7. Vim: visual mode — ✅ `v` / `V` (line) + yank register (`y` / `p` / `P`) + text objects (`iw`/`aw`/`iW`/`a"`/`ib`/…)
 8. Settings: Usage tab per-model breakdown — ✅ `loadProjectUsage` / `usageReport.models`
 9. Accessibility: manual testing with screen reader — ✅ automated SR render pass (CEDIA_SCREEN_READER / Ink isScreenReaderEnabled); live VoiceOver/NVDA still optional
 
@@ -235,3 +235,8 @@ Codex CLI (OpenAI) TUI features:
 
 - `useCediaScreenReader` / `envScreenReader` centralize CEDIA_* and INK_SCREEN_READER flags; `inkRenderOptions` passes them into Ink.
 - Screen-reader layout drops the ██ brand block and box borders, speaks `selected:` / `prompt:` / `suggestion:` instead of glyphs, and is covered by `test/tui-ink-a11y.test.ts`.
+
+## Update 2026-10-28 (ink vim text objects)
+
+- Operator + text object: `diw`/`daw`/`ciW`/`ya"`/`dib`/`da(` and matching `[]`/`{}`/`<>` / `B` / `t`.
+- Ranges live in `vim-textobject.ts` and are covered by `test/tui-ink-textobject.test.ts`.

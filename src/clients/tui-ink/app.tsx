@@ -907,7 +907,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'vim': {
         setVimMode((m) => (m === 'insert' ? 'normal' : 'insert'));
-        say(`vim mode: ${vimMode === 'insert' ? 'normal' : 'insert'} (v visual · V line · y yank · p paste)`);
+        say(`vim mode: ${vimMode === 'insert' ? 'normal' : 'insert'} (v/V visual · y/p yank · diw/ci" text objects)`);
         return;
       }
       case 'palette': {
