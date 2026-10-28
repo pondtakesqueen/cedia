@@ -1,10 +1,10 @@
 # TUI Audit: cedia (ink) vs Claude Code (cc) vs Codex CLI
 
-Date: 2026-10-26. Scope: `src/clients/tui-ink/app.tsx` (ink TUI, default) vs history/CLONE_SPEC.md §16 + GAP_ANALYSIS_CC.md.
+Date: 2026-10-26. Scope: `src/clients/tui-ink/app.tsx` (ink TUI, default) vs Claude Code's public docs (`research/claude-code-docs-notes.md`) + GAP_ANALYSIS_CC.md. The clone-era spec it first cited was removed on 2026-10-28 (`research/clean-room-audit-2026-10-28.md`).
 
 ## 1. Slash commands
 
-### cc built-ins (from history/CLONE_SPEC §2.4)
+### cc built-ins (public command reference)
 | cc command | cedia ink | status |
 |---|---|---|
 | /diff | ✅ | |

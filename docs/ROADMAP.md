@@ -8,7 +8,7 @@ The order follows two rules. Measure before changing: the regression gate comes 
 
 PRs #15 to #18: real-repository eval tasks, results on Haiku 5.5, DeepSeek V4.1 Flash and Beam, the 429 quota fix, the 200-turn default, and the first fixes from the Claude Code changelog review.
 
-## 2. Regression gate (this step)
+## 2. Regression gate (done: baselines in `evals/gate/baseline/`)
 
 `bun evals/gate.ts` runs a fixed suite on each model, records pass rate, false-done, cost and time, compares them with the baseline stored for that model, and exits 1 when one got worse. How it decides, and what it costs, is in `evals/gate/README.md`.
 
@@ -43,3 +43,11 @@ Status (2026-10-22): with the reminder (#21), Haiku spawns on its own on every `
 `SPEC.md` stages 3 to 6, in order: the TUI on pi-tui with `/diff`, `/undo` and the status line; AGENTS.md, full compaction, memory, `/commit` and `/pr`; skills, MCP, subagents by role and the first four-arm comparison; rewind, LSP, goal mode, the classifier and the full eval against pi, `claude -p` and `codex exec`. The cost ideas in `research/NOTES.md` (cold-thread resume, staggered parallel agents, TTL per role) are measured with the gate as they come up.
 
 Each feature lands with its gate report, like any other change.
+
+## 6. What the desktop (cedian v1) needs from cedia
+
+Agreed with the owner on 2026-10-28 (cedian `docs/CEDIAN_SPEC.md` §11 holds the order). Each lands like any other change, with its gate report when it touches a prompt, a default, the loop or a tool.
+
+- Phase B: a lock the desktop's daemon holds and `cedia daemon` yields to; images on `threads send` and `threads fork`; an inline-edit command (a selection and an instruction, answered with a diff).
+- Phase C: multi-repo workspaces as SPEC describes them (`--thread` runs in the thread's root, memory and schedules keyed by the primary root's slug, extra read-only roots); the `Artifact` tool and `enableArtifact`; a write to the project's files.
+- Phase D: a completion command for tab completion (fill-in-the-middle on a fast, cheap model); the route for prompt images and video frames.
