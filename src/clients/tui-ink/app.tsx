@@ -51,7 +51,8 @@ import { projectKey } from '../../core/session/log.ts';
 import { join } from 'node:path';
 import { readFileSync as fsRead, writeFileSync as fsWrite, existsSync as fsExists, readdirSync as fsReaddir, statSync as fsStat, unlinkSync as fsUnlink } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { usageReport, readEventsLenient, isUsageEvent } from '../../core/session/usage.ts';
+import { loadProjectUsage } from './usage-summary.ts';
+import type { VimMode } from './vim-input.tsx';
 
 type Msg = { role: 'user' | 'assistant' | 'tool' | 'system'; text: string; status?: 'running' | 'success' | 'error'; dim?: boolean; tone?: 'red' };
 
@@ -210,7 +211,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [model, setModel] = useState<string | undefined>(args.model);
   const [effort, setEffort] = useState<'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined>(undefined);
   const [goal, setGoal] = useState<string | undefined>(args.goal);
-  const [vimMode, setVimMode] = useState<'insert' | 'normal' | 'visual'>('insert');
+  const [vimMode, setVimMode] = useState<VimMode>('insert');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'status' | 'config' | 'usage' | 'stats'>('status');
   const [configSelected, setConfigSelected] = useState(0);
@@ -222,27 +223,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // Recomputed when the overlay opens or the tab is selected (not on every keystroke).
   const projectUsage = React.useMemo(() => {
     if (settingsTab !== 'usage' && settingsTab !== 'stats') return null;
-    try {
-      const dir = join(cediaHome(), 'sessions', projectKey(args.cwd));
-      if (!fsExists(dir)) return null;
-      const files = fsReaddir(dir).filter((f) => f.endsWith('.jsonl'))
-        .map((f) => ({ p: join(dir, f), m: fsStat(join(dir, f)).mtimeMs }))
-        .sort((a, b) => b.m - a.m).slice(0, 20);
-      if (!files.length) return null;
-      const sessions = files.map((f) => ({ id: f.p.split('/').pop()!.replace(/\.jsonl$/, ''), events: readEventsLenient(fsRead(f.p, 'utf8')).filter(isUsageEvent) }));
-      const report = usageReport(sessions, {});
-      return {
-        models: report.models,
-        sessions: report.sessions,
-        requests: report.requests,
-        tokens: { in: report.tokens.input, cache: report.tokens.cacheRead, out: report.tokens.output },
-        handoffs: report.handoffs,
-      };
-    } catch {
-      return null;
-    }
+    return loadProjectUsage(args.cwd);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settingsTab, settingsOpen]);
+  }, [settingsTab, settingsOpen, args.cwd]);
   const projectUsageStats = settingsTab === 'stats' ? projectUsage : null;
   // Effective model for display (status, receipts): explicit choice, else the code role default.
   const effModel = React.useMemo(() => {
@@ -923,7 +906,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'vim': {
         setVimMode((m) => (m === 'insert' ? 'normal' : 'insert'));
-        say(`vim mode: ${vimMode === 'insert' ? 'normal' : 'insert'} (v for visual)`);
+        say(`vim mode: ${vimMode === 'insert' ? 'normal' : 'insert'} (v visual · V line · y yank · p paste)`);
         return;
       }
       case 'palette': {

@@ -164,8 +164,8 @@ Codex CLI (OpenAI) TUI features:
 
 **Medium priority (polish):**
 6. Ink renderer: tune scheduleRender, Frame diff, SIGCONT, pause/resume — ✅ incrementalRendering, maxFps 60, SIGCONT redraw, suspendTerminal for Ctrl+G
-7. Vim: visual mode? (cc has it; cedia doesn't) — visual mode landed earlier; confirm remaining gaps
-8. Settings: search mode in Config (done), but Usage tab could show per-model breakdown
+7. Vim: visual mode — ✅ `v` / `V` (line) + yank register (`y` / `p` / `P`); text objects still lighter than cc
+8. Settings: Usage tab per-model breakdown — ✅ `loadProjectUsage` / `usageReport.models`
 9. Accessibility: manual testing with screen reader
 
 **Low priority (deferred by design):**
@@ -178,7 +178,7 @@ Codex CLI (OpenAI) TUI features:
 
 **Done:** ~47 commands, virtual list, history search, message selector, transcript toggle, cost/idle dialogs, dialog priority, status line, keybindings, mouse, resize, onboarding, accessibility, resume picker, settings tabs+search, permission router (expanded labels), vim depth (motions/operators/text objects/find/counts/dot-repeat), rewind, LSP, full goal mode, classifier, spawn display, markdown, tool cards, permission dialogs, Tab autocomplete, arrow-key navigation.
 
-**Missing for 95%:** CC-product onboarding (Grove/Chrome/bypass) among the former high list; remaining medium: Usage per-model, a11y manual pass, any leftover vim visual gaps.
+**Missing for 95%:** CC-product onboarding (Grove/Chrome/bypass) among the former high list; remaining medium: a11y manual pass.
 
 **Missing for 100% (deferred):** voice/buddy/computer-use, plugin/remote/cloud, surveys, desktop upsell, ultrapan choice, cc-specific commands. (cedia doesn't need all of these — some are cc-specific.)
 ## Update 2026-10-26 (ink TUI polish round)
@@ -225,3 +225,8 @@ Codex CLI (OpenAI) TUI features:
 - `inkRenderOptions` turns on `incrementalRendering` and `maxFps: 60` for the interactive TUI.
 - `SIGCONT` clears Ink's recorded frame and notifies the App to commit a fresh paint after `fg`.
 - Ctrl+G hands the TTY to `$EDITOR` through Ink's `suspendTerminal`, which restores the alternate screen and force-redraws.
+
+## Update 2026-10-28 (ink usage + vim visual)
+
+- Settings Usage tab reads `loadProjectUsage` (per-model cost and request counts from recent session logs).
+- Vim `V` enters line-wise visual; `y`/`yw`/`yy` fill an in-process yank register; `p`/`P` paste it.

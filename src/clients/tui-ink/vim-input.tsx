@@ -1,18 +1,33 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
+import { yankText, yankedText } from './yank.ts';
+
+export type VimMode = 'insert' | 'normal' | 'visual' | 'vline';
 
 type Props = {
   value: string;
   onChange: (v: string) => void;
   onSubmit: (v: string) => void;
   placeholder?: string;
-  vimMode: 'insert' | 'normal' | 'visual';
-  setVimMode: (m: 'insert' | 'normal' | 'visual') => void;
+  vimMode: VimMode;
+  setVimMode: (m: VimMode) => void;
   /** When an overlay owns the keyboard, ignore all keys. */
   captured?: boolean;
   /** The app consumed Enter itself (accepting a dropdown item): don't submit the stale text. */
   suppressSubmit?: boolean;
 };
+
+/** Character range selected in visual; whole lines in vline (end exclusive). */
+export function visualSpan(value: string, mode: VimMode, anchor: number, cursor: number): { lo: number; hi: number } | null {
+  if (mode !== 'visual' && mode !== 'vline') return null;
+  const a = Math.min(anchor, cursor);
+  const b = Math.max(anchor, cursor);
+  if (mode === 'visual') return { lo: a, hi: Math.min(value.length, b + 1) };
+  const start = a === 0 ? 0 : value.lastIndexOf('\n', a - 1) + 1;
+  let end = value.indexOf('\n', b);
+  end = end < 0 ? value.length : end + 1;
+  return { lo: start, hi: end };
+}
 
 export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setVimMode, captured, suppressSubmit }: Props): React.ReactElement {
   const [cursor, setCursor] = useState(0);
@@ -110,15 +125,22 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
     if (/^[1-9]$/.test(input)) { setCount((c) => (c ?? 0) * 10 + Number(input)); return; }
     const n = count ?? 1;
     setCount(null);
-    // visual mode: motions extend the selection from the anchor
-    if (vimMode === 'visual') {
-      if (key.escape || input === 'v') { setVimMode('normal'); setAnchor(null); return; }
-      if (input === 'y') { setVimMode('normal'); setAnchor(null); return; }
+    // visual / vline: motions extend the selection from the anchor
+    if (vimMode === 'visual' || vimMode === 'vline') {
+      if (key.escape || input === 'v' || input === 'V') { setVimMode('normal'); setAnchor(null); return; }
+      if (input === 'y') {
+        const span = visualSpan(value, vimMode, anchor ?? cursor, cursor);
+        if (span) yankText(value.slice(span.lo, span.hi));
+        setVimMode('normal');
+        setAnchor(null);
+        return;
+      }
       if (input === 'd' || input === 'c' || input === 'x') {
-        const a = anchor ?? cursor;
-        const lo = Math.min(a, cursor), hi = Math.max(a, cursor) + 1;
-        onChange(value.slice(0, lo) + value.slice(Math.min(hi, value.length)));
-        setCursor(Math.min(lo, Math.max(0, value.length - (hi - lo) - 1)));
+        const span = visualSpan(value, vimMode, anchor ?? cursor, cursor);
+        if (span) {
+          onChange(value.slice(0, span.lo) + value.slice(span.hi));
+          setCursor(Math.min(span.lo, Math.max(0, value.length - (span.hi - span.lo))));
+        }
         setAnchor(null);
         if (input === 'c') setVimMode('insert');
         else setVimMode('normal');
@@ -126,9 +148,23 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
       }
       // fall through to the shared motions below (they move the cursor)
     }
-    if (input === 'i') { if (vimMode === 'visual') { setAnchor(null); } setVimMode('insert'); return; }
-    if (input === 'a' && vimMode !== 'visual') { setCursor(Math.min(cursor + 1, value.length)); setVimMode('insert'); return; }
+    if (input === 'i') { if (vimMode === 'visual' || vimMode === 'vline') { setAnchor(null); } setVimMode('insert'); return; }
+    if (input === 'a' && vimMode === 'normal') { setCursor(Math.min(cursor + 1, value.length)); setVimMode('insert'); return; }
     if (input === 'v' && vimMode === 'normal') { setAnchor(cursor); setVimMode('visual'); return; }
+    if (input === 'V' && vimMode === 'normal') { setAnchor(cursor); setVimMode('vline'); return; }
+    if ((input === 'p' || input === 'P') && vimMode === 'normal') {
+      const text = yankedText();
+      if (!text) return;
+      if (input === 'p') {
+        const at = Math.min(cursor + 1, value.length);
+        onChange(value.slice(0, at) + text + value.slice(at));
+        setCursor(at + text.length - (text.endsWith('\n') ? 1 : 0));
+      } else {
+        onChange(value.slice(0, cursor) + text + value.slice(cursor));
+        setCursor(cursor + text.length - (text.endsWith('\n') ? 1 : 0));
+      }
+      return;
+    }
     if (key.return && !suppressSubmit) { onSubmit(value); return; }
     // motions
     const move = (fn: (c: number) => number) => {
@@ -205,15 +241,15 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
         // for w/e include the end char
         if (input === 'w' || input === 'e') end = Math.min(value.length, end + 1);
         if (input === 'b') { /* b moves start back */ }
-        if (op === 'd') {
+        if (op === 'y') {
+          yankText(value.slice(start, end));
+        } else if (op === 'd') {
           onChange(value.slice(0, start) + value.slice(end));
           setCursor(Math.min(start, value.length - 1 < 0 ? 0 : value.length - 1 >= 0 ? Math.min(start, Math.max(0, value.length - 1)) : 0));
         } else if (op === 'c') {
           onChange(value.slice(0, start) + value.slice(end));
           setCursor(start);
           setVimMode('insert');
-        } else {
-          // yank: do nothing visible (no clipboard integration here)
         }
       }
       return;
@@ -222,7 +258,8 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
     if (pendingOp && input === pendingOp) {
       const op = pendingOp;
       setPendingOp(null);
-      if (op === 'd') { onChange(''); setCursor(0); }
+      if (op === 'y') { yankText(value); }
+      else if (op === 'd') { onChange(''); setCursor(0); }
       else if (op === 'c') { onChange(''); setCursor(0); setVimMode('insert'); }
       return;
     }
@@ -272,8 +309,9 @@ export function VimInput({ value, onChange, onSubmit, placeholder, vimMode, setV
   const c = Math.min(cursor, Math.max(0, value.length - 1));
   const npos = locate(c);
   // visual selection range, if active
-  const vlo = vimMode === 'visual' && anchor !== null ? Math.min(anchor, c) : -1;
-  const vhi = vimMode === 'visual' && anchor !== null ? Math.max(anchor, c) + 1 : -1;
+  const span = anchor !== null ? visualSpan(value, vimMode, anchor, c) : null;
+  const vlo = span?.lo ?? -1;
+  const vhi = span?.hi ?? -1;
   let vacc = 0;
   const lineStarts: number[] = npos.lines.map((ln) => { const s = vacc; vacc += ln.length + 1; return s; });
   return (
