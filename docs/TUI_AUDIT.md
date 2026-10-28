@@ -199,3 +199,8 @@ Codex CLI (OpenAI) TUI features:
 - Denial notices name plan mode, filesystem, and sed fields; write shows a line count; skill shows args.
 - Overlay keys resolve through `DEFAULT_BINDINGS` for Autocomplete, Confirmation, Select, Settings, MessageSelector, HistorySearch, and Transcript, so `keybindings.json` can rebind them.
 - Transcript paint composes selection and search hits via `paintRuns`, using theme tokens for selection and hit chrome.
+
+## Update 2026-10-28 (ink TUI virtual window)
+
+- Transcript windowing uses `visibleWindow` with a height budget, message overscan of 3, and a `createHeightCache` map keyed by index/width/text length/role.
+- Still a windowed slice, not a recycled VirtualMessageList component pool.
