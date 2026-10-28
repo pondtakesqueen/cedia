@@ -10,7 +10,7 @@ import { projectKey, projectRoot, projectSlug, SessionLog, sessionExists, sessio
 import { DAILY_SPEND_WARN_USD, daySpendUsd } from '../../core/session/select.ts';
 import { dayOf } from '../../core/session/usage.ts';
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadMaxEffort, capEffort, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
-import { attachedNote, storeImage, type ImageRef } from '../../core/images.ts';
+import { attachedNote, blobDir, STORED_IMAGE, storedImage, storeImage, type ImageRef } from '../../core/images.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
@@ -557,7 +557,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
               inbox: {
                 pending: () => {
                   const t = store.read(threadId);
-                  return t.pending.length ? { ids: t.pending.map((p) => p.id), text: inboxReminder(t.pending) } : undefined;
+                  const images = t.pending.flatMap((p) => p.images ?? []);
+                  return t.pending.length ? { ids: t.pending.map((p) => p.id), text: inboxReminder(t.pending), ...(images.length ? { images } : {}) } : undefined;
                 },
                 delivered: (ids: string[]) => store.append(threadId, { run: runId, kind: 'delivered', ids, sessionId: log.id }),
               },
@@ -625,13 +626,14 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   // A thread that asked the owner a question goes on with their answer, framed as one.
   let task = resumed?.question ? answerPrompt(resumed.question.question, args.prompt) : (skillCommand(args.prompt, skills) ?? args.prompt);
   // The owner's images: the writer is shown them, and the task names their files so plan and review can open them.
+  // `sha256:<hex>` names one already stored (a fork's images, kept by the client that resends the run).
+  const imagePath = (path: string) => (STORED_IMAGE.test(path) ? join(blobDir(), path.slice(7)) : resolve(args.cwd, path));
   const images = (args.images ?? []).map((path) => {
-    const full = resolve(args.cwd, path);
-    const ref = storeImage(readFileSync(full), path);
+    const ref = STORED_IMAGE.test(path) ? storedImage(path) : storeImage(readFileSync(imagePath(path)), path);
     if ('error' in ref) throw new Error(`--image ${path}: ${ref.error}`);
     return ref;
   });
-  if (images.length) task = `${task}\n\n${attachedNote(args.images!.map((p) => resolve(args.cwd, p)))}`;
+  if (images.length) task = `${task}\n\n${attachedNote(args.images!.map(imagePath))}`;
   // The advisor: one session for the run, which reads each of the writer's turns and answers OK or a note. A
   // failed advisor (its quota, an error) is left out for the rest of the run; the writer goes on without it.
   const adv = { log: undefined as SessionLog | undefined, turns: 0, notes: 0, costUsd: 0, off: false };
@@ -914,7 +916,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const last = resumed?.sessions.findLast((s) => s.role === 'code' && !resumed.rewound.includes(s.sessionId));
     const tree = snapshots?.take();
     const from = last?.path && sessionExists(last.path) ? { sessionId: last.sessionId, path: last.path, events: SessionLog.load(last.path).events.length, model: last.model } : undefined;
-    store.append(threadId, { kind: 'run', id: runId, prompt: args.prompt.slice(0, 500), cwd: args.cwd, ...(tree ? { tree } : {}), ...(from ? { from } : {}), permission });
+    store.append(threadId, { kind: 'run', id: runId, prompt: args.prompt.slice(0, 500), cwd: args.cwd, ...(tree ? { tree } : {}), ...(from ? { from } : {}), permission, ...(images.length ? { images } : {}) });
   }
   try {
     const servers = args.noMcp ? {} : loadMcp();

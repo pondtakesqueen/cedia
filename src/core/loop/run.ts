@@ -100,7 +100,7 @@ export type RunOptions = {
   spawnNudgeAt?: number;
   // Messages from other threads, shown as a reminder at each turn boundary. `delivered` runs after the reminder
   // is logged, so a crash in between shows a message twice rather than never.
-  inbox?: { pending(): { ids: string[]; text: string } | undefined; delivered(ids: string[]): void };
+  inbox?: { pending(): { ids: string[]; text: string; images?: ImageRef[] } | undefined; delivered(ids: string[]): void };
   // The advisor role (core/trust/advisor.ts): after each turn that ran tools, it reads the turn's events and may
   // return a note, which the session logs as a reminder before its next request. Absent means no advisor.
   advise?: (turn: SessionEvent[]) => Promise<string | undefined>;
@@ -498,7 +498,12 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
     turns++;
     const mail = handoff === 0 ? opts.inbox?.pending() : undefined;
     if (mail) {
-      log.append({ kind: 'reminder', as: 'user', text: mail.text });
+      // The messages' images count against the session's 20 like the prompt's; past them, a note says so.
+      const room = Math.max(0, MAX_IMAGES_PER_SESSION - imagesShown(log.events));
+      const images = (mail.images ?? []).slice(0, room);
+      const dropped = (mail.images?.length ?? 0) - images.length;
+      const text = dropped ? `${mail.text}\n[cedia: ${dropped} image(s) not shown: a session shows at most ${MAX_IMAGES_PER_SESSION}.]` : mail.text;
+      log.append({ kind: 'reminder', as: 'user', text, ...(images.length ? { images } : {}) });
       opts.inbox!.delivered(mail.ids);
     }
 
@@ -926,7 +931,7 @@ async function runTools(
 
 // Images the session has shown the model so far, in prompts and tool results.
 export const imagesShown = (events: SessionEvent[]) =>
-  events.reduce((n, e) => n + (e.kind === 'user' ? (e.images?.length ?? 0) : e.kind === 'tool_result' ? (e.output.images?.length ?? 0) : 0), 0);
+  events.reduce((n, e) => n + (e.kind === 'user' || e.kind === 'reminder' ? (e.images?.length ?? 0) : e.kind === 'tool_result' ? (e.output.images?.length ?? 0) : 0), 0);
 
 // A command that holds a declared check but is not just it (`bun test 2>&1 | tail`, `bun test; echo`) does not
 // count for the done gate, which cannot see the check's own exit code there. Saying so in that call's result, when

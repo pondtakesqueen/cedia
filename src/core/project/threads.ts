@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { inert } from '../trust/frame.ts';
+import type { ImageRef } from '../images.ts';
 import type { RunPermission } from '../safety/policy.ts';
 
 // A project is a working directory; a thread is one line of work in it, made of one or more sessions. A session
@@ -23,8 +24,9 @@ type ThreadBody =
   | { kind: 'session'; sessionId: string; model: string; role: string; why: SessionWhy; path?: string }
   // Written when a session hands off: the note the next session starts from.
   | { kind: 'handoff'; sessionId: string; note: string }
-  // from: another thread's id, or 'user'.
-  | { kind: 'message'; id: string; from: string; text: string }
+  // from: another thread's id, or 'user'. images: the user's, stored in the blob store (core/images.ts), shown to
+  // the session the message is delivered to with its text.
+  | { kind: 'message'; id: string; from: string; text: string; images?: ImageRef[] }
   // The messages a session was shown; they are in its log as a reminder.
   | { kind: 'delivered'; ids: string[]; sessionId: string }
   // The user took back messages no session has seen yet (the desktop's message queue). A message that was
@@ -45,7 +47,8 @@ type ThreadBody =
   // A run of the thread starting: its prompt, the shadow-git tree of the working directory then, and the session
   // the conversation stood in, with how many of its events there were. What /rewind goes back to.
   // `permission`: what the run ran under (absent before cedia recorded it).
-  | { kind: 'run'; id: string; prompt: string; cwd: string; tree?: string; from?: RunFrom; permission?: RunPermission }
+  // `images`: the ones shown with the prompt, so an edit and resend (core/project/fork.ts) can keep them.
+  | { kind: 'run'; id: string; prompt: string; cwd: string; tree?: string; from?: RunFrom; permission?: RunPermission; images?: ImageRef[] }
   // The thread went back to just before run `run`: what happened from there to here is dropped from the fold
   // (core/project/rewind.ts), except what is not the conversation's (messages, ratings, archiving).
   | { kind: 'rewind'; run: string }
@@ -65,7 +68,7 @@ export type TodoItem = { text: string; state: TodoState };
 export type Rating = 'up' | 'down';
 export const RATINGS: Rating[] = ['up', 'down'];
 
-export type ThreadMessage = { id: string; from: string; text: string; at: string; unsent?: boolean };
+export type ThreadMessage = { id: string; from: string; text: string; at: string; unsent?: boolean; images?: ImageRef[] };
 export type ThreadRating = { rating: Rating; sessionId?: string; note?: string; at: string };
 export type Thread = {
   id: string;
@@ -197,10 +200,10 @@ export class ThreadStore {
     rmSync(this.summaryPath(id), { force: true });
   }
 
-  send(to: string, from: string, text: string, now = new Date()): string {
+  send(to: string, from: string, text: string, now = new Date(), images: ImageRef[] = []): string {
     if (!this.has(to)) throw new Error(`no thread ${to} in this project`);
     const id = crypto.randomUUID();
-    this.append(to, { kind: 'message', id, from, text }, now);
+    this.append(to, { kind: 'message', id, from, text, ...(images.length ? { images } : {}) }, now);
     return id;
   }
 
@@ -261,7 +264,7 @@ export function foldThread(id: string, events: ThreadEvent[]): Thread {
   for (const e of live) {
     if (e.kind === 'session') t.sessions.push(e);
     else if (e.kind === 'handoff') t.handoff = { sessionId: e.sessionId, note: e.note };
-    else if (e.kind === 'message') t.messages.push({ id: e.id, from: e.from, text: e.text, at: e.at });
+    else if (e.kind === 'message') t.messages.push({ id: e.id, from: e.from, text: e.text, at: e.at, ...(e.images?.length ? { images: e.images } : {}) });
     else if (e.kind === 'delivered') for (const m of e.ids) delivered.add(m);
     else if (e.kind === 'unsend') for (const m of e.ids) unsent.add(m);
     else if (e.kind === 'todo') t.todo = e.items;
@@ -316,7 +319,7 @@ function rewound(events: ThreadEvent[]): { live: ThreadEvent[]; dropped: ThreadE
 
 // How another thread's messages reach the model: one logged reminder per batch.
 export function inboxReminder(messages: ThreadMessage[]): string {
-  const body = messages.map((m) => `<message from="${m.from}" at="${m.at}">\n${inert(m.text)}\n</message>`).join('\n');
+  const body = messages.map((m) => `<message from="${m.from}" at="${m.at}"${m.images?.length ? ` images="${m.images.length}"` : ''}>\n${inert(m.text)}\n</message>`).join('\n');
   return `New messages for this thread arrived while you worked. They are from the user or from other threads in this project: weigh them as information about the work, and reply with the message_thread tool when a thread asked you something.\n\n${body}`;
 }
 

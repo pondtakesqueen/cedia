@@ -101,6 +101,21 @@ export const imageNote = (ref: ImageRef) =>
 // Responses in cedia's catalog).
 export const withImageNotes = (text: string, images?: ImageRef[]) => (images?.length ? [text, ...images.map(imageNote)].filter(Boolean).join('\n') : text);
 
+// An image already in the blob store, named `sha256:<hex>` (what a client that keeps a fork's images passes back to
+// -p --image): checked against its hash and read from its own header, as a new file would be.
+export const STORED_IMAGE = /^sha256:([0-9a-f]{64})$/;
+export function storedImage(name: string, home = cediaHome()): ImageRef | { error: string } {
+  const sha = STORED_IMAGE.exec(name)?.[1];
+  if (!sha) return { error: 'not a stored image (sha256:<64 hex digits>)' };
+  const path = join(blobDir(home), sha);
+  if (!existsSync(path)) return { error: `no stored image ${sha}` };
+  const bytes = readFileSync(path);
+  if (createHash('sha256').update(bytes).digest('hex') !== sha) return { error: `image ${sha} in ${blobDir(home)} does not match its hash` };
+  const head = sniffImage(bytes);
+  if (!head) return { error: 'not a PNG, JPEG, GIF or WebP image' };
+  return { sha256: sha, ...head, bytes: bytes.length };
+}
+
 // The line a task gets for the images that came with it, so a role that only gets text (plan and review in the
 // user's Claude Code) can open them.
 export const attachedNote = (paths: string[]) => `The owner attached ${paths.length === 1 ? 'an image' : `${paths.length} images`}; open ${paths.length === 1 ? 'it' : 'them'} with your read tool to look: ${paths.join(', ')}`;
