@@ -1111,7 +1111,7 @@ function plugin(argv: string[]): number {
     if (cmd === 'list') {
       const plugins = listInstalled(home);
       if (values.json) console.log(JSON.stringify(plugins));
-      else console.log(plugins.length ? plugins.map((p) => `${p.enabled ? '*' : ' '} ${p.name}@${p.version}  ${p.installPath}`).join('\\n') : 'no plugins installed');
+      else console.log(plugins.length ? plugins.map((p) => `${p.enabled ? '*' : ' '} ${p.name}@${p.version}  ${p.installPath}`).join('\n') : 'no plugins installed');
       return 0;
     }
     if (cmd === 'install' && rest.length === 1) {
@@ -1150,7 +1150,7 @@ function marketplace(argv: string[]): number {
     if (cmd === 'list' || !cmd) {
       const m = loadMarketplaces(home);
       if (parsed.values.json) console.log(JSON.stringify(m));
-      else console.log(m.length ? m.map((x) => `${x.name}  ${x.source}`).join('\\n') : 'no marketplaces');
+      else console.log(m.length ? m.map((x) => `${x.name}  ${x.source}`).join('\n') : 'no marketplaces');
       return 0;
     }
     if (cmd === 'add' && rest.length >= 2) {
@@ -1181,7 +1181,7 @@ function agentsCmd(argv: string[]): number {
   const slug = projectKey(cwd);
   const sessions = listBgSessions(home, slug);
   if (parsed.values.json) console.log(JSON.stringify(sessions));
-  else console.log(sessions.length ? sessions.map((s) => `${s.id}  ${s.alive ? 'alive' : 'dead'}  thread=${s.thread}  pid=${s.pid}`).join('\\n') : 'no background sessions');
+  else console.log(sessions.length ? sessions.map((s) => `${s.id}  ${s.alive ? 'alive' : 'dead'}  thread=${s.thread}  pid=${s.pid}`).join('\n') : 'no background sessions');
   return 0;
 }
 
@@ -1199,8 +1199,8 @@ function logsCmd(argv: string[]): number {
   const tail = parsed.values.tail ? Number(parsed.values.tail) : 50;
   const { readFileSync, existsSync } = require('node:fs');
   if (!existsSync(s.logPath)) { console.log('(no log yet)'); return 0; }
-  const lines = readFileSync(s.logPath, 'utf8').split('\\n');
-  console.log(lines.slice(-tail).join('\\n'));
+  const lines = readFileSync(s.logPath, 'utf8').split('\n');
+  console.log(lines.slice(-tail).join('\n'));
   return 0;
 }
 
@@ -1272,12 +1272,12 @@ function outputStyle(argv: string[]): number {
     let settings: Record<string, unknown> = {};
     try { settings = JSON.parse(readFileSync(settingsPath, 'utf8')); } catch {}
     settings.outputStyle = name;
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\\n');
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
     console.log(parsed.values.json ? JSON.stringify(s) : `switched to ${name}`);
     return 0;
   }
   if (parsed.values.json) console.log(JSON.stringify(styles));
-  else console.log(styles.map((s) => `${s.name}  ${s.description}`).join('\\n'));
+  else console.log(styles.map((s) => `${s.name}  ${s.description}`).join('\n'));
   return 0;
 }
 
