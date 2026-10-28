@@ -8,7 +8,7 @@ Scope: replace the default pi-tui with an Ink (React) TUI that reaches Claude Co
 
 Make `cedia` with no prompt at a terminal run an Ink-based TUI by default that is
 feature- and quality-equivalent to the existing pi-tui and to Claude Code's TUI
-(see `../../history/CLONE_SPEC.md` §16). The pi-tui stays reachable via `--tui pi` until the
+(as Claude Code's public docs describe it; `research/claude-code-docs-notes.md`). The pi-tui stays reachable via `--tui pi` until the
 Ink TUI passes the full test suite and one full day of real use.
 
 ## 2. Non-goals (v1)
