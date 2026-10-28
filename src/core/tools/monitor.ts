@@ -1,5 +1,8 @@
 import { scrubbedEnv } from './bash.ts';
-import type { ToolSpec } from './registry.ts';
+import { clip, MAX_SHELL_OUTPUT_CHARS, preview, type ToolSpec } from './registry.ts';
+
+// What a watch holds in memory: a chatty command (`yes`, a dev server) left for ten minutes must not grow without end.
+const MAX_HELD_CHARS = 4_000_000;
 
 // Runs the command the way bash does: inside the OS sandbox when one is on, without cedia's credentials or a
 // shell startup file, in its own process group so a timeout or an abort ends what it started too. The policy
@@ -44,8 +47,13 @@ export const monitorTool: ToolSpec = {
     if (ctx.signal.aborted) onAbort();
     const timer = setTimeout(kill('timeout'), timeout);
     const lines: string[] = [];
+    let held = 0;
+    let dropped = 0;
     const keep = (line: string) => {
-      if (!filter || filter.test(line)) lines.push(line);
+      if (filter && !filter.test(line)) return;
+      if (held + line.length + 1 > MAX_HELD_CHARS) return void dropped++;
+      lines.push(line);
+      held += line.length + 1;
     };
     const read = async (stream: ReadableStream<Uint8Array>) => {
       const decoder = new TextDecoder();
@@ -63,7 +71,11 @@ export const monitorTool: ToolSpec = {
     const [code] = await Promise.all([proc.exited, read(proc.stdout), read(proc.stderr)]);
     clearTimeout(timer);
     ctx.signal.removeEventListener('abort', onAbort);
-    const text = lines.join('\n') || '(no output)';
+    let full = lines.join('\n');
+    if (dropped) full += `\n[${dropped} later line(s) not kept: the watch holds at most ${MAX_HELD_CHARS} characters]`;
+    // Long output goes whole to a file with its start and end shown, as bash's does.
+    const path = full.length > MAX_SHELL_OUTPUT_CHARS ? ctx.spill?.(full) : undefined;
+    const text = (path ? preview(full, path, MAX_SHELL_OUTPUT_CHARS) : clip(full, MAX_SHELL_OUTPUT_CHARS)) || '(no output)';
     if (stopped === 'aborted') return { text: `${text}\n[aborted]`, isError: true };
     // Stopping at the timeout is how a watch ends, not a failure.
     if (stopped === 'timeout') return { text, isError: false };

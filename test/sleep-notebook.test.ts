@@ -11,6 +11,16 @@ describe('sleep tool', () => {
     const r2 = await sleepTool.run({ duration_ms: 100 }, { cwd: '/tmp', signal: new AbortController().signal } as any);
     expect(r2.text).toContain('100');
   });
+
+  test('a stop ends the wait', async () => {
+    const { sleepTool } = await import('../src/core/tools/sleep.ts');
+    const stop = new AbortController();
+    setTimeout(() => stop.abort(), 20);
+    const t0 = performance.now();
+    const r = await sleepTool.run({ duration_ms: 600000 }, { cwd: '/tmp', signal: stop.signal } as any);
+    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(r.isError).toBe(true);
+  });
 });
 
 describe('notebook edit', () => {
