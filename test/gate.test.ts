@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { baselinePath, compare, DEFAULT_SUITE, expectedCost, fisherLower, listCost, loadSuite, taskHash, type Baseline, type Thresholds } from "../evals/gate.ts";
+import { baselinePath, baselineRefusal, compare, DEFAULT_SUITE, expectedCost, fisherLower, listCost, loadSuite, taskHash, type Baseline, type Thresholds } from "../evals/gate.ts";
 import { HARNESSES, type Result, type Task } from "../evals/run.ts";
 
 const th: Thresholds = { passP: 0.1, costRise: 0.15, timeRise: 0.2, totalRise: 0.4 };
@@ -151,7 +151,8 @@ describe("regression gate", () => {
     expect(first.code).toBe(3);
     expect(first.out).toContain("faux: NO BASELINE");
 
-    const stored = gate("--update-baseline");
+    // --allow-dirty: the test runs on whatever tree it is in.
+    const stored = gate("--update-baseline", "--allow-dirty");
     expect(stored.code).toBe(0);
     const base = JSON.parse(readFileSync(baselinePath("faux", join(dir, "base")), "utf8")) as Baseline;
     expect(base).toMatchObject({ suite: "mini", model: "faux", runs: 2, jobs: 2 });
@@ -174,7 +175,29 @@ describe("regression gate", () => {
     const rescored = gate("--compare", join(dir, "results", files.at(-1)!));
     expect(rescored.code).toBe(1);
     expect(rescored.out).toContain("faux: REGRESSED");
+
+    // A run that regressed does not replace the baseline it failed against, unless the change says it should.
+    const before = readFileSync(baselinePath("faux", join(dir, "base")), "utf8");
+    const refused = gate("--update-baseline", "--allow-dirty");
+    expect(refused.code).toBe(1);
+    expect(refused.out).toContain("not stored as the baseline: the run regressed");
+    expect(readFileSync(baselinePath("faux", join(dir, "base")), "utf8")).toBe(before);
+    const accepted = gate("--update-baseline", "--allow-dirty", "--accept-regression");
+    expect(accepted.code).toBe(0);
+    expect((JSON.parse(readFileSync(baselinePath("faux", join(dir, "base")), "utf8")) as Baseline).results.map((r) => r.passed)).toEqual([false, false]);
   }, 60_000);
+
+  test("a baseline comes only from a committed tree and a run that did not regress", () => {
+    const ok = { dirty: false, allowDirty: false, verdict: "pass" as const, acceptRegression: false, stopped: false, scored: 50, planned: 50 };
+    expect(baselineRefusal(ok)).toBeUndefined();
+    expect(baselineRefusal({ ...ok, verdict: "inconclusive" })).toBeUndefined(); // no baseline yet
+    expect(baselineRefusal({ ...ok, dirty: true })).toContain("uncommitted changes");
+    expect(baselineRefusal({ ...ok, dirty: true, allowDirty: true })).toBeUndefined();
+    expect(baselineRefusal({ ...ok, verdict: "regressed" })).toContain("regressed");
+    expect(baselineRefusal({ ...ok, verdict: "regressed", acceptRegression: true })).toBeUndefined();
+    expect(baselineRefusal({ ...ok, scored: 39 })).toContain("provider errors");
+    expect(baselineRefusal({ ...ok, stopped: true })).toContain("stopped early");
+  });
 
   test("refuses to start a run whose estimate is above the cap", () => {
     const dir = mkdtempSync(join(tmpdir(), "cedia-gate-cap-"));

@@ -4,7 +4,7 @@
 bun evals/gate.ts --estimate          # what a run will cost, from the baseline's own spend
 bun evals/gate.ts                     # run the suite on every model in suite.json and compare
 bun evals/gate.ts -m opencode-go/claude-haiku-5-5   # one model
-bun evals/gate.ts --update-baseline   # run, compare, then store the new numbers as the baseline
+bun evals/gate.ts --update-baseline   # run, compare, then store the new numbers as the baseline (committed tree, no regression)
 bun evals/gate.ts --compare evals/results/<file>.jsonl [--against <rows.jsonl|baseline.json>]   # re-score, free
 ```
 
@@ -51,6 +51,8 @@ The second run also found a task problem, not a cedia one: 3 of 4 Flash runs of 
 At 2 runs on 24 tasks the pass check needs 5 failures more than the baseline's (47/48 down to 42/48, p = 0.056; 43/48 gives p = 0.102), so most regressions are caught by the tasks-broken check instead: one task that breaks outright is enough. A smaller spread-out drop shows as `~`; rerun with `--runs 3` or more to settle it.
 
 ## Baselines
+
+`--update-baseline` stores a run only when it can judge later changes: it refuses to start on a tree with uncommitted changes (`--allow-dirty` overrides it), and it does not store a run that REGRESSED against the baseline it would replace (`--accept-regression` overrides it, for a PR meant to move the numbers that says why). A refused store exits 1 after a regression, 3 otherwise. Both rules came from 2026-10-27, when `baseline/anthropic_claude-haiku-5-5.json` was overwritten from an uncommitted tree (`e9bcfab-dirty`) after a run that had regressed.
 
 Stored on main at 32774a7 (2026-10-21; the run's files name 43bd436, a merge with the same tree), after PRs #19 to #22:
 
