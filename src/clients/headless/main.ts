@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { historyRejected, runPrompt } from '../../core/loop/run.ts';
+import { historyRejected, runPrompt, type RunOptions } from '../../core/loop/run.ts';
 import { modeNote, preamble, systemFor } from '../../core/prompts.ts';
 import { resolveModel } from '../../core/providers/catalog.ts';
 import type { FauxStep } from '../../core/providers/faux.ts';
@@ -9,7 +9,7 @@ import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectRoot, projectSlug, SessionLog, sessionExists, sessionPath, workspaceRoots } from '../../core/session/log.ts';
 import { DAILY_SPEND_WARN_USD, daySpendUsd } from '../../core/session/select.ts';
 import { dayOf } from '../../core/session/usage.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadMaxEffort, capEffort, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadMaxEffort, capEffort, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPlanOverlap, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
 import { attachedNote, blobDir, STORED_IMAGE, storedImage, storeImage, type ImageRef } from '../../core/images.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
@@ -33,7 +33,7 @@ import { openThreadTool } from '../../core/tools/open.ts';
 import { scheduleTool } from '../../core/tools/schedule.ts';
 import { ScheduleStore, schedulesPath } from '../../core/project/schedules.ts';
 import { resolveProfile, withProfile } from '../../core/profiles.ts';
-import { needsPlan, planParts, planPrompt, TRIAGE_SYSTEM, triagePrompt, withParts, withPlan, type Part, type Split } from '../../core/roles.ts';
+import { needsPlan, planArrived, planComing, planParts, planPrompt, TRIAGE_SYSTEM, triagePrompt, withParts, withPlan, type Part, type Split } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { lspServers, openDiagnoser } from '../../core/lsp/diagnose.ts';
 import { bashTool, scrubbedEnv } from '../../core/tools/bash.ts';
@@ -120,6 +120,8 @@ export type HeadlessArgs = {
   // auto (default): the writer's model first says whether the message is work a plan helps (a greeting or a
   // question is not); always: every prompt is planned; never: none is.
   planWhen?: string;
+  // "on": the writer starts reading while the plan is written (core/roles.ts, planComing); default settings, off.
+  planOverlap?: string;
   // The model that says whether a message needs the planner (default: the code model).
   triage?: string;
   sandbox?: string;
@@ -266,6 +268,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const todoOn = loadTodo(args.todo);
   const promptSuggestionsOn = loadPromptSuggestions(args.promptSuggestions);
   const planWhen = loadPlanWhen(args.planWhen);
+  const planOverlap = loadPlanOverlap(args.planOverlap);
   const cacheTtl = args.cacheTtl ?? '5m';
   warnDaySpend(args.cwd, cediaHome(), say);
   if (cacheTtl !== '5m' && cacheTtl !== '1h') throw new Error(`--cache-ttl must be 5m or 1h, not ${cacheTtl}`);
@@ -493,6 +496,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // held to them: they can fail until the other parts and the writer are done (5 of 6 parts on 2026-10-24 were
     // sent back by the done gate for a suite they could not pass), and the writer must pass them after the parts.
     child?: { thread?: string; handoff?: boolean; part?: true; recall?: ToolSpec; place?: { cwd: string; preamble: string; snapshots: Snapshots; wrap: (command: string) => Promise<string> } };
+    // The plan still being written, for the writer that reads while it is (plan overlap).
+    plan?: NonNullable<RunOptions['plan']>;
     // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
     seed?: { from: SessionLog; compaction: NonNullable<HeadlessResult['compaction']> };
   };
@@ -590,6 +595,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         // One reply a turn, and one more if that came back empty.
         ...(helper ? { maxTurns: 2 } : {}),
         ...(writing && advise ? { advise } : {}),
+        ...(writing && opts.plan ? { plan: opts.plan } : {}),
         // Every session that may write: the writer's, a fix's, a sub-thread's.
         ...(!reviewer && classify ? { classify } : {}),
         ...(args.maxBudgetUsd !== undefined ? { maxBudgetUsd: args.maxBudgetUsd, meter } : {}),
@@ -656,6 +662,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     return r.subtype !== 'success' || needsPlan(r.result);
   };
   // A thread that asked the owner a question goes on with their answer, framed as one.
+  // Plan overlap: the plan on its way while the writer reads (by: who writes it; delivered: it reached the writer),
+  // and the writer's opening prompt, which says the plan is coming.
+  let planning: { by: string; text: Promise<string | undefined>; step: Promise<Step | undefined>; delivered: boolean; plan?: string } | undefined;
+  let opening: string | undefined;
   let task = resumed?.question ? answerPrompt(resumed.question.question, args.prompt) : (skillCommand(args.prompt, skills) ?? args.prompt);
   // The owner's images: the writer is shown them, and the task names their files so plan and review can open them.
   // `sha256:<hex>` names one already stored (a fork's images, kept by the client that resends the run).
@@ -937,8 +947,9 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       handingOff(r, false);
       writer = { model: m, log: openLog() };
       record(writer.log, m, 'handoff');
-      const carry = prompt === task ? task : `${task}\n\n${prompt}`;
-      r = await run(m, writer.log, carry, { ...successor(from, r), ...(opts.images ? { images: opts.images } : {}) });
+      // The opening prompt is carried as the task, which has the plan once it arrived; one still on its way follows.
+      const carry = prompt === task || prompt === opening ? task : `${task}\n\n${prompt}`;
+      r = await run(m, writer.log, carry, { ...successor(from, r), ...(opts.images ? { images: opts.images } : {}), ...(opts.plan && !planning?.delivered ? { plan: opts.plan } : {}) });
     }
     return r;
   };
@@ -978,9 +989,29 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       // delegated on its own). Without them the parts would run one after another, which costs time the writer
       // doing them itself does not (2026-10-24: 121 s of a real task's 683 s, evals/results/README.md).
       const split: Split | undefined = spawnMode !== 'worktree' || policy.plan || policy.mode === 'read-only' ? undefined : { mode: 'parallel', writer: model.ref, workers: roles.workers.filter((w) => w.ref !== model.ref).map((w) => w.ref) };
-      say(`cedia: planning with ${roles.plan.via === 'claude-code' ? `claude-code:${roles.plan.model}@${roles.plan.effort}` : `${roles.plan.model.ref}${roles.plan.effort ? `@${roles.plan.effort}` : ''}`}\n`);
-      const p = await side('plan', roles.plan, planPrompt(task, split));
-      if (p.ok && p.text.trim()) {
+      const by = roles.plan.via === 'claude-code' ? `claude-code:${roles.plan.model}@${roles.plan.effort}` : `${roles.plan.model.ref}${roles.plan.effort ? `@${roles.plan.effort}` : ''}`;
+      say(`cedia: planning with ${by}\n`);
+      // Plan overlap: the writer starts reading now and the plan follows into its session. Not with parts to hand
+      // out before the writer starts, nor in full goal mode, whose criteria are written from the plan.
+      if (planOverlap && !split && !(args.goal && args.goalMode === 'full')) {
+        say('cedia: the writer reads while the plan is written\n');
+        const pending = side('plan', roles.plan, planPrompt(task));
+        planning = {
+          by,
+          text: pending.then((p) => {
+            const text = p.ok ? p.text.trim() || undefined : undefined;
+            if (text) planning!.plan = text;
+            else say('cedia: going on without a plan\n');
+            return text;
+          }),
+          step: pending.then((p) => (p.ok && p.text.trim() ? p.step : undefined)),
+          delivered: false,
+        };
+      }
+      const p = planning ? undefined : await side('plan', roles.plan, planPrompt(task, split));
+      if (planning) {
+        // the plan reaches the writer as a reminder
+      } else if (p?.ok && p.text.trim()) {
         task = withPlan(task, p.text.trim(), p.step.model);
         const planned = split ? planParts(p.text) : [];
         if (planned.length) {
@@ -991,6 +1022,24 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         }
         plan = p.step;
       } else say('cedia: going on without a plan\n');
+    }
+    // The writer reads while the plan is written: its opening prompt says a plan is coming, and once the plan is in,
+    // the task carries it, for a handoff, a fallback or a fresh session after this one.
+    let planOpt: { plan?: NonNullable<RunOptions['plan']> } = {};
+    if (planning) {
+      const on = planning;
+      const original = task;
+      opening = planComing(task, on.by);
+      planOpt = {
+        plan: {
+          text: on.text,
+          reminder: (text: string) => planArrived(text, on.by),
+          delivered: () => {
+            on.delivered = true;
+            if (on.plan) task = withPlan(original, on.plan, on.by);
+          },
+        },
+      };
     }
     // Full goal mode: the judge's model first turns the condition into acceptance criteria, which go with the task.
     let goalPlan: NonNullable<HeadlessResult['goal']>['plan'];
@@ -1028,11 +1077,11 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       const before = resumed?.runs.at(-1)?.permission;
       const header = log.events[0]?.kind === 'session' ? log.events[0] : undefined;
       const lead = before && before !== permission ? `<permission>\n${modeNote(policy.mode, policy.unlock ?? [], policy.plan ? { ask: !!header?.tools.some((d) => d.name === 'ask_user') } : undefined)}\n</permission>` : undefined;
-      result = await write(model, log, task, { ...(inherited.length ? { inherited } : {}), ...(images.length ? { images } : {}) }, lead);
+      result = await write(model, log, opening ?? task, { ...(inherited.length ? { inherited } : {}), ...(images.length ? { images } : {}), ...planOpt }, lead);
     } else {
       const log = openLog();
       record(log, model, resumed ? 'resume' : 'start');
-      result = await write(model, log, task, { ...(resumed ? { note: resumeNote(resumed) } : {}), ...(inherited.length ? { inherited } : {}), ...(images.length ? { images } : {}) });
+      result = await write(model, log, opening ?? task, { ...(resumed ? { note: resumeNote(resumed) } : {}), ...(inherited.length ? { inherited } : {}), ...(images.length ? { images } : {}), ...planOpt });
     }
     // A spent quota does not end the task: a new session on the fallback model picks it up (a session never
     // switches model, so its cache stays valid). Nor does a history the provider refuses: a new session on the
@@ -1065,6 +1114,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     return result;
     };
     result = await recover(result);
+    // The plan written while the writer read: its step, once it is in (the writer waited for it before it finished).
+    if (planning) plan = await planning.step;
     // Review: after the writer's claim passed the done gate, a second model reads the change. Changes it asks
     // for go back to the writer's own session once.
     let review: ReviewOutcome | undefined;

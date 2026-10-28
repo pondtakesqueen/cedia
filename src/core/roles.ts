@@ -47,6 +47,23 @@ ${inert(plan)}
 
 The plan was written before anything changed. Follow it where it holds; where the code shows a step is wrong, do what the task needs and say why.`;
 
+// Plan overlap: the writer starts reading while the planner writes, and the plan follows as a reminder in the same
+// session, after the task, so the prefix the writer has cached stays as it is. On the evals the plan took 29% of a
+// run's time with the writer idle (evals/results/README.md, 2026-10-28).
+export const planComing = (task: string, by: string) =>
+  `${task}
+
+<plan-pending by="${by}">
+A plan for this task is being written now. Until it arrives, read what the task touches (the files, their tests, read-only commands) and change nothing: a call that would change something waits for the plan and comes back not run.
+</plan-pending>`;
+
+export const planArrived = (plan: string, by: string) =>
+  `<plan by="${by}">
+${inert(plan)}
+</plan>
+
+The plan above was written from the repository as it was before you started. Follow it where it holds; where the code shows a step is wrong, do what the task needs and say why.`;
+
 // What the planner is told about splitting: what makes a part, and the models a part may run on.
 const splitNote = (s: Split) =>
   `cedia can hand parts of the work to sub-threads before the cheaper model starts${s.mode === 'parallel' ? ', all at the same time' : ''}. Each sees only its part's brief. When the work falls into 2 to ${MAX_PARTS} parts that change different files and can each be done and checked from a brief alone, end the plan with one block per part: <part files="every file it changes, comma-separated"${s.workers.length ? ' model="…"' : ''}>the brief</part>. A brief stands alone: the goal, the files with the lines and signatures you found, what to change, and the command that checks it. Leave out a part that needs judgment across the code (design, concurrency, a subtle algorithm) and parts that depend on each other: the cheaper model does those after the parts are in, and fits everything together. With no such parts, or a small task, write no blocks.${
