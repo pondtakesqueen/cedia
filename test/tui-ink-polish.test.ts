@@ -11,6 +11,7 @@ import { activeContext, findCommand, IDLE_OVERLAY, resolveBindings, vimInputGate
 import { keybindingsPath, watchKeybindings } from '../src/clients/tui-ink/keybindings/loader.ts';
 import { cancelStep, offsetForIndex, rowMapFromWalk, selectionBounds } from '../src/clients/tui-ink/row-map.ts';
 import { highlightQuery, offsetAt, paintRuns } from '../src/clients/tui-ink/autocomplete.ts';
+import { createHeightCache, heightCacheKey, visibleWindow } from '../src/clients/tui-ink/visible-window.ts';
 
 const stops: Array<() => void> = [];
 afterEach(() => {
@@ -94,6 +95,46 @@ describe('ink key context', () => {
     expect(highlightQuery('aaaa', 'aa')).toEqual([{ text: 'aaaa', hit: true }]);
     expect(highlightQuery('nope', '')).toEqual([{ text: 'nope', hit: false }]);
     expect(highlightQuery('nope', 'zz')).toEqual([{ text: 'nope', hit: false }]);
+  });
+
+  test('visibleWindow fills a height budget and applies overscan', () => {
+    const heights = [2, 2, 2, 2, 2, 2, 2, 2];
+    const win = visibleWindow({
+      count: heights.length,
+      scrollOffset: 0,
+      budget: 6,
+      overscan: 2,
+      heightAt: (i) => heights[i]!,
+    });
+    expect(win.end).toBe(8);
+    expect(win.start).toBe(3);
+    expect(win.used).toBe(6);
+    const scrolled = visibleWindow({
+      count: heights.length,
+      scrollOffset: 3,
+      budget: 4,
+      overscan: 1,
+      heightAt: (i) => heights[i]!,
+    });
+    expect(scrolled.end).toBe(5);
+    expect(scrolled.start).toBe(2);
+    expect(visibleWindow({ count: 0, scrollOffset: 0, budget: 10, heightAt: () => 1 })).toEqual({
+      start: 0, end: 0, used: 0,
+    });
+  });
+
+  test('height cache returns the same estimate until cleared', () => {
+    const cache = createHeightCache();
+    let calls = 0;
+    const key = heightCacheKey(0, 80, 12, 'assistant');
+    expect(cache.lines(key, () => { calls++; return 3; })).toBe(3);
+    expect(cache.lines(key, () => { calls++; return 9; })).toBe(3);
+    expect(calls).toBe(1);
+    expect(cache.size).toBe(1);
+    cache.clear();
+    expect(cache.size).toBe(0);
+    expect(cache.lines(key, () => { calls++; return 4; })).toBe(4);
+    expect(calls).toBe(2);
   });
 
   test('paintRuns composes selection and search hits', () => {

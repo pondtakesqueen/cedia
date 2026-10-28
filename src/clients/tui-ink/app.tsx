@@ -27,6 +27,7 @@ import { runStatusLineCommand } from '../tui/statusline.ts';
 import { loadKeybindings, watchKeybindings } from './keybindings/loader.ts';
 import { activeContext, findCommand, resolveBindings, vimInputGate, type LiveContext } from './keybindings/resolver.ts';
 import { cancelStep, offsetForIndex, rowMapFromWalk, selectionBounds, type InkSelection, type RowMap, type WalkBand } from './row-map.ts';
+import { createHeightCache, heightCacheKey, visibleWindow } from './visible-window.ts';
 import { matchesKey } from '@mariozechner/pi-tui';
 import { fetchMdmSettings } from '../../core/project/mdm-remote.ts';
 import { TeamStore } from '../../core/project/teams.ts';
@@ -250,6 +251,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const busyRef = useRef(false);
   const pendingRef = useRef<{ what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined>(undefined);
   const [scrollOffset, setScrollOffset] = useState(0);
+  const heightCacheRef = useRef(createHeightCache());
   const [transcriptExpanded, setTranscriptExpanded] = useState(true);
   const historyRef = useRef<string[]>([]);
   const histPos = useRef(-1);
@@ -1273,26 +1275,27 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   React.useEffect(() => {
     setScrollOffset((o) => (o > maxScrollOffset ? maxScrollOffset : o));
   }, [columns, rows, displayMessages.length]);
-  // Height-budgeted window (like cc's virtual list): walk back from the bottom
-  // accumulating estimated wrapped heights, so long wrapped messages are
-  // measured instead of counted. windowSize stays as the PgUp/PgDn step.
-  // The budget reserves the header, both scroll indicators, the input box,
-  // the model line and the status bar.
+  // Height-budgeted window with cached estimates and message overscan.
+  // windowSize stays as the PgUp/PgDn step. The budget reserves the header,
+  // both scroll indicators, the input box, the model line and the status bar.
   const heightBudget = Math.max(3, rows - 8);
-  const heightEnd = displayMessages.length - scrollOffset;
-  let heightStart = heightEnd;
-  {
-    let used = 0;
-    while (heightStart > 0) {
-      const msg = displayMessages[heightStart - 1];
-      const h = estimateLines(truncateLongText(msg?.text ?? ''), paintedWidth(msg?.role, columns, screenReader));
-      if (used + h > heightBudget && heightStart < heightEnd) break;
-      used += h;
-      heightStart--;
-    }
-  }
-  const renderStart = Math.max(0, heightStart - 1);
-  const renderEnd = heightEnd;
+  React.useEffect(() => {
+    heightCacheRef.current.clear();
+  }, [columns, displayMessages.length, screenReader, transcriptExpanded, showThinking]);
+  const heightAt = (index: number): number => {
+    const msg = displayMessages[index];
+    const text = truncateLongText(msg?.text ?? '');
+    const width = paintedWidth(msg?.role, columns, screenReader);
+    const key = heightCacheKey(index, width, text.length, msg?.role ?? '');
+    return heightCacheRef.current.lines(key, () => estimateLines(text, width));
+  };
+  const { start: renderStart, end: renderEnd } = visibleWindow({
+    count: displayMessages.length,
+    scrollOffset,
+    budget: heightBudget,
+    overscan: 3,
+    heightAt,
+  });
 
   const visibleMessages = displayMessages.slice(renderStart, renderEnd);
   const aboveHidden = renderStart;
@@ -1306,11 +1309,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     const bands: WalkBand[] = [{ kind: 'chrome', rows: 2 }];
     if (displayMessages.length > 0 && (scrollOffset > 0 || aboveHidden > 0)) bands.push({ kind: 'chrome', rows: 1 });
     for (let i = renderStart; i < renderEnd; i++) {
-      const msg = displayMessages[i];
       bands.push({
         kind: 'message',
         index: i,
-        rows: estimateLines(truncateLongText(msg?.text ?? ''), paintedWidth(msg?.role, columns, screenReader)),
+        rows: heightAt(i),
       });
     }
     if (thinkingText && showThinking) {
@@ -1840,7 +1842,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       </Box>
       {displayMessages.length === 0 ? null : (
         <Box paddingX={1}>
-          {heightEnd < displayMessages.length || belowHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↓ '}{belowHidden} more below</Text> : null}
+          {renderEnd < displayMessages.length || belowHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↓ '}{belowHidden} more below</Text> : null}
         </Box>
       )}
         {trustOpen ? (
