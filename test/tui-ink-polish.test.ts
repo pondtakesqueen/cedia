@@ -9,7 +9,7 @@ import { DISMISS_NOTE, noticeBlocks, noticeLines, PermissionDialog } from '../sr
 import { completedNames, isComplete, reconcileOnboarding, saveOnboarding } from '../src/clients/tui-ink/onboarding.ts';
 import { activeContext, findCommand, IDLE_OVERLAY, resolveBindings, vimInputGate } from '../src/clients/tui-ink/keybindings/resolver.ts';
 import { keybindingsPath, watchKeybindings } from '../src/clients/tui-ink/keybindings/loader.ts';
-import { cancelStep, offsetForIndex, rowMapFromWalk, selectionBounds } from '../src/clients/tui-ink/row-map.ts';
+import { cancelStep, messageFullySelected, offsetForIndex, rowMapFromWalk, selectionBounds } from '../src/clients/tui-ink/row-map.ts';
 import { highlightQuery, offsetAt, paintRuns } from '../src/clients/tui-ink/autocomplete.ts';
 import { createHeightCache, heightCacheKey, visibleWindow } from '../src/clients/tui-ink/visible-window.ts';
 
@@ -79,6 +79,17 @@ describe('ink key context', () => {
     expect(selectionBounds({ aMsg: 1, aCol: 2, bMsg: 3, bCol: 4 }, 3, 10)).toEqual({ start: 0, end: 5 });
     expect(selectionBounds({ aMsg: 3, aCol: 1, bMsg: 1, bCol: 4 }, 1, 10)).toEqual({ start: 4, end: 10 });
     expect(selectionBounds({ aMsg: 2, aCol: 4, bMsg: 2, bCol: 1 }, 2, 10)).toEqual({ start: 1, end: 5 });
+  });
+
+  test('messageFullySelected is true only for whole-message spans', () => {
+    const multi = { aMsg: 1, aCol: 2, bMsg: 3, bCol: 4 };
+    expect(messageFullySelected(multi, 1, 10)).toBe(false);
+    expect(messageFullySelected(multi, 2, 10)).toBe(true);
+    expect(messageFullySelected(multi, 3, 10)).toBe(false);
+    expect(messageFullySelected({ aMsg: 2, aCol: 0, bMsg: 2, bCol: 9 }, 2, 10)).toBe(true);
+    expect(messageFullySelected({ aMsg: 2, aCol: 1, bMsg: 2, bCol: 9 }, 2, 10)).toBe(false);
+    expect(messageFullySelected(null, 0, 5)).toBe(false);
+    expect(messageFullySelected(multi, 2, 0)).toBe(false);
   });
 
   test('highlightQuery is a case-insensitive literal', () => {
