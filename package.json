@@ -19,7 +19,6 @@
     "@anthropic-ai/sandbox-runtime": "0.0.81",
     "@mariozechner/pi-tui": "0.73.1",
     "ink": "^8.0.0",
-    "ink-markdown": "^1.0.4",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
     "react": "^19.3.1",

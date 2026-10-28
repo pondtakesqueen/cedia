@@ -149,7 +149,47 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       h.write('\r');
       for (let i = 0; i < 40 && !h.frame().includes('hello back'); i++) await Bun.sleep(250);
       expect(h.frame()).toContain('hello back');
-      expect(h.frame()).toMatch(/done · \d+ turn/);
+      expect(h.frame()).toMatch(/✓ Done in \d+\.\ds/);
+    } finally {
+      h.stop();
+    }
+  });
+
+  test('a turn shows one row per call, a blocked call, and the line that ends it', async () => {
+    const h = start({
+      files: ['notes.txt'],
+      script: [
+        { blocks: [
+          { type: 'thinking', text: 'look first' },
+          { type: 'tool_use', id: 'c1', name: 'read', input: { path: 'notes.txt' } },
+          { type: 'tool_use', id: 'c2', name: 'edit', input: { path: 'notes.txt', edits: [{ old_text: 'x', new_text: 'y' }] } },
+        ] },
+        { blocks: [{ type: 'text', text: '## Result\n\n- `notes.txt` read' }] },
+      ],
+    });
+    try {
+      await Bun.sleep(500);
+      h.write('look');
+      await Bun.sleep(300);
+      h.write('\r');
+      for (let i = 0; i < 40 && !h.frame().includes('✓ Done'); i++) await Bun.sleep(250);
+      // Close the denial notice, then open the command menu.
+      h.write('\x1b');
+      await Bun.sleep(300);
+      h.drain();
+      h.write('/');
+      await Bun.sleep(600);
+      const f = h.frame();
+      expect(f).toContain('∴ Thought');
+      expect(f).toContain('✓ Read  notes.txt · 1 line');
+      // read-only mode: the edit is denied before it starts, and its row says so.
+      expect(f).toContain('✗ Edit  notes.txt · blocked');
+      expect(f).toContain('• notes.txt read');
+      expect(f).not.toContain('## Result');
+      expect(f).toMatch(/✓ Done in \d+\.\ds · 1 tool · \$/);
+      // The command menu opens over the transcript and the prompt box keeps its three rows.
+      expect(f).toContain('/actions');
+      expect(f).toMatch(/╭─+╮\s*│ › \/\s+│\s*╰─+╯/);
     } finally {
       h.stop();
     }
@@ -220,13 +260,20 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       expect(h.frame()).toContain('more above');
       // Drain so the assertions below only see post-scroll repaints.
       h.drain();
-      h.write('\x1b[5~'); // PageUp
+      // PageUp twice: at 10 rows the transcript shows three rows, and one page moves four messages.
+      h.write('\x1b[5~');
+      await Bun.sleep(300);
+      h.drain();
+      h.write('\x1b[5~');
       await Bun.sleep(500);
       const up = h.frame();
       expect(up).toContain('more below');
       expect(up).toContain('q0');
       h.drain();
-      h.write('\x1b[6~'); // PageDown returns to the bottom
+      h.write('\x1b[6~'); // PageDown, twice, returns to the bottom
+      await Bun.sleep(300);
+      h.drain();
+      h.write('\x1b[6~');
       await Bun.sleep(500);
       const down = h.frame();
       expect(down).toContain('q2');
