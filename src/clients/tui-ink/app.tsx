@@ -1093,7 +1093,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         void (async () => {
           try {
             const { generateSuggestion } = await import('../../core/suggestions/prompt-suggestion.ts');
-            const sug = await generateSuggestion({ cwd: args.cwd, model: model ?? args.model, lastResult: result.subtype });
+            const sug = await generateSuggestion({ cwd: args.cwd, model: model ?? args.model, lastResult: result.result });
             if (sug) setSuggestion(sug.text);
           } catch {}
         })();

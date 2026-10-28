@@ -2,12 +2,13 @@ import { runPrompt } from '../loop/run.ts';
 import { resolveModel } from '../providers/catalog.ts';
 import { providerFor } from '../providers/index.ts';
 import { SessionLog } from '../session/log.ts';
-import { memoryPath } from '../project/memory.ts';
-import type { HeadlessResult } from '../types.ts';
+import { loadPrivacy } from '../config.ts';
 
 export type Suggestion = { text: string };
 
-export async function generateSuggestion(opts: { cwd: string; model?: string; lastResult: string; privacy?: string }): Promise<Suggestion | null> {
+// The last reply goes to a model (beam by default, which keeps prompts), so the project's privacy level holds here as
+// in any run: under zdr runPrompt refuses a model that is not zero-data-retention and nothing is suggested.
+export async function generateSuggestion(opts: { cwd: string; model?: string; lastResult: string }): Promise<Suggestion | null> {
   const { readFileSync } = await import('node:fs');
   const model = resolveModel(opts.model ?? 'beam');
   const script = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
@@ -21,6 +22,7 @@ export async function generateSuggestion(opts: { cwd: string; model?: string; la
       system: 'Predict the user\'s next prompt in one short sentence. Reply with only the suggestion.',
       cwd: opts.cwd,
       role: 'suggest',
+      privacy: loadPrivacy(opts.cwd),
       maxTurns: 1,
     },
     opts.lastResult || 'continue',
