@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { baselinePath, compare, DEFAULT_SUITE, expectedCost, fisherLower, listCost, loadSuite, taskHash, type Baseline, type Thresholds } from "../evals/gate.ts";
+import { baselinePath, baselineRefusal, compare, DEFAULT_SUITE, expectedCost, fisherLower, listCost, loadSuite, taskHash, type Baseline, type Thresholds } from "../evals/gate.ts";
 import { HARNESSES, type Result, type Task } from "../evals/run.ts";
 
 const th: Thresholds = { passP: 0.1, costRise: 0.15, timeRise: 0.2, totalRise: 0.4 };
@@ -110,6 +110,16 @@ describe("regression gate", () => {
     expect(suite.thresholds).toMatchObject({ passP: expect.any(Number), costRise: expect.any(Number), timeRise: expect.any(Number), totalRise: expect.any(Number) });
   });
 
+  test("the frontier suite names existing tasks and keeps its baselines apart from the gate's", () => {
+    const path = join(import.meta.dir, "..", "evals", "gate", "frontier.json");
+    const { suite, tasks } = loadSuite(path);
+    expect(tasks.map((t) => t.id)).toEqual(suite.tasks);
+    expect(suite.runs).toBeGreaterThanOrEqual(4);
+    expect(suite.baselineDir).toBe("frontier-baseline");
+    // The gate never runs these: they are meant to fail some runs, which would make the gate noisy.
+    expect(loadSuite(DEFAULT_SUITE).suite.tasks.filter((t) => t.startsWith("frontier-"))).toEqual([]);
+  });
+
   test("expected cost comes from the baseline's spend, then earlier results, then the token estimate", () => {
     const tasks = ["t0", "t1", "t2"].map((id): Task => ({ id, category: "c", prompt: "p", verify: "true" }));
     const baseline = { results: [row("t0", 1, { cost: 0.1 }), row("t0", 2, { cost: 0.3 })] } as Baseline;
@@ -151,7 +161,8 @@ describe("regression gate", () => {
     expect(first.code).toBe(3);
     expect(first.out).toContain("faux: NO BASELINE");
 
-    const stored = gate("--update-baseline");
+    // --allow-dirty: the test runs on whatever tree it is in.
+    const stored = gate("--update-baseline", "--allow-dirty");
     expect(stored.code).toBe(0);
     const base = JSON.parse(readFileSync(baselinePath("faux", join(dir, "base")), "utf8")) as Baseline;
     expect(base).toMatchObject({ suite: "mini", model: "faux", runs: 2, jobs: 2 });
@@ -174,7 +185,29 @@ describe("regression gate", () => {
     const rescored = gate("--compare", join(dir, "results", files.at(-1)!));
     expect(rescored.code).toBe(1);
     expect(rescored.out).toContain("faux: REGRESSED");
+
+    // A run that regressed does not replace the baseline it failed against, unless the change says it should.
+    const before = readFileSync(baselinePath("faux", join(dir, "base")), "utf8");
+    const refused = gate("--update-baseline", "--allow-dirty");
+    expect(refused.code).toBe(1);
+    expect(refused.out).toContain("not stored as the baseline: the run regressed");
+    expect(readFileSync(baselinePath("faux", join(dir, "base")), "utf8")).toBe(before);
+    const accepted = gate("--update-baseline", "--allow-dirty", "--accept-regression");
+    expect(accepted.code).toBe(0);
+    expect((JSON.parse(readFileSync(baselinePath("faux", join(dir, "base")), "utf8")) as Baseline).results.map((r) => r.passed)).toEqual([false, false]);
   }, 60_000);
+
+  test("a baseline comes only from a committed tree and a run that did not regress", () => {
+    const ok = { dirty: false, allowDirty: false, verdict: "pass" as const, acceptRegression: false, stopped: false, scored: 50, planned: 50 };
+    expect(baselineRefusal(ok)).toBeUndefined();
+    expect(baselineRefusal({ ...ok, verdict: "inconclusive" })).toBeUndefined(); // no baseline yet
+    expect(baselineRefusal({ ...ok, dirty: true })).toContain("uncommitted changes");
+    expect(baselineRefusal({ ...ok, dirty: true, allowDirty: true })).toBeUndefined();
+    expect(baselineRefusal({ ...ok, verdict: "regressed" })).toContain("regressed");
+    expect(baselineRefusal({ ...ok, verdict: "regressed", acceptRegression: true })).toBeUndefined();
+    expect(baselineRefusal({ ...ok, scored: 39 })).toContain("provider errors");
+    expect(baselineRefusal({ ...ok, stopped: true })).toContain("stopped early");
+  });
 
   test("refuses to start a run whose estimate is above the cap", () => {
     const dir = mkdtempSync(join(tmpdir(), "cedia-gate-cap-"));

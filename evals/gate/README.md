@@ -4,7 +4,7 @@
 bun evals/gate.ts --estimate          # what a run will cost, from the baseline's own spend
 bun evals/gate.ts                     # run the suite on every model in suite.json and compare
 bun evals/gate.ts -m opencode-go/claude-haiku-5-5   # one model
-bun evals/gate.ts --update-baseline   # run, compare, then store the new numbers as the baseline
+bun evals/gate.ts --update-baseline   # run, compare, then store the new numbers as the baseline (committed tree, no regression)
 bun evals/gate.ts --compare evals/results/<file>.jsonl [--against <rows.jsonl|baseline.json>]   # re-score, free
 ```
 
@@ -15,6 +15,16 @@ Exit 0: no model got worse. 1: a model regressed. 3: no comparison could be made
 `suite.json`: 25 tasks, 2 runs each, 4 at a time, on Haiku 5.5 and DeepSeek V4.1 Flash, both through OpenCode Go, so a gate run spends the Go plan's quota instead of API credit (since 2026-10-22; the same Haiku model, at the same list price). A change that only the Claude API carries, such as `--handoff compact`, is gated with `-m anthropic/claude-haiku-5-5`, against `baseline/anthropic_claude-haiku-5-5.json`, the Claude API baseline kept from before (still at `medium`, from before Haiku started at `low`; re-record it with API credit before it judges anything). The 12 pi-era floor tasks, the 7 hard tasks, the 4 wide and long tasks, `real-slop-guard`, the cheapest real-repository task, and `real-three-delegated`, which hands three real commits to one work sub-thread: on Haiku that sub-thread passes the 90k handoff point in every run, so the gate checks that sub-thread handoff triggers and the work still passes (about $0.06 a run on Haiku, 5 to 6 minutes). `real-threads` and `real-subthreads` are left out: they cost $0.3 to $0.5 a run on Haiku and hit the 1200 s limit when handoff is on, so they belong in a measured experiment, not a gate. The tasks need `python3 -m pytest` and the full git history (`fetch-depth: 0`).
 
 Each run writes its rows to `evals/results/<date>-gate-<model>-<commit>-<time>.jsonl`. A baseline is `baseline/<model>.json`: the commit, date, runs, jobs and cedia flags it was made with, a hash of each task, and the rows.
+
+## Frontier suite
+
+`bun evals/gate.ts --suite evals/gate/frontier.json` runs a second, small suite of tasks meant to fail some runs, because the gate suite no longer can: every stored baseline passes 48 to 50 of 50, and on the hard tasks cedia and Claude Code both passed 10 of 10 (`research/NOTES.md`), so a change that makes cedia write better code cannot show there. Its tasks follow a written contract whose answers come from the library the contract describes, and their hidden tests hold those answers:
+
+- `frontier-semver`: npm-style ranges (0.x carets, partial versions, hyphen ranges, the prerelease rule); 210 answers from node-semver 7.6.3.
+- `frontier-cron`: the next time a 5-field cron expression fires (steps from a value, names, Sunday as 7, the day-of-month/day-of-week rule, leap days, validation); 127 answers from cron-parser 4.9.0 and 15 invalid expressions.
+- `hard-redact-bugs`, the gate task that Haiku 5.5 through OpenCode Go failed in both runs of its baseline.
+
+Each reference solution was checked against its library on random cases with no difference: 110,000 for semver, 24,000 for cron. Calibration on `anthropic/claude-haiku-5-5` (2026-10-28, 8 runs of semver, 4 of cron): semver 7/8, cron 3/4. The misses were single edge cases (a hyphen range with a prerelease lower bound; a time with milliseconds just before a new minute), the kind of defect the gate tasks no longer catch. It is 4 runs a task, not 2, because at these pass rates 2 runs cannot tell a change from noise. Its baselines live in `frontier-baseline/` (`baselineDir` in the suite), apart from the gate's, and it is not a merge requirement: run it on a change meant to make cedia write better code, and read pass@1 beside the gate's verdict.
 
 ## How it decides
 
@@ -52,6 +62,8 @@ At 2 runs on 24 tasks the pass check needs 5 failures more than the baseline's (
 
 ## Baselines
 
+`--update-baseline` stores a run only when it can judge later changes: it refuses to start on a tree with uncommitted changes (`--allow-dirty` overrides it), and it does not store a run that REGRESSED against the baseline it would replace (`--accept-regression` overrides it, for a PR meant to move the numbers that says why). A refused store exits 1 after a regression, 3 otherwise. Both rules came from 2026-10-27, when `baseline/anthropic_claude-haiku-5-5.json` was overwritten from an uncommitted tree (`e9bcfab-dirty`) after a run that had regressed.
+
 Stored on main at 32774a7 (2026-10-21; the run's files name 43bd436, a merge with the same tree), after PRs #19 to #22:
 
 | Model | pass@1 | pass^2 | False-done | Cost per run of the suite | Avg time per run |
@@ -72,6 +84,7 @@ History:
 | 6ef1dfd | 48/48, $0.16, 21 s | (not rerun) | Haiku starts at `low` and escalates to `high` when the done gate refuses a claim: PASS, typical task cost -14%, whole set -36%, time -14%. About half the runs escalated, and every reply after an escalation read the whole previous input from cache. On the 24-task suite; main then added `real-three-delegated`, and the re-record on 25 tasks stopped when the API credit ran out, so `baseline/anthropic_claude-haiku-5-5.json` is still main's at `medium`: run `bun evals/gate.ts -m anthropic/claude-haiku-5-5 --update-baseline` once credit is back |
 | 2bc8b7f (main, Haiku via Go) | 48/50, $0.27, 38 s | 50/50, $1.12, 87 s | Haiku moved to OpenCode Go; this run is `baseline/opencode-go_claude-haiku-5-5.json` (the two failures are `hard-redact-bugs`, refused claims, as before). Flash against its 82363a0 baseline: same pass and cost, time +40% for the typical task, so Go was slower that hour, not the code; a gate run's time against an old baseline needs a run of main beside it |
 | 9a91283 (server compaction, run beside the row above) | 48/50, $0.26, 42 s | 50/50, $1.11, 90 s | PASS on both against main's rows from the same hour: Haiku typical task cost -0.2%, time +3%; Flash cost -6.5%, time -2.7% |
+| 9d1e1d0 (main, Claude API Haiku re-recorded) | 50/50, $0.28, 29 s | (not rerun) | `baseline/anthropic_claude-haiku-5-5.json` re-recorded from a clean main with API credit, replacing the `e9bcfab-dirty` rows; 8 of its 25 task hashes differ from the committed tasks, so the gate could compare only 34 of 50 runs against it. Frontier baselines from the same commit: Haiku via Go 10/12 (one semver run, one `hard-redact-bugs` refused claim), Flash via Go 11/12 (one semver run) |
 
 Effort arms on Haiku 5.5 (2026-10-22, one gate run each, against the 32774a7 baseline at `medium`):
 

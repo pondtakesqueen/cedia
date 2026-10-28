@@ -180,7 +180,9 @@ describe('loop', () => {
   });
 
   test('the default turn limit lets a session run past 50 turns', async () => {
-    const loop: FauxStep = () => ({ blocks: [toolUse(`c${Math.random()}`, 'read', { path: 'a.txt' })] });
+    // Each call new, so the stuck guard has nothing to see.
+    let n = 0;
+    const loop: FauxStep = () => ({ blocks: [toolUse(`c${Math.random()}`, 'bash', { command: `echo ${n++}` })] });
     const { opts } = setup([...Array.from({ length: 80 }, () => loop), { blocks: [text('done')] }]);
     const res = await runPrompt(opts, 'loop');
     expect(res.subtype).toBe('success');

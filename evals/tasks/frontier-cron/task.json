@@ -1,0 +1,7 @@
+{
+  "id": "frontier-cron",
+  "category": "bugfix",
+  "source": "synthetic: next fire time of a 5-field cron expression (steps from a value, names, Sunday as 7, the day-of-month/day-of-week rule, leap days, validation) with a naive implementation; hidden tests are 127 answers from cron-parser 4.9.0 and 15 invalid expressions. Meant to be hard enough that runs do not all pass (evals/gate/frontier.json)",
+  "prompt": "cron.ts works out when a cron expression fires next. Users report wrong times for expressions with names, steps, Sunday written as 7, both a day of month and a day of week, and the 29th of February, and that some invalid expressions are accepted. The doc comment at the top of cron.ts is the contract. Fix cron.ts so it keeps every rule there. Do not change the existing tests; add tests for what you fix. Run `bun test` before you finish.",
+  "verify": "bun test"
+}

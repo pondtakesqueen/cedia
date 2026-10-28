@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 // Usage: bun evals/gate.ts [--suite evals/gate/suite.json] [--model <ref>]... [--runs <n>] [--jobs <n>] [--budget <usd>]
-//                          [--estimate] [--update-baseline] [--only id,id] [--cedia-arg=<flag>]...
+//                          [--estimate] [--update-baseline [--allow-dirty] [--accept-regression]] [--only id,id]
+//                          [--cedia-arg=<flag>]...
 //        bun evals/gate.ts --compare <results.jsonl> [--against <results.jsonl|baseline.json>]
 //
 // The regression gate. Runs the suite's tasks on each model, records pass rate, false-done, cost and time, and
@@ -10,6 +11,8 @@
 // start a run that would cost more than the suite's maxUsd unless --budget allows it.
 //
 // --only runs some of the suite's tasks; with --update-baseline it replaces only their rows, as after a task changed.
+// --update-baseline refuses a tree with uncommitted changes (--allow-dirty) and a run that regressed against the
+// baseline it would replace (--accept-regression, for a PR that says why the new numbers are the right ones).
 // --compare scores an existing result file instead of running anything, so a rule change can be checked for free.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -41,6 +44,9 @@ export type Suite = {
   cediaArgs?: string[];
   // Relative to the suite file; evals/tasks by default.
   tasksDir?: string;
+  // Relative to the suite file; evals/gate/baseline by default. A second suite keeps its baselines apart, since a
+  // baseline file is named by model only.
+  baselineDir?: string;
 };
 
 export type Baseline = {
@@ -308,9 +314,21 @@ const gitHead = () => Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"], { c
 const gitDirty = () =>
   Bun.spawnSync(["git", "status", "--porcelain", "--untracked-files=no", "--", ".", ":!evals/results", ":!evals/gate/baseline"], { cwd: REPO_ROOT }).stdout.toString().trim() !== "";
 
+const DIRTY = "the tree has uncommitted changes; commit them first (or pass --allow-dirty)";
+
+// Why a run must not become the baseline, or undefined when it may. A baseline judges every later change, so it is
+// made from a commit that can be checked out again, and never from a run the gate itself just failed: on 2026-10-27
+// the Claude API baseline was overwritten from an uncommitted tree by a run that had REGRESSED.
+export function baselineRefusal(r: { dirty: boolean; allowDirty: boolean; verdict: Comparison["verdict"]; acceptRegression: boolean; stopped: boolean; scored: number; planned: number }): string | undefined {
+  if (r.dirty && !r.allowDirty) return DIRTY;
+  if (r.stopped || r.scored < 0.8 * r.planned) return "the run stopped early or lost too many runs to provider errors";
+  if (r.verdict === "regressed" && !r.acceptRegression) return "the run regressed against the baseline it would replace (pass --accept-regression and say why in the PR)";
+  return undefined;
+}
+
 async function main(argv: string[]): Promise<number> {
   let suitePath = DEFAULT_SUITE;
-  let baselineDir = BASELINE_DIR;
+  let baselineDir: string | undefined;
   let resultsDir = resolve(import.meta.dir, "results");
   const models: string[] = [];
   let runs: number | undefined;
@@ -318,6 +336,8 @@ async function main(argv: string[]): Promise<number> {
   let budget: number | undefined;
   let estimate = false;
   let update = false;
+  let allowDirty = false;
+  let acceptRegression = false;
   let comparePath: string | undefined;
   let againstPath: string | undefined;
   let only: string[] | undefined;
@@ -333,6 +353,8 @@ async function main(argv: string[]): Promise<number> {
     else if (a === "--budget") budget = Number(argv[++i]);
     else if (a === "--estimate") estimate = true;
     else if (a === "--update-baseline") update = true;
+    else if (a === "--allow-dirty") allowDirty = true;
+    else if (a === "--accept-regression") acceptRegression = true;
     else if (a === "--compare") comparePath = argv[++i]!;
     else if (a === "--against") againstPath = argv[++i]!;
     else if (a === "--only") only = argv[++i]!.split(",");
@@ -341,6 +363,7 @@ async function main(argv: string[]): Promise<number> {
   }
   const loaded = loadSuite(suitePath);
   const { suite } = loaded;
+  baselineDir ??= suite.baselineDir ? resolve(dirname(suitePath), suite.baselineDir) : BASELINE_DIR;
   for (const id of only ?? []) if (!suite.tasks.includes(id)) throw new Error(`--only: ${id} is not in suite ${suite.name}`);
   const tasks = loaded.tasks.filter((t) => !only || only.includes(t.id));
   const hiddenTasks = tasks.filter((t) => Object.keys(t.hidden ?? {}).length).map((t) => t.id);
@@ -389,11 +412,18 @@ async function main(argv: string[]): Promise<number> {
   if (!update) for (const m of models) if (!baselines.get(m)) console.error(`${m} has no baseline: its results are recorded but not compared (make one with --update-baseline)`);
   if (args.length) process.env.CEDIA_EVAL_ARGS = JSON.stringify(args);
 
-  const commit = gitHead() + (gitDirty() ? "-dirty" : "");
+  const dirty = gitDirty();
+  // Refused before anything is spent; the other reasons can only be known after the run.
+  if (update && dirty && !allowDirty) {
+    console.error(`not run: ${DIRTY}`);
+    return 3;
+  }
+  const commit = gitHead() + (dirty ? "-dirty" : "");
   const date = new Date().toISOString();
   let spent = 0;
   const verdicts: Comparison["verdict"][] = [];
   const reports: string[] = [];
+  let refused = false;
   mkdirSync(resultsDir, { recursive: true });
   for (const m of models) {
     console.log(`\n${m}`);
@@ -423,8 +453,10 @@ async function main(argv: string[]): Promise<number> {
     verdicts.push(verdict);
 
     if (update) {
-      if (run.stopped || run.results.filter((r) => !r.infraError).length < 0.8 * tasks.length * runs) {
-        console.error(`  not stored as the baseline: the run stopped early or lost too many runs to provider errors`);
+      const why = baselineRefusal({ dirty, allowDirty, verdict, acceptRegression, stopped: run.stopped, scored: run.results.filter((r) => !r.infraError).length, planned: tasks.length * runs });
+      if (why) {
+        refused = true;
+        console.error(`  not stored as the baseline: ${why}`);
       } else {
         const rows = run.results.map((r) => ({ ...r, output: r.output.slice(-500), stderr: r.stderr.slice(-300) }));
         // With --only, the other tasks keep their baseline rows; the record of how it was made is the new run's.
@@ -441,7 +473,7 @@ async function main(argv: string[]): Promise<number> {
     }
   }
   console.log(`\nSpent $${spent.toFixed(4)}\n\n${reports.join("\n\n")}`);
-  if (update) return 0;
+  if (update) return refused ? (verdicts.includes("regressed") ? 1 : 3) : 0;
   return verdicts.includes("regressed") ? 1 : verdicts.every((v) => v === "pass") ? 0 : 3;
 }
 

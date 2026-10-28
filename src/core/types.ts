@@ -211,6 +211,8 @@ export type Evidence = { changed: string[]; checks: Check[]; unverified: string[
 // in a new session of the same thread.
 export type ResultSubtype =
   | 'success' | 'error_max_turns' | 'error_max_budget_usd' | 'error_during_execution' | 'interrupted' | 'error_unverified_claim'
+  // The run kept repeating the same calls after the stuck guard's reminder (core/trust/stuck.ts).
+  | 'error_stuck'
   | 'handoff'
   // The writer asked the owner a question (core/tools/ask.ts); `question` holds it, and the thread waits for the answer.
   | 'asked';
