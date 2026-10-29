@@ -233,8 +233,21 @@ describe('handoff in the loop', () => {
   });
 
   test('a session that starts large does not hand off until its context doubles', async () => {
-    const { r } = await run([call('c1', 'ls'), reply('done')], { handoffAt: 1000, system: big });
+    const { r } = await run([call('c1', 'ls'), reply('done')], { handoffAt: 1000, preamble: big });
     expect(r.subtype).toBe('success');
+  });
+
+  test('what must double leaves out the system prompt and tool definitions, which the next session sends again', async () => {
+    // 40k characters of definitions (a big MCP server) are most of the first reply's context; a turn that adds a
+    // fifth of that again is far from doubling the whole, but it doubles what a handoff can shrink.
+    const wide = { ...CORE_TOOLS[0]!, name: 'wide', description: big, effect: 'read' as const, pathOf: undefined, run: async () => ({ text: 'x', isError: false }) };
+    const some = { ...bigTool, name: 'some', run: async () => ({ text: 'y'.repeat(8_000), isError: false }) };
+    const tools = [...CORE_TOOLS, bigTool, wide, some];
+    for (const system of ['sys', big]) {
+      const { r, log } = await run([write, tool('c1', 'some', {}), reply('the note')], { handoffAt: 2000, tools, system });
+      expect(r).toMatchObject({ subtype: 'handoff', result: 'the note' });
+      expect(lintSession(log.events)).toEqual([]);
+    }
   });
 
   test('messages are logged as a reminder at a turn boundary, then marked delivered', async () => {
