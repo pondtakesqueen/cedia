@@ -123,6 +123,8 @@ export type RunOptions = {
   escalate?: Effort;
   ttl?: '5m' | '1h';
   maxTurns?: number;
+  // Fewer output tokens than the model's most, for a reply that must be short and fast (a tab completion).
+  maxTokens?: number;
   maxBudgetUsd?: number;
   // The run's spend so far, across all its sessions, when the client keeps one: each turn adds to it, and
   // maxBudgetUsd is checked against it instead of this session's own cost. A session that spawns sub-threads
@@ -241,7 +243,7 @@ export function rebuildRequest(events: SessionEvent[], requestIndex: number, mod
     tools: header.tools,
     messages: buildMessages(events.slice(0, requestIndex)),
     ...(req.effort ? { effort: req.effort } : {}),
-    maxTokens: model.maxOutput,
+    maxTokens: req.maxTokens ?? model.maxOutput,
     ...(req.ttl ? { ttl: req.ttl } : {}),
   };
 }
@@ -406,6 +408,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   // and escalation resolve under it, never over.
   const cap = loadMaxEffort();
   const startEffort = capEffort(opts.effort, cap);
+  const maxTokens = opts.maxTokens !== undefined && opts.maxTokens < model.maxOutput ? opts.maxTokens : undefined;
   const escalateTo = opts.softChecks ? undefined : escalationTarget(model, startEffort ?? model.defaultEffort, capEffort(opts.escalate, cap));
   // Escalation: logged right after the gate's reminder, the user turn that carries it, so the change applies from
   // that turn on (core/providers/anthropic.ts). Not on a failed check: a turn of tool results alone is not new
@@ -549,7 +552,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       tools: header.tools,
       messages: buildMessages(log.events),
       ...(startEffort ? { effort: startEffort } : {}),
-      maxTokens: model.maxOutput,
+      maxTokens: maxTokens ?? model.maxOutput,
       ...(opts.ttl ? { ttl: opts.ttl } : {}),
       ...(opts.contextManagement ? { contextManagement: opts.contextManagement } : {}),
     };
@@ -559,6 +562,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       kind: 'request',
       model: model.ref,
       ...(startEffort ? { effort: startEffort } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
       toolsHash: hash(header.tools),
       systemHash: hash(header.system),
       bodyHash: hash(provider.body(req)),

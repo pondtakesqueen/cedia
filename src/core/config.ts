@@ -24,8 +24,9 @@ export type Settings = {
   media?: string;
   // The model for each role: an alias or ref (with `@<effort>` for plan and review), `claude-code[:<model>][@<effort>]`
   // for plan and review, or "none". triage is the model that says whether a message needs the planner (default:
-  // the code model). User settings only: a repo must not pick what the user pays for.
-  roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string; workers?: string; triage?: string };
+  // the code model). complete is the model tab completion asks (default: the code model). User settings only: a repo
+  // must not pick what the user pays for.
+  roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string; workers?: string; triage?: string; complete?: string };
   // With a plan role, when a prompt is planned: auto (the triage model decides), always or never.
   planWhen?: string;
   // "on": the writer starts reading while the plan is written, and the plan follows into its session (default on).
@@ -93,7 +94,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   context: 'any',
   fallback: 'any',
   media: 'any',
-  roles: ['plan', 'code', 'review', 'swarm', 'advisor', 'classifier', 'workers', 'triage'],
+  roles: ['plan', 'code', 'review', 'swarm', 'advisor', 'classifier', 'workers', 'triage', 'complete'],
   planWhen: 'any',
   planOverlap: 'any',
   spawn: 'any',
@@ -420,6 +421,12 @@ export function loadRoles(
   if (triageRef && /^claude-code\b/.test(triageRef)) throw new Error('triage runs in cedia, one short reply a prompt; claude-code is for plan or review');
   const triage = triageRef ? resolveModel(triageRef) : code;
   return { code, triage, ...(plan ? { plan } : {}), ...(review ? { review } : {}), swarm, ...(advisor ? { advisor } : {}), ...(classifier ? { classifier } : {}), workers };
+}
+
+// The model tab completion asks: the flag, else roles.complete, else the code model. Each keystroke's pause asks it,
+// so the one picked should answer fast.
+export function loadCompleteModel(flag?: string): string {
+  return flag ?? readSettings(join(cediaHome(), 'settings.json')).roles?.complete ?? loadRoles({}).code.ref;
 }
 
 // Modes a model picker offers beside the models, picked as `-m auto` or `-m oplan`. Both keep the writer the user's
