@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { cediaHome } from '../config.ts';
 import { projectKey } from '../session/log.ts';
-import { SessionLog } from '../session/log.ts';
+import { SessionLog, sessionPath } from '../session/log.ts';
 import { resolveModel } from '../providers/catalog.ts';
 import { providerFor } from '../providers/index.ts';
 import { runPrompt } from '../loop/run.ts';
@@ -39,7 +39,8 @@ export async function gatherNotes(opts: { cwd: string; home?: string; model?: st
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
   const provider = providerFor(model, { fauxScript });
   const id = crypto.randomUUID();
-  const log = SessionLog.create({ id, path: null });
+  // Logged like any session, so `cedia usage` counts what it cost; scanTranscripts leaves its role out.
+  const log = SessionLog.create({ id, path: sessionPath(opts.cwd, id, home) });
   const privacy = loadPrivacy(opts.cwd, undefined);
   const system = `You extract durable memories from a session transcript. Keep short facts (commands that work, decisions and reasons, where things live, traps). Not progress. At most ${MAX_NOTE} chars per note. Use remember tool, at most 5 notes. If nothing durable, call nothing.`;
   const prompt = `Extract durable memories from these transcripts:\n\n${scan.text}`;
