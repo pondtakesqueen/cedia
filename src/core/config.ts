@@ -26,8 +26,6 @@ export type Settings = {
   roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string; workers?: string; triage?: string };
   // With a plan role, when a prompt is planned: auto (the triage model decides), always or never.
   planWhen?: string;
-  // The effort a plan the triage finds plain (LIGHT) is written at, or "off" (default off; `-m auto` sets low).
-  planLight?: string;
   // "on": the writer starts reading while the plan is written, and the plan follows into its session (default on).
   planOverlap?: string;
   // Whether writer sessions get the spawn tool for sub-threads (default true), and "worktree" to run each work
@@ -94,7 +92,6 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   fallback: 'any',
   roles: ['plan', 'code', 'review', 'swarm', 'advisor', 'classifier', 'workers', 'triage'],
   planWhen: 'any',
-  planLight: 'any',
   planOverlap: 'any',
   spawn: 'any',
   lsp: 'any',
@@ -411,21 +408,20 @@ export function loadRoles(
 
 // Modes a model picker offers beside the models, picked as `-m auto` or `-m oplan`. Both keep the writer the user's
 // code role, since a writer that changed from prompt to prompt would lose the cache each time; they choose the
-// steps around it. auto: the triage model decides per prompt whether the planner runs and, for a plain change, plans
-// at low effort; plan and review come from settings, or where none is set from the user's Claude Code: Opus at medium
-// plans, Sonnet at high reviews (a third less cost a task than an Opus review, 6 to 5 on blind review,
-// evals/results/2026-10-29-cheaper-opus/). oplan: the roles and efforts as set, planned every prompt.
+// steps around it. auto: the triage model decides per prompt whether the planner runs, with plan and review from
+// settings, or where none is set from the user's Claude Code: Opus at medium plans, Sonnet at high reviews (30% less
+// cost a task than an Opus review, 6 to 5 on blind review, evals/results/2026-10-29-cheaper-opus/). oplan: the roles
+// and efforts as set, planned every prompt.
 export type Mode = 'auto' | 'oplan';
 export const MODES: { name: Mode; label: string }[] = [
-  { name: 'auto', label: 'Auto: plans and reviews code changes, lighter for plain ones; answers the rest straight away' },
+  { name: 'auto', label: 'Auto: plans and reviews code changes, answers the rest straight away' },
   { name: 'oplan', label: 'Oplan: your roles and efforts from settings, planned every prompt' },
 ];
 export const isMode = (ref: string | undefined): ref is Mode => ref === 'auto' || ref === 'oplan';
 
 // The flags a mode adds under the run's own: the run's flags still win.
-export function modeFlags(mode: Mode, flags: { plan?: string; review?: string; planWhen?: string; planLight?: string }): { plan?: string; review?: string; planWhen: string; planLight?: string } {
+export function modeFlags(mode: Mode, flags: { plan?: string; review?: string; planWhen?: string }): { plan?: string; review?: string; planWhen: string } {
   const set = loadRoles({});
-  const settings = readSettings(join(cediaHome(), 'settings.json'));
   if (mode === 'oplan') {
     if (!flags.plan && !set.plan) throw new Error('oplan plans with roles.plan from ~/.cedia/settings.json, and none is set');
     return { planWhen: flags.planWhen ?? 'always' };
@@ -434,7 +430,6 @@ export function modeFlags(mode: Mode, flags: { plan?: string; review?: string; p
     ...(!flags.plan && !set.plan ? { plan: 'claude-code' } : {}),
     ...(!flags.review && !set.review ? { review: 'claude-code:sonnet@high' } : {}),
     planWhen: flags.planWhen ?? 'auto',
-    ...(!flags.planLight && !settings.planLight ? { planLight: 'low' } : {}),
   };
 }
 
@@ -443,21 +438,6 @@ export function loadPlanWhen(flag?: string): 'auto' | 'always' | 'never' {
   const v = flag ?? readSettings(join(cediaHome(), 'settings.json')).planWhen ?? 'auto';
   if (v !== 'auto' && v !== 'always' && v !== 'never') throw new Error(`${flag !== undefined ? '--plan-when' : '"planWhen"'} must be auto, always or never, not ${v}`);
   return v;
-}
-
-// The effort a plan the triage finds plain is written at: the flag, else the user's settings, else off (the plan
-// role's own effort for every planned prompt). `-m auto` sets low.
-export function loadPlanLight(flag?: string): ClaudeCodeEffort | undefined {
-  const v = flag ?? readSettings(join(cediaHome(), 'settings.json')).planLight ?? 'off';
-  if (v === 'off') return undefined;
-  if (!(EFFORTS as string[]).includes(v)) throw new Error(`${flag !== undefined ? '--plan-light' : '"planLight"'} must be off or one of ${EFFORTS.join(', ')}, not ${v}`);
-  return v as ClaudeCodeEffort;
-}
-
-// A plan role at another effort; a cedia model that does not take it keeps its own.
-export function atEffort(choice: RoleChoice, effort: ClaudeCodeEffort): RoleChoice {
-  if (choice.via === 'claude-code') return { ...choice, effort };
-  return choice.model.caps.effortLevels.includes(effort) ? { ...choice, effort } : choice;
 }
 
 // Whether the writer starts reading while the plan is written (core/roles.ts, planComing): the flag, else the

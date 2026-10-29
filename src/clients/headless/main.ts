@@ -9,7 +9,7 @@ import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectRoot, projectSlug, SessionLog, sessionExists, sessionPath, workspaceRoots } from '../../core/session/log.ts';
 import { DAILY_SPEND_WARN_USD, daySpendUsd } from '../../core/session/select.ts';
 import { dayOf } from '../../core/session/usage.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadMaxEffort, capEffort, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPlanOverlap, loadPlanLight, atEffort, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadMaxEffort, capEffort, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPlanOverlap, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
 import { attachedNote, blobDir, STORED_IMAGE, storedImage, storeImage, type ImageRef } from '../../core/images.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
@@ -33,7 +33,7 @@ import { openThreadTool } from '../../core/tools/open.ts';
 import { scheduleTool } from '../../core/tools/schedule.ts';
 import { ScheduleStore, schedulesPath } from '../../core/project/schedules.ts';
 import { resolveProfile, withProfile } from '../../core/profiles.ts';
-import { tierOf, TRIAGE_TIERS_SYSTEM, planArrived, planComing, planParts, planPrompt, TRIAGE_SYSTEM, triagePrompt, withParts, withPlan, type Part, type Split, type Tier } from '../../core/roles.ts';
+import { needsPlan, planArrived, planComing, planParts, planPrompt, TRIAGE_SYSTEM, triagePrompt, withParts, withPlan, type Part, type Split } from '../../core/roles.ts';
 import { openSandbox } from '../../core/safety/sandbox.ts';
 import { lspServers, openDiagnoser } from '../../core/lsp/diagnose.ts';
 import { bashTool, scrubbedEnv } from '../../core/tools/bash.ts';
@@ -122,8 +122,6 @@ export type HeadlessArgs = {
   planWhen?: string;
   // "on": the writer starts reading while the plan is written (core/roles.ts, planComing); default settings, on.
   planOverlap?: string;
-  // The effort a plan the triage finds plain is written at (LIGHT), or off; `-m auto` sets low.
-  planLight?: string;
   // The model that says whether a message needs the planner (default: the code model).
   triage?: string;
   sandbox?: string;
@@ -270,7 +268,6 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const todoOn = loadTodo(args.todo);
   const promptSuggestionsOn = loadPromptSuggestions(args.promptSuggestions);
   const planWhen = loadPlanWhen(args.planWhen);
-  const planLight = loadPlanLight(args.planLight);
   const planOverlap = loadPlanOverlap(args.planOverlap);
   const cacheTtl = args.cacheTtl ?? '5m';
   warnDaySpend(args.cwd, cediaHome(), say);
@@ -547,7 +544,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         model: m,
         // Plan and review get no write tools, and their policy is read-only whatever the run's mode.
         tools,
-        system: opts.role === 'advisor' ? ADVISOR_SYSTEM : opts.role === 'classifier' ? CLASSIFIER_SYSTEM : opts.role === 'triage' ? (planLight ? TRIAGE_TIERS_SYSTEM : TRIAGE_SYSTEM) : systemFor(m),
+        system: opts.role === 'advisor' ? ADVISOR_SYSTEM : opts.role === 'classifier' ? CLASSIFIER_SYSTEM : opts.role === 'triage' ? TRIAGE_SYSTEM : systemFor(m),
         ...(helper ? {} : { preamble: reviewer ? reviewPreamble() : opts.note ? `${place?.preamble ?? basePreamble()}\n\n${opts.note}` : (place?.preamble ?? basePreamble()) }),
         cwd: place?.cwd ?? args.cwd,
         ...(opts.images?.length ? { images: opts.images } : {}),
@@ -659,12 +656,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     if (r.subtype !== 'success') say(`cedia: the ${role} step on ${choice.model.ref} ended with ${r.subtype}\n`);
     return { ok: r.subtype === 'success', text: r.result, step: { model: choice.model.ref, via: 'cedia', sessionId: log.id, costUsd: r.costUsd, requests: r.numTurns, ...(r.timing ? { apiMs: r.timing.modelMs } : {}) } };
   };
-  // How much plan the writer's model, reading the message alone, finds the message needs; a failed triage plans in
-  // full. Without a light effort a LIGHT answer is never asked for, and would plan in full.
-  const triage = async (): Promise<Tier> => {
+  // True unless the writer's model, reading the message alone, finds it needs no plan; a failed triage plans.
+  const triage = async (): Promise<boolean> => {
     const r = await run(roles.triage, openLog(), triagePrompt(args.prompt), { role: 'triage' });
-    const tier = r.subtype === 'success' ? tierOf(r.result) : 'full';
-    return tier === 'light' && !planLight ? 'full' : tier;
+    return r.subtype !== 'success' || needsPlan(r.result);
   };
   // A thread that asked the owner a question goes on with their answer, framed as one.
   // Plan overlap: the plan on its way while the writer reads (by: who writes it; delivered: it reached the writer),
@@ -984,30 +979,23 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // Triage (core/roles.ts): the writer's model says first whether the message is work a plan helps.
     // direct: the triage sent the message straight to the writer, which also lets a small change skip the review.
     const triaged = planWhen === 'auto' && roles.plan !== undefined && !resumed?.question;
-    const tier: Tier = triaged ? await triage() : 'full';
-    const direct = tier === 'direct';
+    const direct = triaged && !(await triage());
     const wantsPlan = planWhen !== 'never' && !direct;
     if (!wantsPlan) unwarm('plan');
     if (roles.plan && !wantsPlan) say('cedia: no plan for this one\n');
-    // A plain change is planned at the light effort; the step warmed at the role's own effort is not that one.
-    const planner = roles.plan && tier === 'light' && planLight ? atEffort(roles.plan, planLight) : roles.plan;
-    if (planner && planner.effort !== roles.plan?.effort) {
-      unwarm('plan');
-      say(`cedia: a plain change; a light plan at ${planLight}\n`);
-    }
-    if (planner && wantsPlan) {
+    if (roles.plan && wantsPlan) {
       // With worktrees on, the planner may split the work into parts that cedia hands to work sub-threads before the
       // writer starts: what to delegate, and to which model, is the stronger model's call (no DeepSeek run ever
       // delegated on its own). Without them the parts would run one after another, which costs time the writer
       // doing them itself does not (2026-10-24: 121 s of a real task's 683 s, evals/results/README.md).
       const split: Split | undefined = spawnMode !== 'worktree' || policy.plan || policy.mode === 'read-only' ? undefined : { mode: 'parallel', writer: model.ref, workers: roles.workers.filter((w) => w.ref !== model.ref).map((w) => w.ref) };
-      const by = planner.via === 'claude-code' ? `claude-code:${planner.model}@${planner.effort}` : `${planner.model.ref}${planner.effort ? `@${planner.effort}` : ''}`;
+      const by = roles.plan.via === 'claude-code' ? `claude-code:${roles.plan.model}@${roles.plan.effort}` : `${roles.plan.model.ref}${roles.plan.effort ? `@${roles.plan.effort}` : ''}`;
       say(`cedia: planning with ${by}\n`);
       // Plan overlap: the writer starts reading now and the plan follows into its session. Not with parts to hand
       // out before the writer starts, nor in full goal mode, whose criteria are written from the plan.
       if (planOverlap && !split && !(args.goal && args.goalMode === 'full')) {
         say('cedia: the writer reads while the plan is written\n');
-        const pending = side('plan', planner, planPrompt(task));
+        const pending = side('plan', roles.plan, planPrompt(task));
         planning = {
           by,
           text: pending.then((p) => {
@@ -1020,7 +1008,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
           delivered: false,
         };
       }
-      const p = planning ? undefined : await side('plan', planner, planPrompt(task, split));
+      const p = planning ? undefined : await side('plan', roles.plan, planPrompt(task, split));
       if (planning) {
         // the plan reaches the writer as a reminder
       } else if (p?.ok && p.text.trim()) {
