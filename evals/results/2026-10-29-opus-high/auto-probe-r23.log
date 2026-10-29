@@ -1,0 +1,30 @@
+Running 10 tasks x 2 runs on cedia (auto), 2 at a time...
+  PASS hard-csv-stream#1 (151.2s $0.0128, plan 35s, review changes 44s, fix 14s, peak 28k)
+  PASS hard-csv-stream#2 (168.3s $0.0182, plan 33s, review changes 30s, fix 31s, peak 33k)
+  PASS hard-deny-list#2 (102.9s $0.0057, plan 28s, review approve 42s, peak 17k)
+  PASS hard-deny-list#1 (123.6s $0.0084, plan 25s, review changes 46s, fix 14s, peak 22k)
+  PASS hard-edit-tiers#1 (114.7s $0.0078, plan 27s, review approve 43s, peak 21k)
+  PASS hard-edit-tiers#2 (121.1s $0.0109, plan 26s, review changes 36s, fix 21s, peak 26k)
+  PASS hard-injection#1 (59.3s $0.0027, plan 17s, review changes 24s, fix 9s, peak 10k)
+  PASS hard-injection#2 (66.7s $0.0025, plan 16s, review approve 37s, peak 12k)
+  PASS hard-ledger#1 (113.6s $0.0090, plan 28s, review changes 39s, fix 18s, peak 24k)
+  PASS hard-ledger#2 (112.9s $0.0089, plan 26s, review changes 41s, fix 12s, peak 25k)
+  PASS hard-memo-async#2 (91.7s $0.0070, plan 23s, review approve 31s, peak 19k)
+  PASS hard-memo-async#1 (115.0s $0.0093, plan 25s, review changes 35s, fix 21s, peak 22k)
+  PASS hard-pool#1 (107.1s $0.0087, plan 27s, review approve 34s, peak 20k)
+  PASS hard-pool#2 (123.8s $0.0096, plan 33s, review changes 38s, fix 10s, peak 22k)
+  PASS hard-sse#2 (100.8s $0.0100, plan 16s, review changes 22s, fix 38s, peak 23k)
+  PASS hard-sse#1 (127.4s $0.0114, plan 20s, review changes 33s, fix 53s, peak 24k)
+  PASS wide-bug-hunt#2 (89.4s $0.0050, plan 39s, review approve 20s, peak 16k)
+  PASS wide-bug-hunt#1 (171.3s $0.0145, plan 36s, review changes 48s, fix 55s, peak 31k)
+  PASS wide-three-features#1 (162.3s $0.0154, plan 46s, review changes 30s, fix 33s, peak 32k)
+  PASS wide-three-features#2 (153.1s $0.0117, plan 32s, review changes 37s, fix 18s, peak 25k)
+
+Results written to evals/results/2026-10-29-opus-high/auto-probe-r23.jsonl
+cedia (auto): 10 tasks, 20 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 118.8s per run, 176559 input / 11126 output tokens per run, cache hit 89.4%
+  peak context 23k mean, 33k max, 0 of 20 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 22 edit: broken edits string, 5 edit: top-level old_text/new_text
+  speed 261 output tok/s, 1.10s to first token per call; model 99.4% of time, cedia 0.0%
+  cost $0.1895 total, $0.0095 per passed run

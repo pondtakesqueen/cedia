@@ -1,0 +1,195 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/memo.regressions.test.ts b/memo.regressions.test.ts
+--- a/memo.regressions.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/memo.regressions.test.ts	2026-10-29 09:56:21.861122737 +0000
+@@ -0,0 +1,141 @@
++import { expect, test } from "bun:test";
++import { memo } from "./memo";
++
++function deferred<T>() {
++  let resolve!: (v: T) => void;
++  let reject!: (e: unknown) => void;
++  const promise = new Promise<T>((res, rej) => ((resolve = res), (reject = rej)));
++  return { promise, resolve, reject };
++}
++
++// fn's calls, each settled by the test.
++function lookups() {
++  const calls: { key: string; d: ReturnType<typeof deferred<string>> }[] = [];
++  const fn = (key: string) => {
++    const d = deferred<string>();
++    calls.push({ key, d });
++    return d.promise;
++  };
++  return { fn, calls };
++}
++
++const tick = () => new Promise((r) => setTimeout(r, 0));
++
++test("a key in flight counts toward max and is evicted when a newer key needs room", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 2 });
++  m("a");
++  m("b");
++  m("c");
++  expect(m.size).toBe(2);
++  m("a");
++  expect(calls).toHaveLength(4);
++});
++
++test("a result that settles after clear is not kept", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 10 });
++  m("k");
++  m.clear();
++  calls[0]!.d.resolve("v");
++  await tick();
++  expect(m.size).toBe(0);
++  m("k");
++  expect(calls).toHaveLength(2);
++});
++
++test("a stale result does not overwrite a newer call's result", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 10 });
++  m("k");
++  m.invalidate("k");
++  const second = m("k");
++  calls[0]!.d.resolve("old");
++  await tick();
++  const third = m("k");
++  expect(calls).toHaveLength(2);
++  calls[1]!.d.resolve("new");
++  expect(await second).toBe("new");
++  expect(await third).toBe("new");
++});
++
++test("a stale rejection does not delete a newer call's entry", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 10 });
++  const first = m("k");
++  m.invalidate("k");
++  m("k");
++  calls[0]!.d.reject(new Error("boom"));
++  await expect(first).rejects.toThrow("boom");
++  m("k");
++  expect(calls).toHaveLength(2);
++});
++
++test("an evicted key's late result is not kept", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 1 });
++  m("a");
++  m("b");
++  calls[0]!.d.resolve("a");
++  await tick();
++  expect(m.size).toBe(1);
++  m("b");
++  expect(calls).toHaveLength(2);
++});
++
++test("answering from the cache makes a key the most recently used", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 2 });
++  m("a");
++  m("b");
++  calls[0]!.d.resolve("a");
++  calls[1]!.d.resolve("b");
++  await tick();
++  m("a");
++  m("c");
++  expect(calls).toHaveLength(3);
++  m("a");
++  expect(calls).toHaveLength(3);
++  m("b");
++  expect(calls).toHaveLength(4);
++});
++
++test("an expired result is not counted in size or against max", async () => {
++  let t = 0;
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 100, max: 2, now: () => t });
++  m("a");
++  calls[0]!.d.resolve("a");
++  await tick();
++  t = 10;
++  m("b");
++  calls[1]!.d.resolve("b");
++  await tick();
++  t = 50;
++  m("a");
++  t = 105;
++  expect(m.size).toBe(1);
++  m("c");
++  expect(calls).toHaveLength(3);
++  m("b");
++  expect(calls).toHaveLength(3);
++});
++
++test("a synchronous throw from fn evicts nothing", async () => {
++  const d = lookups();
++  const fn = (key: string) => {
++    if (key === "x") throw new Error("sync");
++    return d.fn(key);
++  };
++  const m = memo(fn, { ttlMs: 1000, max: 2 });
++  m("a");
++  m("b");
++  d.calls[0]!.d.resolve("a");
++  d.calls[1]!.d.resolve("b");
++  await tick();
++  expect(() => m("x")).toThrow("sync");
++  expect(m.size).toBe(2);
++  m("a");
++  m("b");
++  expect(d.calls).toHaveLength(2);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/memo.ts b/memo.ts
+--- a/memo.ts	2026-10-29 09:54:34.345318595 +0000
++++ b/memo.ts	2026-10-29 09:56:25.445122950 +0000
+@@ -29,21 +29,41 @@
+   const now = opts.now ?? Date.now;
+   // In insertion order, least recently used first. A key in flight does not expire.
+   const cache = new Map<K, { promise: Promise<V>; expires: number }>();
++  // Drops settled entries whose result has expired, so they count neither in size nor against max.
++  const purge = () => {
++    for (const [key, entry] of cache) if (entry.expires <= now()) cache.delete(key);
++  };
+   const call = ((key: K) => {
+     const hit = cache.get(key);
+-    if (hit && hit.expires > now()) return hit.promise;
++    if (hit && hit.expires > now()) {
++      cache.delete(key);
++      cache.set(key, hit);
++      return hit.promise;
++    }
+     cache.delete(key);
+-    if (cache.size > opts.max) cache.delete(cache.keys().next().value as K);
++    // fn runs before anything is evicted, so a synchronous throw leaves the cache as it was.
+     const entry = { promise: fn(key), expires: Infinity };
++    purge();
++    while (cache.size >= opts.max) cache.delete(cache.keys().next().value as K);
+     cache.set(key, entry);
++    // Only the entry still cached for the key may change the cache: an invalidated, cleared or evicted call does not.
+     entry.promise.then(
+-      (value) => cache.set(key, { promise: Promise.resolve(value), expires: now() + opts.ttlMs }),
+-      () => cache.delete(key),
++      () => {
++        if (cache.get(key) === entry) entry.expires = now() + opts.ttlMs;
++      },
++      () => {
++        if (cache.get(key) === entry) cache.delete(key);
++      },
+     );
+     return entry.promise;
+   }) as Memo<K, V>;
+   call.invalidate = (key) => void cache.delete(key);
+   call.clear = () => cache.clear();
+-  Object.defineProperty(call, "size", { get: () => cache.size });
++  Object.defineProperty(call, "size", {
++    get: () => {
++      purge();
++      return cache.size;
++    },
++  });
+   return call;
+ }

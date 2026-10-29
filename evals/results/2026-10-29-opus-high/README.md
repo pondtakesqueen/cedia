@@ -28,10 +28,36 @@ Head to head, auto + probe against the old auto (`judge-probe-vs-old/`): 4 wins 
 
 What it says:
 - Against Opus at effort high, the old auto lost 2 to 4. Opus high was more correct; auto won on tests and security.
-- With the probe line, auto won 6 to 3, and every judged pair agreed in both orders. It moved correctness past Opus high (8.8 / 8.4) and kept the lead on tests.
+- With the probe line, auto won 6 to 3 on run 1, and every judged pair agreed in both orders. Runs 2 and 3 did not hold it (below). It moved correctness past Opus high (8.8 / 8.4) and kept the lead on tests.
 - The direct panel says part of that swing is the probe and part is run-to-run noise: probe against old is 4 to 3, with correctness the clearest gain. One run per task; read a two-win gap as noise.
 - The probe did not cut the review's send-backs (8 of 10 in all three auto arms) or the time. auto is still about 1.8 times slower than Opus high (118 s against 65 s per task).
 - Haiku at high on top of the probe was worse: fewer wins, 39% slower and 63% more Haiku spend. auto stays at medium.
 - CC Opus high won hard-csv-stream and hard-memo-async in every panel, and hard-pool in two of three.
 
 Spent: $0.27 Haiku (opencode-go). Claude Code Opus high ($2.56), plan and review ($3.22) and four panels ($5.60) ran at API price on the owner's subscription.
+
+## Three runs per task (auto + probe against CC Opus high)
+
+The 6-to-3 above was one run per task. Runs 2 and 3 of both sides: `auto-probe-r23.jsonl` and `cc-opus-high-r23.jsonl` (the files number them 1 and 2; the panel calls them 2 and 3). Panel: `judge-probe-r23/` (`judge.py` takes `RUNS=2,3`). Tally over all three runs: `python3 judge-probe-r23/tally.py judge-probe-r23 probe judge-probe`.
+
+| 30 runs | wins / losses / tie or split | review sent back | time per task | cost per task at API price |
+|---|---|---|---|---|
+| runs 2 and 3 only | 7 / 12 / 1 | 14 of 20 | | |
+| **runs 1 to 3** | **13 / 15 / 2** | 22 of 30 | 119 s against 70 s | $0.16 against $0.27 |
+
+| runs 1 to 3 | correctness | quality | scope | tests | security |
+|---|---|---|---|---|---|
+| auto + probe / CC Opus high | 8.52 / 8.42 | 7.92 / 8.22 | 9.00 / 8.83 | 6.60 / 5.60 | 9.02 / 8.93 |
+
+By task over three runs:
+- CC Opus high won every run of hard-csv-stream, hard-memo-async and hard-pool.
+- auto won every run of hard-ledger and hard-sse.
+- The other five went both ways.
+
+What it says:
+- auto + probe is about even with Claude Code Opus at effort high, not ahead: 13 to 15. The one-run 6 to 3 was a lucky draw.
+- Correctness is level (8.52 / 8.42). auto writes better tests (6.60 / 5.60). CC Opus high writes cleaner code (8.22 / 7.92).
+- auto costs 40% less at API price, and only its Haiku ($0.01 per task) is billed. It is 1.7 times slower, and the review still sends 22 of 30 back.
+- Where CC wins, it wins every time, on the same three tasks. That is the gap to work on, along with time.
+
+Spent for this section: $0.19 Haiku (opencode-go). Claude Code Opus high ($5.43), plan and review ($3.02) and the panel ($2.78) ran at API price on the owner's subscription.
