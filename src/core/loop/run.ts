@@ -618,6 +618,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
         // never consume retries.
         const step = Math.min(quotaWait, recheckMs, (opts.quotaWaitMs ?? 0) - quotaWaited);
         if (step <= 0) return finish('error_during_execution', 'error', got.error.message);
+        log.append({ kind: 'retry', requestId: request.id, n, waitMs: step, code: got.error.code, ...(got.error.status !== undefined ? { status: got.error.status } : {}) });
         await sleep(step);
         timing.retryMs += step;
         if (signal.aborted) return finish('interrupted', 'aborted');
@@ -626,6 +627,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
         continue;
       } else {
         if (wait >= WAIT_SAY_MS) opts.onWait?.(wait);
+        log.append({ kind: 'retry', requestId: request.id, n, waitMs: wait, code: got.error.code, ...(got.error.status !== undefined ? { status: got.error.status } : {}), of: retryMax });
         await sleep(wait);
         timing.retryMs += wait;
         if (signal.aborted) return finish('interrupted', 'aborted');

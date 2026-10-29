@@ -2480,6 +2480,60 @@
           "properties": {
             "kind": {
               "type": "string",
+              "const": "retry"
+            },
+            "requestId": {
+              "$ref": "#/definitions/EventId"
+            },
+            "n": {
+              "type": "number"
+            },
+            "waitMs": {
+              "type": "number"
+            },
+            "code": {
+              "$ref": "#/definitions/AttemptErrorCode"
+            },
+            "status": {
+              "type": "number"
+            },
+            "of": {
+              "type": "number"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "code",
+            "id",
+            "kind",
+            "n",
+            "parentId",
+            "requestId",
+            "waitMs"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
               "const": "assistant"
             },
             "wire": {

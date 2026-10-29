@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { addPick, pickBoost, readPicks, savePick } from '../src/clients/tui-ink/picks.ts';
-import { sinceLabel } from '../src/clients/tui-ink/when.ts';
+import { retryLabel, sinceLabel } from '../src/clients/tui-ink/when.ts';
 import { bindingSummary } from '../src/clients/tui-ink/keybindings/summary.ts';
 
 const DAY = 24 * 3600_000;
@@ -61,5 +61,14 @@ describe('bindingSummary', () => {
   test('names each rebound key with what it does', () => {
     expect(bindingSummary([])).toBe('');
     expect(bindingSummary([{ key: 'ctrl+j', command: 'submit' }, { key: 'ctrl+k', command: 'palette' }])).toBe('ctrl+j send · ctrl+k palette');
+  });
+});
+
+describe('retryLabel', () => {
+  test('says what failed, when it goes again and which attempt that is; a quota wait counts no attempts', () => {
+    expect(retryLabel({ n: 2, waitMs: 8_000, code: 'overloaded', status: 529, of: 5 })).toBe('overloaded (529), retrying in 8s, attempt 3 of 5');
+    expect(retryLabel({ n: 1, waitMs: 1234, code: 'rate_limit', status: 429, of: 5 })).toBe('rate limit (429), retrying in 1s, attempt 2 of 5');
+    expect(retryLabel({ n: 1, waitMs: 90_000, code: 'network', of: 5 })).toBe('network, retrying in 2m, attempt 2 of 5');
+    expect(retryLabel({ n: 4, waitMs: 300_000, code: 'quota', status: 429 })).toBe('quota (429), checking again in 5m');
   });
 });

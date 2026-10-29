@@ -67,6 +67,10 @@ type EventBody =
     }
   // ttftMs: until the provider starts streaming; ms: the whole attempt.
   | { kind: 'attempt'; requestId: EventId; n: number; error?: AttemptError; ttftMs?: number; ms?: number }
+  // A failed attempt n is followed by this wait before the next one, so a client can say why the run is quiet
+  // ("overloaded, retrying in 8s, 2 of 5"). of: the most attempts the run makes; absent for a spent quota, whose
+  // waits do not count against it. Nothing reaches the model.
+  | { kind: 'retry'; requestId: EventId; n: number; waitMs: number; code: AttemptErrorCode; status?: number; of?: number }
   // costUsd: what this reply cost at the model's price when it ran, so a client can show a run's spend as it grows.
   | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; costUsd?: number }
   // The request's body sent again with no output while a tool runs long, so its cached prefix does not expire

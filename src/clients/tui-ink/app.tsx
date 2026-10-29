@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useInput, useApp, useWindowSize, useStdin, useStdout } from 'ink';
 import { selectedPrefix, useCediaScreenReader } from './a11y.ts';
 import { readPicks, savePick, pickBoost } from './picks.ts';
-import { sinceLabel } from './when.ts';
+import { retryLabel, sinceLabel } from './when.ts';
 import { bindingSummary } from './keybindings/summary.ts';
 import { buildAutoItems, menuStart, highlightSpans, paintRuns, truncateDescription, truncateLongText, estimateLines, offsetAt, type AutoItem } from './autocomplete.ts';
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
@@ -511,6 +511,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         next[i] = row;
         return next;
       });
+    } else if (e.kind === 'retry') {
+      // The next attempt is logged only when it ends, so the line goes back to waiting when the wait is over.
+      const label = retryLabel(e);
+      setActivity(label);
+      setTimeout(() => setActivity((a) => (a === label ? 'waiting for model' : a)), e.waitMs);
     } else if (e.kind === 'snapshot') {
       for (const f of e.changed) turnRef.current.files.add(f);
     } else if (e.kind === 'permission' && e.decision === 'deny') {

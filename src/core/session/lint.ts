@@ -43,6 +43,10 @@ export function lintSession(events: SessionEvent[]): LintFinding[] {
           if (!e.error) pendingRequest.ok = true;
         }
         break;
+      case 'retry':
+        // A wait follows the failed attempt it names, before the next one.
+        if (!pendingRequest || e.requestId !== events[pendingRequest.at]!.id || pendingRequest.ok || e.n !== pendingRequest.attempts) add(i, 'request-attempt', `retry after attempt n=${e.n} does not follow that failed attempt of the open request`);
+        break;
       case 'assistant':
         if (!pendingRequest || pendingRequest.attempts === 0) add(i, 'request-attempt', 'assistant event without a request and attempt before it');
         if (pendingRequest && !pendingRequest.ok && e.stop !== 'aborted') add(i, 'request-attempt', 'assistant event after failed attempts only');

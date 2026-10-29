@@ -219,6 +219,13 @@ describe('loop', () => {
     expect(sleeps).toEqual([1234, 2000]);
     expect(of(log.events, 'attempt').map((a) => [a.n, a.error?.code])).toEqual([[1, 'rate_limit'], [2, 'overloaded'], [3, undefined]]);
     expect(of(log.events, 'request')).toHaveLength(1);
+    // Each wait is logged after the attempt it follows, so a client can say why the run is quiet.
+    expect(of(log.events, 'retry')).toEqual([
+      { kind: 'retry', requestId: of(log.events, 'request')[0]!.id, n: 1, waitMs: 1234, code: 'rate_limit', status: 429, of: 5 },
+      { kind: 'retry', requestId: of(log.events, 'request')[0]!.id, n: 2, waitMs: 2000, code: 'overloaded', status: 529, of: 5 },
+    ].map((r) => expect.objectContaining(r)));
+    expect(kinds(log.events).slice(2, 8)).toEqual(['request', 'attempt', 'retry', 'attempt', 'retry', 'attempt']);
+    expect(lintSession(log.events)).toEqual([]);
   });
 
   // Claude Code's retry watchdog waits for a usage limit to reset, up to a ceiling (2.1.295, 2.1.301, 2.1.305).
@@ -232,6 +239,8 @@ describe('loop', () => {
     expect(waited.sleeps).toEqual([5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN]);
     expect(waits).toEqual([5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN]);
     expect(of(waited.log.events, 'attempt').map((a) => a.error?.code)).toEqual(['quota', 'quota', 'quota', 'quota', undefined]);
+    // A quota wait counts against no attempt limit, so its retry event names none.
+    expect(of(waited.log.events, 'retry').map((r) => [r.waitMs, r.code, r.of])).toEqual(Array(4).fill([5 * MIN, 'quota', undefined]));
     // A limit lifted before its reset ends the wait at the next slice, not at the reset.
     const early = setup([spent(20 * MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN });
     expect(await runPrompt(early.opts, 'hi')).toMatchObject({ subtype: 'success', timing: { retryMs: 5 * MIN } });
