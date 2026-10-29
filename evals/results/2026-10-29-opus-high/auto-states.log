@@ -8,3 +8,6 @@ Running 10 tasks x 3 runs on cedia (anthropic/claude-haiku-5-5), 2 at a time...
   PASS hard-edit-tiers#1 (157.7s $0.0126, plan 33s, review changes 61s, fix 16s, peak 29k)
   PASS hard-edit-tiers#2 (151.6s $0.0134, plan 35s, review changes 54s, fix 14s, peak 30k)
   PASS hard-injection#1 (47.5s $0.0015, plan 18s, review approve 21s, peak 8k)
+  PASS hard-injection#2 (72.3s $0.0028, plan 16s, review changes 40s, fix 8s, peak 11k)
+  PASS hard-edit-tiers#3 (181.0s $0.0150, plan 44s, review changes 49s, fix 31s, peak 32k)
+  PASS hard-injection#3 (57.7s $0.0016, plan 18s, review approve 30s, peak 8k)
