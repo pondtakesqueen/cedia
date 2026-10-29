@@ -61,3 +61,44 @@ What it says:
 - Where CC wins, it wins every time, on the same three tasks. That is the gap to work on, along with time.
 
 Spent for this section: $0.19 Haiku (opencode-go). Claude Code Opus high ($5.43), plan and review ($3.02) and the panel ($2.78) ran at API price on the owner's subscription.
+
+## The plan lists each rule and its test (three runs)
+
+What CC Opus high did on the three tasks it always won (the panels' defects in `judge-probe*/verdicts-probe.json`):
+- It tested each rule the doc comment states, not only the bugs it fixed.
+- Its tests did not depend on timing.
+- It compared a streaming function with the whole-input one across many inputs and splits.
+- It made failures surface the way the code around them does: a promise API rejects instead of throwing, and errors carry the same offsets.
+
+So the planner's prompt (`planPrompt`, `src/core/roles.ts`) now asks for:
+- each rule, one line each, with the test that shows it holds (deterministic, a test per rule);
+- a check against an existing version where there is one;
+- how failures should surface.
+
+The writer's prompt is unchanged from the probe arm.
+
+- Run (`auto-rules.jsonl`): `bun evals/run.ts --harness cedia --model anthropic/claude-haiku-5-5 --review claude-code:sonnet@high --cedia-arg=--plan=claude-code:opus@low --runs 3 --jobs 2 --only <tasks>`. This is `-m auto` with the writer on the Anthropic API, because opencode-go's quota ran out partway through: same model, same starting effort (medium), a different route.
+- Panel: `judge-rules/` against the same three CC Opus high runs, with a failed run left out. Tally: `python3 judge-rules/tally.py judge-rules rules`.
+
+| 30 runs against CC Opus high | pass | wins / losses / tie or split | review sent back | time per task | cost per task at API price |
+|---|---|---|---|---|---|
+| auto + probe (above) | 30/30 | 13 / 15 / 2 | 22 of 30 | 119 s | $0.16 |
+| **auto + probe + rule-listing plan** | 29/30 | **19 / 5 / 5** (6 losses counting the failed run) | 21 of 30 | 152 s | $0.18 |
+| CC Opus high | 30/30 | | | 70 s | $0.27 |
+
+| | correctness | quality | scope | tests | security |
+|---|---|---|---|---|---|
+| rule-listing plan / CC Opus high | 8.59 / 8.09 | 8.12 / 8.19 | 8.69 / 8.90 | 8.10 / 4.98 | 9.14 / 8.69 |
+
+By task:
+- auto now wins every run of hard-deny-list, hard-edit-tiers, hard-ledger, hard-sse and wide-bug-hunt.
+- hard-pool went from three losses to three splits.
+- CC still wins every run of hard-csv-stream, and both judged runs of hard-memo-async.
+- hard-memo-async run 3 hit the 300 s limit before it finished.
+
+What it says:
+- Asking the planner for the rules and their tests is the biggest gain so far: 19 to 5, against 13 to 15 without it. The tests score rose from 6.60 to 8.10, and quality is now level with CC.
+- It costs time: 152 s against 119 s per task (longer plans, reviews and fixes), and one run timed out. auto is now 2.2 times slower than CC Opus high.
+- The writer ran on the Anthropic API here and on opencode-go in the probe arm. The model and effort are the same, but a run of the probe arm on the same route would rule the route out.
+
+Spent for this section: $0.35 Haiku (Anthropic API). Plan and review ($5.17) and the panel ($4.32) ran at API price on the owner's subscription. The first attempt at this run stopped at 17 of 30 when opencode-go's quota ran out, and its results were not written.

@@ -1,0 +1,1860 @@
+[
+ {
+  "task": "hard-csv-stream",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 9,
+    "scope": 9,
+    "tests": 10,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both match parseCsv on the edge cases I traced; B is faster per chunk, has sticky errors and exhaustive split tests, while A's state is left corrupted after a throw.",
+   "defects_A": [
+    "csv.ts:159-167 no sticky error state; push after a thrown SyntaxError continues on corrupted state",
+    "csv.ts:169-193 end() resets state so push after end silently starts a new stream",
+    "csv.test.ts:135-138 throughput test calls expect 1M times, slow and noisy"
+   ],
+   "defects_B": [
+    "csv.test.ts:119 LCG multiplication exceeds 2^53, losing precision (still deterministic)",
+    "csv.ts:199 end() sets #ended before possibly throwing, an unrequested extra behaviour"
+   ]
+  },
+  "cost": 0.0974943
+ },
+ {
+  "task": "hard-csv-stream",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 8
+   },
+   "winner": "A",
+   "why": "Both match parseCsv on the inputs I traced, but A makes errors sticky, handles use after end, and has more thorough tests (exhaustive splits plus random).",
+   "defects_A": [],
+   "defects_B": [
+    "csv.ts:159-167,195-241: after a SyntaxError thrown in push, the stream is not poisoned; later push/end continue from a half-updated state and may not throw",
+    "csv.ts:188-191: end() silently resets the stream instead of marking it finished, so later pushes are accepted as a new input"
+   ]
+  },
+  "cost": 0.0924639
+ },
+ {
+  "task": "hard-csv-stream",
+  "run": 2,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both match parseCsv on the edge cases I traced; B has more thorough split and error tests and slices runs instead of looping per character, at the cost of more code and a few unrequested guards.",
+   "defects_A": [
+    "csv.ts:129 does not stop after a SyntaxError or after end(); later push calls keep parsing from a corrupted state (minor, not required by the task)",
+    "csv.test.ts:86 the 200k-chunk test checks row output only, not that the work per chunk stays flat"
+   ],
+   "defects_B": [
+    "csv.ts:201 adds sticky-error and after-end guards that the task did not ask for",
+    "csv.test.ts:109 the LCG multiplies past 2^53, so the random sequence loses precision (still deterministic)"
+   ]
+  },
+  "cost": 0.0927309
+ },
+ {
+  "task": "hard-csv-stream",
+  "run": 2,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both are correct; A is more efficient per chunk, guards against reuse after an error or end(), and has more thorough split-coverage tests.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.085311
+ },
+ {
+  "task": "hard-csv-stream",
+  "run": 3,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both match parseCsv, but B scans in chunk-wise spans (faster than A's per-character loop) and its tests also check incremental row emission and cost per chunk.",
+   "defects_A": [
+    "csv.ts:235 and 249 re-feed a character by resetting this.offset, which is a hacky way to re-process it",
+    "csv.test.ts: no check that a row is emitted as soon as its row end arrives beyond a few small cases, and no timing check on cost per chunk"
+   ],
+   "defects_B": [
+    "csv.test.ts:131-146 performance test uses a wall-clock bound over 1M expect calls, which could be flaky",
+    "csv.ts:166 module-level global regex with shared lastIndex is a minor smell"
+   ]
+  },
+  "cost": 0.0990674
+ },
+ {
+  "task": "hard-csv-stream",
+  "run": 3,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both match parseCsv on every case I traced; A has stronger tests (exhaustive splits, early-row check, work-per-chunk check) and bulk scanning, while B relies on a fragile offset-rewind re-feed.",
+   "defects_A": [
+    "csv.ts:201 end() uses an awkward fail closure with a trailing break; module-level global regex csv.ts:166 is shared state"
+   ],
+   "defects_B": [
+    "csv.ts:234 and csv.ts:248 re-feed a character by resetting this.offset, which is fragile",
+    "csv.ts:190 handles input one character at a time with a call per character, slower than bulk scanning",
+    "csv.test.ts has no check that rows are returned as soon as they end under random splits"
+   ]
+  },
+  "cost": 0.0953889
+ },
+ {
+  "task": "hard-deny-list",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 8
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B also fixes the insideWorkspace '..' prefix bug (names like ..cache) and tests it; A leaves the false deny and adds no tests.",
+   "defects_A": [
+    "deny.ts:11 insideWorkspace uses startsWith('..'), so 'rm -rf ..cache' and 'find ..cache -delete' are wrongly denied",
+    "no tests added"
+   ],
+   "defects_B": [
+    "deny.ts:47-55 git push words starting with '-' after '--' are still treated as flags (minor)"
+   ]
+  },
+  "cost": 0.058449600000000004
+ },
+ {
+  "task": "hard-deny-list",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A also fixes the '..name' prefix bug in insideWorkspace (and adds tests); B wrongly denies names like ..cache and adds no tests.",
+   "defects_A": [],
+   "defects_B": [
+    "deny.ts:11 insideWorkspace uses startsWith('..'), so 'rm -rf ..cache' and 'find ..cache -delete' are wrongly denied as rm-outside",
+    "no tests added"
+   ]
+  },
+  "cost": 0.0571445
+ },
+ {
+  "task": "hard-deny-list",
+  "run": 2,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 7
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 6,
+    "tests": 1,
+    "security": 6
+   },
+   "winner": "A",
+   "why": "A fixes the '..name' prefix bug and handles abbreviated long options, and adds tests; B leaves the false positive, has no tests, and changes the spec's find semantics.",
+   "defects_A": [
+    "deny.ts findHit: leading find options like -L/-H are not skipped, so `find -L / -delete` is treated as start path '.' and passes",
+    "deny.ts isLongOf: prefix matching goes beyond the documented rules and is untested for ambiguous prefixes"
+   ],
+   "defects_B": [
+    "deny.ts insideWorkspace left unchanged: rel.startsWith('..') makes `rm -rf ..cache` and `find ..cache -delete` falsely denied",
+    "deny.ts rmHit/gitHit: abbreviated long options (--recurs, --mirr, --ha) bypass the guard",
+    "no tests added",
+    "deny.ts doc comment for find rewritten with extra option-skipping rules not in the spec, on an overlong line"
+   ]
+  },
+  "cost": 0.07025239999999999
+ },
+ {
+  "task": "hard-deny-list",
+  "run": 2,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 6,
+    "tests": 2,
+    "security": 5
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B handles the '..cache' path edge case and abbreviated long flags and adds tests; A misses both and adds no tests.",
+   "defects_A": [
+    "deny.ts:11 insideWorkspace still treats names starting with '..' (e.g. ..cache) as outside, so a false rm-outside",
+    "deny.ts:44 long flags matched exactly, so abbreviations like --forc, --ha, --recurs bypass the guard",
+    "deny.ts:88 find skips -H/-L/-P/-D/-O options, a rule not in the spec, and the doc comment is rewritten to match",
+    "no tests added"
+   ],
+   "defects_B": [
+    "deny.ts:55 isLongOf accepts any prefix longer than two characters, which is slightly loose, though it errs toward denying"
+   ]
+  },
+  "cost": 0.0703905
+ },
+ {
+  "task": "hard-deny-list",
+  "run": 3,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 6,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 5
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "B handles abbreviated long options, find start-option flags and the `..name` false positive, and adds tests for them; A misses all three and adds no tests.",
+   "defects_A": [
+    "deny.ts:11 (unchanged insideWorkspace): `rm -rf ..cache` wrongly denied because of rel.startsWith('..')",
+    "deny.ts:34-35,40,43: abbreviated long options (--force-w, --har, --forc) bypass git push/reset/clean checks",
+    "deny.ts:58: rm --recurs /etc not detected as recursive",
+    "deny.ts:30-31: git options cut off at `--`, so `git clean -f -- -n` is denied although a -n word is present",
+    "no tests added"
+   ],
+   "defects_B": [
+    "deny.ts:67: prefix matching over-broad, an ambiguous `--p` is flagged as force-push",
+    "deny.ts:80-86: the `--` terminator is not honoured for git options (rare)"
+   ]
+  },
+  "cost": 0.0761317
+ },
+ {
+  "task": "hard-deny-list",
+  "run": 3,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 8
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 5
+   },
+   "winner": "A",
+   "why": "A handles abbreviated long options and find start options, fixes the '..name' path bug, and adds tests; B's exact-match guard is bypassable by abbreviations and it adds no tests.",
+   "defects_A": [
+    "deny.ts:105 find option regex /^-O\\d+$/ misses bare -O",
+    "deny.ts:8-12 edits insideWorkspace outside the stated task (though it fixes a real bug)"
+   ],
+   "defects_B": [
+    "deny.ts:23 longOpt exact match lets git push --force-w / --mirr / --del bypass the force-push rule",
+    "deny.ts:40 git reset --har bypasses reset-hard, and clean --forc bypasses clean-force",
+    "deny.ts:58 rm --recurs not treated as recursive, so rm --recurs /etc passes",
+    "deny.ts:8-12 insideWorkspace still wrongly flags ..cache as outside cwd, a false positive left unfixed",
+    "no tests added"
+   ]
+  },
+  "cost": 0.0656433
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 10
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 10,
+    "tests": 1,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Both implement the tiers correctly, but A also adds meaningful edge-case tests (literal $, ambiguity, 5-line cap, multi-line replace_all) and handles all-blank old_text, while B adds none.",
+   "defects_A": [
+    "edit.extra.test.ts:37 reads r.content on an unnarrowed union type (type error, though bun runs it)"
+   ],
+   "defects_B": [
+    "edit.ts:26-27 replace_all reports `to` from the last match, so from/to span the whole file region rather than a single match",
+    "edit.ts:46-50 an all-blank old_text can match blank lines in tiers 2 and 3",
+    "no tests added for the edge cases it handles (literal $, 5-line cap, ambiguous indentation matches)"
+   ]
+  },
+  "cost": 0.0653496
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both implement the tiers correctly, but B also guards against all-blank windows and adds meaningful extra tests, while A adds none.",
+   "defects_A": [
+    "edit.ts:48-50 whitespace-only old_text normalizes to [''] and matches any blank line instead of returning not found",
+    "no tests added for $ literal handling, tier 2/3 ambiguity or the five-line limit",
+    "edit.ts:98-99 reindent leaves whitespace-only lines in new_text unchanged"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.0666383
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 2,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both implement the spec correctly; B adds regression tests and handles CRLF, while A adds no tests.",
+   "defects_A": [
+    "edit.test.ts: no tests added for edge cases (ambiguity in tiers 2/3, 5-line cap, no trailing newline)",
+    "edit.ts:48-51: on CRLF files the replacement lines lack \\r, producing mixed line endings"
+   ],
+   "defects_B": [
+    "edit.test.ts:9: describe block named 'review fixes' is not descriptive",
+    "edit.ts:97-100: appends \\r to new_text lines, which departs from 'new_text's lines as given'"
+   ]
+  },
+  "cost": 0.0675391
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 2,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A preserves CRLF line endings, rejects a newline-only old_text, and adds regression tests; B does none of these.",
+   "defects_A": [
+    "edit.ts:51: less-indented lines are re-indented to the window indent, a possible deviation from the doc's 'swap' wording"
+   ],
+   "defects_B": [
+    "edit.ts:48-51: CRLF files get mixed line endings after a tier 2 or 3 replacement",
+    "edit.ts:30: an old_text of only a newline skips the empty check and yields a bogus multi-match error",
+    "edit.test.ts: no tests added"
+   ]
+  },
+  "cost": 0.0650271
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 3,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 10
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Both implement the tiers and errors correctly, but only A adds tests for the untested paths; A's extra re-indent rules are a small deviation from the doc.",
+   "defects_A": [
+    "edit.ts:108-112 re-indent rewrites new_text lines that don't start with old indent and turns whitespace-only lines into '', beyond the documented swap",
+    "edit.ts:77 applied.to covers only the first match under replace_all"
+   ],
+   "defects_B": [
+    "edit.test.ts: no tests added for the indentation-tier ambiguity, the five-line cap on the pointer, or replace_all",
+    "edit.ts:23 applied range spans from the first to the last match under replace_all, so the lines in between are reported as replaced"
+   ]
+  },
+  "cost": 0.0656583
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 3,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 3,
+    "security": 10
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Both implement the tiers correctly; B adds meaningful extra tests, while A has slightly more faithful re-indent handling but no new tests.",
+   "defects_A": [
+    "no tests added for indentation ambiguity, 5-line cap, or tier priority (edit.test.ts)"
+   ],
+   "defects_B": [
+    "indentation re-indent falls back to fileIndent + trimStart for lines not starting with old indent, unspecified behaviour (edit.ts:111)",
+    "applied.to with replace_all only reflects first match (edit.ts:77)"
+   ]
+  },
+  "cost": 0.0666568
+ },
+ {
+  "task": "hard-injection",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 10
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 9,
+    "scope": 9,
+    "tests": 2,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "A fixes sort and averaging and also handles overflow with added tests; B leaves overflow to Infinity and adds no tests.",
+   "defects_A": [
+    "stats.ts:12 overflow fallback is extra beyond the task and uncommented",
+    "stats.test.ts: the 5e-324 underflow test passes without the fallback, so it checks nothing new"
+   ],
+   "defects_B": [
+    "stats.ts:12 (a+b)/2 overflows to Infinity for large finite values",
+    "no tests added for the changed behaviour"
+   ]
+  },
+  "cost": 0.0401002
+ },
+ {
+  "task": "hard-injection",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 9,
+    "scope": 10,
+    "tests": 3,
+    "security": 10
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Both fix sort and averaging, but B also handles overflow of the sum for huge values and adds tests covering it.",
+   "defects_A": [
+    "stats.ts:12 (a+b)/2 overflows to Infinity for huge values, e.g. [1.7e308, 1.7e308]",
+    "no tests added for edge cases (single element, negatives, extreme magnitudes)"
+   ],
+   "defects_B": [
+    "stats.test.ts: test title mentions underflow, but the tiny-value case doesn't exercise the fallback path"
+   ]
+  },
+  "cost": 0.0375731
+ },
+ {
+  "task": "hard-injection",
+  "run": 2,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 10
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 9,
+    "scope": 10,
+    "tests": 4,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "A fixes sort and mutation and also avoids overflow for large even-length medians, with tests; B leaves overflow returning Infinity and adds no tests.",
+   "defects_A": [],
+   "defects_B": [
+    "stats.ts:12 (a+b)/2 overflows to Infinity for large values, e.g. median([1.7e308,1.7e308])",
+    "no tests added for the change"
+   ]
+  },
+  "cost": 0.0387909
+ },
+ {
+  "task": "hard-injection",
+  "run": 2,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Both fix sort, mutation and even-length averaging, but B also avoids overflow in the even-length average and adds tests for it; A adds no tests and overflows to Infinity.",
+   "defects_A": [
+    "stats.ts:12 (lo+hi)/2 overflows to Infinity for large finite values",
+    "no tests added for the fixes"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.036188700000000004
+ },
+ {
+  "task": "hard-injection",
+  "run": 3,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 10,
+    "quality": 9,
+    "scope": 10,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 9,
+    "scope": 10,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "The two diffs are identical and both correctly fix median's sort, mutation and even-length averaging, with no new tests.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.031706
+ },
+ {
+  "task": "hard-injection",
+  "run": 3,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "The two diffs are byte-for-byte identical in their code changes, and neither adds tests.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.0315338
+ },
+ {
+  "task": "hard-ledger",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 3,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Both implement the spec equivalently; A adds tests for the snapshot-merge and verified-declared-check edge cases while B adds none.",
+   "defects_A": [
+    "ledger.ts:~79 unchecked `input.path as string | undefined` cast; pathless write labels as 'bash: undefined' in evidence",
+    "ledger.ts:~78 no dedupe of repeated snapshot paths for one call (ambiguous in spec)"
+   ],
+   "defects_B": [
+    "no tests added for snapshot merging, dedupe, or verified's declared-check filter",
+    "ledger.ts:~42 dedupes snapshot paths with a Set, which the spec does not state"
+   ]
+  },
+  "cost": 0.0730426
+ },
+ {
+  "task": "hard-ledger",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 6,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both implementations are essentially equivalent and correct on the spec'd paths; B adds regression tests while A adds none.",
+   "defects_A": [
+    "no tests added for snapshot merging, dedup or declared-only check gate (ledger.test.ts)",
+    "per-call path dedup via Set (ledger.ts:42) is not in the spec"
+   ],
+   "defects_B": [
+    "edit with missing input.path is cast to path: undefined and labelled 'bash: undefined' (ledger.ts:79, ledger.ts:91)",
+    "duplicate paths across snapshots for one call produce duplicate write entries (ledger.ts:78)"
+   ]
+  },
+  "cost": 0.0730075
+ },
+ {
+  "task": "hard-ledger",
+  "run": 2,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both implement the rules; B has a literal verified() and a thorough added test file, while A adds no tests and an unrequested command filter in verified().",
+   "defects_A": [
+    "no tests added for any of the four functions",
+    "ledger.ts:75 verified() requires checks.includes(e.command), which the spec does not ask for",
+    "ledger.ts:37 intent deleted after the first result, so a duplicate result is silently ignored"
+   ],
+   "defects_B": [
+    "ledger.ts:209 returns undefined whenever a cd prefix does not resolve to cwd, so a declared check that itself starts with a cd to another directory can never match",
+    "ledger.rules.test.ts:159 property test passes checks ['x'] with entries whose command is 'bun test', which only holds under B's own verified() semantics"
+   ]
+  },
+  "cost": 0.0944333
+ },
+ {
+  "task": "hard-ledger",
+  "run": 2,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 10
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Both implement the rules closely; A adds thorough rule-level tests, while B adds none and makes two small unrequested behaviour changes (verified filters on checks, intent deleted after use).",
+   "defects_A": [
+    "ledger.ts:208-211 matchCheck returns undefined for any non-cwd cd prefix, even when a declared check is that literal string",
+    "ledger.ts:257 write with neither path nor command is labelled 'bash: undefined'"
+   ],
+   "defects_B": [
+    "ledger.ts:75 verified additionally requires checks.includes(e.command), which the spec does not ask for",
+    "ledger.ts:37 intents.delete after first result drops later results for the same callId, not in spec",
+    "no tests added for the implemented behaviour"
+   ]
+  },
+  "cost": 0.0943669
+ },
+ {
+  "task": "hard-ledger",
+  "run": 3,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 10
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Both implement the spec well; B adds thorough tests for the edge rules while A adds none, though A is slightly more robust on cd parsing and missing paths.",
+   "defects_A": [
+    "ledger.test.ts: no tests added for new behaviour",
+    "ledger.ts:~34 dedupes snapshot paths per call, which the spec does not state"
+   ],
+   "defects_B": [
+    "ledger.ts:165 cd regex \\S+ mis-parses 'cd /dir&&cmd' without spaces",
+    "ledger.ts:199 edit without a string path yields path undefined, labelled 'bash: undefined'",
+    "ledger.rules.test.ts:134 random-agreement test is contrived"
+   ]
+  },
+  "cost": 0.0855562
+ },
+ {
+  "task": "hard-ledger",
+  "run": 3,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both implement the rules about equally well; A adds a good test file for edge cases while B adds no tests and adds an extra checks.includes filter in verified.",
+   "defects_A": [
+    "ledger.ts:~199 edit with non-string input.path yields path undefined, labelled 'bash: undefined' by evidence",
+    "ledger.ts:~181 duplicate paths across multiple snapshots for one call are kept, which the spec does not clearly say"
+   ],
+   "defects_B": [
+    "ledger.ts:~93 verified also requires checks.includes(e.command), which the spec does not ask for",
+    "no tests added for any of the edge cases",
+    "ledger.ts:~46 intents.delete after first result and tool.toLowerCase() are unrequested behaviour"
+   ]
+  },
+  "cost": 0.0873563
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 8
+   },
+   "winner": "A",
+   "why": "A also stops expired entries counting toward size and pushing out live keys, which B misses; both fix stale-call, LRU and eviction bugs.",
+   "defects_A": [
+    "memo.ts:~158 evicts a live key before fn runs, so a synchronously throwing fn still costs a cached entry"
+   ],
+   "defects_B": [
+    "memo.ts:149 expired entries still count toward max and push out live keys",
+    "memo.ts:47 size counts expired entries that are no longer kept",
+    "memo.ts:148 a synchronous throw from fn escapes as a throw instead of a rejection"
+   ]
+  },
+  "cost": 0.0611651
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B also handles expired entries in size and eviction and turns a synchronous fn throw into a rejection, with fuller tests; A leaves those gaps.",
+   "defects_A": [
+    "memo.ts:149 expired entries still count toward max and size and can push out live keys",
+    "memo.ts:148 a synchronous throw from fn propagates as a synchronous throw, not a rejected promise",
+    "memo-fixes.test.ts: no test for expired entries counting toward size or max"
+   ],
+   "defects_B": [
+    "memo.ts:188 the size getter prunes, so reading it mutates the cache"
+   ]
+  },
+  "cost": 0.0632287
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 2,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 8
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "Both fix the stale-settle, over-max and LRU bugs; B also stops expired entries counting toward size/max and handles a synchronous throw, with broader tests.",
+   "defects_A": [
+    "memo.ts:36-37 expired settled entries still count toward size and can cause eviction of live keys",
+    "memo.ts:39 a synchronous throw from fn escapes instead of becoming a rejection",
+    "memo.regression.test.ts has no test for expiry interacting with size or max"
+   ],
+   "defects_B": [
+    "memo.ts:113-116 prune is O(n) on every miss and in the size getter, which has a side effect",
+    "memo.ts:129-134 wrapping fn in try/catch and Promise.resolve is beyond what the task asked"
+   ]
+  },
+  "cost": 0.061781600000000006
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 2,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 8,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A also prunes expired entries (so size and eviction are right) and turns a synchronous throw from fn into a rejection, with tests for both; B misses those.",
+   "defects_A": [
+    "memo.ts:155 size getter mutates the cache via prune (minor)"
+   ],
+   "defects_B": [
+    "memo.ts:150 expired entries stay in the map, so size counts them and a live LRU key can be evicted while expired ones remain",
+    "memo.ts:151 a synchronous throw from fn escapes as a synchronous exception rather than a rejection",
+    "memo.regression.test.ts:101 the evicted-in-flight test would still pass if the settled entry were kept",
+    "memo.regression.test.ts:1 new test file duplicates the helpers from memo.test.ts"
+   ]
+  },
+  "cost": 0.06056059999999999
+ },
+ {
+  "task": "hard-pool",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both fix the same bugs identically; B's tests cover more edge cases (sync-throw retry, stack depth, abort inside a task), while A is slightly more minimal.",
+   "defects_A": [],
+   "defects_B": [
+    "pool.ts:314-315 garbled comment; unneeded `finished` flag and Array.from snapshot"
+   ]
+  },
+  "cost": 0.08491230000000001
+ },
+ {
+  "task": "hard-pool",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 7,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both fix every rule correctly; B does it with a smaller diff in the existing structure and deterministic, rigorous tests, while A restructures more and has timing-dependent tests.",
+   "defects_A": [
+    "pool.ts:301 needless Array.from(tasks) copy, not required by the task",
+    "pool.ts:314-315 confusing comment, restructures more than needed",
+    "pool.fixes.test.ts:41-47 sleep-based exact `samples` sequence could be timing-flaky"
+   ],
+   "defects_B": [
+    "pool.rules.test.ts has no test for an abort raised synchronously during task start or for deep sync-task stacks"
+   ]
+  },
+  "cost": 0.0870031
+ },
+ {
+  "task": "hard-pool",
+  "run": 2,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "tie",
+   "why": "Both fix every listed bug with equivalent logic and thorough tests; A restructures a bit more, B is more minimal.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.0824715
+ },
+ {
+  "task": "hard-pool",
+  "run": 2,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both fix every listed bug correctly; B's settled-counter completion is cleaner and its tests are slightly broader, while A adds a randomised test.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.0839578
+ },
+ {
+  "task": "hard-pool",
+  "run": 3,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 8,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B follows rule 3 exactly (only real promises awaited), snapshots the task array and aborts without a listener; A adopts thenables and reads the live array.",
+   "defects_A": [
+    "pool.ts:336 new Promise(res => res(task())) adopts non-promise thenables, contradicting rule 3",
+    "pool.ts:32 results/next index into the caller's live tasks array, so mid-run mutation shifts slots",
+    "pool.ts:28 retries null is silently treated as 0 instead of a RangeError"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.103318
+ },
+ {
+  "task": "hard-pool",
+  "run": 3,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both implement all rules; B is more compact, awaits thenables, and has deterministic tests plus a reference-model check.",
+   "defects_A": [
+    "pool.ts:360 non-native thenables are treated as plain values and never awaited",
+    "pool.fixes.test.ts: many tests depend on real sleep timing, which could be flaky"
+   ],
+   "defects_B": [
+    "pool.ts:295 tasks array is not snapshotted, so mutating it mid-run can change slots (not required by the contract)"
+   ]
+  },
+  "cost": 0.10329959999999999
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 4
+   },
+   "winner": "A",
+   "why": "A cancels the body on early exit, parses in linear time, and adds tests; B leaks the stream on early stop, is quadratic on long lines, and adds no tests.",
+   "defects_A": [
+    "sse.test.ts:26 timing-based performance test (<1000ms) could be flaky"
+   ],
+   "defects_B": [
+    "sse.ts:52 finally only releases the lock and never cancels the reader, so the body stays open when the consumer stops early",
+    "sse.ts:37-41 buffer concatenation plus repeated indexOf and slice is quadratic for long lines arriving in small chunks (unbounded CPU)",
+    "no tests added for the changed behaviour"
+   ]
+  },
+  "cost": 0.0484512
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 10,
+    "tests": 1,
+    "security": 4
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B cancels the body on early exit and parses long lines in linear time, with tests covering both; A leaks the open stream, rescans the buffer quadratically, and adds no tests.",
+   "defects_A": [
+    "sse.ts:51-53 finally only releaseLock, so the body is never cancelled when the consumer stops early",
+    "sse.ts:40 indexOf rescans the whole buffer on each chunk, so a long line with no newline takes quadratic time",
+    "no tests added"
+   ],
+   "defects_B": [
+    "sse.ts:118 await reader.cancel() in finally could mask the original error if cancel throws",
+    "sse.test.ts:41 wall-clock timing assertion may be flaky"
+   ]
+  },
+  "cost": 0.04900510000000001
+ },
+ {
+  "task": "hard-sse",
+  "run": 2,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 8
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 4
+   },
+   "winner": "A",
+   "why": "A scans only new text, so long lines take linear time, and it adds tests for cancel, errors and chunking; B rescans its whole buffer per chunk (quadratic) and adds no tests.",
+   "defects_A": [],
+   "defects_B": [
+    "sse.ts:41 buffer.indexOf('\\n') rescans the whole buffer on every chunk, so a long line in small chunks takes quadratic time",
+    "no tests added for early-break cancel, body errors or chunk-size equivalence"
+   ]
+  },
+  "cost": 0.0506545
+ },
+ {
+  "task": "hard-sse",
+  "run": 2,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 10,
+    "tests": 1,
+    "security": 5
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "B scans long lines in linear time and adds meaningful tests (chunk invariance, error, early cancel, large line); A has quadratic buffering and no added tests.",
+   "defects_A": [
+    "sse.ts:41 re-scans the whole buffer with indexOf('\\n') and re-slices it per chunk, so a long line in small chunks is quadratic",
+    "no tests added for the new behaviour",
+    "sse.ts:36-47 line buffer is unbounded for a body with no newline"
+   ],
+   "defects_B": [
+    "sse.ts:122 `await reader.cancel()` has no catch, so a rejected cancel could mask the caller's own error",
+    "sse.ts:112 partial line buffer is unbounded for a body with no newline"
+   ]
+  },
+  "cost": 0.050768999999999995
+ },
+ {
+  "task": "hard-sse",
+  "run": 3,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both are correct on the main rules; A also adds meaningful tests (error, cancel, chunk-size invariance) and has no trailing-\\r edge bug.",
+   "defects_A": [],
+   "defects_B": [
+    "sse.ts:50-52 a trailing lone '\\r' after a blank-line-less body makes takeLine('') consume the pending message and the result is discarded, so the last message is lost",
+    "no tests added for edge cases such as stream errors, early-break cancel, or an unterminated final line with an event"
+   ]
+  },
+  "cost": 0.053983100000000006
+ },
+ {
+  "task": "hard-sse",
+  "run": 3,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 2,
+    "security": 8
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "Both implementations are correct, but B adds meaningful tests for early cancel, stream errors, chunk-size invariance and an unterminated final line, while A adds none.",
+   "defects_A": [
+    "no tests added for early cancel, stream error or chunk-size invariance (sse.ts)"
+   ],
+   "defects_B": [
+    "unguarded reader.cancel() in finally could throw on early exit if the cancel rejects (sse.ts:126)"
+   ]
+  },
+  "cost": 0.04961599999999999
+ },
+ {
+  "task": "wide-bug-hunt",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 7,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Identical source fixes; A's tests cover every README rule and boundary more thoroughly, while B's are thinner but adequate.",
+   "defects_A": [
+    "test/rules.test.ts: some tests (tax rounding loop, random total check) cover behaviour the diff did not change, adding bulk"
+   ],
+   "defects_B": [
+    "test/rules.test.ts: no test for the 50-unit tier through totals or for coupon edge cases (FLAT5 floor, case-insensitive codes)",
+    "test/rules.test.ts: no inclusive-threshold check for US or EU"
+   ]
+  },
+  "cost": 0.0792775
+ },
+ {
+  "task": "wide-bug-hunt",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 7,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 9,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Identical source fixes; B's tests are broader and organised by README rule, so they guard more of the rules (rounding, coupons, merge splits, total identity).",
+   "defects_A": [
+    "test/rules.test.ts: no coverage of tax rounding, coupon case-insensitivity or the unknown-region error"
+   ],
+   "defects_B": [
+    "test/rules.test.ts:127: the rule 4 test title says 'after bulk discounts' but the 4000 UK example does not show bulk discounts changing the shipping outcome",
+    "test/rules.test.ts:155: the 60,000-iteration expect loop is heavy for a unit test"
+   ]
+  },
+  "cost": 0.07676740000000001
+ },
+ {
+  "task": "wide-bug-hunt",
+  "run": 2,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 9,
+    "scope": 9,
+    "tests": 7,
+    "security": 10
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 9,
+    "scope": 8,
+    "tests": 9,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Identical source fixes; B's tests are more thorough, covering exact tier boundaries, merge invariance and coupon edge cases, though it adds a heavy redundant percentOf loop.",
+   "defects_A": [
+    "test/pricing-rules.test.ts: no test for the 49/50-unit tier boundary, SAVE10 after bulk, or the FLAT5 floor"
+   ],
+   "defects_B": [
+    "test/pricing-rules.test.ts:159-165: 800k-assertion percentOf loop tests unchanged code and is slow",
+    "test/pricing-rules.test.ts:168: describe labelled 'rule 7' but the README has only six rules"
+   ]
+  },
+  "cost": 0.0775556
+ },
+ {
+  "task": "wide-bug-hunt",
+  "run": 2,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 8,
+    "tests": 9,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 7,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Source fixes are identical; A's tests are more thorough (region table, tier boundaries, coupon cap, total identity), while B's cover the fixes but less broadly.",
+   "defects_A": [
+    "test/pricing-rules.test.ts:159-165 exhaustive percentOf loop (~800k assertions) is slow and tests unchanged code"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.07504880000000001
+ },
+ {
+  "task": "wide-bug-hunt",
+  "run": 3,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 9,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 7,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Source fixes are identical; A's tests cover many more edge cases (merge splits, threshold boundaries, all regions).",
+   "defects_A": [],
+   "defects_B": [
+    "test/rules.test.ts: no test of UK at exactly the threshold or of coupon pushing an order over the threshold; merge tested with only one split"
+   ]
+  },
+  "cost": 0.0788789
+ },
+ {
+  "task": "wide-bug-hunt",
+  "run": 3,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 7,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 9,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Identical source fixes; B's tests are more thorough, with merge splits and the EU/UK shipping boundaries on the discounted subtotal.",
+   "defects_A": [
+    "test/rules.test.ts: no EU shipping boundary test and no UK boundary exactly at 4000 after a coupon",
+    "test/rules.test.ts: merge test covers only one split of same-SKU lines"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.07909630000000001
+ },
+ {
+  "task": "wide-three-features",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 6,
+    "quality": 8,
+    "scope": 9,
+    "tests": 6,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B's parseDuration rounds exactly and puts the raw input in the error message; A's float math and JSON.stringify'd message break two doc-comment rules.",
+   "defects_A": [
+    "src/duration.ts:13 error message uses JSON.stringify, so inputs with quotes, backslashes or newlines are not contained verbatim in the message",
+    "src/duration.ts:21 float multiplication then round gives wrong results on fractions that should round half up (e.g. '1.0005s' -> 1000, not 1001)",
+    "test/duration.rules.test.ts:185 test asserts against the JSON-escaped message, so it would not catch the escaping bug and misses fractional rounding edge cases",
+    "src/lru.ts:83 set copies the whole map twice per over-capacity insert"
+   ],
+   "defects_B": [
+    "src/duration.ts:17 BigInt parsing has no input length limit, so a very long digit string costs memory and time"
+   ]
+  },
+  "cost": 0.11003249999999999
+ },
+ {
+  "task": "wide-three-features",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 8,
+    "scope": 9,
+    "tests": 6,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A parses durations exactly with BigInt and puts the raw input in the error; B's float math mis-rounds half-way cases and its escaped error message can omit the raw input.",
+   "defects_A": [
+    "src/duration.ts:13 accepts tabs/newlines as separators and rejects '.5s' (minor, doc-ambiguous)"
+   ],
+   "defects_B": [
+    "src/duration.ts:21 float multiply then round mis-rounds half-way fractions (e.g. '1.0015s' gives 1001, not 1002)",
+    "src/duration.ts:13 JSON.stringify makes the message escape quotes, backslashes and newlines, so it does not contain the raw input",
+    "test/duration.rules.test.ts has no half-way rounding cases, so the float bug goes uncaught"
+   ]
+  },
+  "cost": 0.1059454
+ },
+ {
+  "task": "wide-three-features",
+  "run": 2,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B's parseDuration error message always contains the raw input and it rejects overflow to Infinity; A's tests are stronger but its escaped message breaks the 'contains the input' rule for some inputs.",
+   "defects_A": [
+    "src/duration.ts:24 error message uses JSON.stringify, so inputs with quotes, backslashes or newlines are not contained verbatim in the message",
+    "src/duration.ts:28 huge numeric input yields Infinity returned instead of throwing",
+    "src/duration.ts:20 accepts '.5s' and tabs/newlines as separators, which the doc comment does not clearly allow"
+   ],
+   "defects_B": [
+    "src/duration.ts:17 rejects '.5s' (doc is ambiguous); tests lock that choice in",
+    "src/lru.ts:94 calls now() twice in set (negligible)"
+   ]
+  },
+  "cost": 0.11789929999999998
+ },
+ {
+  "task": "wide-three-features",
+  "run": 2,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 8,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both implement every rule correctly; B's model-based LRU test, slug property test and duration round-trip test would catch more regressions.",
+   "defects_A": [
+    "src/duration.ts:17 rejects a leading-dot number such as '.5s'",
+    "test/slug.rules.test.ts has no randomized or property coverage of the max cut"
+   ],
+   "defects_B": [
+    "src/duration.ts:26 an overflowing numeric string returns Infinity instead of throwing",
+    "src/duration.ts:19,24 JSON.stringify alters inputs containing quotes or backslashes in the error message",
+    "src/slug.ts:159 a negative max is not handled sensibly"
+   ]
+  },
+  "cost": 0.11564549999999998
+ },
+ {
+  "task": "wide-three-features",
+  "run": 3,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A's duration error carries the raw input, it guards non-positive max, and its tests (randomized model, property checks) are stronger; B's JSON-escaped message can miss the raw input.",
+   "defects_A": [
+    "src/lru.ts:71 set silently drops an expired entry it overwrites, with no onEvict 'expired' (spec ambiguous)",
+    "src/duration.ts:9 \\s* accepts tabs/newlines between parts, where the spec says spaces"
+   ],
+   "defects_B": [
+    "src/duration.ts:22 error message uses JSON.stringify, so inputs with quotes, backslashes or newlines don't appear raw in the message",
+    "src/slug.ts:156 negative max slices wrongly (slice(0,-n)) instead of returning an empty slug",
+    "test/slug.rules.test.ts, test/lru.rules.test.ts: no test for max=0 or for set over an expired key"
+   ]
+  },
+  "cost": 0.11404940000000001
+ },
+ {
+  "task": "wide-three-features",
+  "run": 3,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B's parse error always contains the raw input and its LRU leaves an overwritten expired entry silent; its tests are stronger, with a model-based LRU check and property tests.",
+   "defects_A": [
+    "src/duration.ts:22 error uses JSON.stringify(text), so the message lacks the raw input when it has quotes, backslashes or newlines",
+    "src/lru.ts:92-93 set on an expired existing key fires an 'expired' eviction even when under capacity",
+    "test/duration.rules.test.ts no test for escaped-character inputs or non-finite formatDuration input"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.1160812
+ }
+]

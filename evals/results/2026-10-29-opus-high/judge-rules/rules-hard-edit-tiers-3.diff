@@ -1,0 +1,140 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.test.ts b/edit.test.ts
+--- a/edit.test.ts	2026-10-29 11:11:08.087690038 +0000
++++ b/edit.test.ts	2026-10-29 11:13:38.493398353 +0000
+@@ -82,3 +82,44 @@
+     expect('error' in r && r.error).not.toContain('appears');
+   });
+ });
++
++describe('more coverage', () => {
++  test('indentation tier: several windows match: error with their lines', () => {
++    const r = applyEdit('  a\n  b\n    a\n    b\n', { old_text: 'a\nb', new_text: 'c' });
++    expect('error' in r && r.error).toContain('matches 2 places');
++    expect('error' in r && r.error).toContain('1, 3');
++  });
++  test('not found lists at most five lines where the first line appears', () => {
++    const r = applyEdit('x\nx\nx\nx\nx\nx\nx\n', { old_text: 'x\ny', new_text: 'z' });
++    expect('error' in r && r.error).toContain('first line appears at line 1, 2, 3, 4, 5');
++    expect('error' in r && r.error).not.toContain('6');
++  });
++  test('an exact match wins over a trailing-space window', () => {
++    const r = ok(applyEdit('a \nb\n', { old_text: 'a', new_text: 'z' }));
++    expect(r.applied.tier).toBe('exact');
++    expect(r.content).toBe('z \nb\n');
++  });
++  test('exact replacement agrees with String.replace on random content', () => {
++    let seed = 42;
++    const rnd = (n: number) => {
++      seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
++      return seed % n;
++    };
++    let asserted = 0;
++    const words = ['a', 'b', 'ab', 'c', 'ba'];
++    const line = () => Array.from({ length: 1 + rnd(3) }, () => words[rnd(words.length)]).join(' ');
++    for (let t = 0; t < 300; t++) {
++      const content = Array.from({ length: 1 + rnd(8) }, line).join('\n') + '\n';
++      const from = rnd(content.split('\n').length - 1);
++      const old = content.split('\n').slice(from, from + 1 + rnd(2)).join('\n');
++      if (content.split(old).length !== 2) continue;
++      const neu = Array.from({ length: 1 + rnd(3) }, line).join('\n');
++      if (neu === old) continue;
++      const r = ok(applyEdit(content, { old_text: old, new_text: neu }));
++      expect(r.content).toBe(content.replace(old, neu));
++      expect(r.applied.tier).toBe('exact');
++      asserted++;
++    }
++    expect(asserted).toBeGreaterThanOrEqual(50);
++  });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 11:11:08.087723575 +0000
++++ b/edit.ts	2026-10-29 11:12:17.389555519 +0000
+@@ -23,5 +23,87 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text, new_text, replace_all } = edit;
++  if (old_text === '') return { error: 'old_text is empty; use write to create or overwrite a file' };
++  if (old_text === new_text) return { error: 'old_text and new_text are the same' };
++
++  const starts: number[] = [];
++  for (let i = content.indexOf(old_text); i !== -1; i = content.indexOf(old_text, i + old_text.length)) starts.push(i);
++  if (starts.length > 1 && !replace_all) {
++    return { error: `old_text matches ${starts.length} places (first at line ${lineOf(content, starts[0])}); add context or set replace_all` };
++  }
++  if (starts.length > 0) {
++    let out = '';
++    let pos = 0;
++    for (const s of starts) {
++      out += content.slice(pos, s) + new_text;
++      pos = s + old_text.length;
++    }
++    out += content.slice(pos);
++    const first = starts[0];
++    return {
++      content: out,
++      applied: { from: lineOf(content, first), to: lineOf(content, first + old_text.length - 1), tier: 'exact', count: starts.length },
++    };
++  }
++
++  // A trailing newline after the last line is not a line to match against.
++  const lines = content.split('\n');
++  const searchEnd = content.endsWith('\n') ? lines.length - 1 : lines.length;
++  const oldLines = dropNewline(old_text).split('\n');
++  const newStripped = dropNewline(new_text);
++  const newLines = newStripped === '' ? [] : newStripped.split('\n');
++
++  const tiers: [Tier, (a: string, b: string) => boolean][] = [
++    ['trailing-space', (a, b) => a.trimEnd() === b.trimEnd()],
++    ['indentation', (a, b) => a.trim() === b.trim()],
++  ];
++  for (const [tier, eq] of tiers) {
++    const windows: number[] = [];
++    for (let i = 0; i + oldLines.length <= searchEnd; i++) {
++      if (oldLines.every((l, k) => eq(lines[i + k], l))) windows.push(i);
++    }
++    if (windows.length === 0) continue;
++    if (windows.length > 1) {
++      return { error: `old_text matches ${windows.length} places (lines ${windows.map(i => i + 1).join(', ')}); add more context` };
++    }
++
++    const i = windows[0];
++    let replacement = newLines;
++    if (tier === 'indentation') {
++      const first = Math.max(0, oldLines.findIndex(l => l.trim() !== ''));
++      const oldIndent = leadingSpace(oldLines[first]);
++      const fileIndent = leadingSpace(lines[i + first]);
++      replacement = newLines.map(l => {
++        if (l.trim() === '') return '';
++        if (l.startsWith(oldIndent)) return fileIndent + l.slice(oldIndent.length);
++        return fileIndent + l.trimStart();
++      });
++    }
++    return {
++      content: [...lines.slice(0, i), ...replacement, ...lines.slice(i + oldLines.length)].join('\n'),
++      applied: { from: i + 1, to: i + oldLines.length, tier, count: 1 },
++    };
++  }
++
++  const needle = (oldLines.find(l => l.trim() !== '') ?? '').trim();
++  const hits: number[] = [];
++  if (needle !== '') {
++    for (let j = 0; j < searchEnd && hits.length < 5; j++) {
++      if (lines[j].includes(needle)) hits.push(j + 1);
++    }
++  }
++  return { error: 'old_text not found' + (hits.length > 0 ? `; first line appears at line ${hits.join(', ')}` : '') };
++}
++
++function lineOf(content: string, index: number): number {
++  return content.slice(0, index).split('\n').length;
++}
++
++function dropNewline(s: string): string {
++  return s.endsWith('\n') ? s.slice(0, -1) : s;
++}
++
++function leadingSpace(s: string): string {
++  return s.match(/^\s*/)![0];
+ }
