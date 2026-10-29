@@ -544,7 +544,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         model: m,
         // Plan and review get no write tools, and their policy is read-only whatever the run's mode.
         tools,
-        system: opts.role === 'advisor' ? ADVISOR_SYSTEM : opts.role === 'classifier' ? CLASSIFIER_SYSTEM : opts.role === 'triage' ? TRIAGE_SYSTEM : systemFor(m),
+        system: opts.role === 'advisor' ? ADVISOR_SYSTEM : opts.role === 'classifier' ? CLASSIFIER_SYSTEM : opts.role === 'triage' ? TRIAGE_SYSTEM : systemFor(writing && fromPlan ? { ...m, thorough: true } : m),
         ...(helper ? {} : { preamble: reviewer ? reviewPreamble() : opts.note ? `${place?.preamble ?? basePreamble()}\n\n${opts.note}` : (place?.preamble ?? basePreamble()) }),
         cwd: place?.cwd ?? args.cwd,
         ...(opts.images?.length ? { images: opts.images } : {}),
@@ -666,6 +666,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   // and the writer's opening prompt, which says the plan is coming.
   let planning: { by: string; text: Promise<string | undefined>; step: Promise<Step | undefined>; delivered: boolean; plan?: string } | undefined;
   let opening: string | undefined;
+  // A writer that works from a plan gets the thorough stop lines: the frugal ones (stop once a check passes, skip
+  // edge cases) pull against a plan that lists the edge cases to handle. Set before the writer's session opens, so
+  // its cached system prompt never changes.
+  let fromPlan = false;
   let task = resumed?.question ? answerPrompt(resumed.question.question, args.prompt) : (skillCommand(args.prompt, skills) ?? args.prompt);
   // The owner's images: the writer is shown them, and the task names their files so plan and review can open them.
   // `sha256:<hex>` names one already stored (a fork's images, kept by the client that resends the run).
@@ -983,6 +987,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const wantsPlan = planWhen !== 'never' && !direct;
     if (!wantsPlan) unwarm('plan');
     if (roles.plan && !wantsPlan) say('cedia: no plan for this one\n');
+    fromPlan = !!roles.plan && wantsPlan;
     if (roles.plan && wantsPlan) {
       // With worktrees on, the planner may split the work into parts that cedia hands to work sub-threads before the
       // writer starts: what to delegate, and to which model, is the stronger model's call (no DeepSeek run ever
@@ -1063,7 +1068,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     warm('review', roles.review);
     // A session whose cache has expired costs its whole context to resume; past a size, a new session from where
     // the thread stopped is cheaper, so the run says both prices and takes the cheaper.
-    const freshTokens = resumed ? Math.ceil((systemFor(model).length + JSON.stringify(toolDefs(CORE_TOOLS)).length + basePreamble().length + resumeNote(resumed).length + task.length) / 4) : 0;
+    const freshTokens = resumed ? Math.ceil((systemFor(fromPlan ? { ...model, thorough: true } : model).length + JSON.stringify(toolDefs(CORE_TOOLS)).length + basePreamble().length + resumeNote(resumed).length + task.length) / 4) : 0;
     const choice = lastLog ? resumeChoice(lastLog.events, model, freshTokens) : undefined;
     if (choice?.fresh)
       say(

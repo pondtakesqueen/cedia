@@ -1,0 +1,311 @@
+[
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 9,
+    "tests": 8,
+    "security": 8
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Near-identical parsers; B's cancel is guarded so releaseLock always runs and errors aren't masked, and its structure is simpler.",
+   "defects_A": [
+    "sse.ts:87 unguarded await reader.cancel() can throw and skip releaseLock / mask original error",
+    "sse.ts:64 awkward .catch wrapper on read to set finished"
+   ],
+   "defects_B": [
+    "sse-cancel.test.ts: early-break test placed in a separate file and checks only the cancel flag"
+   ]
+  },
+  "cost": 0.0528592
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 8
+   },
+   "winner": "A",
+   "why": "Near-identical parsers; A swallows cancel errors so cleanup cannot mask the consumer's exit, while B's uncaught cancel can throw.",
+   "defects_A": [],
+   "defects_B": [
+    "sse.ts:87 `await reader.cancel()` is uncaught, so a rejected cancel on early exit propagates to the consumer"
+   ]
+  },
+  "cost": 0.0511986
+ },
+ {
+  "task": "hard-window",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Same correct sliding-window algorithm; A has slightly broader tests (no mutation, -0, string t, fractional edge) and helpful comments.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.0468452
+ },
+ {
+  "task": "hard-window",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 10,
+    "quality": 9,
+    "scope": 10,
+    "tests": 9,
+    "security": 10
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 8,
+    "scope": 10,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Same sliding-window algorithm and both correct; A has explanatory comments and broader edge-case tests (-0, string t, no mutation, fractional window edge).",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.0446022
+ },
+ {
+  "task": "hard-ledger",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 10
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Both implement the same logic; A's cd/&& matching tolerates spacing around && and is marginally more robust, while B is slightly more readable.",
+   "defects_A": [
+    "no tests added",
+    "ledger.ts:~52 dense `return void out.push(...)` style hurts readability"
+   ],
+   "defects_B": [
+    "no tests added",
+    "ledger.ts:~11 cd regex requires literal ' && ' so `cd /work/repo&&bun test` is not matched"
+   ]
+  },
+  "cost": 0.06011079999999999
+ },
+ {
+  "task": "hard-ledger",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 10
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 6,
+    "scope": 9,
+    "tests": 2,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Behaviour is nearly identical and neither adds tests; A follows the spec's `cd <dir> && ` form more literally and is more readable than B's dense `return void` one-liners.",
+   "defects_A": [
+    "no tests added for the new behaviour (ledger.test.ts untouched)"
+   ],
+   "defects_B": [
+    "no tests added for the new behaviour (ledger.test.ts untouched)",
+    "ledger.ts:30 cd regex uses \\s*&&\\s*, so it accepts `cd dir&& cmd`, which the spec's `cd <dir> && ` form does not describe",
+    "ledger.ts:34-37 `return void out.push(...)` one-liners are hard to read"
+   ]
+  },
+  "cost": 0.059300599999999995
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B also drops expired entries before evicting live LRU keys and converts a sync throw from fn into a rejection, with fuller tests; A misses both.",
+   "defects_A": [
+    "memo.ts:36 eviction drops the LRU live key even when expired entries exist elsewhere in the cache",
+    "memo.ts:37 a synchronous throw from fn propagates instead of becoming a rejection",
+    "memo.regression.test.ts:127 stale-resolve TTL test ends without an assertion after the final resolve"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.0576195
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A also prunes expired entries before evicting (so live keys aren't dropped needlessly) and has broader tests; B leaves expired entries counting toward max during eviction.",
+   "defects_A": [
+    "memo.ts:188 sync-throw wrapping is beyond what the doc asks (minor extra)"
+   ],
+   "defects_B": [
+    "memo.ts:144 eviction does not drop expired entries first, so a live LRU key can be evicted while expired entries are still held",
+    "memo.ts:145 a synchronous throw from fn is not converted to a rejection",
+    "memo.regression.test.ts has no test for eviction with expired entries or for an in-flight hit counting as a use"
+   ]
+  },
+  "cost": 0.059596800000000005
+ },
+ {
+  "task": "hard-redact-bugs",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 7,
+    "security": 8
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 8,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Same three core fixes; A's MAX_TOKENS guard covers more limit-style names (num/limit/hyphen) than B's narrow max/min dotenv-only exclusion.",
+   "defects_A": [
+    "redact.ts:66 name-based skip also suppresses redaction of real secrets stored under names like max_tokens (unlikely)"
+   ],
+   "defects_B": [
+    "redact.ts:69 exclusion only covers max_/min_tokens in dotenv form; NUM_TOKENS=4096 or LIMIT_TOKENS=4096 still redacted as false positives"
+   ]
+  },
+  "cost": 0.0586469
+ },
+ {
+  "task": "hard-redact-bugs",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 6,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 6,
+    "security": 8
+   },
+   "winner": "A",
+   "why": "Both fix the same three bugs and the MAX_TOKENS case; A's dotenv-only exclusion is narrower, while B adds speculative num/limit names and a boundary-less match.",
+   "defects_A": [
+    "redact-tokens.test.ts: no tests for the private-key, sk- or URL-password fixes",
+    "redact.ts:69: max/min_tokens exclusion applies only to dotenv, not other forms"
+   ],
+   "defects_B": [
+    "redact-plural.test.ts: no tests for the private-key, sk- or URL-password fixes",
+    "redact.ts:67: (max|num|limit)[_-]?tokens$ has no boundary and skips names like num_tokens or limit_tokens entirely, which can leave a real secret unredacted"
+   ]
+  },
+  "cost": 0.05727600000000001
+ }
+]

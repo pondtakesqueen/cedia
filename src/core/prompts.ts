@@ -2,7 +2,8 @@ import type { Guard, PermissionMode } from './safety/policy.ts';
 
 // The base prompt's lines that trade checking for fewer turns. Haiku and DeepSeek keep them: without them they
 // spent turns on probes that found nothing (catalog.ts). Opus does not: with them it stopped at a passing check and
-// missed rules no visible test held (research/NOTES.md, 2026-10-28), so a model with `thorough` gets the other lines.
+// missed rules no visible test held (research/NOTES.md, 2026-10-28), so a model with `thorough` gets the other lines,
+// and so does any writer that works from a plan (evals/results/2026-10-29-plan-thorough/).
 const TURN_COST = ' Each extra turn re-reads the whole conversation, so it costs the user time and money.';
 const STOP_FRUGAL =
   '- Stop when the task is done: once a declared check passes after your last change, write the report and end. Extra probes, edge cases or improvements nobody asked for widen the change and cost turns.';
