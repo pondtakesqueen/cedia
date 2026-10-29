@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { needsPlan, planParts, planPrompt, withParts, withPlan, type Split } from '../src/core/roles.ts';
+import { tierOf, planParts, planPrompt, withParts, withPlan, type Split } from '../src/core/roles.ts';
 
 const part = (files: string, brief: string, model?: string) => `<part files="${files}"${model ? ` model="${model}"` : ''}>${brief}</part>`;
 const alone: Split = { mode: 'alone', writer: 'opencode-go/deepseek-v4.1-flash', workers: [] };
@@ -54,12 +54,15 @@ t
   });
 });
 
-test('triage plans unless the answer starts with DIRECT', () => {
-  expect(needsPlan('DIRECT')).toBe(false);
-  expect(needsPlan('  direct.')).toBe(false);
-  expect(needsPlan('**DIRECT**')).toBe(false);
-  expect(needsPlan('PLAN')).toBe(true);
-  expect(needsPlan('')).toBe(true);
-  expect(needsPlan('I think this is direct')).toBe(true);
-  expect(needsPlan('directly: PLAN')).toBe(true);
+test('triage plans in full unless the answer starts with DIRECT or LIGHT', () => {
+  expect(tierOf('DIRECT')).toBe('direct');
+  expect(tierOf('  direct.')).toBe('direct');
+  expect(tierOf('**DIRECT**')).toBe('direct');
+  expect(tierOf('LIGHT')).toBe('light');
+  expect(tierOf('**light**')).toBe('light');
+  expect(tierOf('PLAN')).toBe('full');
+  expect(tierOf('')).toBe('full');
+  expect(tierOf('I think this is direct')).toBe('full');
+  expect(tierOf('directly: PLAN')).toBe('full');
+  expect(tierOf('lightly: PLAN')).toBe('full');
 });

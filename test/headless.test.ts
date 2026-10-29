@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { lintSession } from '../src/core/session/lint.ts';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { attributeMisses } from '../src/core/context/cache.ts';
@@ -487,6 +487,30 @@ describe('cedia -p (offline, faux)', () => {
       expect(readFileSync(join(dir, 'env2'), 'utf8')).toContain('CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1');
       const writer = sessionsOf(r.home).find((l) => (l[0] as { role: string }).role === 'code')!;
       expect(userTexts(writer)).toEqual([expect.stringContaining('<plan by="claude-code:opus@medium">'), expect.stringContaining('<review>\nf.txt:1 needs a period.\n</review>')]);
+    });
+
+    test('with a light effort, a change the triage finds plain is planned at it; one easy to get wrong at the role\'s own', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cedia-light-claude-'));
+      const bin = join(dir, 'claude');
+      writeFileSync(join(dir, 'plan'), JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Write good to f.txt.', session_id: 'cc-1' }));
+      writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$@" > ${dir}/args$$\ncat > /dev/null\ncat ${dir}/plan\n`, { mode: 0o755 });
+      const efforts = () => readdirSync(dir).filter((f) => f.startsWith('args')).map((f) => /--effort\n(\w+)/.exec(readFileSync(join(dir, f), 'utf8'))?.[1]);
+      const light = cedia([reply('LIGHT'), ...writes], [...base, '--plan', 'claude-code', '--plan-light', 'low', '--plan-overlap', 'off'], undefined, { CEDIA_CLAUDE_BIN: bin });
+      expect(JSON.parse(light.out)).toMatchObject({ subtype: 'success', plan: { model: 'claude-code:opus@low' } });
+      expect(light.err).toContain('a light plan at low');
+      // The step warmed at medium before the triage answered never got a prompt; only the light one ran.
+      expect(efforts()).toContain('low');
+      const triage = sessionsOf(light.home).find((l) => (l[0] as { role: string }).role === 'triage')!;
+      expect((triage[0] as Extract<SessionEvent, { kind: 'session' }>).system).toContain('Answer LIGHT when');
+      for (const f of readdirSync(dir).filter((f) => f.startsWith('args'))) rmSync(join(dir, f));
+      const full = cedia([reply('PLAN'), ...writes], [...base, '--plan', 'claude-code', '--plan-light', 'low', '--plan-overlap', 'off'], undefined, { CEDIA_CLAUDE_BIN: bin });
+      expect(JSON.parse(full.out)).toMatchObject({ subtype: 'success', plan: { model: 'claude-code:opus@medium' } });
+      expect(efforts()).not.toContain('low');
+      // Without a light effort the triage is not offered LIGHT, and an answer of LIGHT plans in full.
+      const off = cedia([reply('LIGHT'), ...writes], [...base, '--plan', 'claude-code', '--plan-overlap', 'off'], undefined, { CEDIA_CLAUDE_BIN: bin });
+      expect(JSON.parse(off.out)).toMatchObject({ subtype: 'success', plan: { model: 'claude-code:opus@medium' } });
+      const plain = sessionsOf(off.home).find((l) => (l[0] as { role: string }).role === 'triage')!;
+      expect((plain[0] as Extract<SessionEvent, { kind: 'session' }>).system).not.toContain('LIGHT');
     });
 
     test('by default the writer reads while Claude Code plans, and the plan follows into its session', () => {
