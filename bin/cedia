@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
 # Resolve symlinks so `ln -s .../bin/cedia ~/.local/bin/cedia` works.
 src="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+# The TUI wants React's production build, and Bun picks the JSX transform that must match it when it starts, so
+# NODE_ENV is set here. cli.ts takes it away again, so the commands cedia runs never inherit it.
+if [ -z "${NODE_ENV+x}" ]; then export NODE_ENV=production CEDIA_UNSET_NODE_ENV=1; fi
 exec bun "$src/src/cli.ts" "$@"

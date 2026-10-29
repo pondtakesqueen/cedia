@@ -46,6 +46,14 @@ import { versionInfo } from './protocol/version.ts';
 const _projectFlagIndex = process.argv.indexOf('--project');
 if (_projectFlagIndex >= 0 && process.argv[_projectFlagIndex + 1]) process.env.CEDIA_PROJECT = process.argv[_projectFlagIndex + 1];
 
+// bin/cedia starts Bun with NODE_ENV=production when it was unset, for the TUI's React (see the TUI's import below).
+// Nothing else wants it, and the commands cedia runs must not inherit it, so it goes before anything runs.
+const prodReact = process.env.CEDIA_UNSET_NODE_ENV === '1' && process.env.NODE_ENV === 'production';
+if (process.env.CEDIA_UNSET_NODE_ENV === '1') {
+  delete process.env.CEDIA_UNSET_NODE_ENV;
+  if (prodReact) delete process.env.NODE_ENV;
+}
+
 const USAGE = `usage: cedia [options]                 the TUI, at a terminal: each prompt is a turn of one thread
        cedia -p "<prompt>" [options]   (prompt may also come on stdin)
        cedia --version [--json]             the version; --json adds the protocol hash and capabilities
@@ -365,8 +373,13 @@ export async function main(argv: string[]): Promise<number> {
       console.error(`cedia: unknown TUI "${tuiChoice}": the pi-tui client was removed; ink is the only one`);
       return 2;
     }
-    // Loaded only here, so a headless run never pays for the terminal library.
+    // Loaded only here, so a headless run never pays for the terminal library. React picks its build when it
+    // loads: the production one when bin/cedia started Bun with it (the development one checks every render again
+    // and made each scroll step a third slower), and only for the load, so the commands cedia runs never inherit
+    // NODE_ENV. Bun chose the JSX transform at startup, so setting it here alone would pair the wrong one.
+    if (prodReact) process.env.NODE_ENV = 'production';
     const { runInkTui } = await import('./clients/tui-ink/index.ts');
+    if (prodReact) delete process.env.NODE_ENV;
     return await runInkTui(base as TuiArgs);
   }
   if (!prompt && !process.stdin.isTTY) prompt = (await new Response(Bun.stdin.stream()).text()).trim();

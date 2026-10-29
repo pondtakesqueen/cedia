@@ -185,8 +185,19 @@ export function spanProps(style: MdStyle, T: ThemeTokens): { color?: string; bol
   }
 }
 
-export default function Markdown({ children, T, plain }: { children: string; T: ThemeTokens; plain?: boolean }): React.ReactElement {
-  const lines = React.useMemo(() => mdLines(children ?? ''), [children]);
+/**
+ * The lines of a message partly off screen: `drop` leaves out the last ones (below the screen), then `tail` keeps
+ * only the last of the rest (above it). Each line is at least one row; one line always stays.
+ */
+export function clipLines<X>(xs: X[], clip: { drop: number; tail?: number } | undefined): X[] {
+  if (!clip) return xs;
+  const shown = xs.slice(0, Math.max(1, xs.length - clip.drop));
+  return clip.tail !== undefined && shown.length > clip.tail ? shown.slice(-clip.tail) : shown;
+}
+
+export default function Markdown({ children, T, plain, clip }: { children: string; T: ThemeTokens; plain?: boolean; clip?: { drop: number; tail?: number } }): React.ReactElement {
+  const all = React.useMemo(() => mdLines(children ?? ''), [children]);
+  const lines = clipLines(all, clip);
   if (plain) return <Text wrap="wrap">{lines.map((l) => l.map((s) => s.text).join('')).join('\n')}</Text>;
   return (
     <Box flexDirection="column">

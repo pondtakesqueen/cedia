@@ -8,7 +8,7 @@ import { buildAutoItems, menuStart, highlightSpans, paintRuns, truncateDescripti
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import { collapses, expandPastes, pasteToken } from './line-edit.ts';
-import Markdown, { mdPlain, spanProps } from './markdown.tsx';
+import Markdown, { clipLines, mdPlain, spanProps } from './markdown.tsx';
 import { deniedRow, doneRow, intentRow, resultRow, rowProps, rowText, thinkingRow, type RowBand, type RowLine } from './rows.ts';
 import { inkTheme, PANEL_BAR, type ThemeTokens } from './theme-tokens.ts';
 import { PermissionDialog } from './permission-dialogs.tsx';
@@ -58,7 +58,7 @@ import { forkThread } from '../../core/project/fork.ts';
 import { ThreadStore, threadsDir } from '../../core/project/threads.ts';
 import { projectKey } from '../../core/session/log.ts';
 import { join } from 'node:path';
-import { readFileSync as fsRead, writeFileSync as fsWrite, existsSync as fsExists, readdirSync as fsReaddir, statSync as fsStat, unlinkSync as fsUnlink } from 'node:fs';
+import { readFileSync as fsRead, writeFileSync as fsWrite, existsSync as fsExists, readdirSync as fsReaddir, statSync as fsStat, unlinkSync as fsUnlink, mkdirSync as fsMkdir } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { loadProjectUsage } from './usage-summary.ts';
 import type { VimMode } from './vim-input.tsx';
@@ -163,6 +163,10 @@ export function fitPath(path: string, width: number): string {
 const themedColorFor = (T: ThemeTokens, role: Msg['role']): string | undefined =>
   role === 'user' ? undefined : role === 'assistant' ? T.text : T.textMuted;
 
+// Rows the message above the screen keeps beyond the room left, for when the height estimates run short.
+const TAIL_SLACK = 4;
+// Rows one wheel step moves the transcript.
+const WHEEL_ROWS = 3;
 const bandColor = (band: RowBand, T: ThemeTokens): string =>
   band === 'add' ? T.diffAddedBg : band === 'del' ? T.diffRemovedBg : band === 'addWord' ? T.diffAddedWordBg : T.diffRemovedWordBg;
 const rowMsg = (lines: RowLine[], extra: Partial<Msg> = {}): Msg => ({ role: 'tool', text: rowText(lines), lines, ...extra });
@@ -287,7 +291,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const stopRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
   const pendingRef = useRef<{ what: string; yes: (signal: AbortSignal) => Promise<void> | void } | undefined>(undefined);
-  const [scrollOffset, setScrollOffset] = useState(0);
+  const [scrollOffset, setScrollOffsetRaw] = useState(0);
+  // Rows of the lowest message on screen that the wheel moved below it (`at` is the offset they belong to), so a
+  // wheel step moves the transcript a few rows, not a few messages. Any other scroll starts that message whole.
+  const [lift, setLift] = useState({ at: 0, rows: 0 });
+  const setScrollOffset = useCallback((v: React.SetStateAction<number>) => {
+    setLift({ at: 0, rows: 0 });
+    setScrollOffsetRaw(v);
+  }, []);
+  const wheelRef = useRef<(rows: number) => void>(() => {});
+  // Where the last wheel step left the transcript, for the next step before React has drawn this one.
+  const wheelPosRef = useRef({ off: 0, l: 0 });
   const heightCacheRef = useRef(createHeightCache());
   const loadedKeybindingsRef = useRef(loadedKeybindings);
   loadedKeybindingsRef.current = loadedKeybindings;
@@ -359,7 +373,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const screenReaderRef = useRef(false);
   const selectionRef = useRef<InkSelection | null>(null);
   const selectingRef = useRef(false);
-  const store = new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
+  // Opened once: finding the project runs git, which every render (each scroll step) would pay again.
+  const store = React.useMemo(() => new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd))), [args.cwd]);
 
   const push = (m: Msg) => setMessages((prev) => [...prev, m]);
   const thinkingStartRef = useRef<number | undefined>(undefined);
@@ -903,20 +918,23 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       case 'color':
       case 'theme': {
         const t = rest[0];
-        if (t && t !== 'dark' && t !== 'light') { say(`unknown theme: ${t} (dark | light)`); return; }
+        if (t && t !== 'dark' && t !== 'light' && t !== 'auto') { say(`unknown theme: ${t} (dark | light | auto)`); return; }
         if (t) {
+          // auto leaves the choice to the terminal's background; settings.json is made when there is none yet.
+          const pp = join(cediaHome(), 'settings.json');
           try {
-            const pp = join(cediaHome(), 'settings.json');
-            const raw = JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown>;
-            raw.theme = t;
+            const raw = fsExists(pp) ? JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown> : {};
+            if (t === 'auto') delete raw.theme;
+            else raw.theme = t;
+            fsMkdir(cediaHome(), { recursive: true });
             fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
-          } catch { /* ignore */ }
+          } catch (e) { say(`could not save the theme: ${(e as Error).message}`, 'red'); return; }
           setThemeTick((n) => n + 1);
           syncOnboardingRef.current();
           say(`theme: ${t}`);
           return;
         }
-        say(`theme: ${themeName} (dark | light)`);
+        say(`theme: ${themeName} (dark | light | auto)`);
         return;
       }
       case 'notify': {
@@ -1298,11 +1316,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     };
     const handler = (data: Buffer) => {
       const s = data.toString();
-      if (/\x1b\[<64;/.test(s)) {
-        const maxOff = Math.max(0, displayRef.current.length - 1);
-        setScrollOffset((o) => Math.min(maxOff, o + 3));
-      }
-      if (/\x1b\[<65;/.test(s)) setScrollOffset((o) => Math.max(0, o - 3));
+      if (/\x1b\[<64;/.test(s)) wheelRef.current(WHEEL_ROWS);
+      if (/\x1b\[<65;/.test(s)) wheelRef.current(-WHEEL_ROWS);
       const press = /\x1b\[<0;(\d+);(\d+)M/.exec(s);
       if (press) {
         const at = pointer(parseInt(press[1]!, 10), parseInt(press[2]!, 10));
@@ -1469,13 +1484,54 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     // A reply shows as rendered markdown: count the rows of what paints, not of the source.
     return heightCacheRef.current.lines(key, () => estimateLines(truncateLongText(msg?.role === 'assistant' ? mdPlain(raw) : raw), width));
   };
-  const { start: renderStart, end: renderEnd } = visibleWindow({
+  const bottomIdx = displayMessages.length - 1 - scrollOffset;
+  const liftRows = lift.at === scrollOffset ? lift.rows : 0;
+  wheelPosRef.current = { off: scrollOffset, l: liftRows };
+  const { start: fullStart, end: renderEnd, used: fullRows } = visibleWindow({
     count: displayMessages.length,
     scrollOffset,
     budget: heightBudget,
-    overscan: 3,
-    heightAt,
+    overscan: 0,
+    heightAt: (i) => heightAt(i) - (i === bottomIdx ? liftRows : 0),
   });
+  // The message above the ones that fit shows only its last rows, as many as the screen has left (and a few
+  // more, since heights are estimates): drawing all of a long reply above the screen took most of each scroll
+  // step's time, in Ink's layout and paint. The lowest one leaves out the rows the wheel moved below the screen,
+  // and of the rest keeps no more than the screen holds.
+  const topRoom = heightBudget - fullRows;
+  const renderStart = fullStart > 0 && topRoom > 0 ? fullStart - 1 : fullStart;
+  const clipAt = (index: number): { drop: number; tail?: number } | undefined =>
+    index < fullStart ? { drop: 0, tail: topRoom + TAIL_SLACK }
+    : index === bottomIdx && liftRows > 0 ? { drop: liftRows, tail: heightBudget + TAIL_SLACK }
+    : undefined;
+  // A wheel step: `rows` up (positive) or down. Up stops once the first message's top is on screen; a message
+  // keeps at least one row on screen until the step moves past it.
+  wheelRef.current = (rows: number) => {
+    const count = displayMessages.length;
+    let { off, l } = wheelPosRef.current;
+    let n = Math.abs(rows);
+    if (rows > 0) {
+      while (n > 0 && count - 1 - off >= 0) {
+        const idx = count - 1 - off;
+        let above = -l;
+        for (let i = 0; i <= idx && above <= heightBudget; i++) above += heightAt(i);
+        if (above <= heightBudget) break;
+        const d = Math.min(n, heightAt(idx) - 1 - l);
+        if (d > 0) { l += d; n -= d; continue; }
+        if (off >= count - 1) break;
+        off++; l = 0; n--;
+      }
+    } else {
+      while (n > 0) {
+        if (l > 0) { const d = Math.min(l, n); l -= d; n -= d; continue; }
+        if (off === 0) break;
+        off--; l = heightAt(count - 1 - off);
+      }
+    }
+    wheelPosRef.current = { off, l };
+    setScrollOffsetRaw(off);
+    setLift({ at: off, rows: l });
+  };
 
   const recycleSlots = assignRecycleSlots(
     renderStart,
@@ -1487,7 +1543,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     recycleSlotsRef.current,
   );
   recycleSlotsRef.current = recycleSlots;
-  const aboveHidden = renderStart;
+  // Messages above the screen, counting one it shows only the end of.
+  const aboveHidden = renderStart < fullStart ? fullStart : renderStart;
   const belowHidden = Math.max(0, displayMessages.length - renderEnd);
   columnsRef.current = columns;
   screenReaderRef.current = screenReader;
@@ -1496,14 +1553,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   displayRef.current = displayMessages;
   {
     const bands: WalkBand[] = [{ kind: 'chrome', rows: 1 }];
-    if (displayMessages.length > 0 && (scrollOffset > 0 || aboveHidden > 0)) bands.push({ kind: 'chrome', rows: 1 });
+    if (displayMessages.length > 0 && aboveHidden > 0) bands.push({ kind: 'chrome', rows: 1 });
     for (let i = renderStart; i < renderEnd; i++) {
       if (gapBefore(i)) bands.push({ kind: 'chrome', rows: gapBefore(i) });
       if (padAt(i)) bands.push({ kind: 'chrome', rows: 1 });
       bands.push({
         kind: 'message',
         index: i,
-        rows: rowsAt(i),
+        rows: Math.max(1, Math.min(rowsAt(i) - (clipAt(i)?.drop ?? 0), clipAt(i)?.tail ?? Infinity)),
       });
       if (padAt(i)) bands.push({ kind: 'chrome', rows: 1 });
     }
@@ -2040,7 +2097,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       )}
       {displayMessages.length === 0 ? null : (
         <Box paddingX={1} flexShrink={0}>
-          {scrollOffset > 0 || aboveHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↑ '}{aboveHidden} more above</Text> : null}
+          {aboveHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↑ '}{aboveHidden} more above</Text> : null}
         </Box>
       )}
       <Box flexDirection="column" flexGrow={1} overflow="hidden" justifyContent={splash ? 'center' : 'flex-end'} alignItems={splash ? 'center' : undefined} paddingX={1}>
@@ -2075,14 +2132,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const queryHit = q.length > 0 && capped.toLowerCase().includes(q.toLowerCase());
             const bounds = selection ? selectionBounds(selection, globalIdx, capped.length) : undefined;
             const hasSel = !!bounds && bounds.end > bounds.start;
+            // Selection and search count characters from the message's start, so they keep all of it.
+            const clip = hasSel || queryHit ? undefined : clipAt(globalIdx);
+            const keep = <X,>(xs: X[]): X[] => clipLines(xs, clip);
             const fullySelected = messageFullySelected(selection, globalIdx, capped.length);
             const isUserRow = m.role === 'user' && !hasSel && !queryHit;
             const isToolError = m.role === 'tool' && m.status === 'error';
             const contentWidth = paintedWidth(m.role, columns, screenReader);
             const userLines = isUserRow && !screenReader
-              ? capped.split('\n').map((ln) => ln.padEnd(Math.max(ln.length, contentWidth)))
+              ? keep(capped.split('\n')).map((ln) => ln.padEnd(Math.max(ln.length, contentWidth)))
               : null;
-            const full = capped;
+            const full = hasSel || queryHit ? capped : keep(capped.split('\n')).join('\n');
             if (screenReader) {
               return (
                 <Box key={`slot-${slot.slot}`} flexDirection="column" flexShrink={0}>
@@ -2106,10 +2166,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                   ))}
                 </Text>
               ) : m.role === 'assistant' ? (
-                <Markdown T={T}>{m.text}</Markdown>
+                <Markdown T={T} clip={clip}>{m.text}</Markdown>
               ) : m.lines ? (
                 <Box flexDirection="column">
-                  {m.lines.map((ln, li) => {
+                  {keep(m.lines).map((ln, li) => {
                     const used = ln.spans.reduce((n, sp) => n + sp.text.length, 0);
                     return (
                       <Text key={li} wrap="truncate" color={T.text} backgroundColor={ln.band ? bandColor(ln.band, T) : undefined}>
@@ -2151,7 +2211,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       </Box>
       {displayMessages.length === 0 ? null : (
         <Box paddingX={1} flexShrink={0}>
-          {renderEnd < displayMessages.length || belowHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↓ '}{belowHidden} more below</Text> : null}
+          {renderEnd < displayMessages.length || belowHidden > 0 || liftRows > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↓ '}{belowHidden} more below</Text> : null}
         </Box>
       )}
       {/* Everything under the transcript keeps its rows; only the transcript gives way (Yoga shrinks every

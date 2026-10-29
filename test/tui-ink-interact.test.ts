@@ -577,4 +577,55 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       h.stop();
     }
   }, 30000);
+
+  test('a wheel step moves a long reply a few rows, and the screen stays full', async () => {
+    const reply = Array.from({ length: 60 }, (_, i) => `row ${i}`).join('\n\n');
+    const h = start({ rows: 30, script: [{ blocks: [{ type: 'text', text: reply }] }] });
+    try {
+      for (const p of ['one', 'two', 'three']) {
+        h.write(p);
+        await Bun.sleep(80);
+        h.write('\r');
+        await Bun.sleep(900);
+      }
+      h.drain();
+      h.write('\x1b[<64;10;10M');
+      await Bun.sleep(400);
+      const f = h.frame();
+      const screen = f.slice(f.lastIndexOf('◆ cedia ·')).split('\n');
+      expect(screen[1]).toMatch(/more above/);
+      // Three rows went below the screen: the last row of the reply, not the one before it.
+      const shown = screen.join('\n');
+      expect(shown).not.toMatch(/row 59\b/);
+      expect(shown).toMatch(/row 58\b/);
+      expect(shown).toMatch(/more below/);
+      // The top of the screen is the same reply, with no blank band where its start would be.
+      expect(screen.slice(2).findIndex((l) => l.trim())).toBeLessThanOrEqual(1);
+    } finally {
+      h.stop();
+    }
+  }, 30000);
+
+  test('the wheel reaches the start of a reply taller than the screen, and stops at the top', async () => {
+    const reply = Array.from({ length: 60 }, (_, i) => `row ${i}`).join('\n\n');
+    const h = start({ rows: 30, script: [{ blocks: [{ type: 'text', text: reply }] }] });
+    try {
+      h.write('one');
+      await Bun.sleep(80);
+      h.write('\r');
+      await Bun.sleep(900);
+      for (let i = 0; i < 60; i++) {
+        h.write('\x1b[<64;10;10M');
+        await Bun.sleep(15);
+      }
+      await Bun.sleep(400);
+      const f = h.frame();
+      const screen = f.slice(f.lastIndexOf('◆ cedia ·'));
+      expect(screen).toMatch(/row 0\b/);
+      expect(screen).toMatch(/one/);
+      expect(screen).not.toMatch(/more above/);
+    } finally {
+      h.stop();
+    }
+  }, 30000);
 });
