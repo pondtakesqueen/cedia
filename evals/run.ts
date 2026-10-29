@@ -55,10 +55,11 @@ export type Reported = {
   // cedia only: where the run's time went (see Timing in src/core/types.ts).
   timing?: { modelMs: number; ttftMs: number; toolMs: number; retryMs?: number; harnessMs: number; outputTokPerSec: number };
   // cedia with --plan: how long planning took, and its model requests and the time spent in them.
-  plan?: { ms?: number; requests?: number; apiMs?: number };
+  // costUsd: the step's own cost; through Claude Code, what Claude Code says the step would cost at API prices.
+  plan?: { ms?: number; requests?: number; apiMs?: number; costUsd?: number };
   // cedia with --review: what the reviewer said, whether the writer was sent back to fix it, and how long the
   // review and the fix round took (requests and apiMs as for the plan).
-  review?: { verdict: string; fixed: boolean; ms?: number; fixMs?: number; requests?: number; apiMs?: number };
+  review?: { verdict: string; fixed: boolean; ms?: number; fixMs?: number; requests?: number; apiMs?: number; costUsd?: number };
   // cedia: handoffs to a new session, and sub-threads spawned.
   handoffs?: number;
   subthreads?: number;
@@ -233,8 +234,8 @@ export function parseReported(stdout: string): { reported: Reported; text: strin
         cacheHitRatio: Number(j.cacheHitRatio),
         turns: Number(j.numTurns),
         ...(j.timing ? { timing: j.timing as Reported["timing"] } : {}),
-        ...(j.plan ? { plan: { ...msOf(j.plan, "ms"), ...msOf(j.plan, "requests"), ...msOf(j.plan, "apiMs") } } : {}),
-        ...(j.review ? { review: { verdict: String((j.review as { verdict: unknown }).verdict), fixed: Boolean((j.review as { fixed: unknown }).fixed), ...msOf(j.review, "ms"), ...msOf(j.review, "fixMs"), ...msOf(j.review, "requests"), ...msOf(j.review, "apiMs") } } : {}),
+        ...(j.plan ? { plan: { ...msOf(j.plan, "ms"), ...msOf(j.plan, "requests"), ...msOf(j.plan, "apiMs"), ...msOf(j.plan, "costUsd") } } : {}),
+        ...(j.review ? { review: { verdict: String((j.review as { verdict: unknown }).verdict), fixed: Boolean((j.review as { fixed: unknown }).fixed), ...msOf(j.review, "ms"), ...msOf(j.review, "fixMs"), ...msOf(j.review, "requests"), ...msOf(j.review, "apiMs"), ...msOf(j.review, "costUsd") } } : {}),
         ...(Array.isArray(j.sessions) ? { handoffs: j.sessions.length - 1 } : {}),
         ...(typeof j.subthreads === "number" ? { subthreads: j.subthreads } : {}),
         ...(j.spawned && typeof j.spawned === "object" ? { spawned: j.spawned as Reported["spawned"] } : {}),
@@ -604,8 +605,8 @@ function contextOf(results: Result[]): { context?: Summary["context"] } {
   };
 }
 
-// A step's time from cedia's JSON, kept only when it is a number.
-const msOf = (o: unknown, key: "ms" | "fixMs" | "requests" | "apiMs"): { ms?: number; fixMs?: number; requests?: number; apiMs?: number } => {
+// A step's time or cost from cedia's JSON, kept only when it is a number.
+const msOf = (o: unknown, key: "ms" | "fixMs" | "requests" | "apiMs" | "costUsd"): { ms?: number; fixMs?: number; requests?: number; apiMs?: number; costUsd?: number } => {
   const v = (o as Record<string, unknown>)[key];
   return typeof v === "number" ? { [key]: v } : {};
 };

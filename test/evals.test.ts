@@ -92,6 +92,10 @@ describe("evals runner", () => {
     const timed = parseReported('{"type":"result","subtype":"success","costUsd":0,"cacheHitRatio":0,"numTurns":1,"result":"ok","usage":{},"plan":{"model":"m","ms":4100},"review":{"model":"m","verdict":"changes","fixed":true,"ms":9000,"fixMs":"x"}}');
     expect(timed?.reported.plan).toEqual({ ms: 4100 });
     expect(timed?.reported.review).toEqual({ verdict: "changes", fixed: true, ms: 9000 });
+    // A step's cost, as Claude Code prices it at API rates, so a run's whole cost can be told apart from cedia's spend.
+    const priced = parseReported('{"type":"result","subtype":"success","costUsd":0,"cacheHitRatio":0,"numTurns":1,"result":"ok","usage":{},"plan":{"model":"m","costUsd":0.08},"review":{"model":"m","verdict":"approve","fixed":false,"costUsd":0.05}}');
+    expect(priced?.reported.plan).toEqual({ costUsd: 0.08 });
+    expect(priced?.reported.review).toEqual({ verdict: "approve", fixed: false, costUsd: 0.05 });
   });
 
   test("summarize computes pass@1, pass^k, false-done and cost per passed run", () => {
