@@ -1,0 +1,12 @@
+{
+  "id": "chat-greeting",
+  "category": "chat",
+  "prompt": "hi",
+  "setup": {
+    "README.md": "# notes\n\nA scratch folder.\n",
+    "check.test.js": "const fs = require('fs'), path = require('path');\nconst want = {\"README.md\": \"# notes\\n\\nA scratch folder.\\n\"};\nconst seen = [];\n(function walk(dir) {\n  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {\n    if (e.name === 'node_modules' || e.name.startsWith('.')) continue;\n    const p = path.join(dir, e.name);\n    if (e.isDirectory()) walk(p); else seen.push(path.relative('.', p));\n  }\n})('.');\nconst fail = (m) => { console.error('FAIL: ' + m); process.exit(1); };\nfor (const p of seen) if (!(p in want) && p !== 'check.test.js') fail('a file was added: ' + p);\nfor (const [p, c] of Object.entries(want)) {\n  if (!fs.existsSync(p)) fail('a file was removed: ' + p);\n  if (fs.readFileSync(p, 'utf8') !== c) fail('a file was changed: ' + p);\n}\nconst out = process.env.EVAL_OUTPUT && fs.existsSync(process.env.EVAL_OUTPUT) ? fs.readFileSync(process.env.EVAL_OUTPUT, 'utf8') : '';\nconst err = process.env.EVAL_STDERR && fs.existsSync(process.env.EVAL_STDERR) ? fs.readFileSync(process.env.EVAL_STDERR, 'utf8') : '';\nif (!out.trim()) fail('no answer');\nif (out.length > 600) fail('a greeting got ' + out.length + ' characters back');\nif (/planning with/.test(err)) fail('a greeting went to the planner');\nconsole.log('PASS');\n"
+  },
+  "verify": "node check.test.js",
+  "timeoutSec": 60,
+  "budgetUsd": 0.05
+}

@@ -1,0 +1,103 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/ledger.test.ts b/ledger.test.ts
+--- a/ledger.test.ts	2026-10-29 01:34:20.048893773 +0000
++++ b/ledger.test.ts	2026-10-29 01:36:15.693148516 +0000
+@@ -36,6 +36,7 @@
+     expect(matchCheck('cd . && bun test', ['bun test'], cwd)).toBe('bun test');
+     expect(matchCheck('cd /work/repo/sub && bun test', ['bun test'], cwd)).toBeUndefined();
+     expect(matchCheck('cd /work/repo && bun test', ['bun test'])).toBeUndefined(); // no cwd given
++    expect(matchCheck('cd "/re  po" && bun test', ['bun test'], '/re  po')).toBe('bun test');
+   });
+ });
+ 
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/ledger.ts b/ledger.ts
+--- a/ledger.ts	2026-10-29 01:34:20.048945050 +0000
++++ b/ledger.ts	2026-10-29 01:36:15.683979398 +0000
+@@ -20,12 +20,21 @@
+   return /^(ls|cat|head|tail|grep|rg|find|wc|pwd|echo|git (status|diff|log|show))(\s|$)/.test(command.trim()) && !/[>|;&]/.test(command);
+ }
+ 
++const norm = (s: string) => s.trim().replace(/\s+/g, ' ').replace(/ 2>&1$/, '').trim();
++
+ // Returns the declared check (as written in `checks`) that a bash command runs, or undefined.
+ // The whole command must be the check, after trimming and collapsing whitespace on both, and dropping a trailing
+ // ` 2>&1` from both. A pipe or a chain would hide the check's exit code, so `bun test | tail` does not count.
+ // One exception: a leading `cd <dir> && ` is removed when <dir> (quotes stripped) resolves to `cwd`.
+ export function matchCheck(command: string, checks: string[], cwd?: string): string | undefined {
+-  throw new Error('not implemented');
++  let c = command.trim();
++  const cd = cwd === undefined ? null : /^cd\s+("[^"]*"|'[^']*'|\S+)\s+&&\s+/.exec(c);
++  if (cd && cwd !== undefined) {
++    const dir = cd[1]!.replace(/^["']|["']$/g, '');
++    if (resolve(cwd, dir) === resolve(cwd)) c = c.slice(cd[0].length);
++  }
++  c = norm(c);
++  return checks.find(k => norm(k) === c);
+ }
+ 
+ // Walks the log and returns one entry per thing that happened, in log order.
+@@ -38,18 +47,62 @@
+ // - Otherwise an edit or write call that completed is a write entry with path = input.path.
+ // - Otherwise a bash call whose command is not read-only is a write entry with command set (no path).
+ export function ledgerEntries(events: SessionEvent[], checks: string[], cwd?: string): LedgerEntry[] {
+-  throw new Error('not implemented');
++  const snaps = new Map<string, string[]>();
++  for (const e of events) {
++    if (e.kind === 'snapshot' && e.callId !== undefined) {
++      const l = snaps.get(e.callId) ?? [];
++      l.push(...e.changed);
++      snaps.set(e.callId, l);
++    }
++  }
++  const out: LedgerEntry[] = [];
++  let intents = new Map<string, { tool: string; input: Record<string, unknown> }>();
++  events.forEach((e, i) => {
++    if (e.kind === 'request') intents = new Map();
++    else if (e.kind === 'tool_intent') intents.set(e.callId, { tool: e.tool, input: e.input });
++    else if (e.kind === 'tool_result') {
++      const intent = intents.get(e.callId);
++      if (!intent || e.status === 'denied' || e.status === 'not_started') return;
++      const { tool, input } = intent;
++      const cmd = typeof input.command === 'string' ? input.command : undefined;
++      const isBash = tool === 'bash' && cmd !== undefined;
++      const check = isBash ? matchCheck(cmd, checks, cwd) : undefined;
++      if (check !== undefined) {
++        out.push({ kind: 'check', at: i, command: check, exitCode: e.output.exitCode ?? (e.output.isError ? 1 : 0) });
++      } else if (snaps.has(e.callId)) {
++        for (const path of snaps.get(e.callId)!) out.push({ kind: 'write', at: i, tool, path });
++      } else if ((tool === 'edit' || tool === 'write') && e.status === 'completed') {
++        out.push({ kind: 'write', at: i, tool, path: input.path as string });
++      } else if (isBash && !isReadOnly(cmd)) {
++        out.push({ kind: 'write', at: i, tool, command: cmd });
++      }
++    }
++  });
++  return out;
+ }
+ 
+ // changed: every write's label (path, or `bash: <command>`), first seen first, no duplicates.
+ // checks: every check entry, in order, as { command, exitCode }.
+ // unverified: labels of writes after the last passing check (all of them when no check passed), deduped.
+ export function evidence(entries: LedgerEntry[]): Evidence {
+-  throw new Error('not implemented');
++  const label = (w: Extract<LedgerEntry, { kind: 'write' }>) => w.path ?? `bash: ${w.command}`;
++  const last = entries.findLastIndex(e => e.kind === 'check' && e.exitCode === 0);
++  const changed = new Set<string>();
++  const unverified = new Set<string>();
++  entries.forEach((e, i) => {
++    if (e.kind !== 'write') return;
++    changed.add(label(e));
++    if (i > last) unverified.add(label(e));
++  });
++  const checks = entries.flatMap(e => (e.kind === 'check' ? [{ command: e.command, exitCode: e.exitCode }] : []));
++  return { changed: [...changed], checks, unverified: [...unverified] };
+ }
+ 
+ // The done gate. With no declared checks, or no writes, it is satisfied. Otherwise a check with exit code 0
+ // must come after the last write.
+ export function verified(entries: LedgerEntry[], checks: string[]): boolean {
+-  throw new Error('not implemented');
++  if (checks.length === 0) return true;
++  const lastWrite = entries.findLastIndex(e => e.kind === 'write');
++  if (lastWrite === -1) return true;
++  return entries.some((e, i) => e.kind === 'check' && e.exitCode === 0 && i > lastWrite);
+ }

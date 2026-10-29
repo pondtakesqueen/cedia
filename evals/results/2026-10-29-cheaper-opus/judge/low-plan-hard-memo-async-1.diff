@@ -1,0 +1,126 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/memo.regress.test.ts b/memo.regress.test.ts
+--- a/memo.regress.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/memo.regress.test.ts	2026-10-29 01:36:54.767981721 +0000
+@@ -0,0 +1,91 @@
++import { expect, test } from "bun:test";
++import { memo } from "./memo";
++
++function deferred<T>() {
++  let resolve!: (v: T) => void;
++  let reject!: (e: unknown) => void;
++  const promise = new Promise<T>((res, rej) => ((resolve = res), (reject = rej)));
++  return { promise, resolve, reject };
++}
++
++// fn's calls, each settled by the test.
++function lookups() {
++  const calls: { key: string; d: ReturnType<typeof deferred<string>> }[] = [];
++  const fn = (key: string) => {
++    const d = deferred<string>();
++    calls.push({ key, d });
++    return d.promise;
++  };
++  return { fn, calls };
++}
++
++const tick = () => new Promise((r) => setTimeout(r, 0));
++
++test("a result in flight for an evicted key is not kept", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 1 });
++  m("a");
++  m("b");
++  calls[0]!.d.resolve("a");
++  await tick();
++  expect(m.size).toBe(1);
++  m("a");
++  expect(calls).toHaveLength(3);
++});
++
++test("a cache hit counts as a use for least recently used", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 2 });
++  m("a");
++  m("b");
++  calls[0]!.d.resolve("a");
++  calls[1]!.d.resolve("b");
++  await tick();
++  m("a");
++  m("c");
++  m("a");
++  expect(calls).toHaveLength(3);
++  m("b");
++  expect(calls).toHaveLength(4);
++});
++
++test("a stale rejection does not delete a newer entry for the key", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 10 });
++  const first = m("k");
++  m.invalidate("k");
++  m("k");
++  calls[0]!.d.reject(new Error("stale"));
++  await expect(first).rejects.toThrow("stale");
++  await tick();
++  m("k");
++  expect(calls).toHaveLength(2);
++});
++
++test("clear while a call is in flight does not keep its result", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 10 });
++  m("k");
++  m.clear();
++  calls[0]!.d.resolve("v");
++  await tick();
++  expect(m.size).toBe(0);
++  m("k");
++  expect(calls).toHaveLength(2);
++});
++
++test("a key is not evicted when fn throws synchronously", async () => {
++  let calls = 0;
++  const fn = (key: string) => {
++    calls++;
++    if (key === "bad") throw new Error("sync");
++    return Promise.resolve(key);
++  };
++  const m = memo(fn, { ttlMs: 1000, max: 1 });
++  await m("a");
++  await tick();
++  expect(() => m("bad")).toThrow("sync");
++  expect(m.size).toBe(1);
++  await m("a");
++  expect(calls).toBe(2);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/memo.ts b/memo.ts
+--- a/memo.ts	2026-10-29 01:35:03.588446305 +0000
++++ b/memo.ts	2026-10-29 01:36:58.303981931 +0000
+@@ -31,14 +31,23 @@
+   const cache = new Map<K, { promise: Promise<V>; expires: number }>();
+   const call = ((key: K) => {
+     const hit = cache.get(key);
+-    if (hit && hit.expires > now()) return hit.promise;
++    if (hit && hit.expires > now()) {
++      cache.delete(key);
++      cache.set(key, hit);
++      return hit.promise;
++    }
+     cache.delete(key);
+-    if (cache.size > opts.max) cache.delete(cache.keys().next().value as K);
+     const entry = { promise: fn(key), expires: Infinity };
++    while (cache.size >= opts.max) cache.delete(cache.keys().next().value as K);
+     cache.set(key, entry);
++    // Only the entry still stored for the key may change the cache: not one invalidated, cleared or evicted since.
+     entry.promise.then(
+-      (value) => cache.set(key, { promise: Promise.resolve(value), expires: now() + opts.ttlMs }),
+-      () => cache.delete(key),
++      (value) => {
++        if (cache.get(key) === entry) cache.set(key, { promise: Promise.resolve(value), expires: now() + opts.ttlMs });
++      },
++      () => {
++        if (cache.get(key) === entry) cache.delete(key);
++      },
+     );
+     return entry.promise;
+   }) as Memo<K, V>;

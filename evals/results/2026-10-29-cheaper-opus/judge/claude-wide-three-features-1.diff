@@ -1,0 +1,336 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/duration.ts b/src/duration.ts
+--- a/src/duration.ts	2026-10-29 01:45:37.595922954 +0000
++++ b/src/duration.ts	2026-10-29 01:46:45.384221654 +0000
+@@ -7,10 +7,33 @@
+ //
+ // formatDuration: milliseconds to the shortest text using d, h, m, s and ms, largest unit first, zero parts
+ // left out, no spaces: 5_400_000 -> "1h30m", 1_500 -> "1s500ms", 0 -> "0s". Throws on a negative number.
++const UNIT_MS: Record<string, number> = { d: 86_400_000, h: 3_600_000, m: 60_000, s: 1_000, ms: 1 };
++
+ export function parseDuration(text: string): number {
+-  throw new Error('not implemented');
++  const s = text.trim();
++  const part = /(\d+(?:\.\d+)?)(ms|d|h|m|s)\s*/y;
++  let total = 0;
++  let pos = 0;
++  while (pos < s.length) {
++    part.lastIndex = pos;
++    const m = part.exec(s);
++    if (!m) throw new Error(`invalid duration: ${JSON.stringify(text)}`);
++    total += parseFloat(m[1]) * UNIT_MS[m[2]];
++    pos = part.lastIndex;
++  }
++  if (s.length === 0) throw new Error(`invalid duration: ${JSON.stringify(text)}`);
++  return Math.round(total);
+ }
+ 
+ export function formatDuration(ms: number): string {
+-  throw new Error('not implemented');
++  if (!Number.isFinite(ms) || ms < 0) throw new Error(`invalid duration: ${ms}`);
++  let rest = Math.round(ms);
++  if (rest === 0) return '0s';
++  let out = '';
++  for (const [unit, size] of Object.entries(UNIT_MS)) {
++    const n = Math.floor(rest / size);
++    if (n > 0) out += `${n}${unit}`;
++    rest -= n * size;
++  }
++  return out;
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/lru.ts b/src/lru.ts
+--- a/src/lru.ts	2026-10-29 01:45:37.595866404 +0000
++++ b/src/lru.ts	2026-10-29 01:47:57.152021095 +0000
+@@ -14,30 +14,82 @@
+ // An entry set at time t expires at t + ttlMs: it is live while now() < t + ttlMs.
+ export type EvictReason = 'capacity' | 'expired' | 'delete';
+ 
++interface Entry<V> {
++  value: V;
++  expires: number;
++}
++
+ export class LRU<K, V> {
+   onEvict?: (key: K, value: V, reason: EvictReason) => void;
++  private map = new Map<K, Entry<V>>();
+ 
+-  constructor(capacity: number, ttlMs: number, now: () => number = Date.now) {
+-    throw new Error('not implemented');
++  constructor(
++    private capacity: number,
++    private ttlMs: number,
++    private now: () => number = Date.now,
++  ) {}
++
++  private remove(key: K, entry: Entry<V>, reason: EvictReason): void {
++    this.map.delete(key);
++    this.onEvict?.(key, entry.value, reason);
+   }
+ 
+   get(key: K): V | undefined {
+-    throw new Error('not implemented');
++    const entry = this.map.get(key);
++    if (!entry) return undefined;
++    const t = this.now();
++    if (t >= entry.expires) {
++      this.remove(key, entry, 'expired');
++      return undefined;
++    }
++    this.map.delete(key);
++    this.map.set(key, entry);
++    return entry.value;
+   }
+ 
+   set(key: K, value: V): void {
+-    throw new Error('not implemented');
++    const t = this.now();
++    const old = this.map.get(key);
++    if (old && t >= old.expires) {
++      this.remove(key, old, 'expired');
++    } else {
++      this.map.delete(key);
++    }
++    this.map.set(key, { value, expires: t + this.ttlMs });
++    if (this.map.size <= this.capacity) return;
++    const expired: [K, Entry<V>][] = [];
++    for (const [k, e] of this.map) {
++      if (t >= e.expires) expired.push([k, e]);
++    }
++    for (const [k, e] of expired) this.remove(k, e, 'expired');
++    while (this.map.size > this.capacity) {
++      const [k, e] = this.map.entries().next().value!;
++      this.remove(k, e, 'capacity');
++    }
+   }
+ 
+   delete(key: K): boolean {
+-    throw new Error('not implemented');
++    const entry = this.map.get(key);
++    if (!entry) return false;
++    if (this.now() >= entry.expires) {
++      this.remove(key, entry, 'expired');
++      return false;
++    }
++    this.remove(key, entry, 'delete');
++    return true;
+   }
+ 
+   get size(): number {
+-    throw new Error('not implemented');
++    const t = this.now();
++    let n = 0;
++    for (const e of this.map.values()) if (t < e.expires) n++;
++    return n;
+   }
+ 
+   keys(): K[] {
+-    throw new Error('not implemented');
++    const t = this.now();
++    const out: K[] = [];
++    for (const [k, e] of this.map) if (t < e.expires) out.push(k);
++    return out.reverse();
+   }
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/slug.ts b/src/slug.ts
+--- a/src/slug.ts	2026-10-29 01:45:37.595910683 +0000
++++ b/src/slug.ts	2026-10-29 01:46:45.386504285 +0000
+@@ -11,10 +11,25 @@
+ //   keeps exactly max ("ab-cd-ef" with max 5 is "ab-cd").
+ //
+ // uniqueSlug(slug, taken): slug itself if it is not in taken, else slug-2, slug-3, ... the first free one.
++const SPECIAL: Record<string, string> = { ß: 'ss', æ: 'ae', œ: 'oe', ø: 'o', ł: 'l', đ: 'd' };
++
+ export function slugify(text: string, max?: number): string {
+-  throw new Error('not implemented');
++  const slug = text
++    .toLowerCase()
++    .replace(/[ßæœøłđ]/g, (c) => SPECIAL[c])
++    .normalize('NFD')
++    .replace(/\p{M}/gu, '')
++    .replace(/[^a-z0-9]+/g, '-')
++    .replace(/^-+|-+$/g, '');
++  if (max === undefined || slug.length <= max) return slug;
++  if (slug[max] === '-') return slug.slice(0, max);
++  const cut = slug.lastIndexOf('-', max - 1);
++  return cut > 0 ? slug.slice(0, cut) : slug.slice(0, max);
+ }
+ 
+ export function uniqueSlug(slug: string, taken: Set<string>): string {
+-  throw new Error('not implemented');
++  if (!taken.has(slug)) return slug;
++  let n = 2;
++  while (taken.has(`${slug}-${n}`)) n++;
++  return `${slug}-${n}`;
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/test/duration.rules.test.ts b/test/duration.rules.test.ts
+--- a/test/duration.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/test/duration.rules.test.ts	2026-10-29 01:47:57.169194771 +0000
+@@ -0,0 +1,34 @@
++import { expect, test } from 'bun:test';
++import { formatDuration, parseDuration } from '../src/duration.ts';
++
++test('parseDuration accepts the documented forms', () => {
++  expect(parseDuration('1.5h')).toBe(5_400_000);
++  expect(parseDuration('2d 4h')).toBe(2 * 86_400_000 + 4 * 3_600_000);
++  expect(parseDuration('250ms')).toBe(250);
++  expect(parseDuration('  90s  ')).toBe(90_000);
++  expect(parseDuration('1m30s500ms')).toBe(90_500);
++});
++
++test('parseDuration rejects bad input and names it in the error', () => {
++  for (const bad of ['', '   ', '10', '5x', 'h', '-1s', '1 h', '.5h', '1.h']) {
++    expect(() => parseDuration(bad)).toThrow(`"${bad}"`);
++  }
++});
++
++test('parseDuration rounds to whole milliseconds', () => {
++  expect(parseDuration('0.5ms')).toBe(1);
++  expect(parseDuration('1.0004s')).toBe(1000);
++  expect(parseDuration('1.0006s')).toBe(1001);
++});
++
++test('formatDuration', () => {
++  expect(formatDuration(1_500)).toBe('1s500ms');
++  expect(formatDuration(500)).toBe('500ms');
++  expect(formatDuration(90_061_001)).toBe('1d1h1m1s1ms');
++  expect(formatDuration(86_400_000)).toBe('1d');
++  expect(formatDuration(0)).toBe('0s');
++  expect(() => formatDuration(-1)).toThrow();
++  for (const x of [5_400_000, 1_500, 90_061_001]) {
++    expect(parseDuration(formatDuration(x))).toBe(x);
++  }
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/test/lru.rules.test.ts b/test/lru.rules.test.ts
+--- a/test/lru.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/test/lru.rules.test.ts	2026-10-29 01:47:57.162022273 +0000
+@@ -0,0 +1,100 @@
++import { expect, test } from 'bun:test';
++import { LRU, type EvictReason } from '../src/lru.ts';
++
++function setup(capacity: number, ttl: number) {
++  let t = 0;
++  const log: [string, number, EvictReason][] = [];
++  const cache = new LRU<string, number>(capacity, ttl, () => t);
++  cache.onEvict = (k, v, r) => log.push([k, v, r]);
++  return { cache, log, advance: (ms: number) => (t += ms) };
++}
++
++test('get refreshes recency; capacity evicts the least recent', () => {
++  const { cache, log } = setup(2, 1000);
++  cache.set('a', 1);
++  cache.set('b', 2);
++  cache.get('a');
++  cache.set('c', 3);
++  expect(log).toEqual([['b', 2, 'capacity']]);
++  expect(cache.keys()).toEqual(['c', 'a']);
++});
++
++test('expired entries are removed before a live one is evicted', () => {
++  const { cache, log, advance } = setup(2, 100);
++  cache.set('a', 1);
++  advance(60);
++  cache.set('b', 2);
++  advance(50); // a expired (t=110 >= 100), b live
++  cache.set('c', 3);
++  expect(log).toEqual([['a', 1, 'expired']]);
++  expect(cache.keys()).toEqual(['c', 'b']);
++});
++
++test('expired entries count toward capacity', () => {
++  const { cache, log, advance } = setup(1, 100);
++  cache.set('a', 1);
++  advance(100);
++  expect(cache.size).toBe(0);
++  cache.set('b', 2);
++  expect(log).toEqual([['a', 1, 'expired']]);
++  expect(cache.size).toBe(1);
++});
++
++test('live until t+ttl-1, expired at t+ttl', () => {
++  const { cache, advance } = setup(5, 1000);
++  cache.set('a', 1);
++  advance(999);
++  expect(cache.get('a')).toBe(1);
++  advance(1);
++  expect(cache.get('a')).toBeUndefined();
++});
++
++test('get on expired reports expired; delete reports delete or expired', () => {
++  const { cache, log, advance } = setup(5, 100);
++  cache.set('a', 1);
++  cache.set('b', 2);
++  cache.set('c', 3);
++  expect(cache.delete('a')).toBe(true);
++  expect(log).toEqual([['a', 1, 'delete']]);
++  expect(cache.delete('missing')).toBe(false);
++  advance(100);
++  expect(cache.get('b')).toBeUndefined();
++  expect(cache.delete('c')).toBe(false);
++  expect(log).toEqual([
++    ['a', 1, 'delete'],
++    ['b', 2, 'expired'],
++    ['c', 3, 'expired'],
++  ]);
++});
++
++test('size and keys ignore expired entries without evicting', () => {
++  const { cache, log, advance } = setup(5, 100);
++  cache.set('a', 1);
++  advance(50);
++  cache.set('b', 2);
++  advance(60);
++  expect(cache.size).toBe(1);
++  expect(cache.keys()).toEqual(['b']);
++  expect(log).toEqual([]);
++});
++
++test('re-setting an expired key reports the old value as expired', () => {
++  const { cache, log, advance } = setup(5, 100);
++  cache.set('a', 1);
++  advance(100);
++  cache.set('a', 2);
++  expect(log).toEqual([['a', 1, 'expired']]);
++  expect(cache.get('a')).toBe(2);
++});
++
++test('re-setting refreshes ttl and recency without onEvict', () => {
++  const { cache, log, advance } = setup(2, 100);
++  cache.set('a', 1);
++  cache.set('b', 2);
++  advance(90);
++  cache.set('a', 10);
++  expect(log).toEqual([]);
++  advance(50); // b expired, a live with fresh ttl
++  expect(cache.get('a')).toBe(10);
++  expect(cache.keys()).toEqual(['a']);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/test/slug.rules.test.ts b/test/slug.rules.test.ts
+--- a/test/slug.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/test/slug.rules.test.ts	2026-10-29 01:47:57.175773452 +0000
+@@ -0,0 +1,27 @@
++import { expect, test } from 'bun:test';
++import { slugify, uniqueSlug } from '../src/slug.ts';
++
++test('slugify letters and separators', () => {
++  expect(slugify('Straße')).toBe('strasse');
++  expect(slugify('Æon Œuvre')).toBe('aeon-oeuvre');
++  expect(slugify('Øl Łódź Đak')).toBe('ol-lodz-dak');
++  expect(slugify('ñ ç ź à')).toBe('n-c-z-a');
++  expect(slugify('--Hi!!  there--')).toBe('hi-there');
++  expect(slugify('')).toBe('');
++});
++
++test('slugify keeps digits', () => {
++  expect(slugify('Top 10 Tips 2024')).toBe('top-10-tips-2024');
++});
++
++test('slugify with max', () => {
++  expect(slugify('ab-cd-ef', 5)).toBe('ab-cd');
++  expect(slugify('ab-cd-ef', 4)).toBe('ab');
++  expect(slugify('abcdefgh', 3)).toBe('abc');
++  expect(slugify('ab-cd', 10)).toBe('ab-cd');
++});
++
++test('uniqueSlug', () => {
++  expect(uniqueSlug('post', new Set(['post', 'post-2']))).toBe('post-3');
++  expect(uniqueSlug('free', new Set(['post']))).toBe('free');
++});

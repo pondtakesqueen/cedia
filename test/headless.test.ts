@@ -359,6 +359,11 @@ describe('cedia -p (offline, faux)', () => {
 
       const plan = cedia([reply('PLAN'), reply('1. Write good to f.txt.'), ...writes], [...base, '--plan', 'faux/fallback']);
       expect(JSON.parse(plan.out)).toMatchObject({ subtype: 'success', plan: { model: 'faux/fallback' } });
+      // A writer that works from a plan gets the thorough stop lines, one sent straight to it the frugal ones.
+      const system = (home: string) => (sessionsOf(home).find((l) => (l[0] as { role: string }).role === 'code')![0] as Extract<SessionEvent, { kind: 'session' }>).system;
+      expect(system(plan.home)).toContain('once every rule the task states holds');
+      expect(system(plan.home)).not.toContain('Extra probes');
+      expect(system(skip.home)).toContain('Extra probes');
       expect(cedia([reply('x')], [...base, '--plan-when', 'sometimes']).err).toContain('--plan-when must be auto, always or never');
       const never = cedia(writes, [...base, '--plan', 'faux/fallback', '--plan-when', 'never']);
       expect(JSON.parse(never.out).plan).toBeUndefined();

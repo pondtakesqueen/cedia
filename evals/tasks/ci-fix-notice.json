@@ -1,0 +1,13 @@
+{
+  "id": "ci-fix-notice",
+  "category": "bug-fix",
+  "prompt": "Your pull request #2 (https://github.com/example/calc/pull/2) at 3f2c1ab failed CI: test. Fix it so the check passes, and say what was wrong.",
+  "setup": {
+    "src/calc.js": "function add(a, b) {\n  return a - b;\n}\nfunction mul(a, b) {\n  return a * b;\n}\nmodule.exports = { add, mul };\n",
+    "calc.test.js": "const { add, mul } = require('./src/calc');\nconst eq = (a, b, m) => { if (a !== b) { console.error('FAIL ' + m + ': expected ' + b + ', got ' + a); process.exit(1); } };\neq(add(2, 3), 5, 'add');\neq(add(-1, 1), 0, 'add negative');\neq(mul(4, 5), 20, 'mul');\nconsole.log('PASS');\n",
+    "package.json": "{\n  \"name\": \"calc\",\n  \"version\": \"1.0.0\",\n  \"scripts\": {\n    \"test\": \"node calc.test.js\"\n  }\n}\n"
+  },
+  "verify": "node calc.test.js",
+  "timeoutSec": 180,
+  "budgetUsd": 0.1
+}

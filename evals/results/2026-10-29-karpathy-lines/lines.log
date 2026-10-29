@@ -1,0 +1,14 @@
+Running 4 tasks x 1 runs on cedia (opencode-go/claude-haiku-5-5), 2 at a time...
+  PASS hard-pool#1 (34.7s $0.0063, peak 14k)
+  PASS hard-memo-async#1 (35.7s $0.0052, peak 13k)
+  PASS wide-bug-hunt#1 (16.8s $0.0029, peak 11k)
+  PASS hard-redact-bugs#1 (48.0s $0.0078, peak 20k)
+
+Results written to evals/results/2026-10-29-karpathy-lines/lines.jsonl
+cedia (opencode-go/claude-haiku-5-5): 4 tasks, 4 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 33.8s per run, 86825 input / 6530 output tokens per run, cache hit 85.9%
+  peak context 15k mean, 20k max, 0 of 4 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 1 edit: top-level old_text/new_text
+  speed 254 output tok/s, 0.91s to first token per call; model 99.4% of time, cedia 0.1%
+  cost $0.0222 total, $0.0055 per passed run

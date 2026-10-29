@@ -1,0 +1,15 @@
+Running 5 tasks x 1 runs on cedia (opencode-go/claude-haiku-5-5), 2 at a time...
+  PASS hard-ledger#1 (100.1s $0.0045, plan 35s, review approve 42s, peak 15k)
+  PASS hard-memo-async#1 (121.8s $0.0123, plan 43s, review changes 26s, fix 16s, peak 28k)
+  PASS hard-redact-bugs#1 (90.8s $0.0044, plan 35s, review changes 32s, fix 13s, peak 15k)
+  PASS hard-sse#1 (75.0s $0.0057, plan 23s, review changes 21s, fix 22s, peak 16k)
+  PASS hard-window#1 (85.3s $0.0046, plan 34s, review approve 25s, peak 13k)
+
+Results written to evals/results/2026-10-29-plan-thorough/thorough.jsonl
+cedia (opencode-go/claude-haiku-5-5): 5 tasks, 5 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 94.6s per run, 122740 input / 6731 output tokens per run, cache hit 87.6%
+  peak context 18k mean, 28k max, 0 of 5 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 11 edit: top-level old_text/new_text
+  speed 268.4 output tok/s, 0.80s to first token per call; model 99.5% of time, cedia 0.0%
+  cost $0.0316 total, $0.0063 per passed run

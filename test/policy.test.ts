@@ -345,12 +345,12 @@ describe('settings', () => {
       expect(loadPlanWhen('never')).toBe('never');
       // Modes keep the writer and pick the steps around it.
       writeFileSync(join(home, 'settings.json'), JSON.stringify({}));
-      expect(modeFlags('auto', {})).toEqual({ plan: 'claude-code', review: 'claude-code', planWhen: 'auto' });
-      expect(modeFlags('auto', { review: 'none', planWhen: 'always' })).toEqual({ plan: 'claude-code', planWhen: 'always' });
+      expect(modeFlags('auto', {})).toEqual({ plan: 'claude-code:opus@low', review: 'claude-code:sonnet@high', planWhen: 'auto' });
+      expect(modeFlags('auto', { review: 'none', planWhen: 'always' })).toEqual({ plan: 'claude-code:opus@low', planWhen: 'always' });
       expect(() => modeFlags('oplan', {})).toThrow('roles.plan');
       writeFileSync(join(home, 'settings.json'), JSON.stringify({ roles: { plan: 'claude-code:opus@high' } }));
       expect(modeFlags('oplan', {})).toEqual({ planWhen: 'always' });
-      expect(modeFlags('auto', {})).toEqual({ review: 'claude-code', planWhen: 'auto' });
+      expect(modeFlags('auto', {})).toEqual({ review: 'claude-code:sonnet@high', planWhen: 'auto' });
       expect(isMode('auto') && isMode('oplan') && !isMode('haiku')).toBe(true);
       expect(() => loadRoles({ review: 'claude-code:opus@huge' }, {})).toThrow('claude-code[:<model>][@low|medium|high|xhigh|max]');
       expect(() => loadRoles({ code: 'claude-code:opus' }, {})).toThrow('the code role runs in cedia');

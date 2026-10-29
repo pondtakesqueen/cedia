@@ -1,0 +1,72 @@
+[
+ {
+  "task": "real-three-changes",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 8,
+    "tests": 4,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A fails a refusal even when tool calls come with it, dedupes shared ids more cleanly, and tests the quota wait and the rejected resume; B's only test covers shared ids on the budget path.",
+   "defects_A": [
+    "src/core/loop/run.ts:~293 a tool returning an object with no text yields the string 'undefined' instead of 'no output'",
+    "src/clients/headless/main.ts:~130 the provider error message is printed in full to stderr, not truncated",
+    "docs/ROADMAP.md not updated; the completed 'thinking rejected' item remains"
+   ],
+   "defects_B": [
+    "src/core/loop/run.ts:~383 a refusal that comes with tool calls still runs the tools instead of failing the run",
+    "src/core/loop/run.ts:~264 and ~278 duplicate-id dedupe is repeated in the handoff and budget paths",
+    "src/core/loop/run.ts:~325 the unknown-tool name gains an ellipsis, so it can exceed the 64-character cut",
+    "src/clients/headless/main.ts:~131 the wait message rounds to whole minutes, so a short wait reads as 1 min",
+    "test/: no tests for the quota wait, the rejected restart or the empty-reply handling"
+   ]
+  },
+  "cost": 0.18296700000000002
+ },
+ {
+  "task": "real-three-changes",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 8,
+    "tests": 5,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B also handles a refusal that carries tool calls and adds tests for quota wait and the resumed refused thread; A runs the tools on such a refusal.",
+   "defects_A": [
+    "src/core/loop/run.ts:~383: refusal is checked after the tool-call branch, so a refusal that carries tool calls runs them instead of failing the run",
+    "test: no new tests for quota wait or the refused-history restart"
+   ],
+   "defects_B": [
+    "src/clients/headless/main.ts:~130: stderr prints the full provider error message, untruncated",
+    "src/clients/headless/main.ts:~124: a resumed thread whose last session used a different model and was refused is recorded as 'rejected' and given a refusal note, although no session was refused on this model"
+   ]
+  },
+  "cost": 0.16239
+ }
+]

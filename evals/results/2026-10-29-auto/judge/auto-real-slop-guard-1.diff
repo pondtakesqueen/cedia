@@ -1,0 +1,408 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/SPEC.md b/SPEC.md
+--- a/SPEC.md	2026-10-29 02:55:37.768265532 +0000
++++ b/SPEC.md	2026-10-29 02:58:44.025085283 +0000
+@@ -17,7 +17,7 @@
+ | Auth | API keys only, from the environment (`CEDIA_ANTHROPIC_API_KEY` stands in for `ANTHROPIC_API_KEY`, which Claude Code cloud sessions drop) or added by an egress proxy (cloud network secrets). No Claude.ai or Cursor OAuth, no request that impersonates another client |
+ | Sandbox | `@anthropic-ai/sandbox-runtime` (bubblewrap on Linux, sandbox-exec on macOS) around every bash call: writes only in the working directory and temp dir, no reads of the credential stores (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, `~/.netrc`, `~/.docker/config.json`, `~/.git-credentials`, `~/.npmrc`, `~/.pypirc`, `~/.kube/config`, cedia's home), network only to package registries plus `--allow-domain`/user settings. `--sandbox auto` (default) falls back to unsandboxed with a stderr note; `on` requires it. Bash never inherits keys, tokens or `CEDIA_*` env. Edit and write never touch `.git/` or `.cedia/` |
+ | Permission | cedia never stops to ask: a denied call returns its reason to the model and the run goes on, so it can be left alone. Modes `auto` (default: `workspace` when the sandbox is on, `read-only` when it is off), `read-only` and `workspace`; allow/deny rules; built-in guards; then the sandbox (stage 2); classifier (stage 6). Rules: flags > `CEDIA_PERMISSION` > `~/.cedia/settings.json`; a repo's `.cedia/settings.json` can only add deny rules |
+-| Guards | The deny list plus `secret-path` (credential stores, for every tool) and `secret-redaction`. Only the user lifts one, by name: `--unlock <guard>` or `permissions.unlock` in `~/.cedia/settings.json`. Never a repo, an allow rule or the model. cedia's prompt adds no content rules of its own. `context` in `~/.cedia/settings.json` (a string or lines) is the user's standing context, sent in the first user turn of every session as `<user_context>`; a repo cannot set it |
++| Guards | The deny list plus `secret-path` (credential stores, for every tool), `secret-redaction` and `slop-check`. Only the user lifts one, by name: `--unlock <guard>` or `permissions.unlock` in `~/.cedia/settings.json`. Never a repo, an allow rule or the model. cedia's prompt adds no content rules of its own. `context` in `~/.cedia/settings.json` (a string or lines) is the user's standing context, sent in the first user turn of every session as `<user_context>`; a repo cannot set it |
+ | Privacy | No telemetry: cedia talks only to the model provider. Secrets in tool output (known token formats, private keys, dotenv/JSON/URL passwords) are replaced with `[cedia:redacted]` before the result is logged or sent, and a write carrying the placeholder is denied. `--privacy no-training` (default) refuses `dataPolicy: trains` models outside public repos; `zdr` allows only zero-data-retention models. flags > `CEDIA_PRIVACY` > user settings; a repo may set `zdr` but never loosen it |
+ | Edit tool | `edits[]` with tiered matching; `apply_patch` for GPT; edit mode chosen per model from eval results |
+ | Compaction | Claude: server-side context editing and on-demand compaction (`compact-2026-09-04`), or a client-side summary of the whole history with thinking stripped; never client-side tool-result clearing or keep-tail, because Claude 5.5-family thinking signatures bind the unedited prefix. Chat Completions and Responses: client side, clear old tool results first, then summarize. Segments stay grep-able |
+@@ -153,7 +153,7 @@
+ 
+ Guarantees that hold whatever model runs come from the log, not the model's words.
+ 
+-- **Done gate** (`core/trust/ledger.ts`, stage 2). When the agent claims done and the ledger has no passing declared check after its last write, cedia appends one reminder naming the checks and lets the model continue; a second unverified claim ends the run with `error_unverified_claim` and exit code 1. Only declared checks count (`--check`, or `checks` in `~/.cedia/settings.json` or the repo's `.cedia/settings.json`), and only when the bash command is exactly the check: a pipe would hide its exit code. Writes are completed `edit`/`write` calls and any bash command that is not read-only. With no declared checks the gate is off and the receipt lists everything as unverified.
++- **Done gate** (`core/trust/ledger.ts`, stage 2). When the agent claims done and the ledger has no passing declared check after its last write, cedia appends one reminder naming the checks and lets the model continue; a second unverified claim ends the run with `error_unverified_claim` and exit code 1. Only declared checks count (`--check`, or `checks` in `~/.cedia/settings.json` or the repo's `.cedia/settings.json`), and only when the bash command is exactly the check: a pipe would hide its exit code. Writes are completed `edit`/`write` calls and any bash command that is not read-only. With no declared checks the gate is off and the receipt lists everything as unverified. With no declared check, cedia detects the repo's test command (`core/config.ts` `detectChecks`) and gates on it softly: one reminder, never a refusal. At a done claim the slop guard (`core/trust/slop.ts`) scans the run's own changes (the snapshot patch, else completed edit/write calls) for test deletion, weakening or skipping, silenced checks, swallowed errors, `as any` and not-implemented stubs; one reminder lists the findings, and any still found end up in the evidence as `flags` (omitted when empty). `--unlock slop-check` turns it off.
+ - **Receipt.** Every turn that changed files ends with a receipt from the ledger: files changed, checks run, their results.
+ - **Deny list** (`core/safety/policy.ts`, stage 2, before the stage-6 classifier): force-push (including `--force-with-lease`, `+refspec`, branch deletion), `git reset --hard` and `git clean -f` (any branch until shadow snapshots can undo them), `rm -r` or `find -delete` outside the workspace or on targets that cannot be resolved, and publish/deploy commands (`npm publish`, `vercel --prod`, `kubectl apply`, `terraform apply`, `gh pr merge` and similar). It reads each simple command, through `sudo`, `nice -n`, `timeout`, `xargs`, `bash -c`, `$( )` and chains. No mode or allow rule lifts it; the user can unlock one guard by name. pstack's "Always pause" list is a harness rule because a weak model will not pause on its own. It guards against mistakes; the sandbox is the boundary.
+ - **Untrusted content.** Tool results (files, command output, web pages) are data: the base prompt says so, and they only ever reach the model inside `tool_result` blocks. `evals/tasks/hard-injection` plants instructions in a README and a code comment and fails any run that follows them. A small-model injection screen on tool output is a stage-6 candidate. A guard's denial tells the model not to work around it; a command the shell reader cannot parse (`shell:unparsed`) tells it to rewrite instead.
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/clients/headless/main.ts b/src/clients/headless/main.ts
+--- a/src/clients/headless/main.ts	2026-10-29 02:55:37.771035937 +0000
++++ b/src/clients/headless/main.ts	2026-10-29 02:58:39.877443498 +0000
+@@ -7,7 +7,7 @@
+ import { missingKeyNote } from '../../core/providers/http.ts';
+ import { providerFor } from '../../core/providers/index.ts';
+ import { projectSlug, SessionLog, sessionPath } from '../../core/session/log.ts';
+-import { cediaHome, loadChecks, loadContext, loadPolicy, loadPrivacy, loadSandbox } from '../../core/config.ts';
++import { cediaHome, detectChecks, loadChecks, loadContext, loadPolicy, loadPrivacy, loadSandbox } from '../../core/config.ts';
+ import { openSandbox } from '../../core/safety/sandbox.ts';
+ import { openSnapshots } from '../../core/safety/snapshot.ts';
+ import { CORE_TOOLS } from '../../core/tools/index.ts';
+@@ -37,12 +37,13 @@
+ export function receipt(ev: Evidence): string {
+   const list = (xs: string[]) => (xs.length ? xs.join(', ') : 'none');
+   const checks = ev.checks.map((c) => `${c.command} (exit ${c.exitCode})`);
+-  return `cedia receipt: changed ${list(ev.changed)}; checks ${list(checks)}; unverified ${list(ev.unverified)}`;
++  return `cedia receipt: changed ${list(ev.changed)}; checks ${list(checks)}; unverified ${list(ev.unverified)}${ev.flags?.length ? `; flags ${ev.flags.join(', ')}` : ''}`;
+ }
+ 
+ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
+   const model = resolveModel(args.model);
+-  const checks = loadChecks(args.cwd, args.checks);
++  const declared = loadChecks(args.cwd, args.checks);
++  const checks = declared.length ? declared : detectChecks(args.cwd);
+   const privacy = loadPrivacy(args.cwd, args.privacy);
+   const context = loadContext();
+   const sandboxSettings = loadSandbox({ ...(args.sandbox ? { mode: args.sandbox } : {}), allowDomains: args.allowDomains ?? [] });
+@@ -83,6 +84,7 @@
+         permission: policy,
+         privacy,
+         checks,
++        softChecks: !declared.length && checks.length > 0,
+         ...(sandbox.on ? { wrap: sandbox.wrap } : {}),
+         ...(snapshots ? { snapshots } : {}),
+         signal: ac.signal,
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/core/config.ts b/src/core/config.ts
+--- a/src/core/config.ts	2026-10-29 02:55:37.771035937 +0000
++++ b/src/core/config.ts	2026-10-29 02:58:04.535726598 +0000
+@@ -78,6 +78,31 @@
+   return [...new Set([...flags, ...project, ...user])];
+ }
+ 
++// The repo's own test command, for a soft done gate when no check is declared.
++export function detectChecks(cwd: string): string[] {
++  const has = (f: string) => existsSync(join(cwd, f));
++  const read = (f: string) => readFileSync(join(cwd, f), 'utf8');
++  if (has('package.json')) {
++    let test: unknown;
++    try {
++      test = (JSON.parse(read('package.json')) as { scripts?: { test?: unknown } }).scripts?.test;
++    } catch {
++      test = undefined;
++    }
++    if (typeof test === 'string' && test.trim() && !/no test specified/.test(test)) {
++      if (has('pnpm-lock.yaml')) return ['pnpm test'];
++      if (has('bun.lock') || has('bun.lockb')) return ['bun run test'];
++      if (has('yarn.lock')) return ['yarn test'];
++      return ['npm test'];
++    }
++  }
++  if (has('Cargo.toml')) return ['cargo test'];
++  if (has('go.mod')) return ['go test ./...'];
++  if (has('Makefile') && /^test:/m.test(read('Makefile'))) return ['make test'];
++  if (has('pytest.ini') || (has('pyproject.toml') && read('pyproject.toml').includes('[tool.pytest'))) return ['pytest'];
++  return [];
++}
++
+ // Sandbox: flags > CEDIA_SANDBOX > user settings > auto. Network grants come from the user only, never the repo.
+ export function loadSandbox(flags: { mode?: string; allowDomains?: string[] } = {}, env = process.env): { mode: SandboxSetting; allowedDomains: string[] } {
+   const user = readSettings(join(cediaHome(), 'settings.json')).sandbox ?? {};
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/core/loop/run.ts b/src/core/loop/run.ts
+--- a/src/core/loop/run.ts	2026-10-29 02:55:37.771372338 +0000
++++ b/src/core/loop/run.ts	2026-10-29 03:00:21.350845039 +0000
+@@ -1,5 +1,5 @@
+ import { existsSync } from 'node:fs';
+-import { join } from 'node:path';
++import { join, relative, resolve } from 'node:path';
+ import { buildMessages, sessionHeader } from '../context/build.ts';
+ import { hash } from '../hash.ts';
+ import { costUsd } from '../providers/catalog.ts';
+@@ -9,6 +9,7 @@
+ import type { Snapshots } from '../safety/snapshot.ts';
+ import type { SessionLog } from '../session/log.ts';
+ import { evidence, ledgerEntries, verified } from '../trust/ledger.ts';
++import { changesFromPatch, findSlop, type FileChange, type SlopFinding } from '../trust/slop.ts';
+ import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
+ import {
+   addUsage,
+@@ -47,6 +48,8 @@
+   privacy?: PrivacyLevel;
+   // Declared checks (task or repo). The done gate counts only these, never a command the model picked.
+   checks?: string[];
++  // Checks cedia detected rather than the user declared: one reminder, never a refusal.
++  softChecks?: boolean;
+   // Puts bash inside the OS sandbox; absent means unsandboxed.
+   wrap?: (command: string) => Promise<string>;
+   // Shadow-git snapshots around every writing call; absent means changed files come from edit/write only.
+@@ -64,6 +67,40 @@
+ 
+ export const CONTINUE_AFTER_LIMIT = 'Your previous reply was cut off by the output limit. Continue exactly where it stopped.';
+ 
++// The files the run changed: the shadow-git patch when snapshots exist, else the completed edit and write calls.
++export function runChanges(events: SessionEvent[], cwd: string, snapshots?: Snapshots): FileChange[] {
++  const snaps = events.filter((e): e is EventOf<'snapshot'> => e.kind === 'snapshot');
++  if (snapshots && snaps.length >= 2) return changesFromPatch(snapshots.patch(snaps[0]!.tree, snaps.at(-1)!.tree));
++  const lines = (s = '') => (s === '' ? [] : s.replace(/\n$/, '').split('\n'));
++  const intents = new Map<string, EventOf<'tool_intent'>>();
++  const out: FileChange[] = [];
++  for (const e of events) {
++    if (e.kind === 'tool_intent') intents.set(e.callId, e);
++    if (e.kind !== 'tool_result' || e.status !== 'completed') continue;
++    const intent = intents.get(e.callId);
++    if (intent?.tool !== 'write' && intent?.tool !== 'edit') continue;
++    const input = intent.input as { path?: string; content?: string; edits?: { old_text?: string; new_text?: string }[] };
++    const path = relative(cwd, resolve(cwd, input.path ?? ''));
++    if (intent.tool === 'write') out.push({ path, added: lines(input.content), removed: [], deleted: false });
++    else {
++      // Lines the edit keeps from old_text are context, not changes.
++      const parts = (input.edits ?? []).map((x) => [lines(x.old_text), lines(x.new_text)] as const);
++      out.push({
++        path,
++        added: parts.flatMap(([o, n]) => n.filter((l) => !o.includes(l))),
++        removed: parts.flatMap(([o, n]) => o.filter((l) => !n.includes(l))),
++        deleted: false,
++      });
++    }
++  }
++  return out;
++}
++
++const flag = (f: SlopFinding) => `${f.rule} ${f.path}${f.text ? `: ${f.text}` : ''}`;
++
++export const slopReminder = (flags: string[]) =>
++  `cedia found shortcuts in your changes that can make work look done:\n- ${flags.join('\n- ')}\nFix each one. If one is truly needed, keep it and say why in your report; anything left stays on the receipt as a flag.`;
++
+ export const unverifiedReminder = (checks: string[]) =>
+   `cedia has no record of a declared check passing since your last change, so the task is not done yet. A check counts only when the whole bash command is ${checks.map((c) => `\`${c}\``).join(' or ')} (a leading \`cd\` to the working directory is fine; pipes, \`;\` or other commands are not). Run it that way now, fix what fails, then report.`;
+ 
+@@ -149,14 +186,17 @@
+   let runStart = log.events.length;
+   const entries = () => ledgerEntries(log.events.slice(runStart), checks, opts.cwd);
+   let nudged = false;
++  let flags: string[] = [];
++  let slopNudged = false;
++  const slopOn = !opts.permission?.unlock?.includes('slop-check');
+   const snap: { tree?: string } = {};
+   const wallStart = performance.now();
+   const timing = { modelMs: 0, ttftMs: 0, decodeMs: 0, toolMs: 0 };
+ 
+   const finish = (subtype: ResultSubtype, reason: TurnEndReason, result?: string): HeadlessResult => {
+     log.append({ kind: 'turn_end', reason, ...(reason === 'aborted' ? { cause: 'user' as const } : {}) });
+-    const ev = evidence(entries());
+-    const hasEvidence = ev.changed.length > 0 || ev.checks.length > 0;
++    const ev = { ...evidence(entries()), ...(flags.length ? { flags } : {}) };
++    const hasEvidence = ev.changed.length > 0 || ev.checks.length > 0 || flags.length > 0;
+     return {
+       type: 'result',
+       subtype,
+@@ -259,6 +299,14 @@
+       log.append({ kind: 'reminder', as: 'user', text: CONTINUE_AFTER_LIMIT });
+       continue;
+     }
++    if (slopOn) {
++      flags = findSlop(runChanges(log.events.slice(runStart), opts.cwd, opts.snapshots)).map(flag);
++      if (flags.length && !slopNudged) {
++        slopNudged = true;
++        log.append({ kind: 'reminder', as: 'user', text: slopReminder(flags) });
++        continue;
++      }
++    }
+     // Done gate: one reminder to run a declared check, then the claim is refused.
+     if (!verified(entries(), checks)) {
+       if (!nudged) {
+@@ -266,7 +314,7 @@
+         log.append({ kind: 'reminder', as: 'user', text: unverifiedReminder(checks) });
+         continue;
+       }
+-      return finish('error_unverified_claim', 'completed');
++      return finish(opts.softChecks ? 'success' : 'error_unverified_claim', 'completed');
+     }
+     return finish('success', 'completed');
+   }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/core/safety/policy.ts b/src/core/safety/policy.ts
+--- a/src/core/safety/policy.ts	2026-10-29 02:55:37.772207408 +0000
++++ b/src/core/safety/policy.ts	2026-10-29 02:58:33.086563791 +0000
+@@ -17,8 +17,8 @@
+ export const PERMISSION_SETTINGS: PermissionSetting[] = ['auto', ...PERMISSION_MODES];
+ 
+ // Built-in guards. The user (never a repo or the model) may lift one with `unlock`; nothing else lifts them.
+-export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside' | 'deploy' | 'secret-path' | 'secret-redaction';
+-export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'rm-outside', 'deploy', 'secret-path', 'secret-redaction'];
++export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside' | 'deploy' | 'secret-path' | 'secret-redaction' | 'slop-check';
++export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'rm-outside', 'deploy', 'secret-path', 'secret-redaction', 'slop-check'];
+ 
+ // Rules look like `bash`, `bash(bun test*)` or `edit(src/*)`. `*` matches anything. A bash pattern is
+ // matched against each simple command in the line, so `bun test && rm -rf x` needs both to be allowed.
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/core/safety/snapshot.ts b/src/core/safety/snapshot.ts
+--- a/src/core/safety/snapshot.ts	2026-10-29 02:55:37.772425659 +0000
++++ b/src/core/safety/snapshot.ts	2026-10-29 03:00:21.351266212 +0000
+@@ -5,7 +5,7 @@
+ // Shadow git: a separate git dir and index that record the working tree as trees, so cedia can name
+ // every file a call changed (bash included) and later undo a turn. It never touches the user's repo:
+ // GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE all point at cedia's copy, and user/system config is ignored.
+-export type Snapshots = { take(): string | undefined; diff(from: string, to: string): string[]; restore(tree: string): void };
++export type Snapshots = { take(): string | undefined; diff(from: string, to: string): string[]; patch(from: string, to: string): string; restore(tree: string): void };
+ 
+ const SLOW_MS = 10_000;
+ 
+@@ -24,7 +24,7 @@
+     GIT_TERMINAL_PROMPT: '0',
+   };
+   const git = (args: string[]) => {
+-    const p = Bun.spawnSync(['git', '-c', 'core.autocrlf=false', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0', ...args], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
++    const p = Bun.spawnSync(['git', '-c', 'core.autocrlf=false', '-c', 'core.quotepath=false', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'gc.auto=0', ...args], { cwd: root, env, stdout: 'pipe', stderr: 'pipe' });
+     if (p.exitCode !== 0) throw new Error(`git ${args[0]}: ${p.stderr.toString().trim()}`);
+     return p.stdout.toString();
+   };
+@@ -57,6 +57,9 @@
+       if (from === to) return [];
+       return git(['diff-tree', '-r', '--name-only', '--no-renames', '-z', from, to]).split('\0').filter(Boolean);
+     },
++    patch(from, to) {
++      return from === to ? '' : git(['diff-tree', '-r', '-p', '-U0', '--no-renames', '--no-color', from, to]);
++    },
+     // Puts the working tree back to `tree`: changed files restored, files added since removed.
+     restore(tree) {
+       const now = this.take();
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/core/trust/slop.ts b/src/core/trust/slop.ts
+--- a/src/core/trust/slop.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/src/core/trust/slop.ts	2026-10-29 03:00:21.350363670 +0000
+@@ -0,0 +1,79 @@
++// The slop guard finds shortcuts in a run's changes that make work look done.
++export type FileChange = { path: string; added: string[]; removed: string[]; deleted: boolean };
++export type SlopRule = 'test-deleted' | 'test-weakened' | 'test-skipped' | 'suppression' | 'swallowed-error' | 'type-escape' | 'stub';
++export type SlopFinding = { rule: SlopRule; path: string; text?: string };
++
++const CODE = /\.(ts|tsx|js|jsx|mjs|cjs|mts|cts|py|go|rs|rb|java|kt|swift|c|cc|cpp|h|hpp|cs|php|scala)$/;
++const TS = /\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/;
++const TEST_DIR = /(^|\/)(tests?|__tests__|spec)\//;
++const TEST_NAME = /[._](test|spec)\.[a-z]+$/;
++const TEST_PY = /^test_.*\.py$/;
++const ASSERT = /\b(assert\w*|expect|should)\b|\bt\.(Error|Fatal|Fail)/;
++const SKIPPED = /\b(it|test|describe)\.(skip|todo)\s*\(|\b(xit|xdescribe|xtest)\s*\(|\bt\.Skip(Now|f)?\s*\(|@pytest\.mark\.skip|@unittest\.skip|\bpytest\.skip\s*\(|#\[ignore\]/;
++const SUPPRESSION = /@ts-(ignore|nocheck|expect-error)|eslint-disable|biome-ignore|#\s*type:\s*ignore|#\s*noqa|pylint:\s*disable|\/\/\s*nolint|@SuppressWarnings/;
++const SWALLOWED = [/\bcatch\s*(\([^)]*\))?\s*\{\s*\}/, /\bexcept\b[^:]*:\s*pass\b/, /\.catch\(\s*\(\s*\w*\s*\)\s*=>\s*\{\s*\}\s*\)/];
++const TYPE_ESCAPE = /\bas\s+any\b|<any>|:\s*any\b(?!\s*\()/;
++const STUB = [/\b(throw|raise|panic)\b.*\b(not implemented|unimplemented)\b/i, /NotImplementedError/, /\b(todo|unimplemented)!\(/];
++
++const isTest = (path: string) => TEST_DIR.test(path) || TEST_NAME.test(path) || TEST_PY.test(path.split('/').pop()!);
++const count = (lines: string[]) => lines.filter((l) => ASSERT.test(l)).length;
++
++// Type escapes are looked for in code only: strings and comments may say `any`.
++const code = (line: string) => line.replace(/\/\/.*$/, '').replace(/(['"`]).*?\1/g, "''");
++
++// `next` is the following added line, so a catch or except whose body is on the next line still counts.
++function lineRule(path: string, line: string, next = ''): SlopRule | undefined {
++  if (isTest(path) && SKIPPED.test(line)) return 'test-skipped';
++  if (SUPPRESSION.test(line)) return 'suppression';
++  if (SWALLOWED.some((r) => r.test(`${line} ${next}`))) return 'swallowed-error';
++  if (TS.test(path) && TYPE_ESCAPE.test(code(line))) return 'type-escape';
++  if (STUB.some((r) => r.test(line))) return 'stub';
++}
++
++export function findSlop(changes: FileChange[]): SlopFinding[] {
++  const out: SlopFinding[] = [];
++  for (const c of changes) {
++    if (isTest(c.path)) {
++      if (c.deleted) {
++        out.push({ rule: 'test-deleted', path: c.path });
++        continue;
++      }
++      const fewer = count(c.removed) - count(c.added);
++      if (fewer > 0) out.push({ rule: 'test-weakened', path: c.path, text: `${fewer} fewer assertions` });
++    }
++    if (!CODE.test(c.path)) continue;
++    for (const [i, line] of c.added.entries()) {
++      const rule = lineRule(c.path, line, c.added[i + 1]);
++      if (rule) out.push({ rule, path: c.path, text: line.trim().slice(0, 120) });
++    }
++  }
++  return out;
++}
++
++export function changesFromPatch(patch: string): FileChange[] {
++  const out: FileChange[] = [];
++  let cur: FileChange | undefined;
++  let inHunk = false;
++  for (const line of patch.split('\n')) {
++    const head = /^diff --git a\/.* b\/(.*)$/.exec(line);
++    if (head) {
++      cur = { path: head[1]!, added: [], removed: [], deleted: false };
++      out.push(cur);
++      inHunk = false;
++    } else if (!cur) {
++      continue;
++    } else if (line.startsWith('@@')) {
++      inHunk = true;
++    } else if (inHunk) {
++      if (line.startsWith('+')) cur.added.push(line.slice(1));
++      else if (line.startsWith('-')) cur.removed.push(line.slice(1));
++    } else if (line.startsWith('--- a/')) {
++      cur.path = line.slice(6);
++    } else if (line.startsWith('+++ b/')) {
++      cur.path = line.slice(6);
++    } else if (line.startsWith('deleted file mode')) {
++      cur.deleted = true;
++    }
++  }
++  return out;
++}
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/core/types.ts b/src/core/types.ts
+--- a/src/core/types.ts	2026-10-29 02:55:37.772790353 +0000
++++ b/src/core/types.ts	2026-10-29 02:58:33.086000614 +0000
+@@ -135,7 +135,7 @@
+   stream(req: WireRequest, signal: AbortSignal): AsyncIterable<StreamEvent>;
+ };
+ 
+-export type Evidence = { changed: string[]; checks: { command: string; exitCode: number }[]; unverified: string[] };
++export type Evidence = { changed: string[]; checks: { command: string; exitCode: number }[]; unverified: string[]; flags?: string[] };
+ 
+ export type ResultSubtype =
+   | 'success' | 'error_max_turns' | 'error_max_budget_usd' | 'error_during_execution' | 'interrupted' | 'error_unverified_claim';
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/test/slop-review.test.ts b/test/slop-review.test.ts
+--- a/test/slop-review.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/test/slop-review.test.ts	2026-10-29 03:00:13.215734247 +0000
+@@ -0,0 +1,60 @@
++import { describe, expect, test } from 'bun:test';
++import { receipt } from '../src/clients/headless/main.ts';
++import { runChanges } from '../src/core/loop/run.ts';
++import type { SessionEvent } from '../src/core/types.ts';
++import { changesFromPatch, findSlop, type FileChange } from '../src/core/trust/slop.ts';
++
++const change = (path: string, added: string[], removed: string[] = [], deleted = false): FileChange => ({ path, added, removed, deleted });
++const rules = (c: FileChange[]) => findSlop(c).map((f) => `${f.rule} ${f.path}`);
++
++describe('review findings', () => {
++  test('a path with spaces is read from the header, not the previous file', () => {
++    const patch = [
++      'diff --git a/src/a.ts b/src/a.ts',
++      '--- a/src/a.ts',
++      '+++ b/src/a.ts',
++      '@@ -1 +1 @@',
++      '-old',
++      '+new',
++      'diff --git a/my tests/a b.test.ts b/my tests/a b.test.ts',
++      'deleted file mode 100644',
++      '--- a/my tests/a b.test.ts',
++      '+++ /dev/null',
++      '@@ -1 +0,0 @@',
++      '-expect(1)',
++    ].join('\n');
++    expect(changesFromPatch(patch)).toEqual([
++      { path: 'src/a.ts', added: ['new'], removed: ['old'], deleted: false },
++      { path: 'my tests/a b.test.ts', added: [], removed: ['expect(1)'], deleted: true },
++    ]);
++    expect(rules(changesFromPatch(patch))).toEqual(['test-deleted my tests/a b.test.ts']);
++  });
++
++  test('a swallowed error split over two added lines is caught', () => {
++    expect(rules([change('app.py', ['try:', '    f()', 'except Exception:', '    pass'])])).toEqual(['swallowed-error app.py']);
++    expect(rules([change('src/a.ts', ['try {', '  f()', '} catch (e) {', '}'])])).toEqual(['swallowed-error src/a.ts']);
++  });
++
++  test('an `any` inside a string or comment is not a type escape', () => {
++    expect(rules([change('src/a.ts', ["throw new Error('invalid input: any value is rejected')", '// note: any caller may pass this'])])).toEqual([]);
++  });
++});
++
++describe('runChanges without snapshots', () => {
++  const edit = (path: string, edits: { old_text: string; new_text: string }[]): SessionEvent[] => [
++    { kind: 'tool_intent', callId: 'c1', tool: 'edit', input: { path, edits } },
++    { kind: 'tool_result', callId: 'c1', status: 'completed', output: { text: 'ok' } },
++  ] as unknown as SessionEvent[];
++
++  test('context lines copied from old_text are not counted as added', () => {
++    const changes = runChanges(edit('a.ts', [{ old_text: '// @ts-ignore\nx()', new_text: '// @ts-ignore\ny()' }]), '/tmp', undefined);
++    expect(changes).toEqual([{ path: 'a.ts', added: ['y()'], removed: ['x()'], deleted: false }]);
++    expect(findSlop(changes)).toEqual([]);
++  });
++});
++
++test('the receipt names the flags only when there are some', () => {
++  const base = { changed: ['a.ts'], checks: [], unverified: ['bun test'] };
++  expect(receipt(base)).toBe('cedia receipt: changed a.ts; checks none; unverified bun test');
++  expect(receipt({ ...base, flags: ['stub a.ts: throw'] })).toBe('cedia receipt: changed a.ts; checks none; unverified bun test; flags stub a.ts: throw');
++});

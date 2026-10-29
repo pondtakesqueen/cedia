@@ -1,0 +1,12 @@
+{
+ "hard-sse-1-1": "cedia",
+ "hard-sse-1-2": "claude",
+ "hard-window-1-1": "cedia",
+ "hard-window-1-2": "claude",
+ "hard-ledger-1-1": "cedia",
+ "hard-ledger-1-2": "claude",
+ "hard-memo-async-1-1": "claude",
+ "hard-memo-async-1-2": "cedia",
+ "hard-redact-bugs-1-1": "cedia",
+ "hard-redact-bugs-1-2": "claude"
+}

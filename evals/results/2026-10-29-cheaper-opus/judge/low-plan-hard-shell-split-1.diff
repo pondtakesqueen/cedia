@@ -1,0 +1,184 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.test.ts b/shell.test.ts
+--- a/shell.test.ts	2026-10-29 01:38:32.586798665 +0000
++++ b/shell.test.ts	2026-10-29 01:42:26.668338906 +0000
+@@ -48,3 +48,22 @@
+   expect(simpleCommands(' ; ; ')).toEqual([]);
+   expect(simpleCommands('a;;b')).toEqual([['a'], ['b']]);
+ });
++
++test('quoted assignments, redirection targets and operators glued to words', () => {
++  expect(simpleCommands('FOO="a b" rm -rf /')).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands("A='' rm -rf /")).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands('env X="1" rm -rf /')).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands('cmd 2>"/dev/null" arg')).toEqual([['cmd', 'arg']]);
++  expect(simpleCommands('cmd >"out.txt"')).toEqual([['cmd']]);
++  expect(simpleCommands('rm>/dev/null -rf /')).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands('sort<in.txt')).toEqual([['sort']]);
++  expect(simpleCommands('echo \\>&rm -rf /')).toEqual([['echo', '>'], ['rm', '-rf', '/']]);
++});
++
++test('bash -c after flags that take a value, and wrappers given as paths', () => {
++  expect(simpleCommands('bash -o pipefail -c "rm -rf /"')).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands("bash -O extglob -c 'rm -rf /'")).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands("bash --rcfile x -c 'rm -rf /'")).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands('/usr/bin/env rm -rf /')).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands('/usr/bin/sudo rm -rf /')).toEqual([['rm', '-rf', '/']]);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.ts b/shell.ts
+--- a/shell.ts	2026-10-29 01:38:32.586763888 +0000
++++ b/shell.ts	2026-10-29 01:42:45.576002574 +0000
+@@ -17,6 +17,72 @@
+   ['xargs', { value: ['-a', '-d', '-E', '-e', '-I', '-i', '-L', '-l', '-n', '-P', '-s', '--arg-file', '--delimiter', '--eof', '--replace', '--max-lines', '--max-args', '--max-procs', '--max-chars', '--process-slot-var'] }],
+ ]);
+ 
++// `text` is the word with quotes and escapes removed; `raw` is its source text.
++type Word = { text: string; raw: string };
++
++const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
++const OPERATOR = /^(\d*>>?|\d*<|&>>?|\d*>&)$/;
++const REDIR = /^(\d*>>?|\d*<|&>>?|\d*>&)/;
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
++// Shell flags whose next word is a value, so a `-c` after them is still found.
++const SHELL_VALUE = ['-o', '-O', '+o', '+O', '--rcfile', '--init-file'];
++
++// Index of the ')' that closes a $( whose contents start at `start`, or -1.
++function closeParen(src: string, start: number): number {
++  let depth = 1;
++  for (let j = start; j < src.length; j++) {
++    const c = src[j];
++    if (c === '\\') j++;
++    else if (c === "'" || c === '"') {
++      j = src.indexOf(c, j + 1);
++      if (j < 0) return -1;
++    } else if (c === '(') depth++;
++    else if (c === ')' && --depth === 0) return j;
++  }
++  return -1;
++}
++
++// Drops redirections, assignments, keywords and wrappers from one command, then unpacks bash -c and eval.
++function normalize(words: Word[]): string[][] | null {
++  const argv: Word[] = [];
++  for (let i = 0; i < words.length; i++) {
++    const w = words[i];
++    if (OPERATOR.test(w.raw)) i++;
++    else if (REDIR.test(w.raw)) continue;
++    else argv.push(w);
++  }
++
++  let i = 0;
++  while (i < argv.length) {
++    const w = argv[i];
++    if (ASSIGN.test(w.raw) || KEYWORDS.has(w.raw)) {
++      i++;
++      continue;
++    }
++    const wrapper = WRAPPERS.get(w.text.split('/').pop()!);
++    if (!wrapper) break;
++    i++;
++    while (i < argv.length && argv[i].text.startsWith('-')) {
++      const flag = argv[i++].text;
++      if (flag === '--') break;
++      if (wrapper.value?.includes(flag)) i++;
++    }
++    i += wrapper.positional ?? 0;
++  }
++
++  const rest = argv.slice(i).map((w) => w.text);
++  if (rest.length === 0) return [];
++  const [head, ...args] = rest;
++  if (head === 'eval') return simpleCommands(args.join(' '));
++  if (SHELLS.has(head.split('/').pop()!)) {
++    for (let j = 0; j < args.length && /^[-+]/.test(args[j]); j++) {
++      if (/^-[a-zA-Z]*c/.test(args[j])) return args[j + 1] === undefined ? [rest] : simpleCommands(args[j + 1]);
++      if (SHELL_VALUE.includes(args[j])) j++;
++    }
++  }
++  return [rest];
++}
+ 
+ // Splits a shell command line into the argv of each simple command, so a permission policy can check every
+ // command a line would run. It is not a full shell parser; it must never hide a command from the policy.
+@@ -37,5 +103,80 @@
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  const out: string[][] = [];
++  let words: Word[] = [];
++  let word: Word | undefined;
++  let nested: string[][] = [];
++  let dq = false;
++  const cur = (): Word => (word ??= { text: '', raw: '' });
++  const add = (text: string, raw: string) => {
++    const w = cur();
++    w.text += text;
++    w.raw += raw;
++  };
++  const endWord = () => {
++    if (word) words.push(word);
++    word = undefined;
++  };
++  const endCmd = (): boolean => {
++    endWord();
++    const argv = normalize(words);
++    words = [];
++    if (!argv) return false;
++    out.push(...argv, ...nested);
++    nested = [];
++    return true;
++  };
++
++  for (let i = 0; i < command.length; i++) {
++    const c = command[i];
++    const next = command[i + 1] ?? '';
++    if (c === '\\') {
++      if (i + 1 < command.length) {
++        add(next, c + next);
++        i++;
++      }
++      continue;
++    }
++    if (c === '"') {
++      dq = !dq;
++      cur().raw += c;
++      continue;
++    }
++    if (c === "'" && !dq) {
++      const end = command.indexOf("'", i + 1);
++      if (end < 0) return null;
++      add(command.slice(i + 1, end), command.slice(i, end + 1));
++      i = end;
++      continue;
++    }
++    if ((c === '$' && next === '(') || c === '`') {
++      const start = c === '`' ? i + 1 : i + 2;
++      const end = c === '`' ? command.indexOf('`', start) : closeParen(command, start);
++      if (end < 0) return null;
++      const sub = simpleCommands(command.slice(start, end));
++      if (!sub) return null;
++      nested.push(...sub);
++      i = end;
++      continue;
++    }
++    if (dq) {
++      add(c, c);
++      continue;
++    }
++    // `&` is part of a redirection after `>` (`2>&1`, `>&2`) or in `&>`; any other `&` ends the command.
++    if (c === '\n' || c === ';' || c === '|' || c === '(' || c === ')' || (c === '&' && next !== '>' && !/(^|\d)>$/.test(word?.raw ?? ''))) {
++      if (!endCmd()) return null;
++      continue;
++    }
++    if (/\s/.test(c)) {
++      endWord();
++      continue;
++    }
++    // `>` and `<` end a word unless it is an fd number or an operator being built (`2>`, `>>`, `&>`).
++    if ((c === '>' || c === '<') && !/^[\d&<>]*$/.test(word?.raw ?? '')) endWord();
++    add(c, c);
++  }
++  if (dq) return null;
++  return endCmd() ? out : null;
+ }

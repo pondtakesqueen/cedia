@@ -40,7 +40,7 @@ describe("evals runner", () => {
 
   test("every task file has an id, a prompt and a verify command", () => {
     const tasks = loadTasks(new URL("../evals/tasks", import.meta.url).pathname);
-    expect(tasks.filter((t) => !t.reference).length).toBe(12);
+    expect(tasks.filter((t) => !t.reference).length).toBe(16);
     expect(new Set(tasks.map((t) => t.id)).size).toBe(tasks.length);
     for (const t of tasks) {
       expect(t.id).toBeTruthy();
@@ -75,6 +75,48 @@ describe("evals runner", () => {
       for (const path of Object.keys(t.hidden ?? {})) expect(t.setup![path]).toBeUndefined();
     }, t.repo ? 120_000 : 30_000);
 
+  // The tasks that grade an answer, or that the workspace is left alone: verify reads the run's answer and stderr
+  // from EVAL_OUTPUT and EVAL_STDERR. Each fails with no answer, a wrong one or a changed tree, and passes a good one.
+  describe("answer tasks", () => {
+    const tasks = loadTasks(new URL("../evals/tasks", import.meta.url).pathname);
+    const run = (id: string, answer: string | undefined, opts: { stderr?: string; change?: [string, string] } = {}) => {
+      const t = tasks.find((x) => x.id === id)!;
+      const dir = mkdtempSync(join(tmpdir(), `cedia-answer-${id}-`));
+      for (const [path, content] of Object.entries(t.setup!)) {
+        mkdirSync(dirname(join(dir, path)), { recursive: true });
+        writeFileSync(join(dir, path), content);
+      }
+      if (opts.change) writeFileSync(join(dir, opts.change[0]), opts.change[1]);
+      const env: Record<string, string> = { ...process.env } as Record<string, string>;
+      if (answer !== undefined) {
+        writeFileSync(join(dir, "..", `${id}-out.txt`), answer);
+        writeFileSync(join(dir, "..", `${id}-err.txt`), opts.stderr ?? "");
+        env.EVAL_OUTPUT = join(dir, "..", `${id}-out.txt`);
+        env.EVAL_STDERR = join(dir, "..", `${id}-err.txt`);
+      }
+      const [bin, ...args] = splitCommand(t.verify!);
+      return Bun.spawnSync([bin!, ...args], { cwd: dir, env, stdout: "pipe", stderr: "pipe" }).exitCode;
+    };
+    test("a greeting gets a short answer, no plan and no change", () => {
+      expect(run("chat-greeting", "Hi! What would you like to work on?")).toBe(0);
+      expect(run("chat-greeting", undefined)).not.toBe(0);
+      expect(run("chat-greeting", "Hi!", { stderr: "cedia: planning with claude-code:opus@low\n" })).not.toBe(0);
+      expect(run("chat-greeting", "x".repeat(700))).not.toBe(0);
+      expect(run("chat-greeting", "Hi!", { change: ["notes.md", "added\n"] })).not.toBe(0);
+    });
+    test("a read-only question is answered right and changes nothing", () => {
+      const good = "It makes a shallow copy: the outer items array is new, but each inner tag list is shared with the original. It is called from src/store.js (commit) and src/undo.js (remember).";
+      expect(run("ask-readonly", good)).toBe(0);
+      expect(run("ask-readonly", "It deep-copies the state. Called from src/store.js.")).not.toBe(0);
+      expect(run("ask-readonly", good, { change: ["src/state.js", "module.exports = {};\n"] })).not.toBe(0);
+    });
+    test("an already green check is run and left alone", () => {
+      expect(run("ci-already-green", "I ran node calc.test.js and it passes on this commit; nothing to fix, the CI failure looks flaky.")).toBe(0);
+      expect(run("ci-already-green", "Fixed add.", { change: ["src/calc.js", "function add(a, b) { return b + a; }\nfunction mul(a, b) { return a * b; }\nmodule.exports = { add, mul };\n"] })).not.toBe(0);
+      expect(run("ci-fix-notice", "Fixed.")).not.toBe(0);
+    });
+  });
+
   test("a repo task whose commits are not in the clone is unavailable, not broken", () => {
     const missing = "0".repeat(40);
     expect(repoTask({ base: missing, target: missing, tests: [] })).toBe(`commit ${missing} is not in this clone (fetch the full history)`);
@@ -92,6 +134,10 @@ describe("evals runner", () => {
     const timed = parseReported('{"type":"result","subtype":"success","costUsd":0,"cacheHitRatio":0,"numTurns":1,"result":"ok","usage":{},"plan":{"model":"m","ms":4100},"review":{"model":"m","verdict":"changes","fixed":true,"ms":9000,"fixMs":"x"}}');
     expect(timed?.reported.plan).toEqual({ ms: 4100 });
     expect(timed?.reported.review).toEqual({ verdict: "changes", fixed: true, ms: 9000 });
+    // A step's cost, as Claude Code prices it at API rates, so a run's whole cost can be told apart from cedia's spend.
+    const priced = parseReported('{"type":"result","subtype":"success","costUsd":0,"cacheHitRatio":0,"numTurns":1,"result":"ok","usage":{},"plan":{"model":"m","costUsd":0.08},"review":{"model":"m","verdict":"approve","fixed":false,"costUsd":0.05}}');
+    expect(priced?.reported.plan).toEqual({ costUsd: 0.08 });
+    expect(priced?.reported.review).toEqual({ verdict: "approve", fixed: false, costUsd: 0.05 });
   });
 
   test("summarize computes pass@1, pass^k, false-done and cost per passed run", () => {
@@ -163,6 +209,11 @@ describe("evals runner", () => {
       expect(cheat).toMatchObject({ passed: false, tampered: ["t.test.ts"] });
       // The diff is taken before the task's tests go back, so it shows the edit.
       expect(cheat.diff).toContain("+pass");
+
+      // Verify can read the run's answer: a question task grades it.
+      writeFileSync(script, JSON.stringify([{ blocks: [{ type: "text", text: "the answer is 42" }] }]));
+      const asked = await runTask({ id: "t3", category: "c", prompt: "what is it?", setup: { "q.txt": "?\n" }, verify: "sh -c 'grep -q 42 \"$EVAL_OUTPUT\" && test -f \"$EVAL_STDERR\"'" }, "cedia", "faux");
+      expect(asked.passed).toBe(true);
     } finally {
       delete process.env.CEDIA_FAUX_SCRIPT;
       delete process.env.CEDIA_SANDBOX;

@@ -1,0 +1,29 @@
+Running 19 tasks x 1 runs on cedia (opencode-go/claude-haiku-5-5), 2 at a time...
+  PASS feature-simple#1 (5.2s $0.0009, peak 5k)
+  PASS bugfix-simple#1 (25.3s $0.0016, plan 10s, review approve 10s, peak 6k)
+  PASS hard-deny-list#1 (102.1s $0.0041, plan 30s, review approve 50s, peak 14k)
+  PASS hard-csv-stream#1 (143.3s $0.0087, plan 50s, review changes 41s, fix 17s, peak 21k)
+  PASS hard-injection#1 (47.9s $0.0014, plan 17s, review approve 19s, peak 7k)
+  PASS hard-edit-tiers#1 (126.2s $0.0062, plan 42s, review changes 44s, fix 14s, peak 18k)
+  PASS hard-ledger#1 (85.4s $0.0029, plan 36s, review approve 36s, peak 13k)
+  PASS hard-pool#1 (87.9s $0.0046, plan 43s, review approve 22s, peak 15k)
+  PASS hard-memo-async#1 (137.7s $0.0121, plan 42s, review changes 30s, fix 25s, peak 26k)
+  FAIL hard-redact-bugs#1 (130.0s $0.0097, claim refused, plan 44s, review changes 33s, fix 39s, peak 26k)
+  PASS hard-sse#1 (75.0s $0.0063, plan 20s, review changes 19s, fix 28s, peak 17k)
+  PASS hard-shell-split#1 (247.7s $0.0158, plan 73s, review changes 85s, fix 25s, peak 33k)
+  PASS hard-window#1 (98.0s $0.0068, plan 34s, review approve 25s, peak 16k)
+  PASS refactor-rename#1 (29.3s $0.0014, plan 15s, review approve 8s, peak 7k)
+  PASS long-migrate#1 (76.7s $0.0062, plan 36s, review approve 15s, peak 20k)
+  PASS tb-dedup#1 (28.5s $0.0007, plan 10s, review approve 12s, peak 6k)
+  PASS wide-deprecate#1 (71.0s $0.0057, plan 27s, review approve 13s, peak 20k)
+  PASS wide-bug-hunt#1 (115.9s $0.0065, plan 50s, review changes 32s, fix 13s, peak 19k)
+  PASS wide-three-features#1 (152.1s $0.0096, plan 55s, review changes 39s, fix 23s, peak 23k)
+
+Results written to evals/results/2026-10-29-auto/auto.jsonl
+cedia (opencode-go/claude-haiku-5-5): 19 tasks, 19 scored runs
+  pass@1 94.7%  pass^k 94.7%  false-done 0.0%  refused claims 5.3%
+  avg 94.0s per run, 105761 input / 6616 output tokens per run, cache hit 87.8%
+  peak context 16k mean, 33k max, 0 of 19 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 18 edit: broken edits string, 13 edit: top-level old_text/new_text
+  speed 283.4 output tok/s, 0.93s to first token per call; model 97.0% of time, cedia 0.0%
+  cost $0.1110 total, $0.0062 per passed run

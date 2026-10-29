@@ -1,0 +1,113 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/ledger.review.test.ts b/ledger.review.test.ts
+--- a/ledger.review.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/ledger.review.test.ts	2026-10-29 01:36:03.407362796 +0000
+@@ -0,0 +1,29 @@
++import { describe, expect, test } from 'bun:test';
++import { ledgerEntries, matchCheck, verified, type LedgerEntry } from './ledger.ts';
++
++describe('review findings', () => {
++  test('F1: a declared check that starts with the cd prefix matches itself', () => {
++    expect(matchCheck('cd /work/repo && bun test', ['cd /work/repo && bun test'], '/work/repo')).toBe('cd /work/repo && bun test');
++  });
++
++  test('F2: quoted cd directory keeps its inner spaces', () => {
++    expect(matchCheck('cd "/work/my  repo" && bun test', ['bun test'], '/work/my  repo')).toBe('bun test');
++  });
++
++  test('F3: a doubled trailing 2>&1 matches the same as without the cd', () => {
++    expect(matchCheck('cd . && bun test 2>&1 2>&1', ['bun test'], '/work/repo')).toBe(matchCheck('bun test 2>&1 2>&1', ['bun test'], '/work/repo'));
++  });
++
++  test('F4: an edit without a string path is not a write with path undefined', () => {
++    const events = [
++      { kind: 'tool_intent' as const, callId: 'a', tool: 'edit', input: { file_path: 'x.ts' } },
++      { kind: 'tool_result' as const, callId: 'a', status: 'completed' as const, output: { isError: false } },
++    ];
++    expect(ledgerEntries(events, [])).toEqual([]);
++  });
++
++  test('F5: verified does not overflow the stack on a long log', () => {
++    const entries: LedgerEntry[] = Array.from({ length: 300000 }, (_, i) => ({ kind: 'write' as const, at: i, tool: 'edit', path: 'a' }));
++    expect(verified(entries, ['bun test'])).toBe(false);
++  });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/ledger.ts b/ledger.ts
+--- a/ledger.ts	2026-10-29 01:34:05.137793483 +0000
++++ b/ledger.ts	2026-10-29 01:36:13.075651826 +0000
+@@ -25,7 +25,14 @@
+ // ` 2>&1` from both. A pipe or a chain would hide the check's exit code, so `bun test | tail` does not count.
+ // One exception: a leading `cd <dir> && ` is removed when <dir> (quotes stripped) resolves to `cwd`.
+ export function matchCheck(command: string, checks: string[], cwd?: string): string | undefined {
+-  throw new Error('not implemented');
++  const norm = (s: string) => s.trim().replace(/\s+/g, ' ').replace(/ 2>&1$/, '');
++  let c = norm(command);
++  const m = cwd === undefined ? null : command.trim().match(/^cd\s+("[^"]*"|'[^']*'|\S+)\s+&&\s+(.*)$/);
++  if (cwd !== undefined && m) {
++    const dir = m[1]!.replace(/^["']|["']$/g, '');
++    if (resolve(cwd, dir) === resolve(cwd)) c = norm(m[2]!);
++  }
++  return checks.find(k => norm(k) === c) ?? checks.find(k => norm(k) === norm(command));
+ }
+ 
+ // Walks the log and returns one entry per thing that happened, in log order.
+@@ -38,18 +45,57 @@
+ // - Otherwise an edit or write call that completed is a write entry with path = input.path.
+ // - Otherwise a bash call whose command is not read-only is a write entry with command set (no path).
+ export function ledgerEntries(events: SessionEvent[], checks: string[], cwd?: string): LedgerEntry[] {
+-  throw new Error('not implemented');
++  const snap = new Map<string, string[]>();
++  for (const e of events) {
++    if (e.kind === 'snapshot' && e.callId !== undefined) snap.set(e.callId, [...(snap.get(e.callId) ?? []), ...e.changed]);
++  }
++  const out: LedgerEntry[] = [];
++  const intents = new Map<string, { tool: string; input: Record<string, unknown> }>();
++  events.forEach((e, i) => {
++    if (e.kind === 'request') intents.clear();
++    else if (e.kind === 'tool_intent') intents.set(e.callId, { tool: e.tool, input: e.input });
++    else if (e.kind === 'tool_result') {
++      const intent = intents.get(e.callId);
++      if (!intent || e.status === 'denied' || e.status === 'not_started') return;
++      const { tool, input } = intent;
++      const cmd = typeof input.command === 'string' ? input.command : undefined;
++      const m = tool === 'bash' && cmd !== undefined ? matchCheck(cmd, checks, cwd) : undefined;
++      if (m !== undefined) {
++        out.push({ kind: 'check', at: i, command: m, exitCode: e.output.exitCode ?? (e.output.isError ? 1 : 0) });
++      } else if (snap.has(e.callId)) {
++        for (const path of snap.get(e.callId)!) out.push({ kind: 'write', at: i, tool, path });
++      } else if ((tool === 'edit' || tool === 'write') && e.status === 'completed' && typeof input.path === 'string') {
++        out.push({ kind: 'write', at: i, tool, path: input.path });
++      } else if (tool === 'bash' && cmd !== undefined && !isReadOnly(cmd)) {
++        out.push({ kind: 'write', at: i, tool, command: cmd });
++      }
++    }
++  });
++  return out;
+ }
+ 
+ // changed: every write's label (path, or `bash: <command>`), first seen first, no duplicates.
+ // checks: every check entry, in order, as { command, exitCode }.
+ // unverified: labels of writes after the last passing check (all of them when no check passed), deduped.
+ export function evidence(entries: LedgerEntry[]): Evidence {
+-  throw new Error('not implemented');
++  const label = (e: Extract<LedgerEntry, { kind: 'write' }>) => e.path ?? `bash: ${e.command}`;
++  const checks = entries.filter(e => e.kind === 'check');
++  const passes = checks.filter(e => e.exitCode === 0);
++  const lastPass = passes.length ? passes[passes.length - 1]!.at : -1;
++  const writes = entries.filter(e => e.kind === 'write');
++  return {
++    changed: [...new Set(writes.map(label))],
++    checks: checks.map(e => ({ command: e.command, exitCode: e.exitCode })),
++    unverified: [...new Set(writes.filter(e => e.at > lastPass).map(label))],
++  };
+ }
+ 
+ // The done gate. With no declared checks, or no writes, it is satisfied. Otherwise a check with exit code 0
+ // must come after the last write.
+ export function verified(entries: LedgerEntry[], checks: string[]): boolean {
+-  throw new Error('not implemented');
++  if (checks.length === 0) return true;
++  const writes = entries.filter(e => e.kind === 'write');
++  if (writes.length === 0) return true;
++  const lastWrite = writes.reduce((max, e) => Math.max(max, e.at), -1);
++  return entries.some(e => e.kind === 'check' && e.exitCode === 0 && e.at > lastWrite);
+ }

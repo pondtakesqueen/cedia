@@ -643,7 +643,7 @@ describe('cedia threads (offline, faux)', () => {
     const ro = JSON.parse(cedia(dir, [call('c1', 'echo y > g.txt'), reply('tried')], ['-p', 'z', '--output-format', 'json', '--sandbox', 'off', '--profile', 'writer', '--permission', 'read-only']).out);
     expect(ro.subtype).toBe('success');
     expect(existsSync(join(dir, 'g.txt'))).toBe(false);
-    expect(cedia(dir, [], ['-p', 'x', '--profile', 'nobody']).err).toContain('no profile "nobody" (known: coordinator, writer)');
+    expect(cedia(dir, [], ['-p', 'x', '--profile', 'nobody']).err).toContain('no profile "nobody" (known: coordinator, ci, writer)');
     writeFileSync(join(dir, 'home', 'settings.json'), JSON.stringify({ profiles: { coordinator: { color: 'red' } } }));
     expect(cedia(dir, [], ['-p', 'x', '--profile', 'coordinator']).err).toContain('unknown setting "profiles.coordinator.color"');
   });

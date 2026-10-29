@@ -3,8 +3,9 @@
 // the profile, and the profile over settings. A thread opened with a profile keeps it: `--thread` goes on with the
 // thread's profile unless another is named.
 //
-// cedia ships one, `coordinator`, for the desktop's project chat: a read-only session that talks with the owner,
-// splits the work into threads with open_thread, follows them, and does none of the work itself. A profile of the
+// cedia ships two. `coordinator`, for the desktop's project chat: a read-only session that talks with the owner,
+// splits the work into threads with open_thread, follows them, and does none of the work itself. `ci`, for the
+// desktop's PR watcher, whose prompts say a pull request failed a check: no planner, and the rules for such a fix. A profile of the
 // same name in the user's settings (`profiles` in ~/.cedia/settings.json) is laid over cedia's, key by key.
 
 export type Profile = {
@@ -17,10 +18,12 @@ export type Profile = {
   openThread?: boolean;
   // schedule (core/tools/schedule.ts): the session may schedule prompts for its own thread.
   schedule?: boolean;
+  // When a prompt is planned, as --plan-when: never skips the planner for every prompt of the profile.
+  planWhen?: 'auto' | 'always' | 'never';
   instructions?: string;
 };
 
-const KEYS: (keyof Profile)[] = ['model', 'permission', 'spawn', 'ask', 'todo', 'openThread', 'schedule', 'instructions'];
+const KEYS: (keyof Profile)[] = ['model', 'permission', 'spawn', 'ask', 'todo', 'openThread', 'schedule', 'planWhen', 'instructions'];
 
 export const COORDINATOR_INSTRUCTIONS = `You are this project's coordinator. The owner talks with you in the project chat; the work itself happens in threads, each a session of its own in a worktree of its own, which you open and follow.
 
@@ -30,8 +33,18 @@ export const COORDINATOR_INSTRUCTIONS = `You are this project's coordinator. The
 - When the owner asks for something later or on a cadence, schedule it for yourself with the schedule tool; at the time you get the prompt and act on it, opening threads as needed.
 - Answer the owner briefly: what you opened and why, what is done, what needs them. Ask them (ask_user) only for a decision that changes the goal; a thread that asks you something, answer yourself when you can.`;
 
+// A failed check on a pull request. Haiku alone fixed the PR watcher's notices 6 of 6 in 6-12 s for $0.001 each;
+// with an Opus plan in front the same notices took 26-32 s and $0.06-0.08 (evals/results/2026-10-29-real-use/).
+// The review, when one is set, still reads the change.
+export const CI_INSTRUCTIONS = `This session fixes a failed check on a pull request. The message names the pull request and the check.
+
+- Run the check the message names, the way the repository runs it (its test script or command), before changing anything. If it passes here, say so, change nothing, and say what could have made it fail in CI (a flaky test, the environment, a fix already on the branch).
+- If it fails, find the cause in the code under test and fix that. Never skip, disable, loosen or delete a test, and never change what a test expects, to make the check pass; if a test itself is wrong, say why and leave it for the owner.
+- Keep the fix to what the failure needs. Run the check again after the change and report the cause, the fix and the result.`;
+
 export const BUILTIN_PROFILES: Record<string, Profile> = {
   coordinator: { permission: 'read-only', spawn: 'on', ask: true, todo: true, openThread: true, schedule: true, instructions: COORDINATOR_INSTRUCTIONS },
+  ci: { permission: 'workspace', spawn: 'off', planWhen: 'never', instructions: CI_INSTRUCTIONS },
 };
 
 // The profile `name`, cedia's own with the user's laid over it. An unknown name or a bad field is an error.
@@ -51,15 +64,16 @@ function checkProfile(name: string, raw: unknown): Profile {
   if (p.model !== undefined && (typeof p.model !== 'string' || !p.model)) throw new Error(`${at}.model must be a model alias or ref`);
   if (p.permission !== undefined && p.permission !== 'read-only' && p.permission !== 'workspace') throw new Error(`${at}.permission must be read-only or workspace`);
   if (p.spawn !== undefined && p.spawn !== 'on' && p.spawn !== 'off' && p.spawn !== 'worktree') throw new Error(`${at}.spawn must be on, off or worktree`);
+  if (p.planWhen !== undefined && p.planWhen !== 'auto' && p.planWhen !== 'always' && p.planWhen !== 'never') throw new Error(`${at}.planWhen must be auto, always or never`);
   for (const k of ['ask', 'todo', 'openThread', 'schedule'] as const) if (p[k] !== undefined && typeof p[k] !== 'boolean') throw new Error(`${at}.${k} must be true or false`);
   if (p.instructions !== undefined && typeof p.instructions !== 'string') throw new Error(`${at}.instructions must be the text of the instructions`);
   return p as Profile;
 }
 
 // The run's flags with the profile's defaults under them: a flag the user gave wins.
-export function withProfile<A extends { model?: string; permission?: string; spawn?: string; ask?: string; todo?: string }>(args: A, p: Profile): A {
+export function withProfile<A extends { model?: string; permission?: string; spawn?: string; ask?: string; todo?: string; planWhen?: string }>(args: A, p: Profile): A {
   const on = (v: boolean | undefined) => (v === undefined ? undefined : v ? 'on' : 'off');
-  const fill = { model: p.model, permission: p.permission, spawn: p.spawn, ask: on(p.ask), todo: on(p.todo) };
+  const fill = { model: p.model, permission: p.permission, spawn: p.spawn, ask: on(p.ask), todo: on(p.todo), planWhen: p.planWhen };
   const out = { ...args };
   for (const [k, v] of Object.entries(fill)) if (v !== undefined && out[k as keyof A] === undefined) (out as Record<string, unknown>)[k] = v;
   return out;

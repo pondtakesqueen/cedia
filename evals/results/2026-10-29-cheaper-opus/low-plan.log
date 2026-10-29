@@ -1,0 +1,29 @@
+Running 19 tasks x 1 runs on cedia (opencode-go/claude-haiku-5-5), 2 at a time...
+  PASS feature-simple#1 (7.1s $0.0009, peak 5k)
+  PASS bugfix-simple#1 (8.7s $0.0004, peak 5k)
+  PASS hard-csv-stream#1 (165.2s $0.0094, plan 37s, review changes 72s, fix 17s, peak 23k)
+  PASS hard-deny-list#1 (171.5s $0.0090, plan 21s, review changes 95s, fix 33s, peak 23k)
+  PASS hard-injection#1 (43.0s $0.0013, plan 12s, review approve 23s, peak 7k)
+  PASS hard-edit-tiers#1 (109.1s $0.0057, plan 25s, review changes 56s, fix 16s, peak 18k)
+  PASS hard-ledger#1 (133.0s $0.0061, plan 23s, review changes 78s, fix 19s, peak 19k)
+  PASS hard-memo-async#1 (117.6s $0.0065, plan 21s, review changes 46s, fix 10s, peak 18k)
+  PASS hard-pool#1 (134.1s $0.0083, plan 34s, review approve 53s, peak 19k)
+  PASS hard-redact-bugs#1 (97.8s $0.0059, plan 24s, review changes 45s, fix 14s, peak 20k)
+  PASS hard-sse#1 (98.2s $0.0063, plan 19s, review changes 36s, fix 34s, peak 17k)
+  PASS hard-window#1 (119.5s $0.0074, plan 28s, review changes 47s, fix 23s, peak 19k)
+  PASS hard-shell-split#1 (258.1s $0.0199, plan 37s, review changes 102s, fix 58s, peak 40k)
+  PASS refactor-rename#1 (6.2s $0.0007, peak 5k)
+  PASS tb-dedup#1 (7.1s $0.0006, peak 5k)
+  PASS long-migrate#1 (76.9s $0.0046, plan 33s, review approve 25s, peak 18k)
+  PASS wide-deprecate#1 (45.8s $0.0042, plan 17s, review approve 12s, peak 16k)
+  PASS wide-bug-hunt#1 (102.5s $0.0043, plan 35s, review approve 46s, peak 16k)
+  PASS wide-three-features#1 (142.4s $0.0087, plan 31s, review changes 51s, fix 23s, peak 22k)
+
+Results written to evals/results/2026-10-29-cheaper-opus/low-plan.jsonl
+cedia (opencode-go/claude-haiku-5-5): 19 tasks, 19 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 97.0s per run, 92705 input / 6801 output tokens per run, cache hit 86.1%
+  peak context 17k mean, 40k max, 0 of 19 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 16 edit: top-level old_text/new_text, 13 edit: broken edits string
+  speed 273.1 output tok/s, 1.03s to first token per call; model 99.3% of time, cedia 0.0%
+  cost $0.1102 total, $0.0058 per passed run
