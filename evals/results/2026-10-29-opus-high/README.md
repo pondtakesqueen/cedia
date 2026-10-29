@@ -199,3 +199,35 @@ What it says:
 - It costs time: the rule-by-rule review takes 46 s instead of 38 s and sends back 17 of 30, so a task takes 148 s.
 
 Spent for this section: $0.36 Haiku (Anthropic API). The panel ($4.66) and the plan and review ran at API price on the owner's subscription.
+
+## The plan gives the shape of new code (three runs)
+
+hard-csv-stream lost every panel of the last arm on one point: the stream read one character per call, where Claude Code scanned whole runs with `indexOf` and `slice`. The planner now names the shape of the code the change adds:
+- where input is large or arrives in pieces, scan whole runs with what the language provides instead of one item per call;
+- keep state in as few fields as the rules need, each named for what it means;
+- give each new type or function a doc comment that says what it keeps and what happens after an error.
+
+The code around the change is left as it is.
+
+- Run (`auto-shape.jsonl`): the same command and route as the arms above.
+- Panel: `judge-shape/`, against the same three CC Opus high runs. Tally: `python3 judge-shape/tally.py judge-shape shape`.
+
+| 30 runs | pass | wins / losses / tie or split vs CC Opus high | review sent back | time per task (plan, review, fix) |
+|---|---|---|---|---|
+| finishing order, rule-by-rule review | 30/30 | 23 / 6 / 1 | 17 of 30 | 148 s (34, 46, 14) |
+| **+ shape of new code** | 28/30 | **23 / 3 / 2** (of 28) | 14 of 30 | 159 s (38, 45, 14) |
+
+| | correctness | quality | scope | tests | security |
+|---|---|---|---|---|---|
+| shape / CC Opus high | 8.86 / 8.27 | 8.14 / 8.18 | 8.64 / 8.86 | 8.54 / 4.86 | 9.27 / 8.95 |
+
+What it says:
+- hard-csv-stream went from three losses to two losses and a tie. No panel named a per-character scan any more; every panel called both streams linear per chunk. The losses were on Claude Code's tests (every split, a row returned as soon as it ends) and its explicit state machine.
+- hard-pool went from two losses to one win, one loss and a tie.
+- Correctness is the highest of any arm (8.86 against 8.27).
+- hard-memo-async failed two of three runs. Each time a test the writer added awaited a promise that never settled, so the check hung until the run's time ran out.
+  - Six more runs of that task alone (`auto-shape-memo6.jsonl`) all passed, so it is 7 of 9 with this plan.
+  - The earlier arms passed it 9 of 9.
+  - It is not counted here as caused by this line, but a hung test can still cost a run.
+
+Spent for this section: $0.34 + $0.06 Haiku (Anthropic API). The panel ($4.39) and the plan and review ran at API price on the owner's subscription.
