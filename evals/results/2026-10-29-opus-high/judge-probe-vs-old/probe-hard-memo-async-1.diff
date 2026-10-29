@@ -1,0 +1,185 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/memo.fixes.test.ts b/memo.fixes.test.ts
+--- a/memo.fixes.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/memo.fixes.test.ts	2026-10-29 09:11:27.704962589 +0000
+@@ -0,0 +1,132 @@
++import { expect, test } from "bun:test";
++import { memo } from "./memo";
++
++function deferred<T>() {
++  let resolve!: (v: T) => void;
++  let reject!: (e: unknown) => void;
++  const promise = new Promise<T>((res, rej) => ((resolve = res), (reject = rej)));
++  return { promise, resolve, reject };
++}
++
++// fn's calls, each settled by the test.
++function lookups() {
++  const calls: { key: string; d: ReturnType<typeof deferred<string>> }[] = [];
++  const fn = (key: string) => {
++    const d = deferred<string>();
++    calls.push({ key, d });
++    return d.promise;
++  };
++  return { fn, calls };
++}
++
++const tick = () => new Promise((r) => setTimeout(r, 0));
++
++test("size never goes past max, and the least recently used key goes first", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 2 });
++  m("a");
++  m("b");
++  m("c");
++  expect(m.size).toBe(2);
++  expect(calls).toHaveLength(3);
++  for (const c of calls) c.d.resolve(c.key);
++  await tick();
++  m("a");
++  expect(calls).toHaveLength(4);
++  m("c");
++  expect(calls).toHaveLength(4);
++});
++
++test("a call answered from the cache counts as a use", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 2 });
++  m("a");
++  m("b");
++  for (const c of calls) c.d.resolve(c.key);
++  await tick();
++  expect(await m("a")).toBe("a");
++  m("c");
++  expect(calls).toHaveLength(3);
++  m("a");
++  expect(calls).toHaveLength(3);
++  m("b");
++  expect(calls).toHaveLength(4);
++});
++
++test("an in-flight call whose key was evicted is not kept when it settles", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 1 });
++  const a = m("a");
++  m("b");
++  calls[0]!.d.resolve("a");
++  expect(await a).toBe("a");
++  await tick();
++  expect(m.size).toBe(1);
++  m("a");
++  expect(calls).toHaveLength(3);
++});
++
++test("an old call that settles does not overwrite a newer call for the same key", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 10 });
++  const first = m("k");
++  m.invalidate("k");
++  const second = m("k");
++  calls[0]!.d.resolve("old");
++  expect(await first).toBe("old");
++  await tick();
++  expect(m("k")).toBe(second);
++  expect(calls).toHaveLength(2);
++  calls[1]!.d.resolve("new");
++  expect(await m("k")).toBe("new");
++});
++
++test("an old rejection does not remove a newer call for the same key", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 10 });
++  const first = m("k");
++  const firstError = first.then(
++    () => "resolved",
++    (e: Error) => e.message,
++  );
++  m.invalidate("k");
++  const second = m("k");
++  calls[0]!.d.reject(new Error("boom"));
++  expect(await firstError).toBe("boom");
++  await tick();
++  expect(m("k")).toBe(second);
++  expect(calls).toHaveLength(2);
++});
++
++test("an expired key is not counted in size and does not take a place under max", async () => {
++  let t = 0;
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 100, max: 2, now: () => t });
++  m("a");
++  calls[0]!.d.resolve("a");
++  await tick(); // a expires at 100
++  t = 60;
++  m("b");
++  calls[1]!.d.resolve("b");
++  await tick(); // b expires at 160
++  t = 80;
++  expect(await m("a")).toBe("a"); // a hit: a is now the most recently used
++  t = 120;
++  expect(m.size).toBe(1); // only b is still kept
++  m("c"); // room is made by dropping expired a, so live b stays
++  expect(m.size).toBe(2);
++  expect(await m("b")).toBe("b");
++  expect(calls).toHaveLength(3);
++});
++
++test("clear during flight: the settled call is not kept", async () => {
++  const { fn, calls } = lookups();
++  const m = memo(fn, { ttlMs: 1000, max: 10 });
++  m("k");
++  m.clear();
++  calls[0]!.d.resolve("v");
++  await tick();
++  expect(m.size).toBe(0);
++  m("k");
++  expect(calls).toHaveLength(2);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/memo.ts b/memo.ts
+--- a/memo.ts	2026-10-29 09:09:22.793685512 +0000
++++ b/memo.ts	2026-10-29 09:11:27.721498026 +0000
+@@ -29,21 +29,40 @@
+   const now = opts.now ?? Date.now;
+   // In insertion order, least recently used first. A key in flight does not expire.
+   const cache = new Map<K, { promise: Promise<V>; expires: number }>();
++  // Drops settled entries whose TTL has passed, so they neither count in size nor take a place under max.
++  const purge = () => {
++    for (const [k, entry] of cache) if (entry.expires <= now()) cache.delete(k);
++  };
+   const call = ((key: K) => {
+     const hit = cache.get(key);
+-    if (hit && hit.expires > now()) return hit.promise;
++    if (hit && hit.expires > now()) {
++      cache.delete(key);
++      cache.set(key, hit); // mark as most recently used
++      return hit.promise;
++    }
+     cache.delete(key);
+-    if (cache.size > opts.max) cache.delete(cache.keys().next().value as K);
++    purge();
++    while (cache.size >= opts.max) cache.delete(cache.keys().next().value as K);
+     const entry = { promise: fn(key), expires: Infinity };
+     cache.set(key, entry);
++    // Only the entry still stored for the key may change the cache: an invalidated, cleared or evicted call must not.
+     entry.promise.then(
+-      (value) => cache.set(key, { promise: Promise.resolve(value), expires: now() + opts.ttlMs }),
+-      () => cache.delete(key),
++      () => {
++        if (cache.get(key) === entry) entry.expires = now() + opts.ttlMs;
++      },
++      () => {
++        if (cache.get(key) === entry) cache.delete(key);
++      },
+     );
+     return entry.promise;
+   }) as Memo<K, V>;
+   call.invalidate = (key) => void cache.delete(key);
+   call.clear = () => cache.clear();
+-  Object.defineProperty(call, "size", { get: () => cache.size });
++  Object.defineProperty(call, "size", {
++    get: () => {
++      purge();
++      return cache.size;
++    },
++  });
+   return call;
+ }

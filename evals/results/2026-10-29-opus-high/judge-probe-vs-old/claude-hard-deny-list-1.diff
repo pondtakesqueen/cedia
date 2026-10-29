@@ -1,0 +1,106 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.abbrev.test.ts b/deny.abbrev.test.ts
+--- a/deny.abbrev.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/deny.abbrev.test.ts	2026-10-29 08:06:06.760766932 +0000
+@@ -0,0 +1,19 @@
++import { expect, test } from 'bun:test';
++import { denyListed } from './deny.ts';
++
++const cwd = '/work/repo';
++const hit = (argv: string[]) => denyListed(argv, cwd)?.name;
++
++test('unambiguous abbreviations of long options are checked', () => {
++  expect(hit(['rm', '--recurs', '/etc'])).toBe('rm-outside');
++  expect(hit(['git', 'push', '--dele', 'origin', 'x'])).toBe('force-push');
++  expect(hit(['git', 'push', '--mirr'])).toBe('force-push');
++  expect(hit(['git', 'push', '--prun', 'origin'])).toBe('force-push');
++});
++
++test('find keeps its leading options in front of the start paths', () => {
++  expect(hit(['find', '-L', '/etc', '-delete'])).toBe('rm-outside');
++  expect(hit(['find', '-H', '/etc', '-exec', 'rm', '{}', ';'])).toBe('rm-outside');
++  expect(hit(['find', '-O3', '-D', 'stat', '/etc', '-delete'])).toBe('rm-outside');
++  expect(hit(['find', '-L', 'src', '-delete'])).toBeUndefined();
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.ts b/deny.ts
+--- a/deny.ts	2026-10-29 08:03:46.988124903 +0000
++++ b/deny.ts	2026-10-29 08:06:16.972767539 +0000
+@@ -18,23 +18,74 @@
+ //
+ // git (argv[0] may be a path such as /usr/bin/git). Global options before the subcommand are skipped; -C, -c,
+ // --git-dir, --work-tree and --namespace take the next word as their value.
+-// - force-push: `push` with --force, --force-with-lease, --mirror, --delete or --prune (alone or with =value),
++// - force-push: `push` with --force, --force-with-lease, --mirror, --delete or --prune (alone, with =value, or as an
++//   unambiguous abbreviation such as --dele),
+ //   a short flag group containing f or d (-f, -fu, -df), or a refspec starting with + or : (+main, :old).
+ // - reset-hard: `reset` with --hard.
+ // - clean-force: `clean` with --force or a short flag group containing f, unless the word -n or --dry-run is
+ //   present (a group like -fn still counts as force).
+ //
+-// rm (argv[0] may be a path): only recursive removal is checked (--recursive or a short flag group containing r or R).
++// rm (argv[0] may be a path): only recursive removal is checked (--recursive, an abbreviation of it, or a short flag
++//   group containing r or R).
+ //   Words after `--` are targets even when they start with -. Before `--`, words starting with - are flags.
+ // - no targets at all (they come from xargs): rm-outside.
+ // - a target that cannot be resolved before it runs (contains $, or ~user): rm-outside.
+ // - a target outside cwd, or cwd itself (`.`, `..`, `/`, `~`): rm-outside. A glob such as `*` or `./*` stays
+ //   under cwd and is fine.
+ //
+-// find with -delete, -exec or -execdir: the start paths are the words before the first word starting with -
+-//   (none means `.`). Any start path that cannot be resolved or is outside cwd: rm-outside. cwd itself is fine.
++// find with -delete, -exec or -execdir: the start paths are the words after any leading -H, -L, -P, -O and -D
++//   options, up to the first word starting with - (none means `.`). Any start path that cannot be resolved or is outside cwd: rm-outside. cwd itself is fine.
+ //
+ // Anything else: undefined.
+ export function denyListed(argv: string[], cwd: string): Hit | undefined {
+-  throw new Error('not implemented');
++  if (argv.length === 0) return undefined;
++  const cmd = argv[0].split('/').pop();
++  const shortHas = (w: string, chars: string) => /^-[^-]/.test(w) && [...chars].some((c) => w.includes(c));
++  const longOpt = (w: string, full: string) => w.length > 2 && w.startsWith('--') && full.startsWith(w.split('=')[0]);
++  const unresolvable = (p: string) => p.includes('$') || (p.startsWith('~') && p !== '~' && !p.startsWith('~/'));
++  const outside = (p: string) => unresolvable(p) || !insideWorkspace(p, cwd);
++  const rmOutside: Hit = { name: 'rm-outside', reason: 'recursive delete outside the working directory' };
++
++  if (cmd === 'git') {
++    let i = 1;
++    while (argv[i]?.startsWith('-')) i += ['-C', '-c', '--git-dir', '--work-tree', '--namespace'].includes(argv[i]) ? 2 : 1;
++    const sub = argv[i];
++    const rest = argv.slice(i + 1);
++    if (sub === 'push') {
++      const force = (w: string) =>
++        ['--force', '--force-with-lease', '--mirror', '--delete', '--prune'].some((f) => longOpt(w, f)) ||
++        shortHas(w, 'fd') ||
++        (!w.startsWith('-') && /^[+:]/.test(w));
++      if (rest.some(force)) return { name: 'force-push', reason: 'git push rewrites or deletes remote refs' };
++    }
++    if (sub === 'reset' && rest.includes('--hard')) return { name: 'reset-hard', reason: 'git reset --hard discards changes' };
++    if (sub === 'clean' && !rest.some((w) => w === '-n' || w === '--dry-run') && rest.some((w) => w === '--force' || shortHas(w, 'f')))
++      return { name: 'clean-force', reason: 'git clean -f deletes untracked files' };
++    return undefined;
++  }
++
++  if (cmd === 'rm') {
++    let recursive = false;
++    let endOfOpts = false;
++    const targets: string[] = [];
++    for (const w of argv.slice(1)) {
++      if (endOfOpts) targets.push(w);
++      else if (w === '--') endOfOpts = true;
++      else if (w.startsWith('-')) recursive ||= longOpt(w, '--recursive') || shortHas(w, 'rR');
++      else targets.push(w);
++    }
++    if (!recursive) return undefined;
++    return targets.length === 0 || targets.some((t) => outside(t) || sameDir(t, cwd)) ? rmOutside : undefined;
++  }
++
++  if (cmd === 'find') {
++    if (!argv.some((w) => w === '-delete' || w === '-exec' || w === '-execdir')) return undefined;
++    let i = 1;
++    while (/^-([HLP]|O\d*|D)$/.test(argv[i])) i += argv[i] === '-D' ? 2 : 1;
++    const opt = argv.findIndex((w, j) => j >= i && w.startsWith('-'));
++    const starts = argv.slice(i, opt < 0 ? argv.length : opt);
++    return (starts.length ? starts : ['.']).some(outside) ? rmOutside : undefined;
++  }
++
++  return undefined;
+ }

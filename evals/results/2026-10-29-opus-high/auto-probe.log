@@ -1,0 +1,20 @@
+Running 10 tasks x 1 runs on cedia (auto), 2 at a time...
+  PASS hard-deny-list#1 (133.9s $0.0091, plan 26s, review changes 54s, fix 15s, peak 22k)
+  PASS hard-csv-stream#1 (175.8s $0.0186, plan 37s, review changes 36s, fix 34s, peak 35k)
+  PASS hard-injection#1 (38.7s $0.0014, plan 17s, review approve 13s, peak 8k)
+  PASS hard-edit-tiers#1 (121.7s $0.0093, plan 24s, review changes 41s, fix 14s, peak 22k)
+  PASS hard-ledger#1 (112.3s $0.0090, plan 24s, review changes 38s, fix 15s, peak 23k)
+  PASS hard-memo-async#1 (132.2s $0.0113, plan 37s, review changes 29s, fix 25s, peak 25k)
+  PASS hard-pool#1 (99.7s $0.0080, plan 32s, review approve 26s, peak 20k)
+  PASS hard-sse#1 (99.3s $0.0109, plan 15s, review changes 18s, fix 51s, peak 23k)
+  PASS wide-bug-hunt#1 (122.8s $0.0099, plan 33s, review changes 36s, fix 29s, peak 23k)
+  PASS wide-three-features#1 (146.1s $0.0138, plan 29s, review changes 42s, fix 20s, peak 29k)
+
+Results written to evals/results/2026-10-29-opus-high/auto-probe.jsonl
+cedia (auto): 10 tasks, 10 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 118.3s per run, 192336 input / 11950 output tokens per run, cache hit 89.8%
+  peak context 23k mean, 35k max, 0 of 10 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 15 edit: broken edits string, 5 edit: top-level old_text/new_text
+  speed 271.2 output tok/s, 1.09s to first token per call; model 99.3% of time, cedia 0.0%
+  cost $0.1014 total, $0.0101 per passed run

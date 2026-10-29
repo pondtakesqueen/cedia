@@ -11,7 +11,8 @@ const STOP_THOROUGH =
   '- Stop when the task is done: once every rule the task states holds and a declared check passes after your last change, write the report and end. Leave improvements nobody asked for out of the change.';
 // A thorough writer probes its own change before it reports, as Claude Code does on the tasks it wins
 // (evals/results/2026-10-29-cc-behavior/): the review sent most auto runs back for these cases and their tests
-// (evals/results/2026-10-29-haiku-effort/auto.jsonl).
+// (evals/results/2026-10-29-haiku-effort/auto.jsonl). With it, auto went from 2-4 to 6-3 against Claude Code Opus high
+// (evals/results/2026-10-29-opus-high/).
 const PROBE_THOROUGH =
   "\n- Before the report, probe your own change as a reviewer would: list the inputs the task and the code's doc comments imply that no visible test checks (empty, boundary, malformed or very large input, a throw or early stop midway, an alias or abbreviation a guard must still catch), run the risky ones against your code in one short script or test, fix what breaks, and add a test for each behaviour you changed or fixed.";
 
