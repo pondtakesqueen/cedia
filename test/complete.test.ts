@@ -42,12 +42,18 @@ describe('tab completion', () => {
     expect(completionText('```js\na + b;\n```', '')).toBe('a + b;');
     // The editor keeps `);` after the cursor, so a reply that writes it again would show it twice.
     expect(completionText('<completion>a, b);</completion>', ');\nnext()')).toBe('a, b');
-    expect(completionText('<completion>\n  x();\n</completion>', '')).toBe('\n  x();\n');
+    // The block's own line breaks go; a leading one stays where the cursor ends a line with code on it.
+    expect(completionText('<completion>\n  x();\n</completion>', '', '  ')).toBe('  x();');
+    expect(completionText('<completion>\n  x();\n</completion>', '', 'if (a) {')).toBe('\n  x();');
+    // Cut off by the token cap: the whole lines only.
+    expect(completionText('<completion>a();\nb();\nc(1, ', '')).toBe('a();\nb();');
+    expect(completionText('<completion>a(1, ', '')).toBe('');
     // With text after the cursor, a line break would strand it: the first line only, less the repeated `;`.
     expect(completionText('<completion>xs.length;\n}</completion>', ';\n}')).toBe('xs.length');
     expect(completionText('<completion>a, b)</completion>', ');')).toBe('a, b');
     // Only closing punctuation counts as repeated, never a word the cursor is before.
     expect(completionText('<completion>foo</completion>', 'o.bar()')).toBe('foo');
+    expect(completionText('<completion>before + text };</completion>', ' };')).toBe('before + text');
   });
 
   test('cedia complete --json answers the text at the cursor in one short request, logs it, and writes nothing', () => {
@@ -59,6 +65,17 @@ describe('tab completion', () => {
     expect(log[0]).toMatchObject({ kind: 'session', role: 'complete', tools: [] });
     expect(log.find((e) => e.kind === 'user')).toMatchObject({ text: expect.stringContaining('  return <<<CURSOR>>>') });
     expect(log.find((e) => e.kind === 'request')).toMatchObject({ maxTokens: 256 });
+  });
+
+  test('one turn is the answer, even when the loop would go on past the token cap or an empty reply', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-complete-'));
+    writeFileSync(join(dir, 'script.json'), JSON.stringify([{ blocks: [{ type: 'text', text: '<completion>a + b;\nnext(' }], stop: 'max_tokens' }]));
+    writeFileSync(join(dir, 'math.js'), FILE);
+    const p = Bun.spawnSync([BIN, 'complete', '--cwd', dir, '--model', 'faux', '--file', 'math.js', '--at', '2:10', '--json'], {
+      env: { ...process.env, CEDIA_FAUX_SCRIPT: join(dir, 'script.json'), CEDIA_HOME: join(dir, 'home') },
+    });
+    expect(JSON.parse(p.stdout.toString())).toMatchObject({ text: 'a + b;' });
+    expect(JSON.parse(cedia('', ['--file', 'math.js', '--at', '2:10', '--json']).out)).toMatchObject({ text: '' });
   });
 
   test('--stdin completes the editor\'s text, and refusals say why', () => {
