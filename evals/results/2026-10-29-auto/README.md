@@ -52,3 +52,26 @@ What it says:
 - On these two diffs (about 28 KB each), the Sonnet review still sent the writer back, and review was the cheap step: $0.16-0.23. On real tasks the Opus plan is most of the cost.
 - The judge marked p21 down on scope, because it edited test files the task said to leave alone. The scope rules were added to cedia after p21, so part of this win is the newer prompts, not the review.
 - On real-slop-guard, in the order p21 won, the judge found this run less robust: a failed diff could crash it, and a renamed test was flagged as deleted. Neither the review nor the hidden tests caught that. Two tasks are too few to say whether an Opus review would have.
+
+## An Opus plan at low effort on a real task
+
+Question: on real tasks the Opus plan is the slowest and costliest step. Does an Opus plan at low effort hold up there, as it did on the small tasks (`../2026-10-29-cheaper-opus/`, low-plan arm: a third less plan time, 5 to 5 blind)?
+
+- real-three-changes, the task whose plan took longest above (167 s), run again with `--cedia-arg=--plan=claude-code:opus@low`. Everything else was as above.
+- Judge: `judge-lowplan/judge.py`, both orders. Side `cedia` is the low plan and side `claude` the medium plan above.
+
+| real-three-changes | plan at medium (above) | plan at low |
+|---|---|---|
+| pass | yes | yes |
+| plan: time, turns, cost | 167 s, 13, $1.11 | **114 s (-32%), 18, $0.84 (-25%)** |
+| review | changes, $0.23 | changes, $0.27 |
+| fix after the review | 30 s | 158 s |
+| wall time | 400 s | 470 s |
+| run cost (Haiku + plan + review) | $1.37 | **$1.15 (-16%)** |
+| blind | | **low wins** (both orders): it fails a refusal that comes with tool calls and tests the quota wait and the resumed refused thread |
+
+What it says:
+- On this task the low plan was quicker and cheaper and gave the better change. The plan split the work into 4 parts where the medium plan made 2. The writer then took longer to fix what the review found, so the whole run took 70 s more.
+- This is one run of one task. With the small tasks, an Opus plan at low effort has now tied or won everywhere it was measured.
+
+Decision: `-m auto` plans with `claude-code:opus@low` where no plan role is set.

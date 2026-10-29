@@ -1,0 +1,11 @@
+Running 1 tasks x 1 runs on cedia (opencode-go/claude-haiku-5-5), 1 at a time...
+  PASS real-three-changes#1 (469.9s $0.0416, plan 114s, review changes 85s, fix 158s, 4 sub-threads (4 work, peak 37k), peak 37k)
+
+Results written to evals/results/2026-10-29-auto/real-lowplan.jsonl
+cedia (opencode-go/claude-haiku-5-5): 1 tasks, 1 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 469.9s per run, 1067333 input / 32751 output tokens per run, cache hit 88.2%
+  peak context 37k mean, 37k max, 0 of 1 runs past 100k; 0 handoffs, 4 sub-threads (4 work, 0 handoffs in them, peak 37k)
+  repaired inputs: 14 edit: top-level old_text/new_text
+  speed 277.1 output tok/s, 0.78s to first token per call; model 39.9% of time, cedia 0.0%
+  cost $0.0416 total, $0.0416 per passed run
