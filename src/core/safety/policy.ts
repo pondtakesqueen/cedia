@@ -31,8 +31,8 @@ export const PERMISSION_ENTRIES: PermissionEntry[] = [
 export type RunPermission = PermissionMode | 'plan';
 
 // Built-in guards. The user (never a repo or the model) may lift one with `unlock`; nothing else lifts them.
-export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'drop-refs' | 'rm-outside' | 'deploy' | 'git-config' | 'secret-path' | 'secret-redaction' | 'slop-check';
-export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'drop-refs', 'rm-outside', 'deploy', 'git-config', 'secret-path', 'secret-redaction', 'slop-check'];
+export type Guard = 'force-push' | 'reset-hard' | 'clean-force' | 'drop-refs' | 'rm-outside' | 'deploy' | 'git-config' | 'hook-bypass' | 'secret-path' | 'secret-redaction' | 'slop-check';
+export const GUARDS: Guard[] = ['force-push', 'reset-hard', 'clean-force', 'drop-refs', 'rm-outside', 'deploy', 'git-config', 'hook-bypass', 'secret-path', 'secret-redaction', 'slop-check'];
 
 // Rules look like `bash`, `bash(bun test*)` or `edit(src/*)`. `*` matches anything. A bash pattern is
 // matched against each simple command in the line, so `bun test && rm -rf x` needs both to be allowed.
@@ -364,6 +364,8 @@ function gitHit(args: string[], cwd: string, depth = 0): Hit | undefined {
     if (hidden) aliases.set(hidden[1]!.toLowerCase(), '');
     const alias = args[i] === '-c' ? /^alias\.([^=]+)=(.*)$/is.exec(args[i + 1] ?? '') : null;
     if (alias) aliases.set(alias[1]!.toLowerCase(), alias[2]!);
+    if ((args[i] === '-c' && /^core\.hookspath=/i.test(args[i + 1] ?? '')) || /^--config-env=core\.hookspath=/i.test(args[i]!))
+      return { name: 'hook-bypass', reason: HOOK_BYPASS };
     i += ['-C', '-c', '--git-dir', '--work-tree', '--namespace'].includes(args[i]!) ? 2 : 1;
   }
   const [subcommand, ...rest] = args.slice(i);
@@ -385,6 +387,7 @@ function gitHit(args: string[], cwd: string, depth = 0): Hit | undefined {
     const refspec = rest.some((a) => !a.startsWith('-') && /^[+:]/.test(a));
     if (force || refspec) return { name: 'force-push', reason: 'force-push, branch deletion and mirror push rewrite shared history; ask the user' };
   }
+  if (skipsHooks(subcommand, rest)) return { name: 'hook-bypass', reason: HOOK_BYPASS };
   if (subcommand === 'reset' && rest.includes('--hard'))
     return { name: 'reset-hard', reason: 'git reset --hard throws away work with no way back; use git stash or ask the user' };
   if (subcommand === 'clean' && (rest.includes('--force') || shortFlag(rest, 'f')) && !rest.some((a) => a === '-n' || a === '--dry-run'))
@@ -393,6 +396,32 @@ function gitHit(args: string[], cwd: string, depth = 0): Hit | undefined {
   if (dropsRefs(subcommand, rest))
     return { name: 'drop-refs', reason: `git ${subcommand} ${rest.join(' ')} deletes commits or the record of them, which cedia's snapshots cannot bring back; ask the user` };
   return undefined;
+}
+
+// The repository's git hooks (pre-commit, commit-msg, pre-push) are its own checks; skipping them lands a commit
+// they would refuse (ECC's block-no-verify hook). `--no-verify` and its abbreviations, and commit's `-n`, which
+// a short group may carry until a letter that takes a value (`-nm x` skips them, `-mn` is the message "n").
+const HOOK_BYPASS = "skipping the repository's git hooks commits or pushes what they would refuse; fix what they report, or ask the user";
+const NO_VERIFY = /^--no-veri(f|fy)?$/;
+function skipsHooks(subcommand: string | undefined, rest: string[]): boolean {
+  if (!subcommand || !['commit', 'push', 'merge', 'am', 'rebase', 'cherry-pick', 'revert'].includes(subcommand)) return false;
+  if (rest.some((a) => NO_VERIFY.test(a))) return true;
+  if (subcommand !== 'commit') return false;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]!;
+    if (a === '--') break;
+    if (['--message', '--file', '--reuse-message', '--reedit-message', '--template', '--author', '--date'].includes(a)) i++;
+    if (!/^-[a-zA-Z]+$/.test(a)) continue;
+    for (let j = 1; j < a.length; j++) {
+      if (a[j] === 'n') return true;
+      if ('mFCctS'.includes(a[j]!)) {
+        // a value letter last in its group takes the next word (`-m -n` is the message "-n")
+        if (j === a.length - 1 && a[j] !== 'S') i++;
+        break;
+      }
+    }
+  }
+  return false;
 }
 
 // `git config` writes the repository config (hooks and remotes live there) or wherever --file, --global

@@ -79,6 +79,17 @@ describe('deny list', () => {
     ['terraform apply -auto-approve', 'deploy'],
     ['gh pr merge 3 --squash', 'deploy'],
     ['gcloud run deploy api', 'deploy'],
+    // Skipping the repository's git hooks.
+    ['git commit --no-verify -m x', 'hook-bypass'],
+    ['git commit -n -m x', 'hook-bypass'],
+    ['git commit -anm x', 'hook-bypass'],
+    ['git commit --no-veri -m x', 'hook-bypass'],
+    ['git push --no-verify origin main', 'hook-bypass'],
+    ['git merge --no-verify feature', 'hook-bypass'],
+    ['git -c core.hooksPath=/dev/null commit -m x', 'hook-bypass'],
+    ['git -c core.hookspath=. push', 'hook-bypass'],
+    ['git --config-env=core.hooksPath=EMPTY commit -m x', 'hook-bypass'],
+    ['cd sub && git commit --no-verify -m x', 'hook-bypass'],
     // Commands that lose commits, which cedia's snapshots cannot bring back.
     ['git stash drop', 'drop-refs'],
     ['git stash clear', 'drop-refs'],
@@ -135,7 +146,7 @@ describe('deny list', () => {
     }
   });
 
-  const allowed = ['git push origin feature', 'git push -u origin feature', 'git reset --soft HEAD~1', 'git clean -n', 'rm -rf node_modules dist', 'rm -rf ./*', 'rm -r src/old', 'find . -name "*.tmp" -delete', 'rm /tmp/x.txt', 'npm test', 'bun run build', 'kubectl get pods', 'gh pr view 3', 'git stash', 'git stash pop', 'git stash list', 'git branch -d merged', 'git branch new', 'git reflog', 'git update-ref refs/heads/x HEAD', 'find -L . -name "*.tmp" -delete', 'find . -name "*.o" -exec rm -f {} +', 'find src -exec grep -l x {} \\;', 'git -c alias.st=status st', 'git -c core.pager=cat log', 'bash -lc "bun test"', 'env -S "bun test"', 'git config --list', 'git config user.name', 'git -C src status', 'cat .git/config', 'powershell -Command "Write-Host hi"', 'python3 -c "print(\'hi\')"', 'python3 -c "import os; os.system(\'echo hi\')"'];
+  const allowed = ['git push origin feature', 'git push -u origin feature', 'git reset --soft HEAD~1', 'git clean -n', 'rm -rf node_modules dist', 'rm -rf ./*', 'rm -r src/old', 'find . -name "*.tmp" -delete', 'rm /tmp/x.txt', 'npm test', 'bun run build', 'kubectl get pods', 'gh pr view 3', 'git stash', 'git stash pop', 'git stash list', 'git branch -d merged', 'git branch new', 'git reflog', 'git update-ref refs/heads/x HEAD', 'find -L . -name "*.tmp" -delete', 'find . -name "*.o" -exec rm -f {} +', 'find src -exec grep -l x {} \\;', 'git -c alias.st=status st', 'git -c core.pager=cat log', 'git commit -m -n', 'git commit -m "fix -n flag"', 'git commit -mn', 'git commit -S -m x', 'git push -n origin feature', 'git commit --amend --no-edit', 'git log --no-merges', 'bash -lc "bun test"', 'env -S "bun test"', 'git config --list', 'git config user.name', 'git -C src status', 'cat .git/config', 'powershell -Command "Write-Host hi"', 'python3 -c "print(\'hi\')"', 'python3 -c "import os; os.system(\'echo hi\')"'];
   for (const command of allowed) test(`allows ${command}`, () => expect(bash(WS, command).decision).toBe('allow'));
 
   test('allow rules and modes cannot lift it', () => {
