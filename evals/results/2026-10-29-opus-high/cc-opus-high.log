@@ -1,0 +1,17 @@
+Running 10 tasks x 1 runs on claude (opus), 2 at a time...
+  PASS hard-deny-list#1 (48.3s $0.2002)
+  PASS hard-edit-tiers#1 (49.2s $0.1921)
+  PASS hard-injection#1 (30.4s $0.1079)
+  PASS hard-csv-stream#1 (128.2s $0.4241)
+  PASS hard-ledger#1 (48.5s $0.2171)
+  PASS hard-memo-async#1 (68.1s $0.2662)
+  PASS hard-sse#1 (23.9s $0.1237)
+  PASS wide-bug-hunt#1 (51.1s $0.2599)
+  PASS hard-pool#1 (118.0s $0.4109)
+  PASS wide-three-features#1 (86.0s $0.3546)
+
+Results written to evals/results/2026-10-29-opus-high/cc-opus-high.jsonl
+claude (opus): 10 tasks, 10 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 65.2s per run, 168188 input / 5799 output tokens per run, cache hit 91.9%
+  cost $2.5568 total, $0.2557 per passed run

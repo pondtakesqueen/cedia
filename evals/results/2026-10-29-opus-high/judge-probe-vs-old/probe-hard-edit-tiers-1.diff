@@ -1,0 +1,94 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.test.ts b/edit.test.ts
+--- a/edit.test.ts	2026-10-29 09:07:21.070277469 +0000
++++ b/edit.test.ts	2026-10-29 09:09:11.488954492 +0000
+@@ -18,6 +18,11 @@
+     expect(r.applied).toEqual({ from: 2, to: 3, tier: 'exact', count: 1 });
+     expect(r.content).toBe('a\nB\nC\nX\nd\n');
+   });
++  test('old_text ending in a newline spans only its own lines', () => {
++    const r = ok(applyEdit('a\nb\nc\n', { old_text: 'b\n', new_text: 'X\n' }));
++    expect(r.applied).toEqual({ from: 2, to: 2, tier: 'exact', count: 1 });
++    expect(r.content).toBe('a\nX\nc\n');
++  });
+   test('ambiguous without replace_all', () => {
+     const r = applyEdit('x\ny\nx\n', { old_text: 'x', new_text: 'z' });
+     expect('error' in r && r.error).toContain('matches 2 places');
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 09:07:21.070307465 +0000
++++ b/edit.ts	2026-10-29 09:09:18.516954909 +0000
+@@ -23,5 +23,74 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text, new_text, replace_all } = edit;
++  if (old_text === '') return { error: 'old_text is empty; use write to create content' };
++  if (old_text === new_text) return { error: 'old_text and new_text are the same' };
++
++  const trimNl = (s: string) => (s.endsWith('\n') ? s.slice(0, -1) : s);
++  const lineOf = (idx: number) => content.slice(0, idx).split('\n').length;
++
++  const starts: number[] = [];
++  for (let i = content.indexOf(old_text); i !== -1; i = content.indexOf(old_text, i + old_text.length)) starts.push(i);
++  if (starts.length > 1 && !replace_all) {
++    return { error: `old_text matches ${starts.length} places; first at line ${lineOf(starts[0])}` };
++  }
++  if (starts.length > 0) {
++    const first = starts[0];
++    const next = replace_all
++      ? content.split(old_text).join(new_text)
++      : content.slice(0, first) + new_text + content.slice(first + old_text.length);
++    const from = lineOf(first);
++    return { content: next, applied: { from, to: from + trimNl(old_text).split('\n').length - 1, tier: 'exact', count: starts.length } };
++  }
++
++  const cLines = content.split('\n');
++  const oLines = trimNl(old_text).split('\n');
++  const nLines = trimNl(new_text) === '' ? [] : trimNl(new_text).split('\n');
++  const indentOf = (lines: string[]) => {
++    const first = lines.find(l => l.trim() !== '') ?? '';
++    return first.slice(0, first.length - first.trimStart().length);
++  };
++  const windowsOf = (norm: (s: string) => string) => {
++    const want = oLines.map(norm);
++    const found: number[] = [];
++    for (let i = 0; i + want.length <= cLines.length; i++) {
++      if (want.every((w, k) => norm(cLines[i + k]) === w)) found.push(i);
++    }
++    return found;
++  };
++
++  const lineTiers: [Tier, (s: string) => string][] = [
++    ['trailing-space', s => s.trimEnd()],
++    ['indentation', s => s.trim()],
++  ];
++  for (const [tier, norm] of lineTiers) {
++    const windows = windowsOf(norm);
++    if (windows.length > 1) {
++      return { error: `old_text matches ${windows.length} places at lines ${windows.map(i => i + 1).join(', ')}` };
++    }
++    if (windows.length === 1) {
++      const i = windows[0];
++      let repl = nLines;
++      if (tier === 'indentation') {
++        const oldInd = indentOf(oLines);
++        const fileInd = indentOf(cLines.slice(i, i + oLines.length));
++        repl = nLines.map(l => {
++          if (l.trim() === '') return '';
++          return l.startsWith(oldInd) ? fileInd + l.slice(oldInd.length) : fileInd + l.trimStart();
++        });
++      }
++      cLines.splice(i, oLines.length, ...repl);
++      return { content: cLines.join('\n'), applied: { from: i + 1, to: i + oLines.length, tier, count: 1 } };
++    }
++  }
++
++  const first = oLines.find(l => l.trim() !== '')?.trim() ?? '';
++  const hits: number[] = [];
++  if (first !== '') {
++    for (let i = 0; i < cLines.length && hits.length < 5; i++) {
++      if (cLines[i].includes(first)) hits.push(i + 1);
++    }
++  }
++  return { error: 'old_text not found' + (hits.length > 0 ? `; first line appears at line ${hits.join(', ')}` : '') };
+ }
