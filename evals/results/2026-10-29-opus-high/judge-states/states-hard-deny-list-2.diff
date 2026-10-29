@@ -1,0 +1,100 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.rules.test.ts b/deny.rules.test.ts
+--- a/deny.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/deny.rules.test.ts	2026-10-29 12:48:04.456086875 +0000
+@@ -0,0 +1,30 @@
++import { expect, test } from 'bun:test';
++import { denyListed } from './deny.ts';
++
++const cwd = '/work/repo';
++const hit = (line: string) => denyListed(line.split(' '), cwd)?.name;
++
++test('git global options with values, and push flag forms', () => {
++  expect(hit('git --work-tree w push -f')).toBe('force-push');
++  expect(hit('git --namespace push status')).toBeUndefined();
++  expect(hit('git push --mirror=x')).toBe('force-push');
++  expect(hit('git push --prune=x')).toBe('force-push');
++  expect(hit('git push -df')).toBe('force-push');
++  expect(hit('git push -uf')).toBe('force-push');
++  expect(hit('git log --format=+x')).toBeUndefined();
++});
++
++test('rm edge targets', () => {
++  expect(hit('rm -rf /work/repo/')).toBe('rm-outside');
++  expect(hit('rm -rf ./')).toBe('rm-outside');
++  expect(hit('rm -rf ~/x')).toBe('rm-outside');
++  expect(hit('rm -rf ..')).toBe('rm-outside');
++  expect(hit('rm -rf -- -r /etc')).toBe('rm-outside');
++  expect(hit('rm -- -r /etc')).toBeUndefined();
++});
++
++test('find with a non-workspace start path or no start path', () => {
++  expect(hit('find -delete')).toBeUndefined();
++  expect(hit('find ~bob -delete')).toBe('rm-outside');
++  expect(hit('find / -exec rm {} ;')).toBe('rm-outside');
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.ts b/deny.ts
+--- a/deny.ts	2026-10-29 12:46:55.192766527 +0000
++++ b/deny.ts	2026-10-29 12:48:00.676086650 +0000
+@@ -36,5 +36,61 @@
+ //
+ // Anything else: undefined.
+ export function denyListed(argv: string[], cwd: string): Hit | undefined {
+-  throw new Error('not implemented');
++  if (argv.length === 0) return undefined;
++  const cmd = argv[0].split('/').pop();
++  if (cmd === 'git') return gitHit(argv.slice(1));
++  if (cmd === 'rm') return rmHit(argv.slice(1), cwd);
++  if (cmd === 'find') return findHit(argv.slice(1), cwd);
++  return undefined;
+ }
++
++const GIT_VALUE_OPTS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
++const PUSH_FORCE = new Set(['--force', '--force-with-lease', '--mirror', '--delete', '--prune']);
++const shortGroup = (w: string) => /^-[^-]/.test(w);
++
++function gitHit(args: string[]): Hit | undefined {
++  let i = 0;
++  while (i < args.length && args[i].startsWith('-')) i += GIT_VALUE_OPTS.has(args[i]) ? 2 : 1;
++  const sub = args[i];
++  const rest = args.slice(i + 1);
++  if (sub === 'push') {
++    for (const w of rest) {
++      if (PUSH_FORCE.has(w.split('=')[0]) || (shortGroup(w) && /[fd]/.test(w)) || (!w.startsWith('-') && /^[+:]/.test(w)))
++        return { name: 'force-push', reason: `push ${w}` };
++    }
++  }
++  if (sub === 'reset' && rest.includes('--hard')) return { name: 'reset-hard', reason: 'reset --hard' };
++  if (sub === 'clean') {
++    const force = rest.find((w) => w === '--force' || (shortGroup(w) && w.includes('f')));
++    const dry = rest.some((w) => w === '-n' || w === '--dry-run');
++    if (force && !dry) return { name: 'clean-force', reason: `clean ${force}` };
++  }
++  return undefined;
++}
++
++function rmHit(args: string[], cwd: string): Hit | undefined {
++  const end = args.indexOf('--');
++  const opts = end < 0 ? args : args.slice(0, end);
++  const recursive = opts.some((w) => w === '--recursive' || (shortGroup(w) && /[rR]/.test(w)));
++  if (!recursive) return undefined;
++  const targets = [...opts.filter((w) => !w.startsWith('-')), ...(end < 0 ? [] : args.slice(end + 1))];
++  if (targets.length === 0) return { name: 'rm-outside', reason: 'rm -r with no targets' };
++  for (const t of targets) {
++    if (unresolved(t)) return { name: 'rm-outside', reason: `rm ${t} cannot be resolved before it runs` };
++    if (sameDir(t, cwd) || !insideWorkspace(t, cwd)) return { name: 'rm-outside', reason: `rm ${t} is cwd or outside it` };
++  }
++  return undefined;
++}
++
++function findHit(args: string[], cwd: string): Hit | undefined {
++  if (!args.some((w) => w === '-delete' || w === '-exec' || w === '-execdir')) return undefined;
++  const starts = args.slice(0, args.findIndex((w) => w.startsWith('-')));
++  const paths = starts.length > 0 ? starts : ['.'];
++  for (const p of paths) {
++    if (unresolved(p) || !insideWorkspace(p, cwd)) return { name: 'rm-outside', reason: `find ${p} is outside ${cwd}` };
++  }
++  return undefined;
++}
++
++// Paths the shell expands in a way we cannot see: variables and ~user (but not ~ or ~/...).
++const unresolved = (p: string) => p.includes('$') || (p.startsWith('~') && p !== '~' && !p.startsWith('~/'));
