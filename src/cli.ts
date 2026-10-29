@@ -23,6 +23,7 @@ import { loadOnboarding, saveOnboarding, acceptTrust, markStep, isComplete } fro
 import { loadOutputStyles, getStyle, stylesDir } from './core/output-styles/styles.ts';
 import { installPlugin, uninstallPlugin, setPluginEnabled, updatePlugin, listInstalled, loadInstalled, pluginContents, addPluginMcp, addMarketplace, removeMarketplace, loadMarketplaces } from './core/plugins/plugins.ts';
 import { consolidateMemory } from './core/project/consolidate.ts';
+import { MCP_PRESETS, mcpPreset } from './core/mcp/presets.ts';
 import { gatherNotes } from './core/memory/gather.ts';
 import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Schedule } from './core/project/schedules.ts';
 import { commandList, loadSkills } from './core/skills/skills.ts';
@@ -199,6 +200,10 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia mcp add <name> (--command <cmd> [--arg <a>]... [--env K=V]... | --url <url> [--header K=V]...)
                      [--read-only] [--timeout <sec>]
                                             add a server, or replace the one of that name
+       cedia mcp add <name> --preset <tavily|brave>
+                                            add a ready-made search server; its key is read from
+                                            TAVILY_API_KEY or BRAVE_API_KEY each run, never written
+       cedia mcp presets                    the ready-made servers and the key each one reads
        cedia mcp remove <name>              take a server out
        cedia commit --thread <id> [--cwd <dir>] [--model <ref>] [--json]
                                             draft a message for the files the thread changed; commits nothing
@@ -676,6 +681,7 @@ async function mcp(argv: string[]): Promise<number> {
         header: { type: 'string', multiple: true },
         'read-only': { type: 'boolean' },
         timeout: { type: 'string' },
+        preset: { type: 'string' },
       },
     });
   } catch (e) {
@@ -707,8 +713,20 @@ async function mcp(argv: string[]): Promise<number> {
       else console.log(r.ok ? `${name}: ${r.tools.length} tool${r.tools.length === 1 ? '' : 's'}${r.tools.map((t) => `\n  ${t.name}${t.description ? `  ${t.description}` : ''}`).join('')}` : `${name}: ${r.error}`);
       return r.ok ? 0 : 1;
     }
+    if (cmd === 'presets' && !name) {
+      console.log(MCP_PRESETS.map((p) => `${p.name}  ${p.description}\n    key: ${p.keyEnv} (${p.keyUrl})`).join('\n'));
+      return 0;
+    }
+    if (cmd === 'add' && name && !rest.length && values.preset !== undefined) {
+      if (values.command || values.url || values.env || values.header || values.arg) throw new Error('mcp add --preset takes no --command, --url, --arg, --env or --header');
+      const p = mcpPreset(values.preset);
+      addMcp(name, { ...p.server, ...(values['read-only'] ? { readOnly: true } : {}), ...(values.timeout !== undefined ? { timeoutSec: Number(values.timeout) } : {}) });
+      console.log(`added MCP server ${name} (${p.name}); it reads its key from ${p.keyEnv}`);
+      if (!process.env[p.keyEnv]) console.log(`${p.keyEnv} is not set here: get a key at ${p.keyUrl} and export it where cedia runs`);
+      return 0;
+    }
     if (cmd === 'add' && name && !rest.length) {
-      if (!values.command === !values.url) throw new Error('mcp add takes --command or --url');
+      if (!values.command === !values.url) throw new Error('mcp add takes --command, --url or --preset');
       const common = { ...(values['read-only'] ? { readOnly: true } : {}), ...(values.timeout !== undefined ? { timeoutSec: Number(values.timeout) } : {}) };
       const env = pairs(values.env, 'env');
       const headers = pairs(values.header, 'header');
@@ -725,7 +743,7 @@ async function mcp(argv: string[]): Promise<number> {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia mcp [list [--json] | check <name> [--json] | add <name> (--command <cmd> [--arg <a>]... [--env K=V]... | --url <url> [--header K=V]...) [--read-only] [--timeout <sec>] | remove <name>]');
+  console.error('usage: cedia mcp [list [--json] | check <name> [--json] | presets | add <name> (--command <cmd> [--arg <a>]... [--env K=V]... | --url <url> [--header K=V]... | --preset <tavily|brave>) [--read-only] [--timeout <sec>] | remove <name>]');
   return 2;
 }
 
