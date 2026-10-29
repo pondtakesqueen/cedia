@@ -39,7 +39,7 @@ The plan above cost most of a CI notice's run. The same two tasks were run three
 |---|---|---|---|---|
 | auto roles, plan and review (above) | 2 | 2 | 29 s | $0.070 |
 | Haiku alone, no plan or review (`ci-noprofile.jsonl`) | 6 | 6 | 9 s | $0.001 |
-| auto roles with `--profile ci` (`ci-profile.jsonl`): no plan, Sonnet review kept | 6 | 6 | 14 s | $0.014 |
+| auto roles with `--profile ci` (`ci-profile.jsonl`): no plan, Sonnet review kept | 6 | 6 | 14 s | $0.012 |
 
 So cedia now ships a `ci` profile for the PR watcher's prompts:
 - `planWhen: never`, so the planner is skipped.
