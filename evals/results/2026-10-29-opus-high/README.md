@@ -102,3 +102,38 @@ What it says:
 - The writer ran on the Anthropic API here and on opencode-go in the probe arm. The model and effort are the same, but a run of the probe arm on the same route would rule the route out.
 
 Spent for this section: $0.35 Haiku (Anthropic API). Plan and review ($5.17) and the panel ($4.32) ran at API price on the owner's subscription. The first attempt at this run stopped at 17 of 30 when opencode-go's quota ran out, and its results were not written.
+
+## The plan also names states, where rules meet, and fast tests (three runs)
+
+The rule-listing plan still lost hard-csv-stream and hard-memo-async (`judge-rules/verdicts-rules.json`):
+- csv-stream: the stream kept parsing after a thrown error or after `end()`.
+- memo-async: expired entries still counted toward the size limit, and a synchronous throw escaped as a throw.
+
+It was also slower. Some of its tests ran large or timed loops, with tool time up to 187 s in a run, and one run timed out. So `planPrompt` now also asks for:
+- the states the code passes through (after an error, after end or close, when reused) and where two rules meet;
+- tests that finish in seconds and never wait on real time.
+
+- Run (`auto-states.jsonl`): the same command and route as the rule-listing arm (Haiku on the Anthropic API).
+- Panel: `judge-states/`, against the same three CC Opus high runs. Tally: `python3 judge-states/tally.py judge-states states`.
+
+| 30 runs | pass | wins / losses / tie or split vs CC Opus high | review sent back | time per task (plan, review, fix) | tool time per run | cost per task at API price |
+|---|---|---|---|---|---|---|
+| rule-listing plan | 29/30 | 19 / 5 / 5 | 21 of 30 | 152 s (35, 39, 22) | 14 s | $0.18 |
+| **+ states and fast tests** | **30/30** | **18 / 7 / 5** | **14 of 30** | **127 s** (36, 38, 9) | **1 s** | $0.20 |
+| CC Opus high | 30/30 | | | 70 s | | $0.27 |
+
+| | correctness | quality | scope | tests | security |
+|---|---|---|---|---|---|
+| states / CC Opus high | 8.53 / 8.42 | 8.08 / 8.18 | 8.87 / 8.93 | 8.07 / 5.17 | 9.05 / 9.02 |
+
+What it says:
+- Quality held: 18 to 7 here and 19 to 5 before are within a run's noise, and the score means are within 0.1 of each other.
+- It is faster and steadier:
+  - 16% less time per task;
+  - no timeout;
+  - tool time from 14 s to 1 s;
+  - the review sent back 14 of 30 instead of 21, so the fix step fell from 22 s to 9 s.
+- hard-csv-stream went from three losses to two and a split. hard-memo-async still loses every run, each time on expired entries that count toward the size limit.
+- Plan and review are still most of the time (74 s of 127 s). They are the next place to look for speed.
+
+Spent for this section: $0.30 Haiku (Anthropic API). Plan and review ($5.68) and the panel ($4.54) ran at API price on the owner's subscription.

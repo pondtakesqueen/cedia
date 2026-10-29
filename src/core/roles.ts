@@ -11,7 +11,8 @@ export type Part = { files: string[]; brief: string; model?: string };
 export const MAX_PARTS = 4;
 
 // The rules and their tests: with them, auto went from 13-15 to 19-5 against Claude Code Opus high, its tests most of
-// all (evals/results/2026-10-29-opus-high/).
+// all. Naming states and keeping tests fast kept that (18-7) at 16% less time and no timeout
+// (evals/results/2026-10-29-opus-high/).
 export function planPrompt(task: string, split?: Split): string {
   return `Plan how to do the task below in this working directory. Read what you need and change nothing.
 
