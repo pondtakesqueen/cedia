@@ -1,0 +1,81 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 05:30:43.133779571 +0000
++++ b/edit.ts	2026-10-29 05:31:05.907194624 +0000
+@@ -23,5 +23,76 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text, new_text, replace_all } = edit;
++  if (old_text === '') return { error: 'old_text is empty; use write to create or overwrite a file' };
++  if (old_text === new_text) return { error: 'old_text and new_text are the same; nothing to change' };
++
++  // Tier 1: exact.
++  const exactCount = content.split(old_text).length - 1;
++  if (exactCount > 0) {
++    const lineOf = (index: number) => content.slice(0, index).split('\n').length;
++    if (exactCount > 1 && !replace_all) {
++      return { error: `old_text matches ${exactCount} places; first match at line ${lineOf(content.indexOf(old_text))}. Add context to make it unique or set replace_all` };
++    }
++    const first = content.indexOf(old_text);
++    const last = content.lastIndexOf(old_text);
++    const applied: Applied = {
++      from: lineOf(first),
++      to: lineOf(last + old_text.length - 1),
++      tier: 'exact',
++      count: replace_all ? exactCount : 1,
++    };
++    const out = replace_all ? content.split(old_text).join(new_text) : content.replace(old_text, () => new_text);
++    return { content: out, applied };
++  }
++
++  // Tiers 2 and 3: whole lines.
++  const hasTrailingNewline = content.endsWith('\n');
++  const lines = content.split('\n');
++  if (hasTrailingNewline) lines.pop();
++  const stripNewline = (s: string) => (s.endsWith('\n') ? s.slice(0, -1) : s);
++  const oldLines = stripNewline(old_text).split('\n');
++  const newLines = new_text === '' ? [] : stripNewline(new_text).split('\n');
++
++  const findWindows = (normalize: (s: string) => string): number[] => {
++    const want = oldLines.map(normalize);
++    const hits: number[] = [];
++    for (let i = 0; i + want.length <= lines.length; i++) {
++      if (want.every((w, j) => normalize(lines[i + j]) === w)) hits.push(i);
++    }
++    return hits;
++  };
++
++  const tiers: { tier: Tier; normalize: (s: string) => string }[] = [
++    { tier: 'trailing-space', normalize: (s) => s.trimEnd() },
++    { tier: 'indentation', normalize: (s) => s.trim() },
++  ];
++  for (const { tier, normalize } of tiers) {
++    const hits = findWindows(normalize);
++    if (hits.length === 0) continue;
++    if (hits.length > 1) {
++      return { error: `old_text matches ${hits.length} places at lines ${hits.map((i) => i + 1).join(', ')}` };
++    }
++    const at = hits[0];
++    let replacement = newLines;
++    if (tier === 'indentation') {
++      const indentOf = (s: string) => s.match(/^\s*/)![0];
++      const oldFirst = oldLines.find((l) => l.trim() !== '') ?? '';
++      const windowFirst = lines.slice(at, at + oldLines.length).find((l) => l.trim() !== '') ?? '';
++      const from = indentOf(oldFirst);
++      const to = indentOf(windowFirst);
++      replacement = newLines.map((l) => (l.trim() !== '' && l.startsWith(from) ? to + l.slice(from.length) : l));
++    }
++    const out = [...lines.slice(0, at), ...replacement, ...lines.slice(at + oldLines.length)];
++    return {
++      content: out.join('\n') + (hasTrailingNewline && out.length > 0 ? '\n' : ''),
++      applied: { from: at + 1, to: at + oldLines.length, tier, count: 1 },
++    };
++  }
++
++  // Nothing matched: point at where the first line of old_text appears.
++  const firstLine = oldLines.find((l) => l.trim() !== '')?.trim();
++  const where = firstLine ? lines.map((l, i) => (l.includes(firstLine) ? i + 1 : 0)).filter((n) => n > 0) : [];
++  const pointer = where.length > 0 ? `; first line appears at line ${where.slice(0, 5).join(', ')}` : '';
++  return { error: `old_text not found${pointer}` };
+ }

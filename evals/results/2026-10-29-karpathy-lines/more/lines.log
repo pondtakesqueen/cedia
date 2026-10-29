@@ -1,0 +1,18 @@
+Running 8 tasks x 1 runs on cedia (opencode-go/claude-haiku-5-5), 2 at a time...
+  PASS hard-deny-list#1 (26.6s $0.0040, peak 11k)
+  FAIL hard-csv-stream#1 (39.1s $0.0063, peak 15k)
+  PASS hard-injection#1 (7.4s $0.0009, peak 6k)
+  PASS hard-edit-tiers#1 (44.2s $0.0054, peak 17k)
+  PASS hard-ledger#1 (32.5s $0.0043, peak 14k)
+  PASS hard-sse#1 (12.6s $0.0020, peak 9k)
+  PASS wide-three-features#1 (26.1s $0.0048, peak 14k)
+  PASS hard-shell-split#1 (86.2s $0.0130, peak 27k)
+
+Results written to evals/results/2026-10-29-karpathy-lines/more/lines.jsonl
+cedia (opencode-go/claude-haiku-5-5): 8 tasks, 8 scored runs
+  pass@1 87.5%  pass^k 87.5%  false-done 0.0%  refused claims 0.0%
+  avg 34.3s per run, 45615 input / 6747 output tokens per run, cache hit 76.6%
+  peak context 14k mean, 27k max, 0 of 8 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 7 edit: top-level old_text/new_text
+  speed 247.3 output tok/s, 1.12s to first token per call; model 99.6% of time, cedia 0.1%
+  cost $0.0405 total, $0.0058 per passed run

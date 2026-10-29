@@ -1,0 +1,66 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.ts b/deny.ts
+--- a/deny.ts	2026-10-29 05:30:21.114721589 +0000
++++ b/deny.ts	2026-10-29 05:30:41.056212584 +0000
+@@ -36,5 +36,61 @@
+ //
+ // Anything else: undefined.
+ export function denyListed(argv: string[], cwd: string): Hit | undefined {
+-  throw new Error('not implemented');
++  const cmd = argv[0]?.split('/').pop();
++  if (cmd === 'git') return gitHit(argv.slice(1));
++  if (cmd === 'rm') return rmHit(argv.slice(1), cwd);
++  if (cmd === 'find') return findHit(argv.slice(1), cwd);
++  return undefined;
+ }
++
++const GIT_VALUE_OPTS = ['-C', '-c', '--git-dir', '--work-tree', '--namespace'];
++const shortGroup = (w: string, letters: string) => /^-[^-]/.test(w) && [...letters].some((l) => w.includes(l));
++
++function gitHit(args: string[]): Hit | undefined {
++  let i = 0;
++  while (i < args.length && args[i].startsWith('-')) i += GIT_VALUE_OPTS.includes(args[i]) ? 2 : 1;
++  const sub = args[i];
++  const rest = args.slice(i + 1);
++  if (sub === 'push') {
++    const forced = rest.some(
++      (w) =>
++        /^--(force|force-with-lease|mirror|delete|prune)(=|$)/.test(w) ||
++        shortGroup(w, 'fd') ||
++        w.startsWith('+') || w.startsWith(':'),
++    );
++    if (forced) return { name: 'force-push', reason: 'git push would overwrite or delete remote refs' };
++  }
++  if (sub === 'reset' && rest.includes('--hard')) return { name: 'reset-hard', reason: 'git reset --hard discards local changes' };
++  if (sub === 'clean' && !rest.includes('-n') && !rest.includes('--dry-run')) {
++    if (rest.includes('--force') || rest.some((w) => shortGroup(w, 'f')))
++      return { name: 'clean-force', reason: 'git clean -f deletes untracked files' };
++  }
++  return undefined;
++}
++
++function rmHit(args: string[], cwd: string): Hit | undefined {
++  const dd = args.indexOf('--');
++  const flags = dd < 0 ? args : args.slice(0, dd);
++  const targets = dd < 0 ? args.filter((w) => !w.startsWith('-')) : args.slice(dd + 1);
++  if (!flags.some((w) => w === '--recursive' || shortGroup(w, 'rR'))) return undefined;
++  const reason = 'recursive rm outside the working directory';
++  if (targets.length === 0) return { name: 'rm-outside', reason };
++  for (const t of targets) {
++    if (unresolved(t) || !insideWorkspace(t, cwd) || sameDir(t, cwd)) return { name: 'rm-outside', reason };
++  }
++  return undefined;
++}
++
++function findHit(args: string[], cwd: string): Hit | undefined {
++  if (!args.some((w) => w === '-delete' || w === '-exec' || w === '-execdir')) return undefined;
++  const firstFlag = args.findIndex((w) => w.startsWith('-'));
++  const starts = firstFlag < 0 ? args : args.slice(0, firstFlag);
++  for (const p of starts) {
++    if (unresolved(p) || !insideWorkspace(p, cwd))
++      return { name: 'rm-outside', reason: 'find would delete or run commands outside the working directory' };
++  }
++  return undefined;
++}
++
++// A path the guard cannot resolve before the command runs: a $ variable or ~user.
++const unresolved = (p: string) => p.includes('$') || (p.startsWith('~') && p !== '~' && !p.startsWith('~/'));

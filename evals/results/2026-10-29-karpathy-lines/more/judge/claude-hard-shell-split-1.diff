@@ -1,0 +1,148 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.ts b/shell.ts
+--- a/shell.ts	2026-10-29 05:31:18.178277238 +0000
++++ b/shell.ts	2026-10-29 05:32:37.524219507 +0000
+@@ -37,5 +37,143 @@
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  const tokens = lex(command);
++  if (!tokens) return null;
++  const out: string[][] = [];
++  let words: string[] = [];
++  for (const t of [...tokens, null]) {
++    if (t !== null) {
++      words.push(t);
++      continue;
++    }
++    const argv = parseGroup(words);
++    if (!argv) return null;
++    out.push(...argv);
++    words = [];
++  }
++  return out;
++}
++
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
++const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
++
++// Turns the command line into words, with null marking a command separator. Redirection targets are dropped here.
++// Returns null when a quote, $( or ( is left open.
++function lex(command: string): (string | null)[] | null {
++  const tokens: (string | null)[] = [];
++  // Open contexts: 'dq' for double quotes, 'sub' for $( ), 'paren' for ( ).
++  const stack: ('dq' | 'sub' | 'paren')[] = [];
++  let word = '';
++  let inWord = false;
++  let quoted = false;
++  let redirect = false;
++
++  const flush = () => {
++    if (inWord) {
++      if (redirect) redirect = false;
++      else tokens.push(word);
++    }
++    word = '';
++    inWord = false;
++    quoted = false;
++  };
++  const separate = () => {
++    flush();
++    tokens.push(null);
++    redirect = false;
++  };
++
++  for (let i = 0; i < command.length; i++) {
++    const c = command[i];
++    const top = stack[stack.length - 1];
++    if (c === '$' && command[i + 1] === '(') {
++      separate();
++      stack.push('sub');
++      i++;
++    } else if (c === '`') {
++      separate();
++    } else if (top === 'dq') {
++      inWord = true;
++      if (c === '"') stack.pop();
++      else if (c === '\\' && i + 1 < command.length) word += command[++i];
++      else word += c;
++    } else if (c === '"') {
++      inWord = true;
++      quoted = true;
++      stack.push('dq');
++    } else if (c === "'") {
++      const end = command.indexOf("'", i + 1);
++      if (end < 0) return null;
++      word += command.slice(i + 1, end);
++      inWord = true;
++      quoted = true;
++      i = end;
++    } else if (c === '\\') {
++      if (i + 1 < command.length) {
++        word += command[++i];
++        inWord = true;
++        quoted = true;
++      }
++    } else if (c === ' ' || c === '\t') {
++      flush();
++    } else if (c === '(') {
++      separate();
++      stack.push('paren');
++    } else if (c === ')') {
++      separate();
++      stack.pop();
++    } else if (c === '\n' || c === ';' || c === '|' || (c === '&' && command[i + 1] !== '>')) {
++      separate();
++      if (c !== '\n' && command[i + 1] === c) i++;
++    } else if (c === '<' || c === '>' || (c === '&' && command[i + 1] === '>')) {
++      if (inWord && !quoted && /^\d+$/.test(word)) {
++        word = '';
++        inWord = false;
++      } else {
++        flush();
++      }
++      let j = i;
++      while (j < command.length && '<>&'.includes(command[j])) j++;
++      i = j - 1;
++      redirect = true;
++    } else {
++      word += c;
++      inWord = true;
++    }
++  }
++  if (stack.length > 0) return null;
++  flush();
++  return tokens;
++}
++
++// The commands of one separated group of words, with assignments, keywords and wrappers unwrapped.
++function parseGroup(words: string[]): string[][] | null {
++  let i = 0;
++  while (i < words.length) {
++    const w = words[i];
++    const wrapper = WRAPPERS.get(w);
++    if (KEYWORDS.has(w) || ASSIGNMENT.test(w)) i++;
++    else if (wrapper) i = skipWrapper(words, i + 1, wrapper);
++    else break;
++  }
++  const argv = words.slice(i);
++  if (argv.length === 0) return [];
++  const [name, ...rest] = argv;
++  if (name === 'eval') return rest.length > 0 ? simpleCommands(rest.join(' ')) : [];
++  if (SHELLS.has(name) && rest.length > 1 && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(rest[0])) return simpleCommands(rest[1]);
++  return [argv];
++}
++
++// Returns the index of the first word after a wrapper's flags and positional operands.
++function skipWrapper(words: string[], start: number, wrapper: Wrapper): number {
++  let i = start;
++  while (i < words.length && words[i].startsWith('-')) {
++    if (words[i] === '--') {
++      i++;
++      break;
++    }
++    i += wrapper.value?.includes(words[i]) ? 2 : 1;
++  }
++  return i + (wrapper.positional ?? 0);
+ }
