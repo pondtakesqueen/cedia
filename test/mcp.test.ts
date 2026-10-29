@@ -135,6 +135,27 @@ describe('MCP', () => {
     }
   });
 
+  test("per-tool rules: the user's read, exec and deny win over the server's readOnly; a rule for a tool the server does not list is noted", async () => {
+    const m = await startMcp({ fake: { ...server, readOnly: true, tools: { echo: 'exec', env: 'deny', fail: 'read', nope: 'deny' } } });
+    try {
+      expect(m.notes).toEqual(['cedia: mcpServers.fake.tools names nope, which the server does not list']);
+      // A denied tool never reaches a tool list.
+      expect(m.tools.map((t) => t.name)).toEqual(['mcp__fake__crash', 'mcp__fake__echo', 'mcp__fake__fail', 'mcp__fake__picture', 'mcp__fake__slow']);
+      const effect = (name: string) => m.tools.find((t) => t.name === `mcp__fake__${name}`)!.effect;
+      expect([effect('echo'), effect('fail'), effect('crash')]).toEqual(['exec', 'read', 'read']);
+    } finally {
+      await m.close();
+    }
+    // Without readOnly, a tool with no rule is a command, and `read` makes one a read.
+    const n = await startMcp({ fake: { ...server, tools: { echo: 'read' } } });
+    try {
+      const effect = (name: string) => n.tools.find((t) => t.name === `mcp__fake__${name}`)!.effect;
+      expect([effect('echo'), effect('fail')]).toEqual(['read', 'exec']);
+    } finally {
+      await n.close();
+    }
+  });
+
   test('settings: a command or a URL, checked; ${VAR} read from the environment', () => {
     const home = mkdtempSync(join(tmpdir(), 'cedia-mcp-cfg-'));
     const load = (servers: unknown) => {
@@ -153,6 +174,9 @@ describe('MCP', () => {
     expect(() => load({ a: { command: 'x', shell: true } })).toThrow('unknown key "shell"');
     expect(() => load({ 'a b': { command: 'x' } })).toThrow('a server name is');
     expect(() => load({ a: { command: 'x', env: { K: 1 } } })).toThrow('must map names to strings');
+    expect(load({ a: { url: 'https://h', tools: { search: 'read', drop: 'deny' } } })).toEqual({ a: { url: 'https://h', tools: { search: 'read', drop: 'deny' } } });
+    expect(() => load({ a: { command: 'x', tools: { search: 'allow' } } })).toThrow('.tools must map tool names to read, exec, deny');
+    expect(() => load({ a: { command: 'x', tools: ['read'] } })).toThrow('.tools must map tool names');
   });
 
   test('in a run: the writer calls a server tool in workspace mode; a read-only run is refused without an allow rule', () => {
@@ -184,24 +208,27 @@ describe('MCP', () => {
     process.env.CEDIA_HOME = home;
     try {
       writeFileSync(join(home, 'settings.json'), JSON.stringify({ desktop: { theme: 'cedian Dark' }, todo: true }));
-      addMcp('fake', { ...server, env: { FAKE_TOKEN: 'secret' }, readOnly: true });
+      addMcp('fake', { ...server, env: { FAKE_TOKEN: 'secret' }, readOnly: true, tools: { env: 'deny' } });
       addMcp('web', { url: 'https://example.com/mcp', headers: { Authorization: 'Bearer token' } });
       expect(() => addMcp('bad', { url: 'ftp://x' })).toThrow('must be http(s)');
       expect(listMcp()).toEqual({
         servers: [
-          { name: 'fake', command: server.command, args: server.args, env: ['FAKE_TOKEN'], readOnly: true },
+          { name: 'fake', command: server.command, args: server.args, env: ['FAKE_TOKEN'], readOnly: true, tools: { env: 'deny' } },
           { name: 'web', url: 'https://example.com/mcp', headers: ['Authorization'] },
         ],
       });
       expect(JSON.stringify(listMcp())).not.toContain('secret');
       const check = await checkMcp('fake');
       expect(check.ok && check.tools.map((t) => t.name)).toEqual(['crash', 'echo', 'env', 'fail', 'picture', 'slow']);
-      expect(check.ok && check.tools.find((t) => t.name === 'echo')).toEqual({ name: 'echo', description: 'Echo the text back' });
+      // The server's hints are shown for the user to decide a rule from, next to the rule they set.
+      expect(check.ok && check.tools.find((t) => t.name === 'echo')).toEqual({ name: 'echo', description: 'Echo the text back', readOnlyHint: true });
+      expect(check.ok && check.tools.find((t) => t.name === 'crash')).toEqual({ name: 'crash', description: 'Exits', destructiveHint: true });
+      expect(check.ok && check.tools.find((t) => t.name === 'env')).toEqual({ name: 'env', description: 'Says which variables it sees', rule: 'deny' });
       expect(await checkMcp('nope')).toMatchObject({ ok: false, error: expect.stringContaining('no MCP server nope') });
       removeMcp('web');
       expect(() => removeMcp('web')).toThrow('no MCP server web');
       const written = JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8'));
-      expect(written).toEqual({ desktop: { theme: 'cedian Dark' }, todo: true, mcpServers: { fake: { ...server, env: { FAKE_TOKEN: 'secret' }, readOnly: true } } });
+      expect(written).toEqual({ desktop: { theme: 'cedian Dark' }, todo: true, mcpServers: { fake: { ...server, env: { FAKE_TOKEN: 'secret' }, readOnly: true, tools: { env: 'deny' } } } });
       // An entry cedia would refuse is listed with why, so a client can show it and offer to remove it.
       writeFileSync(join(home, 'settings.json'), JSON.stringify({ mcpServers: { odd: { command: 'x', shell: true } } }));
       expect(listMcp().servers).toEqual([{ name: 'odd', command: 'x', error: expect.stringContaining('unknown key "shell"') }]);

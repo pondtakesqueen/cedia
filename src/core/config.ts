@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { McpServerConfig } from './mcp/client.ts';
+import { MCP_TOOL_RULES, type McpServerConfig, type McpToolRule } from './mcp/client.ts';
 import { GUARDS, PERMISSION_SETTINGS, type Guard, type PermissionSetting, type Policy } from './safety/policy.ts';
 import { DEFAULT_DOMAINS, SANDBOX_SETTINGS, type SandboxSetting } from './safety/sandbox.ts';
 import { defaultHandoffAt } from './project/handoff.ts';
@@ -334,12 +334,13 @@ export function checkMcpServer(name: string, v: unknown, env: Record<string, str
   const at = `mcpServers.${name}`;
   if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) throw new Error(`${at}: a server name is 1 to 32 letters, digits, _ or -`);
   if (!isObject(v)) throw new Error(`${at} must be an object`);
-  const known = ['command', 'args', 'env', 'cwd', 'url', 'headers', 'readOnly', 'timeoutSec'];
+  const known = ['command', 'args', 'env', 'cwd', 'url', 'headers', 'readOnly', 'tools', 'timeoutSec'];
   const unknown = Object.keys(v).find((k) => !known.includes(k));
   if (unknown) throw new Error(`${at}: unknown key "${unknown}" (known: ${known.join(', ')})`);
   if (v.readOnly !== undefined && typeof v.readOnly !== 'boolean') throw new Error(`${at}.readOnly must be true or false`);
   if (v.timeoutSec !== undefined && (typeof v.timeoutSec !== 'number' || !(v.timeoutSec > 0))) throw new Error(`${at}.timeoutSec must be a positive number`);
-  const common = { ...(v.readOnly !== undefined ? { readOnly: v.readOnly as boolean } : {}), ...(v.timeoutSec !== undefined ? { timeoutSec: v.timeoutSec as number } : {}) };
+  if (v.tools !== undefined && (!isObject(v.tools) || Object.values(v.tools).some((r) => !MCP_TOOL_RULES.includes(r as McpToolRule)))) throw new Error(`${at}.tools must map tool names to ${MCP_TOOL_RULES.join(', ')}`);
+  const common = { ...(v.readOnly !== undefined ? { readOnly: v.readOnly as boolean } : {}), ...(v.tools !== undefined ? { tools: v.tools as Record<string, McpToolRule> } : {}), ...(v.timeoutSec !== undefined ? { timeoutSec: v.timeoutSec as number } : {}) };
   if (typeof v.command === 'string' && v.url === undefined) {
     if (v.args !== undefined && (!Array.isArray(v.args) || v.args.some((a) => typeof a !== 'string'))) throw new Error(`${at}.args must be a list of strings`);
     if (v.cwd !== undefined && typeof v.cwd !== 'string') throw new Error(`${at}.cwd must be a string`);

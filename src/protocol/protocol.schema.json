@@ -1586,19 +1586,7 @@
             "tools": {
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string"
-                  },
-                  "description": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "name"
-                ],
-                "additionalProperties": false
+                "$ref": "#/definitions/McpCheckTool"
               }
             }
           },
@@ -1631,6 +1619,30 @@
           "additionalProperties": false
         }
       ]
+    },
+    "McpCheckTool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "readOnlyHint": {
+          "type": "boolean"
+        },
+        "destructiveHint": {
+          "type": "boolean"
+        },
+        "rule": {
+          "$ref": "#/definitions/McpToolRule"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
     },
     "McpEntry": {
       "type": "object",
@@ -1668,6 +1680,12 @@
         "readOnly": {
           "type": "boolean"
         },
+        "tools": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/McpToolRule"
+          }
+        },
         "timeoutSec": {
           "type": "number"
         },
@@ -1694,6 +1712,14 @@
         "servers"
       ],
       "additionalProperties": false
+    },
+    "McpToolRule": {
+      "type": "string",
+      "enum": [
+        "read",
+        "exec",
+        "deny"
+      ]
     },
     "ModelEntry": {
       "type": "object",

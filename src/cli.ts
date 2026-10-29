@@ -29,7 +29,8 @@ import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Sch
 import { commandList, loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
 import { rewindThread, rewoundText, runLines, type RewindResult } from './core/project/rewind.ts';
-import { addMcp, checkMcp, listMcp, removeMcp } from './core/mcp/manage.ts';
+import { addMcp, checkMcp, listMcp, removeMcp, type McpCheckTool } from './core/mcp/manage.ts';
+import type { McpToolRule } from './core/mcp/client.ts';
 import { codeReview, type CodeReview } from './core/project/code-review.ts';
 import { commitFiles, commitPatch, currentBranch, headCommit, prPlan, pushAndOpenPr, threadChanges, type CommitDraft, type Committed, type PrOpened } from './core/project/commit.ts';
 import { draftCommitMessage } from './core/project/draft.ts';
@@ -729,6 +730,7 @@ async function mcp(argv: string[]): Promise<number> {
         url: { type: 'string' },
         header: { type: 'string', multiple: true },
         'read-only': { type: 'boolean' },
+        tool: { type: 'string', multiple: true },
         timeout: { type: 'string' },
         preset: { type: 'string' },
       },
@@ -759,7 +761,10 @@ async function mcp(argv: string[]): Promise<number> {
     if (cmd === 'check' && name && !rest.length) {
       const r = await checkMcp(name);
       if (values.json) console.log(JSON.stringify(r));
-      else console.log(r.ok ? `${name}: ${r.tools.length} tool${r.tools.length === 1 ? '' : 's'}${r.tools.map((t) => `\n  ${t.name}${t.description ? `  ${t.description}` : ''}`).join('')}` : `${name}: ${r.error}`);
+      else {
+        const marks = (t: McpCheckTool) => [t.rule ? `rule: ${t.rule}` : '', t.readOnlyHint ? 'says read-only' : '', t.destructiveHint ? 'says destructive' : ''].filter(Boolean).join(', ');
+        console.log(r.ok ? `${name}: ${r.tools.length} tool${r.tools.length === 1 ? '' : 's'}${r.tools.map((t) => `\n  ${t.name}${marks(t) ? ` (${marks(t)})` : ''}${t.description ? `  ${t.description}` : ''}`).join('')}` : `${name}: ${r.error}`);
+      }
       return r.ok ? 0 : 1;
     }
     if (cmd === 'presets' && !name) {
@@ -769,14 +774,16 @@ async function mcp(argv: string[]): Promise<number> {
     if (cmd === 'add' && name && !rest.length && values.preset !== undefined) {
       if (values.command || values.url || values.env || values.header || values.arg) throw new Error('mcp add --preset takes no --command, --url, --arg, --env or --header');
       const p = mcpPreset(values.preset);
-      addMcp(name, { ...p.server, ...(values['read-only'] ? { readOnly: true } : {}), ...(values.timeout !== undefined ? { timeoutSec: Number(values.timeout) } : {}) });
+      const tools = pairs(values.tool, 'tool') as Record<string, McpToolRule> | undefined;
+      addMcp(name, { ...p.server, ...(values['read-only'] ? { readOnly: true } : {}), ...(tools ? { tools } : {}), ...(values.timeout !== undefined ? { timeoutSec: Number(values.timeout) } : {}) });
       console.log(`added MCP server ${name} (${p.name}); it reads its key from ${p.keyEnv}`);
       if (!process.env[p.keyEnv]) console.log(`${p.keyEnv} is not set here: get a key at ${p.keyUrl} and export it where cedia runs`);
       return 0;
     }
     if (cmd === 'add' && name && !rest.length) {
       if (!values.command === !values.url) throw new Error('mcp add takes --command, --url or --preset');
-      const common = { ...(values['read-only'] ? { readOnly: true } : {}), ...(values.timeout !== undefined ? { timeoutSec: Number(values.timeout) } : {}) };
+      const tools = pairs(values.tool, 'tool') as Record<string, McpToolRule> | undefined;
+      const common = { ...(values['read-only'] ? { readOnly: true } : {}), ...(tools ? { tools } : {}), ...(values.timeout !== undefined ? { timeoutSec: Number(values.timeout) } : {}) };
       const env = pairs(values.env, 'env');
       const headers = pairs(values.header, 'header');
       addMcp(name, values.command ? { command: values.command, ...(values.arg?.length ? { args: values.arg } : {}), ...(env ? { env } : {}), ...common } : { url: values.url!, ...(headers ? { headers } : {}), ...common });
@@ -792,7 +799,7 @@ async function mcp(argv: string[]): Promise<number> {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia mcp [list [--json] | check <name> [--json] | presets | add <name> (--command <cmd> [--arg <a>]... [--env K=V]... | --url <url> [--header K=V]... | --preset <tavily|brave>) [--read-only] [--timeout <sec>] | remove <name>]');
+  console.error('usage: cedia mcp [list [--json] | check <name> [--json] | presets | add <name> (--command <cmd> [--arg <a>]... [--env K=V]... | --url <url> [--header K=V]... | --preset <tavily|brave>) [--read-only] [--tool <tool>=read|exec|deny]... [--timeout <sec>] | remove <name>]');
   return 2;
 }
 

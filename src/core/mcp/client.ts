@@ -5,11 +5,19 @@ import type { JsonObject } from '../types.ts';
 // one JSON-RPC message a line) or a URL (streamable HTTP: a POST a message, answered with JSON or an event
 // stream). Nothing else of the protocol is used: a server's own requests get "method not found", except ping.
 
-export type McpServerConfig =
-  | { command: string; args?: string[]; env?: Record<string, string>; cwd?: string; readOnly?: boolean; timeoutSec?: number }
-  | { url: string; headers?: Record<string, string>; readOnly?: boolean; timeoutSec?: number };
+// What the user decided about one of a server's tools, by the server's own name for it: `read` counts it as a read
+// (read-only sessions, plan, review and read-only sub-threads may call it), `exec` as a command even on a readOnly
+// server, and `deny` keeps it out of every tool list, so the model never sees it.
+export type McpToolRule = 'read' | 'exec' | 'deny';
+export const MCP_TOOL_RULES: McpToolRule[] = ['read', 'exec', 'deny'];
 
-export type McpTool = { name: string; description?: string; inputSchema?: JsonObject };
+export type McpServerConfig =
+  | { command: string; args?: string[]; env?: Record<string, string>; cwd?: string; readOnly?: boolean; tools?: Record<string, McpToolRule>; timeoutSec?: number }
+  | { url: string; headers?: Record<string, string>; readOnly?: boolean; tools?: Record<string, McpToolRule>; timeoutSec?: number };
+
+// annotations: the server's hints about a tool. They are its words, so cedia only shows them (`cedia mcp check`)
+// for the user to decide a rule; they never change what a tool may do.
+export type McpTool = { name: string; description?: string; inputSchema?: JsonObject; annotations?: { readOnlyHint?: unknown; destructiveHint?: unknown } };
 export type McpContent = { type: string; text?: string; mimeType?: string; data?: string; resource?: { uri?: string; text?: string } };
 export type McpCallResult = { content?: McpContent[]; structuredContent?: unknown; isError?: boolean };
 
