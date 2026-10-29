@@ -53,6 +53,12 @@ const shellCommand = (spec: ToolSpec, input: JsonObject) => (SHELL_TOOLS.has(spe
 const ruleTools = (name: string) => (SHELL_TOOLS.has(name) && name !== 'bash' ? [name, 'bash'] : [name]);
 
 export function decide(policy: Policy, spec: ToolSpec, input: JsonObject, cwd: string): Decision {
+  // A call that runs another tool is judged as that tool; a deny rule naming the call's own tool still holds.
+  const inner = spec.via?.(input);
+  if (inner) {
+    const hit = policy.deny.find((rule) => matches(rule, spec.name, undefined, undefined, cwd, 'any', undefined, input));
+    return hit ? deny(`deny:${hit}`, `matches the deny rule ${hit}`) : decide(policy, inner.spec, inner.input, cwd);
+  }
   const command = shellCommand(spec, input);
   const commands = command !== undefined ? simpleCommands(command) : undefined;
   const unlocked = (g: Guard) => policy.unlock?.includes(g) ?? false;
@@ -121,6 +127,8 @@ export function rulePatternMatches(rule: string, tool: string, text: string): bo
 
 // Whether a call matches a rule the way a deny rule does: any simple command of a bash call, or the call's path.
 export function ruleMatches(rule: string, spec: ToolSpec, input: JsonObject, cwd: string): boolean {
+  const inner = spec.via?.(input);
+  if (inner && ruleMatches(rule, inner.spec, inner.input, cwd)) return true;
   const command = shellCommand(spec, input);
   const commands = command !== undefined ? simpleCommands(command) : undefined;
   return ruleTools(spec.name).some((t) => matches(rule, t, commands, spec.pathOf?.(input), cwd, 'any', undefined, input));

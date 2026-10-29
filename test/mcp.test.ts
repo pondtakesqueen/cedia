@@ -257,27 +257,22 @@ describe('MCP reconnect', () => {
     }
   });
 
-  test('past the definition budget, tools go out stripped with full text in the search index', async () => {
-    const { budgetMcpTools, MCP_DEF_BUDGET } = await import('../src/core/mcp/tools.ts');
+  test('past the definition budget, tools leave the list for mcp_call, with full text and schema in the search index', async () => {
+    const { budgetMcpTools, mcpCallTool } = await import('../src/core/mcp/tools.ts');
+    const { toolDefs } = await import('../src/core/tools/registry.ts');
     const big = (i: number) => ({ name: `mcp__s__tool${i}`, description: `${`tool ${i} does things with binaries and symbols. `}x`.repeat(40), schema: { type: 'object', properties: { q: { type: 'string', description: 'a query'.repeat(20) } } }, effect: 'exec' as const, replay: 'unsafe' as const, run: async () => ({ text: 'ok', isError: false }) });
     const specs = Array.from({ length: 30 }, (_, i) => big(i));
-    const { tools, index } = budgetMcpTools(specs);
-    expect(tools.map((t) => t.name)).toEqual(specs.map((t) => t.name));
-    const direct = tools.filter((t) => !index.some((d) => d.name === t.name));
-    expect(direct.length).toBeGreaterThan(0);
-    expect(direct.length).toBeLessThan(specs.length);
-    for (const t of direct) expect(t.description).toContain('tool');
-    const sent = JSON.stringify(tools.map((t) => ({ name: t.name, description: t.description, schema: t.schema }))).length;
-    const full = JSON.stringify(specs.map((t) => ({ name: t.name, description: t.description, schema: t.schema }))).length;
-    // Stripped names and one-liners still ride along, but the full weight does not.
-    expect(sent).toBeLessThan(full);
-    for (const d of index) {
-      const out = tools.find((t) => t.name === d.name)!;
-      expect(out.description).toContain(`search ToolSearch for ${d.name}`);
-      expect(out.description.length).toBeLessThanOrEqual(160 + 60);
-      expect(out.schema).toEqual({ type: 'object', additionalProperties: true });
-      expect(d.description.length).toBeGreaterThan(out.description.length);
-    }
+    const { tools, deferred, index } = budgetMcpTools(specs);
+    expect(tools.length).toBeGreaterThan(0);
+    expect(deferred.length).toBeGreaterThan(0);
+    expect([...tools, ...deferred].map((t) => t.name)).toEqual(specs.map((t) => t.name));
+    // Listed ones are whole; deferred ones are whole in the index, schema included, and run as they are.
+    for (const t of tools) expect(t).toBe(specs.find((x) => x.name === t.name)!);
+    expect(index).toEqual(deferred.map((t) => ({ name: t.name, description: t.description, schema: t.schema })));
+    // What the model is sent: the listed ones and one mcp_call, against every tool whole.
+    const sent = JSON.stringify(toolDefs([...tools, mcpCallTool(deferred)])).length;
+    const full = JSON.stringify(toolDefs(specs)).length;
+    expect(sent).toBeLessThan(full / 2);
     // Deterministic: the same tools always split the same way.
     expect(budgetMcpTools(specs).index.map((d) => d.name)).toEqual(index.map((d) => d.name));
   });
@@ -286,16 +281,17 @@ describe('MCP reconnect', () => {
     const { budgetMcpTools } = await import('../src/core/mcp/tools.ts');
     const m = await startMcp({ fake: server });
     try {
-      const { tools, index } = budgetMcpTools(m.tools);
+      const { tools, deferred, index } = budgetMcpTools(m.tools);
       expect(index).toEqual([]);
+      expect(deferred).toEqual([]);
       expect(tools).toEqual(m.tools);
     } finally {
       await m.close();
     }
   });
 
-  test('a stripped tool is found through ToolSearch and still runs by name', async () => {
-    const { budgetMcpTools } = await import('../src/core/mcp/tools.ts');
+  test('a deferred tool is found through ToolSearch and runs through mcp_call', async () => {
+    const { budgetMcpTools, mcpCallTool } = await import('../src/core/mcp/tools.ts');
     const { clearDeferred, registerDeferred, toolSearchTool } = await import('../src/core/tools/tool-search.ts');
     const { fauxProvider, text, toolUse } = await import('../src/core/providers/faux.ts');
     const { FAUX_MODEL } = await import('../src/core/providers/catalog.ts');
@@ -305,11 +301,10 @@ describe('MCP reconnect', () => {
     try {
       // Force the deferral: one near-budget sibling eats it first (itself just fits, the next does not).
       const filler = { name: 'mcp__s__big', description: 'x'.repeat(31_800), schema: { type: 'object' }, effect: 'exec' as const, replay: 'unsafe' as const, run: async () => ({ text: 'big', isError: false }) };
-      const { tools, index } = budgetMcpTools([filler, ...m.tools]);
+      const { deferred, index } = budgetMcpTools([filler, ...m.tools]);
       expect(index.map((d) => d.name)).toContain('mcp__fake__echo');
       clearDeferred();
       for (const d of index) registerDeferred(d);
-      const stripped = tools.filter((t) => index.some((d) => d.name === t.name));
       const log = SessionLog.create();
       const cwd = mkdtempSync(join(tmpdir(), 'cedia-mcp-defer-'));
       const res = await runPrompt(
@@ -317,11 +312,11 @@ describe('MCP reconnect', () => {
           log,
           provider: fauxProvider([
             { blocks: [toolUse('q1', 'ToolSearch', { query: 'echo' })] },
-            { blocks: [toolUse('c1', 'mcp__fake__echo', { text: 'hi' })] },
+            { blocks: [toolUse('c1', 'mcp_call', { tool: 'mcp__fake__echo', input: { text: 'hi' } }), toolUse('c2', 'mcp_call', { tool: 'mcp__fake__nope', input: {} })] },
             { blocks: [text('done')] },
           ]),
           model: FAUX_MODEL,
-          tools: [toolSearchTool, ...stripped],
+          tools: [toolSearchTool, mcpCallTool(deferred)],
           system: 'sys',
           cwd,
           permission: { mode: 'workspace', allow: [], deny: [] },
@@ -329,15 +324,63 @@ describe('MCP reconnect', () => {
         'say it back',
       );
       expect(res.subtype).toBe('success');
-      const found = log.events.find((e): e is Extract<SessionEvent, { kind: 'tool_result' }> => e.kind === 'tool_result' && e.callId === 'q1')!;
-      expect(found.output.text).toContain('mcp__fake__echo');
-      expect(found.output.text).toContain('Echo the text back');
-      expect(log.events.find((e): e is Extract<SessionEvent, { kind: 'tool_result' }> => e.kind === 'tool_result' && e.callId === 'c1')).toMatchObject({ status: 'completed', output: { text: 'echo: hi' } });
-      const { lintSession } = await import('../src/core/session/lint.ts');
+      // Only ToolSearch and mcp_call are sent, whatever the server has.
+      expect((log.events[0] as Extract<SessionEvent, { kind: 'session' }>).tools.map((d) => d.name)).toEqual(['ToolSearch', 'mcp_call']);
+      const result = (id: string) => log.events.find((e): e is Extract<SessionEvent, { kind: 'tool_result' }> => e.kind === 'tool_result' && e.callId === id)!;
+      expect(result('q1').output.text).toContain('Echo the text back');
+      expect(result('q1').output.text).toContain('"schema"');
+      expect(result('c1')).toMatchObject({ status: 'completed', output: { text: 'echo: hi' } });
+      expect(result('c2').output).toMatchObject({ isError: true, text: expect.stringContaining('no MCP tool named mcp__fake__nope') });
       expect(lintSession(log.events)).toEqual([]);
     } finally {
       clearDeferred();
       await m.close();
     }
+  });
+
+  test('mcp_call is judged as the tool it names: its allow and deny rules, its read-only server, the classifier', async () => {
+    const { mcpCallTool } = await import('../src/core/mcp/tools.ts');
+    const { decide, ruleMatches } = await import('../src/core/safety/policy.ts');
+    const { effectOf } = await import('../src/core/tools/registry.ts');
+    const spec = (name: string, effect: 'read' | 'exec') => ({ name, description: name, schema: { type: 'object' }, effect, replay: 'unsafe' as const, run: async () => ({ text: 'ok', isError: false }) });
+    const call = mcpCallTool([spec('mcp__gh__search', 'exec'), spec('mcp__docs__get', 'read')]);
+    const ro = { mode: 'read-only' as const, allow: [] as string[], deny: [] as string[] };
+    const of = (tool: string) => ({ tool, input: { q: 'x' } });
+    expect(effectOf(call, of('mcp__docs__get'))).toBe('read');
+    expect(effectOf(call, of('mcp__gh__search'))).toBe('exec');
+    expect(effectOf(call, of('mcp__gh__nope'))).toBe('exec');
+    expect(decide(ro, call, of('mcp__docs__get'), '/').decision).toBe('allow');
+    expect(decide(ro, call, of('mcp__gh__search'), '/').decision).toBe('deny');
+    expect(decide({ ...ro, allow: ['mcp__gh__search'] }, call, of('mcp__gh__search'), '/')).toMatchObject({ decision: 'allow', rule: 'allow:mcp__gh__search' });
+    const ws = { mode: 'workspace' as const, allow: [] as string[], deny: ['mcp__gh__search'] };
+    expect(decide(ws, call, of('mcp__gh__search'), '/')).toMatchObject({ decision: 'deny', rule: 'deny:mcp__gh__search' });
+    expect(decide({ ...ws, deny: ['mcp_call'] }, call, of('mcp__docs__get'), '/')).toMatchObject({ decision: 'deny', rule: 'deny:mcp_call' });
+    expect(decide({ ...ws, deny: [] }, call, of('mcp__gh__nope'), '/')).toMatchObject({ decision: 'allow', rule: 'mode:workspace' });
+    // Hook matchers see both names.
+    expect(ruleMatches('mcp__gh__search', call, of('mcp__gh__search'), '/')).toBe(true);
+    expect(ruleMatches('mcp_call', call, of('mcp__gh__search'), '/')).toBe(true);
+    expect(ruleMatches('mcp__gh__search', call, of('mcp__docs__get'), '/')).toBe(false);
+
+    // The classifier reads the call as the tool it runs, with that tool's input.
+    const { fauxProvider, text, toolUse } = await import('../src/core/providers/faux.ts');
+    const { FAUX_MODEL } = await import('../src/core/providers/catalog.ts');
+    const { runPrompt } = await import('../src/core/loop/run.ts');
+    const seen: { tool: string; input: unknown }[] = [];
+    const log = SessionLog.create();
+    await runPrompt(
+      {
+        log,
+        provider: fauxProvider([{ blocks: [toolUse('c1', 'mcp_call', { tool: 'mcp__gh__search', input: { q: 'x' } })] }, { blocks: [text('done')] }]),
+        model: FAUX_MODEL,
+        tools: [call],
+        system: 'sys',
+        cwd: mkdtempSync(join(tmpdir(), 'cedia-mcp-call-')),
+        permission: { mode: 'workspace', allow: [], deny: [] },
+        classify: async (c) => (seen.push({ tool: c.tool, input: c.input }), { decision: 'deny', reason: 'no' }),
+      },
+      'search',
+    );
+    expect(seen).toEqual([{ tool: 'mcp__gh__search', input: { q: 'x' } }]);
+    expect(lintSession(log.events)).toEqual([]);
   });
 });

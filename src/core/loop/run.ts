@@ -19,7 +19,7 @@ import { evidence, ledgerEntries, matchCheck, repeatCheck, verified } from '../t
 import { findStuck, stuckEnd, stuckReminder } from '../trust/stuck.ts';
 import type { Verdict } from '../trust/classifier.ts';
 import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
-import { effectOf, toolDefs, type ToolSpec } from '../tools/registry.ts';
+import { effectOf, resolveCall, toolDefs, type ToolSpec } from '../tools/registry.ts';
 import { isSpawnNudge, spawnNudge } from '../tools/spawn.ts';
 import { ASK_TOOL, questionOf } from '../tools/ask.ts';
 import {
@@ -879,7 +879,9 @@ async function runTools(
       if (opts.classify && d.decision === 'allow' && d.rule === 'mode:workspace' && effectOf(spec, input) === 'exec' && !signal.aborted) {
         let v: Verdict;
         try {
-          v = await opts.classify({ tool: c.name, input, cwd: opts.cwd });
+          // What runs: an MCP tool mcp_call names is read as that tool with its own input.
+          const runs = resolveCall(spec, input);
+          v = await opts.classify({ tool: runs.spec.name, input: runs.input, cwd: opts.cwd });
         } catch (e) {
           // A guard that fails blocks; the call still gets its result.
           v = { decision: 'deny', reason: `the classifier failed (${(e as Error).message}), so nothing it has not read runs` };

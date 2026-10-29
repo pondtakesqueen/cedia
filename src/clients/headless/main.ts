@@ -18,7 +18,7 @@ import { instructionsBlock, loadInstructions } from '../../core/project/instruct
 import { memoryBlock, memoryPath, MemoryStore, rememberTool } from '../../core/project/memory.ts';
 import { loadSkills, skillCommand, skillsBlock, skillTool } from '../../core/skills/skills.ts';
 import { getStyle, loadOutputStyleSetting } from '../../core/output-styles/styles.ts';
-import { mcpStub, startMcp, type McpServers } from '../../core/mcp/tools.ts';
+import { MCP_CALL_TOOL, mcpCallTool, mcpStub, startMcp, type McpServers } from '../../core/mcp/tools.ts';
 import { clearDeferred, registerDeferred } from '../../core/tools/tool-search.ts';
 import { webFetchTool } from '../../core/tools/web.ts';
 import { runTurn } from '../../core/project/undo.ts';
@@ -534,10 +534,14 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // With skills, or on a resumed session that had the tool: its tool list stays as it was even when the skills
     // are gone since, and a call to one that is gone says so.
     const withSkill = skills.length > 0 || !!header?.tools.some((d) => d.name === 'skill');
-    // MCP tools: all for the writer, the read-only ones for reviewers and sub-threads. A resumed session whose
-    // server is gone keeps the tool, and a call to it says the server is not there.
-    const mcpTools = [...(mcp?.tools ?? []), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map(mcpStub)];
-    const mcpRead = mcpTools.filter((t) => t.effect === 'read');
+    // MCP tools: all for the writer, the read-only ones for reviewers and sub-threads; past the definition budget
+    // they run through mcp_call. A resumed session whose server is gone keeps the tool, and a call to it says the
+    // server is not there; one opened with a tool that now runs through mcp_call keeps it by name.
+    const deferred = mcp?.deferred ?? [];
+    const hadCall = !!header?.tools.some((d) => d.name === MCP_CALL_TOOL);
+    const callOf = (ts: ToolSpec[]) => (ts.length || hadCall ? [mcpCallTool(ts)] : []);
+    const mcpTools = [...(mcp?.tools ?? []), ...callOf(deferred), ...(header?.tools ?? []).filter((d) => d.name.startsWith('mcp__') && !mcp?.tools.some((t) => t.name === d.name)).map((d) => deferred.find((t) => t.name === d.name) ?? mcpStub(d))];
+    const mcpRead = [...mcpTools.filter((t) => t.effect === 'read'), ...callOf(deferred.filter((t) => t.effect === 'read'))];
     // A resumed session that had the browser keeps the tool when this run has none, and a call says so.
     const browserTools = browser ? [browser.tool] : header?.tools.some((d) => d.name === BROWSER_TOOL) ? [browserStub] : [];
     const extra = [...(spawnOn ? [spawnHere] : []), ...((askOn || policy.plan) && store && threadId ? [askTool] : []), ...(todoOn && store && threadId ? [todoTool(store, threadId, runId)] : []), ...(store && threadId ? [teamTool(new TeamStore(), threadId)] : []), ...(profile?.openThread && store && threadId ? [openThreadTool(store, threadId, opened, projectRoot(args.cwd), workspaceRoots())] : []), ...(profile?.schedule && store && threadId ? [scheduleTool(new ScheduleStore(schedulesPath(cediaHome(), projectKey(args.cwd))), threadId)] : []), ...(earlier.some((s) => s.id !== log.id) ? [recall] : []), ...(store && threadId && others ? threadTools(store, threadId) : []), ...(remember ? [remember] : []), ...(withSkill ? [skill] : []), webFetch, ...browserTools, ...mcpTools];
