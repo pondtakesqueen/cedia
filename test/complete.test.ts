@@ -43,6 +43,11 @@ describe('tab completion', () => {
     // The editor keeps `);` after the cursor, so a reply that writes it again would show it twice.
     expect(completionText('<completion>a, b);</completion>', ');\nnext()')).toBe('a, b');
     expect(completionText('<completion>\n  x();\n</completion>', '')).toBe('\n  x();\n');
+    // With text after the cursor, a line break would strand it: the first line only, less the repeated `;`.
+    expect(completionText('<completion>xs.length;\n}</completion>', ';\n}')).toBe('xs.length');
+    expect(completionText('<completion>a, b)</completion>', ');')).toBe('a, b');
+    // Only closing punctuation counts as repeated, never a word the cursor is before.
+    expect(completionText('<completion>foo</completion>', 'o.bar()')).toBe('foo');
   });
 
   test('cedia complete --json answers the text at the cursor in one short request, logs it, and writes nothing', () => {
