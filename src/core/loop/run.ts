@@ -12,7 +12,7 @@ import { isRetryable } from '../providers/http.ts';
 import { capEffort, loadMaxEffort } from '../config.ts';
 import { hookName, runHook, type Hooks } from '../hooks.ts';
 import { decide, READ_ONLY_POLICY, ruleMatches, type Policy } from '../safety/policy.ts';
-import { redactSecrets } from '../safety/secrets.ts';
+import { REDACTED, redactSecrets } from '../safety/secrets.ts';
 import type { Snapshots } from '../safety/snapshot.ts';
 import type { SessionLog } from '../session/log.ts';
 import { evidence, ledgerEntries, matchCheck, repeatCheck, verified } from '../trust/ledger.ts';
@@ -981,9 +981,15 @@ async function runTools(
       if (!output.images.length) delete output.images;
     }
     const r = redact ? redactSecrets(output.text) : { text: output.text, count: 0 };
+    if (r.count) r.text += `\n${redactedNote(r.count)}`;
     log.append({ kind: 'tool_result', callId, status, output: r.count ? { ...output, text: r.text, redacted: r.count } : output });
   }
 }
+
+// A model shown only the placeholder took a test's fake keys for missing values and gave up on a task it could
+// finish (evals/results/2026-10-29-karpathy-lines/README.md, hard-redact-bugs), so the result says what happened.
+export const redactedNote = (n: number) =>
+  `[cedia: ${n === 1 ? 'a value' : `${n} values`} in this result looked like ${n === 1 ? 'a secret' : 'secrets'} and cedia showed you ${REDACTED} in ${n === 1 ? 'its' : 'their'} place. The file or output still holds the real ${n === 1 ? 'value' : 'values'}, which may be fake ones such as a test's fixtures: work from what the code does with ${n === 1 ? 'it' : 'them'}, and edit around ${n === 1 ? 'it' : 'them'}. An edit or command that contains ${REDACTED} is denied.]`;
 
 // Images the session has shown the model so far, in prompts and tool results.
 export const imagesShown = (events: SessionEvent[]) =>
