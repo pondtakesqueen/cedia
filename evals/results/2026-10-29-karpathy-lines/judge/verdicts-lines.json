@@ -1,0 +1,245 @@
+[
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "tie",
+   "why": "memo.ts changes are functionally identical; the added test sets are comparable, each missing one scenario the other covers.",
+   "defects_A": [
+    "memo.regression.test.ts: no test that an old call resolving after invalidate leaves a newer call's entry intact"
+   ],
+   "defects_B": [
+    "memo.regression.test.ts: no test that a key dropped for max does not return when its lookup settles"
+   ]
+  },
+  "cost": 0.0482195
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 9,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Code is functionally identical; A's tests also cover a newer call's entry being overwritten by an older call's result, and check LRU eviction from both sides.",
+   "defects_A": [],
+   "defects_B": [
+    "memo.regression.test.ts: no test that an invalidated call's successful result leaves a newer call's entry intact"
+   ]
+  },
+  "cost": 0.047325
+ },
+ {
+  "task": "hard-pool",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 8
+   },
+   "winner": "A",
+   "why": "Both fix all the bugs correctly; A also removes its abort listener on completion, while B leaves a listener that can re-run launch after the pool resolves.",
+   "defects_A": [],
+   "defects_B": [
+    "pool.ts:168 abort listener never removed after resolve; a later abort re-runs launch and calls resolve again (harmless but leftover)"
+   ]
+  },
+  "cost": 0.061083000000000005
+ },
+ {
+  "task": "hard-pool",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 7
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both fix all the contract rules the same way; B also removes its abort listener on completion, while A leaves one attached to the signal, and A's tests are only slightly broader.",
+   "defects_A": [
+    "pool.ts:168 abort listener never removed when pool finishes without abort (leaks closure on long-lived signal)",
+    "pool.ts:139 resolve may be called repeatedly (harmless)"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.061137
+ },
+ {
+  "task": "wide-bug-hunt",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Source fixes are identical; A's tests also cover the 50-unit tier and the exact UK 4000 boundary.",
+   "defects_A": [
+    "test/pricing.test.ts:75 comment in the shipping test is muddled"
+   ],
+   "defects_B": [
+    "test/pricing-rules.test.ts:61 UK test uses 4800 so it misses the 4000 boundary",
+    "test/pricing-rules.test.ts:56 the 50-unit tier is not tested"
+   ]
+  },
+  "cost": 0.0700918
+ },
+ {
+  "task": "wide-bug-hunt",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 8,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Source fixes are identical; B's tests also cover the 50-unit tier boundary and don't depend on the catalog.",
+   "defects_A": [
+    "test/pricing-rules.test.ts: no test for the 50-unit tier boundary"
+   ],
+   "defects_B": [
+    "test/pricing.test.ts:75 confusing comment in shipping test",
+    "test/pricing.test.ts:84 merge test asserts only subtotal and line count, not the merged quantity or discount"
+   ]
+  },
+  "cost": 0.0654182
+ },
+ {
+  "task": "hard-redact-bugs",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 5,
+    "security": 8
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 5,
+    "security": 8
+   },
+   "winner": "tie",
+   "why": "The two diffs are byte-for-byte identical in their changes.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.0423084
+ },
+ {
+  "task": "hard-redact-bugs",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 3,
+    "security": 8
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 3,
+    "security": 8
+   },
+   "winner": "tie",
+   "why": "The two diffs are identical apart from timestamps.",
+   "defects_A": [
+    "redact.ts:48 all-digit dotenv secrets such as DB_PASSWORD=12345678 are no longer redacted",
+    "no tests added for the four fixes"
+   ],
+   "defects_B": [
+    "redact.ts:48 all-digit dotenv secrets such as DB_PASSWORD=12345678 are no longer redacted",
+    "no tests added for the four fixes"
+   ]
+  },
+  "cost": 0.0436545
+ }
+]
