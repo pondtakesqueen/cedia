@@ -1,0 +1,13 @@
+Running 2 tasks x 1 runs on cedia (opencode-go/claude-haiku-5-5), 2 at a time...
+  PASS real-slop-guard#1 (300.9s $0.0272, plan 117s, review changes 52s, fix 53s, 2 sub-threads (2 work, peak 15k), peak 50k)
+  PASS real-three-changes#1 (399.7s $0.0260, plan 167s, review changes 67s, fix 30s, 3 sub-threads (2 work, peak 25k), peak 44k)
+
+Results written to evals/results/2026-10-29-auto/real.jsonl
+cedia (opencode-go/claude-haiku-5-5): 2 tasks, 2 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 350.3s per run, 753461 input / 21220 output tokens per run, cache hit 88.7%
+  peak context 47k mean, 50k max, 0 of 2 runs past 100k; 0 handoffs, 5 sub-threads (4 work, 0 handoffs in them, peak 25k)
+  repaired inputs: 3 edit: broken edits string, 1 edit: top-level old_text/new_text
+  cache misses 3 (3 provider), 8k tokens the cache could have served
+  speed 268.4 output tok/s, 1.07s to first token per call; model 73.8% of time, cedia 0.1%
+  cost $0.0532 total, $0.0266 per passed run

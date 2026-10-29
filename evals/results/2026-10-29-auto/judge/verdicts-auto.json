@@ -1,0 +1,145 @@
+[
+ {
+  "task": "real-slop-guard",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 5,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "B modified the provided test/slop.test.ts despite the instruction not to change it; A kept it intact with equivalent behaviour, though B is somewhat more robust.",
+   "defects_A": [
+    "src/core/loop/run.ts:~127: snapshots.patch() called without try/catch, so a git failure at a done claim throws",
+    "src/core/trust/slop.ts:~311: quoted git paths are not unquoted",
+    "src/core/trust/slop.ts:275: code() strips '//.*', mangling strings like URLs before the type-escape check",
+    "src/core/config.ts:~66: detectChecks has no tests of its own beyond the provided ones"
+   ],
+   "defects_B": [
+    "test/slop.test.ts: modifies the provided test file (imports changed, tests appended) against the task instruction",
+    "src/core/prompts.ts and run.ts: reworded preamble and reminder text beyond what the task needs",
+    "src/core/safety/snapshot.ts: patch uses -M, adding rename handling the patch parser must then cope with"
+   ]
+  },
+  "cost": 0.16975089999999998
+ },
+ {
+  "task": "real-slop-guard",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 6,
+    "tests": 7,
+    "security": 8
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 7,
+    "tests": 6,
+    "security": 6
+   },
+   "winner": "A",
+   "why": "A handles patch failures, renames, quoted paths, multi-line empty catches and a capped reminder; B can crash on a failed diff and flags renamed tests as deleted, though A edits the given test file.",
+   "defects_A": [
+    "test/slop.test.ts: modifies the provided test file (adds imports and tests) despite 'without changing them'",
+    "src/core/loop/run.ts: unverifiedReminder gains a soft variant duplicating most of the text"
+   ],
+   "defects_B": [
+    "src/core/loop/run.ts:127 snapshots.patch not wrapped in try/catch; a git failure at done claim throws and ends the run",
+    "src/core/safety/snapshot.ts:245 --no-renames makes a renamed test file read as deleted (false test-deleted flag)",
+    "src/core/safety/snapshot.ts:27 adds core.quotepath=false to all shadow-git calls; paths with quotes/backslashes still get quoted and mis-parsed",
+    "src/core/loop/run.ts: soft checks reuse the 'declared check ... task is not done yet' reminder, and the preamble still says the task isn't done until a check passes",
+    "src/core/loop/run.ts:155 slopReminder lists every finding with no cap",
+    "src/core/trust/slop.ts:267 swallowed-error detection narrower (no multi-line empty catch with comments; no .catch(() => undefined))"
+   ]
+  },
+  "cost": 0.1775817
+ },
+ {
+  "task": "real-three-changes",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 9,
+    "tests": 6,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 4,
+    "tests": 4,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A leaves the provided tests alone, adds a test for the shared-id edge case and keeps the CLI help intact; B has the better retry handling but edits test/loop.test.ts against the task and garbles the --help text.",
+   "defects_A": [
+    "src/core/loop/run.ts:~256 quota waits advance the attempt counter n, so after several waits a transient overloaded error is no longer retried",
+    "src/core/loop/run.ts: shared-id dedupe is repeated at each result-writing site instead of once"
+   ],
+   "defects_B": [
+    "test/loop.test.ts modified although the task said to make the provided tests pass without changing them",
+    "src/cli.ts:28 --on-quota help line inserted between the --fallback line and its continuation, which breaks the help text",
+    "no new tests for the dedupe, the new-session recovery or the thread resume path",
+    "AGENTS.md not updated for the new flag"
+   ]
+  },
+  "cost": 0.1471413
+ },
+ {
+  "task": "real-three-changes",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 6,
+    "quality": 6,
+    "scope": 5,
+    "tests": 5,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 8,
+    "tests": 6,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B deduplicates shared call ids on every path and leaves the provided tests untouched; A leaves duplicate results on two paths, edits loop.test.ts, and breaks the --help text.",
+   "defects_A": [
+    "src/core/loop/run.ts: handoff and over-budget/abort paths still write one tool_result per call, so shared ids get duplicate results",
+    "src/clients/headless/main.ts: a resumed refused session is recorded as why 'resume', not 'rejected'",
+    "src/cli.ts:28: --on-quota help line is inserted before the --fallback continuation line",
+    "test/loop.test.ts: edits a test file the task said to leave unchanged"
+   ],
+   "defects_B": [
+    "src/core/loop/run.ts: quota waits advance the attempt counter n, so a later transient error can hit retryMax early",
+    "test/loop-shared-id.test.ts: covers only the budget-stop path, not the handoff path or the other new behaviours"
+   ]
+  },
+  "cost": 0.1413671
+ }
+]
