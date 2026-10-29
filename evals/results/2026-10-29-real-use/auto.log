@@ -1,0 +1,13 @@
+Running 4 tasks x 1 runs on cedia (opencode-go/claude-haiku-5-5), 4 at a time...
+  PASS chat-greeting#1 (2.7s $0.0006, peak 4k)
+  PASS ask-readonly#1 (4.4s $0.0009, peak 5k)
+  PASS ci-already-green#1 (26.1s $0.0015, plan 16s, peak 8k)
+  PASS ci-fix-notice#1 (31.8s $0.0012, plan 12s, review approve 11s, peak 7k)
+
+Results written to evals/results/2026-10-29-real-use/auto.jsonl
+cedia (opencode-go/claude-haiku-5-5): 4 tasks, 4 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 16.2s per run, 18838 input / 766 output tokens per run, cache hit 77.5%
+  peak context 6k mean, 8k max, 0 of 4 runs past 100k; 0 handoffs, 0 sub-threads
+  speed 242.3 output tok/s, 0.86s to first token per call; model 99.2% of time, cedia 0.1%
+  cost $0.0042 total, $0.0011 per passed run

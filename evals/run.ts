@@ -7,8 +7,9 @@
 //
 // Every harness binary comes from the environment (CEDIA_EVAL_<NAME>_BIN) or PATH, so the runner works on any
 // machine. Each task runs `--runs` times, each in its own clean temp dir. The task's verify command decides
-// pass or fail, never the agent's words. Workspaces are never marked public: the tasks come from cedia's own
-// code, so a model that trains on prompts (Muse) is refused here, as in any private repo.
+// pass or fail, never the agent's claim (a question task's verify grades the answer itself, EVAL_OUTPUT).
+// Workspaces are never marked public: the tasks come from cedia's own code, so a model that trains on prompts
+// (Muse) is refused here, as in any private repo.
 
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -349,10 +350,18 @@ export async function runTask(task: Task, harness: string, model: string | null,
       // Without the runner's own CEDIA_EVAL_* settings: a real-repository task's tests run that commit's eval runner,
       // which would pass it flags (--cedia-arg) its older cedia does not know.
       const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("CEDIA_EVAL_")));
+      // The run's final answer and its stderr, outside the workspace, for tasks that grade an answer or how the
+      // harness got there (a greeting that went to the planner): EVAL_OUTPUT and EVAL_STDERR name the files.
+      const said = mkdtempSync(join(tmpdir(), `cedia-eval-said-${task.id}-`));
+      writeFileSync(join(said, "output.txt"), text);
+      writeFileSync(join(said, "stderr.txt"), out.stderr);
+      env.EVAL_OUTPUT = join(said, "output.txt");
+      env.EVAL_STDERR = join(said, "stderr.txt");
       const verify = spawnSync(argv[0]!, argv.slice(1), { cwd, env, encoding: "utf8", timeout: 120_000, stdio: ["ignore", "pipe", "pipe"] });
       verifyExitCode = verify.status ?? 1;
       verifyOutput = ((verify.stdout ?? "") + (verify.stderr ?? "")).slice(-500);
       passed = verifyExitCode === (task.expectedExitCode ?? 0);
+      rmSync(said, { recursive: true, force: true });
     } else {
       passed = out.code === 0;
     }
