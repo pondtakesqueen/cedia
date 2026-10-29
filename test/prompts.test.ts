@@ -30,8 +30,22 @@ describe('system prompt per model', () => {
     }
     expect(CATALOG.filter((m) => m.thorough).map((m) => m.ref)).toEqual(['anthropic/claude-opus-5-5', 'anthropic/claude-opus-5-5-fast']);
     const opus = systemFor(resolveModel('opus'));
-    expect(opus).toContain('once every rule the task states holds and a declared check passes after your last change');
     expect(opus).toContain('Leave improvements nobody asked for out of the change.');
+  });
+
+  test('a thorough writer checks, probes and reads its diff before it stops, and adds tests in a new file when told to', () => {
+    const s = systemFor({ thorough: true });
+    const at = (line: string) => {
+      const i = s.indexOf(line);
+      expect([line, i >= 0]).toEqual([line, true]);
+      return i;
+    };
+    const order = ['1. Run a declared check', '2. Probe your own change', '3. Read your whole diff', '4. If step 2 or 3 changed anything', 'Then stop: write the report and end.', '- Finish with a short report'].map(at);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(s).toContain('Keep what makes a stated rule hold, the state after an error included.');
+    expect(s).toContain('put new tests in a new test file');
+    expect(s).not.toContain('Prefer the smallest change that solves the task.');
+    expect(s).not.toContain('when the task lets you change tests');
   });
 
   test('a session that only reads is not told to edit, check its change or read its own diff', () => {
