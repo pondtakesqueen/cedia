@@ -9,8 +9,8 @@ import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import { collapses, expandPastes, pasteToken } from './line-edit.ts';
 import Markdown, { mdPlain, spanProps } from './markdown.tsx';
-import { deniedRow, doneRow, intentRow, resultRow, rowProps, rowText, thinkingRow, type RowLine } from './rows.ts';
-import { inkTheme, type ThemeTokens } from './theme-tokens.ts';
+import { deniedRow, doneRow, intentRow, resultRow, rowProps, rowText, thinkingRow, type RowBand, type RowLine } from './rows.ts';
+import { inkTheme, PANEL_BAR, type ThemeTokens } from './theme-tokens.ts';
 import { PermissionDialog } from './permission-dialogs.tsx';
 import { askedBannerText } from './asked.ts';
 import { StatusBar } from './status-bar.tsx';
@@ -159,11 +159,12 @@ export function fitPath(path: string, width: number): string {
 }
 
 // The prompt panel's only border: a bar down its left side.
-const PANEL_BAR = { topLeft: '', top: '', topRight: '', right: '', bottomRight: '', bottom: '', bottomLeft: '', left: '▌' };
 
 const themedColorFor = (T: ThemeTokens, role: Msg['role']): string | undefined =>
   role === 'user' ? undefined : role === 'assistant' ? T.text : T.textMuted;
 
+const bandColor = (band: RowBand, T: ThemeTokens): string =>
+  band === 'add' ? T.diffAddedBg : band === 'del' ? T.diffRemovedBg : band === 'addWord' ? T.diffAddedWordBg : T.diffRemovedWordBg;
 const rowMsg = (lines: RowLine[], extra: Partial<Msg> = {}): Msg => ({ role: 'tool', text: rowText(lines), lines, ...extra });
 
 // Every row of the transcript starts two columns in: a prompt behind its bar ("▌ "), the rest in a gutter of the
@@ -2111,14 +2112,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                   {m.lines.map((ln, li) => {
                     const used = ln.spans.reduce((n, sp) => n + sp.text.length, 0);
                     return (
-                      <Text key={li} wrap="truncate" color={T.text} backgroundColor={ln.band === 'add' ? T.diffAddedBg : ln.band === 'del' ? T.diffRemovedBg : undefined}>
+                      <Text key={li} wrap="truncate" color={T.text} backgroundColor={ln.band ? bandColor(ln.band, T) : undefined}>
                         {ln.spans.map((sp, si) =>
                           sp.style === 'status' ? (
                             <Text key={si} color={m.status === 'running' ? T.accent : m.status === 'error' ? T.error : T.success}>
                               {m.status === 'running' ? SPINNER_FRAMES[spin % SPINNER_FRAMES.length] : m.status === 'error' ? '✗' : '✓'}
                             </Text>
                           ) : (
-                            <Text key={si} {...(rowProps(sp.style, T) ?? spanProps(sp.style as Parameters<typeof spanProps>[0], T))}>{sp.text}</Text>
+                            <Text key={si} {...(rowProps(sp.style, T) ?? spanProps(sp.style as Parameters<typeof spanProps>[0], T))} backgroundColor={sp.bg ? bandColor(sp.bg, T) : undefined}>{sp.text}</Text>
                           ),
                         )}
                         {ln.band ? ' '.repeat(Math.max(0, contentWidth - used)) : null}
@@ -2289,7 +2290,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           })()
         ) : null}
         {permissionDialog ? (
-          <PermissionDialog tool={permissionDialog.tool} input={permissionDialog.input} reason={permissionDialog.reason} rule={permissionDialog.rule} />
+          <PermissionDialog tool={permissionDialog.tool} input={permissionDialog.input} reason={permissionDialog.reason} rule={permissionDialog.rule} cwd={args.cwd} maxRows={overlayBudget} />
         ) : null}
         {settingsOpen ? (
           <Box flexDirection="column" paddingX={1}>
