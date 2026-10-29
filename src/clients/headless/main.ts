@@ -263,7 +263,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
       say(`cedia: ${where} effort ${effort} will not apply on ${m.ref}: it takes no effort levels\n`);
     }
   };
-  const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}), ...(args.advisor ? { advisor: args.advisor } : {}), ...(args.classifier ? { classifier: args.classifier } : {}), ...(args.workers ? { workers: args.workers } : {}), ...(args.triage ? { triage: args.triage } : {}) });
+  // A thread goes on with its writer's model unless the run names another: a client that sends the thread's next
+  // run (the desktop's line comments and review fixes) need not know it. Not the fallback a quota moved it to.
+  const threadModel = args.model ? undefined : threadRecord()?.sessions.filter((s) => !s.rewound && s.role === 'code' && s.why !== 'quota').at(-1)?.model;
+  const roles = loadRoles({ ...(args.model ? { code: args.model } : threadModel ? { code: threadModel } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}), ...(args.advisor ? { advisor: args.advisor } : {}), ...(args.classifier ? { classifier: args.classifier } : {}), ...(args.workers ? { workers: args.workers } : {}), ...(args.triage ? { triage: args.triage } : {}) });
   const spawnMode = loadSpawn(args.spawn);
   const spawnOn = spawnMode !== 'off';
   const lspSetting = loadLsp(args.lsp);
