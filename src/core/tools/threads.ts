@@ -127,6 +127,7 @@ export function threadTools(store: ThreadStore, self: string): ToolSpec[] {
     // It changes state outside this session, so a read-only session may not send.
     effect: 'write_workspace',
     replay: 'unsafe',
+    relays: true,
     async run(input) {
       const id = String(input.id ?? '');
       const text = String(input.text ?? '').trim();

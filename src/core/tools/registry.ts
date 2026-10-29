@@ -33,6 +33,9 @@ export type ToolSpec = ToolDef & {
   // that tool's input, which the policy and the classifier judge in its place (and hook matchers match). Undefined
   // when it names none.
   via?(input: JsonObject): { spec: ToolSpec; input: JsonObject } | undefined;
+  // A call that hands words to another agent that acts on them (a message to another thread): an injected writer
+  // could pass its instructions on, so the classifier reads it as it reads a command.
+  relays?: boolean;
   run(input: JsonObject, ctx: ToolCtx): Promise<ToolOutput>;
 };
 

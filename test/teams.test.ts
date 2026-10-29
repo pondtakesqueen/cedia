@@ -3,6 +3,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TeamStore } from '../src/core/project/teams.ts';
+import { effectOf } from '../src/core/tools/registry.ts';
+import { teamTool } from '../src/core/tools/team.ts';
 
 describe('teams', () => {
   test('create, add task, update, delete', () => {
@@ -34,5 +36,12 @@ describe('teams', () => {
     expect(store.addTask('../settings', 'planted')).toBeUndefined();
     expect(store.delete('../settings')).toBe(false);
     expect(fs.readFileSync(outside, 'utf8')).toBe(body);
+  });
+
+  test('listing and reading a team is a read; changing one is a write a read-only session may not make', () => {
+    const tool = teamTool(new TeamStore(mkdtempSync(join(tmpdir(), 'cedia-teams-'))), 't-1');
+    expect(effectOf(tool, { action: 'list' })).toBe('read');
+    expect(effectOf(tool, { action: 'get', team: 'x' })).toBe('read');
+    for (const action of ['create', 'add', 'set-status']) expect(effectOf(tool, { action })).toBe('write_workspace');
   });
 });
