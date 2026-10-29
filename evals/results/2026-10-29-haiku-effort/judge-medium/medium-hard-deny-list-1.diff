@@ -1,0 +1,77 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.ts b/deny.ts
+--- a/deny.ts	2026-10-29 07:16:23.858934066 +0000
++++ b/deny.ts	2026-10-29 07:16:59.196591720 +0000
+@@ -1,5 +1,5 @@
+ import { homedir } from 'node:os';
+-import { isAbsolute, relative, resolve } from 'node:path';
++import { basename, isAbsolute, relative, resolve } from 'node:path';
+ 
+ export type Hit = { name: 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside'; reason: string };
+ 
+@@ -36,5 +36,65 @@
+ //
+ // Anything else: undefined.
+ export function denyListed(argv: string[], cwd: string): Hit | undefined {
+-  throw new Error('not implemented');
++  const [cmd = '', ...args] = argv;
++  switch (basename(cmd)) {
++    case 'git':
++      return gitHit(args);
++    case 'rm':
++      return rmHit(args, cwd);
++    case 'find':
++      return findHit(args, cwd);
++  }
++  return undefined;
++}
++
++const GIT_VALUE_OPTS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
++const FORCE_PUSH_OPTS = ['--force', '--force-with-lease', '--mirror', '--delete', '--prune'];
++const shortGroupHas = (word: string, chars: string) => /^-[^-]/.test(word) && [...chars].some((c) => word.includes(c));
++const unresolvable = (path: string) => path.includes('$') || /^~(?!\/|$)/.test(path);
++
++function gitHit(args: string[]): Hit | undefined {
++  let i = 0;
++  while (i < args.length && args[i].startsWith('-')) i += GIT_VALUE_OPTS.has(args[i]) ? 2 : 1;
++  const sub = args[i];
++  const rest = args.slice(i + 1);
++  if (sub === 'push') {
++    const forced = rest.some(
++      (w) =>
++        FORCE_PUSH_OPTS.includes(w.split('=')[0]) || shortGroupHas(w, 'fd') || /^[+:]/.test(w),
++    );
++    return forced ? { name: 'force-push', reason: 'git push with a force, mirror, delete or prune option rewrites remote refs' } : undefined;
++  }
++  if (sub === 'reset' && rest.includes('--hard')) return { name: 'reset-hard', reason: 'git reset --hard discards uncommitted changes' };
++  if (sub === 'clean' && !rest.some((w) => w === '-n' || w === '--dry-run')) {
++    if (rest.some((w) => w === '--force' || shortGroupHas(w, 'f')))
++      return { name: 'clean-force', reason: 'git clean -f deletes untracked files' };
++  }
++  return undefined;
++}
++
++function rmHit(args: string[], cwd: string): Hit | undefined {
++  const dashDash = args.indexOf('--');
++  const flags = dashDash < 0 ? args : args.slice(0, dashDash);
++  const recursive = flags.some((w) => w === '--recursive' || shortGroupHas(w, 'rR'));
++  if (!recursive) return undefined;
++  const targets = [...flags.filter((w) => !w.startsWith('-')), ...(dashDash < 0 ? [] : args.slice(dashDash + 1))];
++  const outside = (reason: string) => ({ name: 'rm-outside' as const, reason });
++  if (targets.length === 0) return outside('recursive rm with no targets');
++  for (const t of targets) {
++    if (unresolvable(t)) return outside(`rm target ${t} cannot be resolved before it runs`);
++    if (!insideWorkspace(t, cwd) || sameDir(t, cwd)) return outside(`recursive rm of ${t} reaches outside the working directory`);
++  }
++  return undefined;
++}
++
++function findHit(args: string[], cwd: string): Hit | undefined {
++  if (!args.some((w) => w === '-delete' || w === '-exec' || w === '-execdir')) return undefined;
++  const firstFlag = args.findIndex((w) => w.startsWith('-'));
++  const starts = firstFlag < 0 ? args : args.slice(0, firstFlag);
++  for (const p of starts.length ? starts : ['.']) {
++    if (unresolvable(p) || !insideWorkspace(p, cwd))
++      return { name: 'rm-outside', reason: `find ${p} with -delete or -exec reaches outside the working directory` };
++  }
++  return undefined;
+ }

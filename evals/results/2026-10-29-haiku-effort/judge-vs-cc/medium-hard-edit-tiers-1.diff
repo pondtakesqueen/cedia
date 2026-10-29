@@ -1,0 +1,92 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 07:16:23.861342896 +0000
++++ b/edit.ts	2026-10-29 07:16:59.860591759 +0000
+@@ -23,5 +23,87 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text: oldText, new_text: newText, replace_all: replaceAll } = edit;
++  if (oldText === '') return { error: 'old_text is empty; use write to replace the whole file' };
++  if (oldText === newText) return { error: 'old_text and new_text are the same' };
++
++  const exactAt: number[] = [];
++  for (let pos = content.indexOf(oldText); pos >= 0; pos = content.indexOf(oldText, pos + oldText.length)) exactAt.push(pos);
++  if (exactAt.length > 1 && !replaceAll) {
++    const first = lineOf(content, exactAt[0]);
++    return { error: `old_text matches ${exactAt.length} places (first at line ${first}); add context to make it unique or set replace_all` };
++  }
++  if (exactAt.length > 0) {
++    const last = exactAt[exactAt.length - 1] + oldText.length - 1;
++    const applied = { from: lineOf(content, exactAt[0]), to: lineOf(content, last), tier: 'exact' as const, count: exactAt.length };
++    return { content: content.split(oldText).join(newText), applied };
++  }
++
++  const { lines, eol } = splitLines(content);
++  const oldLines = stripEol(oldText).split('\n');
++  const newLines = stripEol(newText) === '' ? [] : stripEol(newText).split('\n');
++
++  const trailing = windowHits(lines, oldLines, (a, b) => a.trimEnd() === b.trimEnd());
++  if (trailing.length > 1) return { error: matchError(trailing.map((i) => i + 1)) };
++  if (trailing.length === 1) {
++    const start = trailing[0];
++    return joinLines(lines, eol, start, oldLines.length, newLines, 'trailing-space');
++  }
++
++  const indented = windowHits(lines, oldLines, (a, b) => a.trim() === b.trim());
++  if (indented.length > 1) return { error: matchError(indented.map((i) => i + 1)) };
++  if (indented.length === 1) {
++    const start = indented[0];
++    const k = oldLines.findIndex((l) => l.trim() !== '');
++    const oldIndent = k < 0 ? '' : indentOf(oldLines[k]);
++    const newIndent = k < 0 ? '' : indentOf(lines[start + k]);
++    const reindented = newLines.map((l) => {
++      if (l.trim() === '' || !l.startsWith(oldIndent)) return l;
++      return newIndent + l.slice(oldIndent.length);
++    });
++    return joinLines(lines, eol, start, oldLines.length, reindented, 'indentation');
++  }
++
++  const first = oldLines.find((l) => l.trim() !== '')?.trim() ?? '';
++  const appears = lines.flatMap((l, i) => (first !== '' && l.includes(first) ? [i + 1] : []));
++  const hint = appears.length > 0 ? `; first line appears at line ${appears.slice(0, 5).join(', ')}` : '';
++  return { error: `old_text not found${hint}` };
++}
++
++function matchError(linesOf: number[]): string {
++  return `old_text matches ${linesOf.length} places (lines ${linesOf.join(', ')}); add context to make it unique or set replace_all`;
++}
++
++function lineOf(content: string, pos: number): number {
++  return content.slice(0, pos).split('\n').length;
++}
++
++function stripEol(s: string): string {
++  return s.endsWith('\n') ? s.slice(0, -1) : s;
++}
++
++function indentOf(s: string): string {
++  return /^\s*/.exec(s)![0];
++}
++
++function splitLines(content: string): { lines: string[]; eol: boolean } {
++  if (content === '') return { lines: [], eol: false };
++  const eol = content.endsWith('\n');
++  return { lines: (eol ? content.slice(0, -1) : content).split('\n'), eol };
++}
++
++function windowHits(lines: string[], oldLines: string[], same: (a: string, b: string) => boolean): number[] {
++  const hits: number[] = [];
++  for (let i = 0; i + oldLines.length <= lines.length; i++) {
++    if (oldLines.every((l, j) => same(lines[i + j], l))) hits.push(i);
++  }
++  return hits;
++}
++
++function joinLines(lines: string[], eol: boolean, start: number, count: number, replacement: string[], tier: Tier): { content: string; applied: Applied } {
++  const out = [...lines.slice(0, start), ...replacement, ...lines.slice(start + count)];
++  return {
++    content: out.join('\n') + (eol && out.length > 0 ? '\n' : ''),
++    applied: { from: start + 1, to: start + count, tier, count: 1 },
++  };
+ }

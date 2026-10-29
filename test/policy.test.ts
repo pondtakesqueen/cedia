@@ -338,7 +338,9 @@ describe('settings', () => {
 
       // Roles: flags > CEDIA_MODEL (code) > user settings > defaults; claude-code only for plan and review.
       const beam = resolveModel('beam');
-      expect(loadRoles({}, {})).toEqual({ code: flash, triage: flash, swarm: beam, workers: [] });
+      const haiku = resolveModel('haiku');
+      expect(loadRoles({}, {})).toEqual({ code: haiku, triage: haiku, swarm: beam, workers: [] });
+      expect(loadFallback(haiku)?.ref).toBe('anthropic/claude-haiku-5-5');
       writeFileSync(join(home, 'settings.json'), JSON.stringify({ roles: { plan: 'claude-code', code: 'anthropic/claude-haiku-5-5', review: 'sonnet', swarm: 'deepseek', workers: 'haiku, deepseek,haiku' } }));
       expect(loadRoles({}, {})).toEqual({ plan: { via: 'claude-code', model: 'opus', effort: 'medium' }, code: resolveModel('anthropic/claude-haiku-5-5'), triage: resolveModel('anthropic/claude-haiku-5-5'), review: { via: 'cedia', model: resolveModel('sonnet') }, swarm: flash, workers: [resolveModel('haiku'), flash] });
       expect(loadRoles({ workers: 'none' }, {}).workers).toEqual([]);
@@ -368,7 +370,7 @@ describe('settings', () => {
       // A repo cannot pick roles.
       writeFileSync(join(repo, '.cedia', 'settings.json'), JSON.stringify({ roles: { code: 'opus' } }));
       writeFileSync(join(home, 'settings.json'), '{}');
-      expect(loadRoles({}, {}).code).toBe(flash);
+      expect(loadRoles({}, {}).code).toBe(haiku);
     } finally {
       if (prev === undefined) delete process.env.CEDIA_HOME;
       else process.env.CEDIA_HOME = prev;

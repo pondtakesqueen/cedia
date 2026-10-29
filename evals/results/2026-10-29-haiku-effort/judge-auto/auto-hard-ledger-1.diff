@@ -1,0 +1,90 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/ledger.test.ts b/ledger.test.ts
+--- a/ledger.test.ts	2026-10-29 08:07:30.077367237 +0000
++++ b/ledger.test.ts	2026-10-29 08:09:05.140578074 +0000
+@@ -77,6 +77,19 @@
+     ]);
+   });
+ 
++  test('every snapshot naming a callId counts, not only the last one', () => {
++    const events: SessionEvent[] = [
++      { kind: 'tool_intent', callId: 'a', tool: 'bash', input: { command: 'gen' } },
++      { kind: 'tool_result', callId: 'a', status: 'completed', output: { isError: false, exitCode: 0 } },
++      { kind: 'snapshot', callId: 'a', changed: ['1'] },
++      { kind: 'snapshot', callId: 'a', changed: ['2'] },
++    ];
++    expect(ledgerEntries(events, [])).toEqual([
++      { kind: 'write', at: 1, tool: 'bash', path: '1' },
++      { kind: 'write', at: 1, tool: 'bash', path: '2' },
++    ]);
++  });
++
+   test('a check is never a write, even with a snapshot; a missing exit code comes from isError', () => {
+     const check = bash('bun test');
+     const callId = check[0]!.kind === 'tool_intent' ? check[0]!.callId : '';
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/ledger.ts b/ledger.ts
+--- a/ledger.ts	2026-10-29 08:07:30.077430813 +0000
++++ b/ledger.ts	2026-10-29 08:09:09.428777790 +0000
+@@ -25,7 +25,14 @@
+ // ` 2>&1` from both. A pipe or a chain would hide the check's exit code, so `bun test | tail` does not count.
+ // One exception: a leading `cd <dir> && ` is removed when <dir> (quotes stripped) resolves to `cwd`.
+ export function matchCheck(command: string, checks: string[], cwd?: string): string | undefined {
+-  throw new Error('not implemented');
++  const norm = (s: string) => s.trim().replace(/\s+/g, ' ').replace(/ 2>&1$/, '').trim();
++  let cmd = norm(command);
++  const cd = /^cd\s+("[^"]*"|'[^']*'|\S+)\s*&&\s*/.exec(cmd);
++  if (cd) {
++    if (cwd === undefined || resolve(cwd, cd[1]!.replace(/^["']|["']$/g, '')) !== resolve(cwd)) return undefined;
++    cmd = cmd.slice(cd[0].length);
++  }
++  return checks.find((c) => norm(c) === cmd);
+ }
+ 
+ // Walks the log and returns one entry per thing that happened, in log order.
+@@ -38,18 +45,44 @@
+ // - Otherwise an edit or write call that completed is a write entry with path = input.path.
+ // - Otherwise a bash call whose command is not read-only is a write entry with command set (no path).
+ export function ledgerEntries(events: SessionEvent[], checks: string[], cwd?: string): LedgerEntry[] {
+-  throw new Error('not implemented');
++  const snaps = new Map<string, string[]>();
++  for (const e of events) if (e.kind === 'snapshot' && e.callId !== undefined) snaps.set(e.callId, [...(snaps.get(e.callId) ?? []), ...e.changed]);
++  const intents = new Map<string, Extract<SessionEvent, { kind: 'tool_intent' }>>();
++  const entries: LedgerEntry[] = [];
++  events.forEach((e, at) => {
++    if (e.kind === 'request') intents.clear();
++    else if (e.kind === 'tool_intent') intents.set(e.callId, e);
++    else if (e.kind === 'tool_result') {
++      const intent = intents.get(e.callId);
++      if (!intent || e.status === 'denied' || e.status === 'not_started') return;
++      const { tool, input } = intent;
++      const cmd = typeof input.command === 'string' ? input.command : undefined;
++      const check = tool === 'bash' && cmd !== undefined ? matchCheck(cmd, checks, cwd) : undefined;
++      const snap = snaps.get(e.callId);
++      if (check !== undefined) entries.push({ kind: 'check', at, command: check, exitCode: e.output.exitCode ?? (e.output.isError ? 1 : 0) });
++      else if (snap) for (const path of snap) entries.push({ kind: 'write', at, tool, path });
++      else if ((tool === 'edit' || tool === 'write') && e.status === 'completed') entries.push({ kind: 'write', at, tool, path: input.path as string });
++      else if (tool === 'bash' && cmd !== undefined && !isReadOnly(cmd)) entries.push({ kind: 'write', at, tool, command: cmd });
++    }
++  });
++  return entries;
+ }
+ 
+ // changed: every write's label (path, or `bash: <command>`), first seen first, no duplicates.
+ // checks: every check entry, in order, as { command, exitCode }.
+ // unverified: labels of writes after the last passing check (all of them when no check passed), deduped.
+ export function evidence(entries: LedgerEntry[]): Evidence {
+-  throw new Error('not implemented');
++  const label = (e: Extract<LedgerEntry, { kind: 'write' }>) => e.path ?? `bash: ${e.command}`;
++  const writes = (list: LedgerEntry[]) => [...new Set(list.flatMap((e) => (e.kind === 'write' ? [label(e)] : [])))];
++  const checks = entries.flatMap((e) => (e.kind === 'check' ? [{ command: e.command, exitCode: e.exitCode }] : []));
++  const lastPass = entries.findLastIndex((e) => e.kind === 'check' && e.exitCode === 0);
++  return { changed: writes(entries), checks, unverified: writes(entries.slice(lastPass + 1)) };
+ }
+ 
+ // The done gate. With no declared checks, or no writes, it is satisfied. Otherwise a check with exit code 0
+ // must come after the last write.
+ export function verified(entries: LedgerEntry[], checks: string[]): boolean {
+-  throw new Error('not implemented');
++  const lastWrite = entries.findLastIndex((e) => e.kind === 'write');
++  if (checks.length === 0 || lastWrite < 0) return true;
++  return entries.slice(lastWrite + 1).some((e) => e.kind === 'check' && e.exitCode === 0);
+ }

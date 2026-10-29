@@ -1,0 +1,41 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse.ts b/sse.ts
+--- a/sse.ts	2026-10-29 07:18:14.925180777 +0000
++++ b/sse.ts	2026-10-29 07:18:33.920614323 +0000
+@@ -15,7 +15,36 @@
+ // - When the body ends without a final blank line, data lines still pending (including a last line with no
+ //   newline) are yielded as one last message.
+ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseMessage> {
+-  throw new Error('not implemented');
++  const reader = body.getReader();
++  const decoder = new TextDecoder();
++  let buf = '';
++  let event: string | undefined;
++  let data: string[] = [];
++  for (;;) {
++    const { done, value } = await reader.read();
++    buf += done ? decoder.decode() : decoder.decode(value, { stream: true });
++    if (done && buf !== '' && !buf.endsWith('\n')) buf += '\n';
++    let nl: number;
++    while ((nl = buf.indexOf('\n')) !== -1) {
++      const raw = buf.slice(0, nl);
++      buf = buf.slice(nl + 1);
++      const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
++      if (line === '') {
++        if (data.length > 0) yield { event, data: data.join('\n') };
++        event = undefined;
++        data = [];
++        continue;
++      }
++      const colon = line.indexOf(':');
++      const field = colon === -1 ? line : line.slice(0, colon);
++      let val = colon === -1 ? '' : line.slice(colon + 1);
++      if (val.startsWith(' ')) val = val.slice(1);
++      if (field === 'event') event = val;
++      else if (field === 'data') data.push(val);
++    }
++    if (done) break;
++  }
++  if (data.length > 0) yield { event, data: data.join('\n') };
+ }
+ 
+ export function streamFromString(text: string, chunkSize = 7): ReadableStream<Uint8Array> {

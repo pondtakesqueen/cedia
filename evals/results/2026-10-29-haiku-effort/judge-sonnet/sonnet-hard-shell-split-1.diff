@@ -1,0 +1,194 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.ts b/shell.ts
+--- a/shell.ts	2026-10-29 07:35:10.615032076 +0000
++++ b/shell.ts	2026-10-29 07:36:40.352417772 +0000
+@@ -37,5 +37,189 @@
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  try {
++    return parse(command);
++  } catch (e) {
++    if (e instanceof Unbalanced) return null;
++    throw e;
++  }
++}
++
++class Unbalanced extends Error {}
++
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
++const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
++const REDIRECT = /(>>|>&|>\||>|<<<|<<-|<<|<&|<>|<)/y;
++const AMP_REDIRECT = /&>>?/y;
++
++function parse(src: string): string[][] {
++  return parseList(src, 0, false).cmds;
++}
++
++// Parses commands from `start`; when `nested` (inside $( )), stops after the matching ) and returns the index past it.
++function parseList(src: string, start: number, nested: boolean): { cmds: string[][]; end: number } {
++  type Word = { text: string; redirEnd: number };
++  const cmds: string[][] = [];
++  let pending: string[][] = []; // commands of substitutions inside the current command
++  let words: Word[] = [];
++  let text = '';
++  let has = false;
++  let redirEnd = -1; // when the word is a redirection: text length right after its operator
++  let depth = 0;
++  let i = start;
++
++  const endWord = () => {
++    if (has) words.push({ text, redirEnd });
++    text = '';
++    has = false;
++    redirEnd = -1;
++  };
++  const endCommand = () => {
++    endWord();
++    const argv: string[] = [];
++    let skip = false;
++    for (const w of words) {
++      if (skip) skip = false;
++      else if (w.redirEnd >= 0) skip = w.text.length === w.redirEnd;
++      else argv.push(w.text);
++    }
++    cmds.push(...unwrap(argv), ...pending);
++    pending = [];
++    words = [];
++  };
++  const substitute = (inner: string, from: number, isNested: boolean) => {
++    const r = parseList(inner, from, isNested);
++    pending.push(...r.cmds);
++    return r.end;
++  };
++  const backtick = () => {
++    let j = i + 1;
++    while (j < src.length && src[j] !== '`') j += src[j] === '\\' ? 2 : 1;
++    if (j >= src.length) throw new Unbalanced();
++    substitute(src.slice(i + 1, j).replace(/\\([`\\$])/g, '$1'), 0, false);
++    i = j + 1;
++  };
++
++  while (i < src.length) {
++    const c = src[i];
++    if (c === '\\') {
++      if (src[i + 1] === undefined) text += c, has = true;
++      else if (src[i + 1] !== '\n') text += src[i + 1], has = true;
++      i += 2;
++    } else if (c === "'") {
++      const j = src.indexOf("'", i + 1);
++      if (j < 0) throw new Unbalanced();
++      text += src.slice(i + 1, j);
++      has = true;
++      i = j + 1;
++    } else if (c === '$' && src[i + 1] === "'") {
++      i += 2;
++      while (src[i] !== "'") {
++        if (i >= src.length) throw new Unbalanced();
++        if (src[i] === '\\') i++;
++        text += src[i++];
++      }
++      has = true;
++      i++;
++    } else if (c === '"') {
++      has = true;
++      i++;
++      for (;;) {
++        const d = src[i];
++        if (d === undefined) throw new Unbalanced();
++        if (d === '"') break;
++        if (d === '\\') {
++          if (src[i + 1] === undefined) throw new Unbalanced();
++          text += src[i + 1];
++          i += 2;
++        } else if (d === '$' && src[i + 1] === '(') {
++          i = substitute(src, i + 2, true);
++        } else if (d === '`') {
++          backtick();
++        } else {
++          text += d;
++          i++;
++        }
++      }
++      i++;
++    } else if (c === '$' && src[i + 1] === '(') {
++      i = substitute(src, i + 2, true);
++    } else if (c === '`') {
++      backtick();
++    } else if (c === '>' || c === '<' || (c === '&' && src[i + 1] === '>')) {
++      // a bare number right before the operator is the file descriptor (`2>`); anything else ends the word
++      if (redirEnd >= 0 || !/^\d+$/.test(text)) endWord();
++      const re = c === '&' ? AMP_REDIRECT : REDIRECT;
++      re.lastIndex = i;
++      const op = re.exec(src)![0];
++      text += op;
++      has = true;
++      redirEnd = text.length;
++      i += op.length;
++    } else if (c === ' ' || c === '\t' || c === '\r') {
++      endWord();
++      i++;
++    } else if (c === '(' ) {
++      endCommand();
++      depth++;
++      i++;
++    } else if (c === ')') {
++      endCommand();
++      i++;
++      if (nested && depth === 0) return { cmds, end: i };
++      depth = Math.max(0, depth - 1);
++    } else if (c === ';' || c === '&' || c === '|' || c === '\n') {
++      endCommand();
++      i++;
++    } else {
++      text += c;
++      has = true;
++      i++;
++    }
++  }
++  if (nested) throw new Unbalanced();
++  endCommand();
++  return { cmds, end: i };
++}
++
++// Skips leading assignments and keywords, unwraps wrappers, and expands `bash -c` and `eval`.
++function unwrap(argv: string[]): string[][] {
++  let i = 0;
++  for (;;) {
++    while (i < argv.length && (ASSIGNMENT.test(argv[i]) || KEYWORDS.has(argv[i]))) i++;
++    if (i >= argv.length) return [];
++    const name = argv[i].split('/').pop()!;
++    const wrapper = WRAPPERS.get(name);
++    if (wrapper) {
++      i = skipWrapper(argv, i + 1, wrapper);
++      continue;
++    }
++    if (SHELLS.has(name)) {
++      const script = shellScript(argv, i + 1);
++      if (script !== undefined) return parse(script);
++    }
++    if (argv[i] === 'eval') return parse(argv.slice(i + 1).join(' '));
++    return [argv.slice(i)];
++  }
++}
++
++function skipWrapper(argv: string[], i: number, wrapper: Wrapper): number {
++  while (i < argv.length && argv[i].startsWith('-')) {
++    if (argv[i] === '--') {
++      i++;
++      break;
++    }
++    i += wrapper.value?.includes(argv[i]) ? 2 : 1;
++  }
++  return i + (wrapper.positional ?? 0);
++}
++
++// The script of `sh -c script`, or undefined when argv from `i` is not a -c invocation.
++function shellScript(argv: string[], i: number): string | undefined {
++  for (; i < argv.length && argv[i].startsWith('-') && argv[i] !== '--'; i++) {
++    if (/^-[A-Za-z]*c[A-Za-z]*$/.test(argv[i])) return argv[i + 1];
++    if (argv[i] === '-o' || argv[i] === '-O') i++;
++  }
++  return undefined;
+ }

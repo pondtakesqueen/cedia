@@ -1,0 +1,20 @@
+Running 10 tasks x 1 runs on cedia (auto), 2 at a time...
+  PASS hard-deny-list#1 (154.8s $0.0144, plan 22s, review changes 49s, fix 56s, peak 29k)
+  PASS hard-csv-stream#1 (174.5s $0.0130, plan 43s, review changes 43s, fix 39s, peak 26k)
+  PASS hard-injection#1 (48.2s $0.0019, plan 11s, review approve 25s, peak 10k)
+  PASS hard-edit-tiers#1 (120.1s $0.0097, plan 26s, review changes 38s, fix 27s, peak 23k)
+  PASS hard-ledger#1 (101.9s $0.0071, plan 22s, review changes 41s, fix 12s, peak 21k)
+  PASS hard-memo-async#1 (86.7s $0.0086, plan 21s, review changes 26s, fix 10s, peak 21k)
+  PASS hard-pool#1 (90.8s $0.0076, plan 23s, review approve 23s, peak 19k)
+  PASS hard-sse#1 (88.3s $0.0078, plan 18s, review changes 22s, fix 29s, peak 20k)
+  PASS wide-bug-hunt#1 (141.3s $0.0101, plan 41s, review changes 44s, fix 31s, peak 26k)
+  PASS wide-three-features#1 (162.0s $0.0167, plan 32s, review changes 46s, fix 25s, peak 39k)
+
+Results written to evals/results/2026-10-29-haiku-effort/auto.jsonl
+cedia (auto): 10 tasks, 10 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 116.9s per run, 177632 input / 11280 output tokens per run, cache hit 88.8%
+  peak context 23k mean, 39k max, 0 of 10 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 14 edit: broken edits string, 9 edit: top-level old_text/new_text
+  speed 264.6 output tok/s, 1.02s to first token per call; model 97.2% of time, cedia 0.0%
+  cost $0.0970 total, $0.0097 per passed run

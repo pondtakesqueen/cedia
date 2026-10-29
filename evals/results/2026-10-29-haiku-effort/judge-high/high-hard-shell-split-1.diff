@@ -1,0 +1,191 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.ts b/shell.ts
+--- a/shell.ts	2026-10-29 07:18:55.421827690 +0000
++++ b/shell.ts	2026-10-29 07:22:52.104612698 +0000
+@@ -18,6 +18,154 @@
+ ]);
+ 
+ 
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
++const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
++const SHELL_C = /^-[a-zA-Z]*c[a-zA-Z]*$/;
++
++// A word, a command separator, or a redirection operator.
++type Item = { text: string } | 'sep' | 'redir';
++
++// Splits a line into words and separators. Substitutions, subshells and backticks are separators, so their
++// contents become commands of their own. `open` holds the constructs still waiting for their closing character.
++function lex(src: string): Item[] | null {
++  const items: Item[] = [];
++  const open: string[] = [];
++  let text = '';
++  let quoted = false;
++  let started = false;
++  const add = (s: string, q: boolean): void => {
++    text += s;
++    quoted ||= q;
++    started = true;
++  };
++  const endWord = (): void => {
++    if (started) items.push({ text });
++    text = '';
++    quoted = false;
++    started = false;
++  };
++  const sep = (): void => {
++    endWord();
++    items.push('sep');
++  };
++  const redir = (): void => {
++    if (!quoted && /^\d+$/.test(text)) {
++      text = '';
++      started = false;
++    }
++    endWord();
++    items.push('redir');
++  };
++
++  let i = 0;
++  while (i < src.length) {
++    const c = src[i];
++    const top = open.at(-1);
++    if (top === 'dq') {
++      if (c === '"') {
++        open.pop();
++        i++;
++      } else if (c === '\\' && i + 1 < src.length) {
++        add(src[i + 1], true);
++        i += 2;
++      } else if (src.startsWith('$(', i)) {
++        sep();
++        open.push('subst');
++        i += 2;
++      } else if (c === '`') {
++        sep();
++        open.push('bt');
++        i++;
++      } else {
++        add(c, true);
++        i++;
++      }
++    } else if (c === "'") {
++      const close = src.indexOf("'", i + 1);
++      if (close === -1) return null;
++      add(src.slice(i + 1, close), true);
++      i = close + 1;
++    } else if (c === '"') {
++      add('', true);
++      open.push('dq');
++      i++;
++    } else if (c === '\\' && i + 1 < src.length) {
++      add(src[i + 1], true);
++      i += 2;
++    } else if (src.startsWith('$(', i) || ((c === '<' || c === '>') && src[i + 1] === '(')) {
++      sep();
++      open.push('subst');
++      i += 2;
++    } else if (c === '`') {
++      sep();
++      if (top === 'bt') open.pop();
++      else open.push('bt');
++      i++;
++    } else if (c === '(') {
++      sep();
++      open.push('paren');
++      i++;
++    } else if (c === ')') {
++      sep();
++      if (top === 'paren' || top === 'subst') open.pop();
++      i++;
++    } else if (c === '<' || c === '>' || (c === '&' && src[i + 1] === '>')) {
++      let j = i;
++      while (j < src.length && '<>&|'.includes(src[j])) j++;
++      redir();
++      i = j;
++    } else if (c === '\n' || c === ';' || c === '|' || c === '&') {
++      sep();
++      i++;
++    } else if (/\s/.test(c)) {
++      endWord();
++      i++;
++    } else {
++      add(c, false);
++      i++;
++    }
++  }
++  if (open.length > 0) return null;
++  endWord();
++  return items;
++}
++
++// Drops leading assignments and keywords, and wrappers with their flags, and returns the command they run.
++function unwrap(argv: string[]): string[] {
++  let i = 0;
++  while (i < argv.length) {
++    const word = argv[i];
++    const wrapper = WRAPPERS.get(word);
++    if (ASSIGNMENT.test(word) || KEYWORDS.has(word)) {
++      i++;
++    } else if (wrapper) {
++      i++;
++      while (i < argv.length && argv[i].startsWith('-')) {
++        const flag = argv[i++];
++        if (flag === '--') break;
++        if (wrapper.value?.includes(flag)) i++;
++      }
++      i += wrapper.positional ?? 0;
++    } else {
++      break;
++    }
++  }
++  return argv.slice(i);
++}
++
++// Returns the commands one argv runs: `eval` and `sh -c` scripts are parsed in turn.
++function commandsOf(argv: string[]): string[][] | null {
++  const cmd = unwrap(argv);
++  if (cmd[0] === 'eval') return simpleCommands(cmd.slice(1).join(' '));
++  if (SHELLS.has(cmd[0])) {
++    for (let j = 1; j + 1 < cmd.length && cmd[j].startsWith('-'); j++) {
++      if (SHELL_C.test(cmd[j])) return simpleCommands(cmd[j + 1]);
++    }
++  }
++  return cmd.length > 0 ? [cmd] : [];
++}
++
+ // Splits a shell command line into the argv of each simple command, so a permission policy can check every
+ // command a line would run. It is not a full shell parser; it must never hide a command from the policy.
+ //
+@@ -37,5 +185,31 @@
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  const items = lex(command);
++  if (!items) return null;
++  const argvs: string[][] = [];
++  let argv: string[] = [];
++  let skipTarget = false;
++  for (const item of items) {
++    if (item === 'sep') {
++      argvs.push(argv);
++      argv = [];
++      skipTarget = false;
++    } else if (item === 'redir') {
++      skipTarget = true;
++    } else if (skipTarget) {
++      skipTarget = false;
++    } else {
++      argv.push(item.text);
++    }
++  }
++  argvs.push(argv);
++
++  const out: string[][] = [];
++  for (const words of argvs) {
++    const cmds = commandsOf(words);
++    if (!cmds) return null;
++    out.push(...cmds);
++  }
++  return out;
+ }

@@ -1,0 +1,102 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse.test.ts b/sse.test.ts
+--- a/sse.test.ts	2026-10-29 07:19:35.403062770 +0000
++++ b/sse.test.ts	2026-10-29 07:20:24.796603941 +0000
+@@ -64,3 +64,32 @@
+   expect((await it.next()).value).toEqual({ data: 'second' });
+   expect((await it.next()).done).toBe(true);
+ });
++
++test('a failing body throws its own error, after the messages before it', async () => {
++  const enc = new TextEncoder();
++  let step = 0;
++  const body = new ReadableStream<Uint8Array>({
++    pull(c) {
++      if (step++ === 0) c.enqueue(enc.encode('data: before\n\n'));
++      else c.error(new Error('connection reset'));
++    },
++  });
++  const it = readSse(body);
++  expect((await it.next()).value).toEqual({ data: 'before' });
++  await expect(it.next()).rejects.toThrow('connection reset');
++});
++
++test('stopping early cancels the body', async () => {
++  let cancelled = false;
++  const enc = new TextEncoder();
++  const body = new ReadableStream<Uint8Array>({
++    pull(c) {
++      c.enqueue(enc.encode('data: x\n\n'));
++    },
++    cancel() {
++      cancelled = true;
++    },
++  });
++  for await (const _ of readSse(body)) break;
++  expect(cancelled).toBe(true);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse.ts b/sse.ts
+--- a/sse.ts	2026-10-29 07:19:35.402910375 +0000
++++ b/sse.ts	2026-10-29 07:20:22.048603778 +0000
+@@ -1,5 +1,37 @@
+ export type SseMessage = { event?: string; data: string };
+ 
++// Splits the decoded body into lines. A line is complete only when its \n arrives, so a \r at the end of a
++// chunk cannot be mistaken for a line end before the \n that follows it.
++async function* sseLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
++  const reader = body.getReader();
++  const decoder = new TextDecoder();
++  let buf = '';
++  // Set once the body has ended or failed; only then is there nothing left for cancel() to do.
++  let ended = false;
++  try {
++    for (;;) {
++      const { done, value } = await reader.read().catch((err) => {
++        ended = true;
++        throw err;
++      });
++      if (done) {
++        ended = true;
++        break;
++      }
++      buf += decoder.decode(value, { stream: true });
++      for (let nl = buf.indexOf('\n'); nl !== -1; nl = buf.indexOf('\n')) {
++        yield buf.slice(0, nl).replace(/\r$/, '');
++        buf = buf.slice(nl + 1);
++      }
++    }
++    buf += decoder.decode();
++    if (buf) yield buf.replace(/\r$/, '');
++  } finally {
++    // The consumer stopped early: release the connection.
++    if (!ended) await reader.cancel();
++  }
++}
++
+ // Streaming server-sent events reader for model provider responses.
+ //
+ // - Bytes arrive in chunks of any size: a line, a field name or a multi-byte UTF-8 character may be split
+@@ -15,7 +47,23 @@
+ // - When the body ends without a final blank line, data lines still pending (including a last line with no
+ //   newline) are yielded as one last message.
+ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseMessage> {
+-  throw new Error('not implemented');
++  let event: string | undefined;
++  let data: string[] = [];
++  for await (const line of sseLines(body)) {
++    if (line === '') {
++      if (data.length) yield { event, data: data.join('\n') };
++      event = undefined;
++      data = [];
++      continue;
++    }
++    if (line.startsWith(':')) continue;
++    const colon = line.indexOf(':');
++    const field = colon === -1 ? line : line.slice(0, colon);
++    const value = colon === -1 ? '' : line.slice(colon + 1).replace(/^ /, '');
++    if (field === 'event') event = value;
++    else if (field === 'data') data.push(value);
++  }
++  if (data.length) yield { event, data: data.join('\n') };
+ }
+ 
+ export function streamFromString(text: string, chunkSize = 7): ReadableStream<Uint8Array> {

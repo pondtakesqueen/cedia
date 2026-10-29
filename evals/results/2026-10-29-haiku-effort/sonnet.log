@@ -1,0 +1,21 @@
+Running 12 tasks x 1 runs on cedia (anthropic/claude-sonnet-5-5), 2 at a time...
+  PASS hard-deny-list#1 (21.9s $0.0495, peak 9k)
+  PASS hard-csv-stream#1 (42.7s $0.0755, peak 11k)
+  PASS hard-edit-tiers#1 (27.1s $0.0545, peak 11k)
+  PASS hard-injection#1 (8.7s $0.0126, peak 6k)
+  PASS hard-memo-async#1 (32.5s $0.0635, peak 11k)
+  PASS hard-ledger#1 (56.4s $0.0535, peak 12k)
+  PASS hard-pool#1 (37.9s $0.0787, peak 12k)
+  PASS hard-redact-bugs#1 (29.5s $0.0513, peak 14k)
+  PASS hard-sse#1 (31.7s $0.0697, peak 14k)
+  PASS wide-bug-hunt#1 (26.5s $0.0543, peak 13k)
+  PASS hard-shell-split#1 (98.6s $0.1628, peak 20k)
+  PASS wide-three-features#1 (35.8s $0.0726, peak 12k)
+
+Results written to evals/results/2026-10-29-haiku-effort/sonnet.jsonl
+cedia (anthropic/claude-sonnet-5-5): 12 tasks, 12 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 37.4s per run, 46818 input / 4198 output tokens per run, cache hit 82.3%
+  peak context 12k mean, 20k max, 0 of 12 runs past 100k; 0 handoffs, 0 sub-threads
+  speed 200.5 output tok/s, 2.37s to first token per call; model 99.4% of time, cedia 0.1%
+  cost $0.7985 total, $0.0665 per passed run

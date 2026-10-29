@@ -1,0 +1,86 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 07:16:23.867058023 +0000
++++ b/edit.ts	2026-10-29 07:17:27.492593402 +0000
+@@ -3,6 +3,62 @@
+ // from/to are 1-based line numbers of the replaced text in the original content; count is how many places were replaced.
+ export type Applied = { from: number; to: number; tier: Tier; count: number };
+ 
++type Result = { content: string; applied: Applied } | { error: string };
++
++const stripNewline = (s: string) => (s.endsWith('\n') ? s.slice(0, -1) : s);
++const lineOf = (text: string, index: number) => text.slice(0, index).split('\n').length;
++const indentOf = (line: string) => line.slice(0, line.length - line.trimStart().length);
++const multiple = (count: number, lines: number[]) => `old_text matches ${count} places (at line ${lines.join(', ')})`;
++
++function applyExact(content: string, edit: TextEdit): Result | undefined {
++  const hits: number[] = [];
++  for (let i = content.indexOf(edit.old_text); i !== -1; i = content.indexOf(edit.old_text, i + edit.old_text.length)) {
++    hits.push(i);
++  }
++  if (hits.length === 0) return undefined;
++  if (hits.length > 1 && !edit.replace_all) return { error: multiple(hits.length, hits.map((i) => lineOf(content, i))) };
++  const last = hits[hits.length - 1];
++  return {
++    content: content.split(edit.old_text).join(edit.new_text),
++    applied: { from: lineOf(content, hits[0]), to: lineOf(content, last + edit.old_text.length - 1), tier: 'exact', count: hits.length },
++  };
++}
++
++function applyLines(content: string, edit: TextEdit, tier: 'trailing-space' | 'indentation'): Result | undefined {
++  const hasNewline = content.endsWith('\n');
++  const lines = (hasNewline ? content.slice(0, -1) : content).split('\n');
++  const oldLines = stripNewline(edit.old_text).split('\n');
++  const newBody = stripNewline(edit.new_text);
++  const newLines = newBody === '' ? [] : newBody.split('\n');
++  const norm = tier === 'indentation' ? (s: string) => s.trim() : (s: string) => s.trimEnd();
++  const want = oldLines.map(norm);
++
++  const starts: number[] = [];
++  for (let i = 0; i + want.length <= lines.length; i++) {
++    if (want.every((w, j) => norm(lines[i + j]) === w)) starts.push(i);
++  }
++  if (starts.length === 0) return undefined;
++  if (starts.length > 1) return { error: multiple(starts.length, starts.map((i) => i + 1)) };
++
++  const at = starts[0];
++  let replacement = newLines;
++  if (tier === 'indentation') {
++    const k = Math.max(0, oldLines.findIndex((l) => l.trim() !== ''));
++    const oldIndent = indentOf(oldLines[k]);
++    const newIndent = indentOf(lines[at + k]);
++    replacement = newLines.map((l) => {
++      if (l.trim() === '') return l;
++      return newIndent + (l.startsWith(oldIndent) ? l.slice(oldIndent.length) : l.trimStart());
++    });
++  }
++
++  const out = [...lines.slice(0, at), ...replacement, ...lines.slice(at + want.length)];
++  return {
++    content: out.length > 0 ? out.join('\n') + (hasNewline ? '\n' : '') : '',
++    applied: { from: at + 1, to: at + want.length, tier, count: 1 },
++  };
++}
++
+ // Applies one edit to `content`.
+ //
+ // Tiers, tried in order; a tier applies only when it finds exactly one place (or replace_all is set, exact tier only):
+@@ -23,5 +79,18 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  if (edit.old_text === '') return { error: 'old_text is empty; use write to create or overwrite a file' };
++  if (edit.old_text === edit.new_text) return { error: 'old_text and new_text are the same; nothing to change' };
++
++  const result =
++    applyExact(content, edit) ?? applyLines(content, edit, 'trailing-space') ?? applyLines(content, edit, 'indentation');
++  if (result) return result;
++
++  const first = edit.old_text
++    .split('\n')
++    .map((l) => l.trim())
++    .find((l) => l !== '');
++  const hits = first === undefined ? [] : content.split('\n').flatMap((l, i) => (l.includes(first) ? [i + 1] : []));
++  if (hits.length === 0) return { error: 'old_text not found' };
++  return { error: `old_text not found; first line appears at line ${hits.slice(0, 5).join(', ')}` };
+ }
