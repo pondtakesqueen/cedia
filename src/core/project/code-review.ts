@@ -4,7 +4,7 @@ import { loadPolicy, loadPrivacy } from '../config.ts';
 import { runPrompt } from '../loop/run.ts';
 import { resolveModel } from '../providers/catalog.ts';
 import { providerFor } from '../providers/index.ts';
-import { systemFor } from '../prompts.ts';
+import { READ_ONLY_SYSTEM } from '../prompts.ts';
 import { SessionLog, sessionPath } from '../session/log.ts';
 import { CORE_TOOLS } from '../tools/index.ts';
 import { askedReviewPrompt, findingRef, parseVerdict, verifyFindings, type Verdict } from '../trust/review.ts';
@@ -59,7 +59,7 @@ export async function codeReview(opts: { cwd: string; files: string[]; patch: st
       provider: providerFor(model, { fauxScript }),
       model,
       tools: CORE_TOOLS.filter((t) => t.effect !== 'write_workspace'),
-      system: systemFor(model),
+      system: READ_ONLY_SYSTEM,
       cwd: opts.cwd,
       role: 'review',
       permission: { ...loadPolicy(opts.cwd, { allow: [], deny: [], unlock: [] }), mode: 'read-only' },

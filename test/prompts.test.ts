@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { BASE_SYSTEM, preamble, systemFor } from '../src/core/prompts.ts';
+import { BASE_SYSTEM, preamble, READ_ONLY_SYSTEM, systemFor } from '../src/core/prompts.ts';
 import { CATALOG, FAUX_MODEL, resolveModel } from '../src/core/providers/catalog.ts';
 
 describe('system prompt per model', () => {
@@ -32,6 +32,13 @@ describe('system prompt per model', () => {
     const opus = systemFor(resolveModel('opus'));
     expect(opus).toContain('once every rule the task states holds and a declared check passes after your last change');
     expect(opus).toContain('Leave improvements nobody asked for out of the change.');
+  });
+
+  test('a session that only reads is not told to edit, check its change or read its own diff', () => {
+    for (const line of ['Change files with edit', 'Run the project\'s checks after a change', 'git diff', 'smallest change'])
+      expect([line, READ_ONLY_SYSTEM.includes(line)]).toEqual([line, false]);
+    expect(READ_ONLY_SYSTEM).toContain('you change nothing');
+    expect(READ_ONLY_SYSTEM).not.toMatch(/\d{4}-\d{2}-\d{2}|\/home\/|\/Users\/|\$\{/);
   });
 
   test('a model prompt holds no per-session value, so the prefix stays cacheable (cache rule 1)', () => {

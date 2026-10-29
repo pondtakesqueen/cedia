@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { attributeMisses } from '../src/core/context/cache.ts';
 import { resolveModel } from '../src/core/providers/catalog.ts';
+import { READ_ONLY_SYSTEM } from '../src/core/prompts.ts';
 import { authHeaders, missingKeyNote } from '../src/core/providers/http.ts';
 import { securityKeychain, systemKeychain } from '../src/core/providers/keychain.ts';
 import { SessionLog } from '../src/core/session/log.ts';
@@ -295,6 +296,9 @@ describe('cedia -p (offline, faux)', () => {
       expect(result).toMatchObject({ subtype: 'success', numTurns: 5, result: 'done', review: { model: 'faux/fallback', verdict: 'approve', fixed: false } });
       const review = logs(r.home).find((l) => head(l).role === 'review')!;
       expect(head(review).tools.map((t) => t.name)).toEqual(['read', 'grep', 'bash', 'sleep', 'ToolSearch', 'Monitor', 'web_fetch']);
+      // A reviewer's system prompt is for reading, not the writer's.
+      expect(head(review).system).toBe(READ_ONLY_SYSTEM);
+      expect(head(logs(r.home).find((l) => head(l).role === 'code')!).system).not.toBe(READ_ONLY_SYSTEM);
       // Read-only, but it may run the declared check to test what it suspects.
       expect(review.find((e) => e.kind === 'permission')).toMatchObject({ decision: 'allow', rule: 'allow:bash(test -s f.txt)' });
       const prompt = review.find((e): e is Extract<SessionEvent, { kind: 'user' }> => e.kind === 'user')!.text;
