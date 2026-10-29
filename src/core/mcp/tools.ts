@@ -15,7 +15,9 @@ import { McpClient, type McpCallResult, type McpServerConfig, type McpTool } fro
 const MAX_DESCRIPTION = 2_000;
 const MAX_NAME = 64;
 
-export type McpServers = { clients: McpClient[]; tools: ToolSpec[]; index: { name: string; description: string }[]; notes: string[]; close(): Promise<void> };
+// `tools` go in the tool list as they are; `deferred` run through mcp_call (in `tools` when there are any), and
+// `index` is their text for ToolSearch.
+export type McpServers = { clients: McpClient[]; tools: ToolSpec[]; deferred: ToolSpec[]; index: DeferredEntry[]; notes: string[]; close(): Promise<void> };
 
 const part = (s: string) => s.replace(/[^A-Za-z0-9_-]/g, '_');
 
@@ -85,33 +87,66 @@ export async function connectWithRetry(client: McpClient, remote: boolean, sleep
   }
 }
 
-// Definition budget: past this many characters of MCP tool definitions, tools after it go out stripped
-// (name, first line of description, open schema) with their full text searchable through ToolSearch, instead
-// of every tool of a big server riding each request's cached prefix (208 tools of one server were ~400k
-// characters a request). Under the budget everything stays full, exactly as before. The split walks servers
-// then tools, both already sorted, so the list stays fixed for the run; calls still resolve by name, so the
-// loop, the linter and the session shape need no change.
+// Definition budget: past this many characters of MCP tool definitions, the tools after it are kept out of the
+// tool list, their full text and schema searchable through ToolSearch, and the model runs one through a single
+// tool, mcp_call, instead of every tool of a big server riding each request's cached prefix. Stubs (name, first
+// line, open schema) went first: 208 tools of one server came down from ~400k characters to ~110k, still about
+// 41k tokens of a 46k first request on Haiku, since every definition costs tokens of its own however short it is.
+// Under the budget everything stays in the list, exactly as before. The split walks servers then tools, both
+// already sorted, so the list stays fixed for the run.
 export const MCP_DEF_BUDGET = 32_000;
-const DEFERRED_DESC = 160;
+export const MCP_CALL_TOOL = 'mcp_call';
 
 const defChars = (spec: ToolSpec) => JSON.stringify({ name: spec.name, description: spec.description, schema: spec.schema }).length;
 
-export function budgetMcpTools(specs: ToolSpec[]): { tools: ToolSpec[]; index: { name: string; description: string }[] } {
+export type DeferredEntry = { name: string; description: string; schema: JsonObject };
+
+export function budgetMcpTools(specs: ToolSpec[]): { tools: ToolSpec[]; deferred: ToolSpec[]; index: DeferredEntry[] } {
   let used = 0;
   const tools: ToolSpec[] = [];
-  const index: { name: string; description: string }[] = [];
+  const deferred: ToolSpec[] = [];
   for (const spec of specs) {
     const chars = defChars(spec);
     if (used + chars <= MCP_DEF_BUDGET) {
       used += chars;
       tools.push(spec);
-      continue;
-    }
-    const first = spec.description.split('\n')[0]!.slice(0, DEFERRED_DESC);
-    tools.push({ ...spec, description: `${first} (full usage: search ToolSearch for ${spec.name})`, schema: { type: 'object', additionalProperties: true } });
-    index.push({ name: spec.name, description: spec.description });
+    } else deferred.push(spec);
   }
-  return { tools, index };
+  return { tools, deferred, index: deferred.map(({ name, description, schema }) => ({ name, description, schema })) };
+}
+
+// Runs an MCP tool kept out of the tool list. The policy and the classifier judge the call as the tool it names,
+// with that tool's input, and hook matchers match it (ToolSpec.via), so `--allow mcp__github__search` and a read-only server mean
+// what they mean for a listed tool. `tools` is what this session may run: a reviewer's or sub-thread's holds the
+// read-only ones only.
+export function mcpCallTool(tools: ToolSpec[]): ToolSpec {
+  const byName = new Map(tools.map((t) => [t.name, t]));
+  const target = (input: JsonObject) => (typeof input.tool === 'string' ? byName.get(input.tool) : undefined);
+  const args = (input: JsonObject): JsonObject => (input.input && typeof input.input === 'object' && !Array.isArray(input.input) ? (input.input as JsonObject) : {});
+  return {
+    name: MCP_CALL_TOOL,
+    description: `Run an MCP server tool that is not in your tool list. Find it with ToolSearch first, which gives its exact name, what it does and its input schema. ${tools.length} tools of ${new Set(tools.map((t) => t.name.split('__')[1])).size} server(s) are reached this way.`,
+    schema: {
+      type: 'object',
+      properties: {
+        tool: { type: 'string', description: 'The exact name ToolSearch gave, mcp__<server>__<tool>' },
+        input: { type: 'object', description: "The tool's input, as its schema says" },
+      },
+      required: ['tool'],
+      additionalProperties: false,
+    },
+    effect: 'exec',
+    replay: 'unsafe',
+    via(input) {
+      const spec = target(input);
+      return spec ? { spec, input: args(input) } : undefined;
+    },
+    async run(input, ctx) {
+      const spec = target(input);
+      if (!spec) return { text: `no MCP tool named ${String(input.tool ?? '')} can run here; search ToolSearch for the exact name`, isError: true };
+      return spec.run(args(input), ctx);
+    },
+  };
 }
 
 // A resumed session's tool whose server is not connected now: it keeps the definition the session was cached
@@ -160,6 +195,6 @@ export async function startMcp(servers: Record<string, McpServerConfig>, sleep: 
     }
   }
   const clients = started.flatMap((s) => (s ? [s.client] : []));
-  const { tools: budgeted, index } = budgetMcpTools(tools);
-  return { clients, tools: budgeted, index, notes, close: async () => void (await Promise.all(clients.map((c) => c.close()))) };
+  const { tools: listed, deferred, index } = budgetMcpTools(tools);
+  return { clients, tools: listed, deferred, index, notes, close: async () => void (await Promise.all(clients.map((c) => c.close()))) };
 }

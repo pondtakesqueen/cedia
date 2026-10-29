@@ -29,15 +29,25 @@ export type ToolSpec = ToolDef & {
   // Puts an input a model sent in a known wrong shape into the schema's shape, naming each repair; undefined when
   // it needed none. The loop logs the repairs (input_repaired) and every later step sees the repaired input.
   repair?(input: JsonObject): { input: JsonObject; repairs: string[] } | undefined;
+  // A call that runs another tool (mcp_call runs an MCP tool kept out of the tool list): the tool it names and
+  // that tool's input, which the policy and the classifier judge in its place (and hook matchers match). Undefined
+  // when it names none.
+  via?(input: JsonObject): { spec: ToolSpec; input: JsonObject } | undefined;
   run(input: JsonObject, ctx: ToolCtx): Promise<ToolOutput>;
 };
+
+// The tool a call is judged as: the one it runs through `via`, else itself.
+export const resolveCall = (spec: ToolSpec, input: JsonObject): { spec: ToolSpec; input: JsonObject } => spec.via?.(input) ?? { spec, input };
 
 // Tool definitions as the model sees them, in a fixed order (cache rule 1).
 export function toolDefs(tools: ToolSpec[]): ToolDef[] {
   return tools.map(({ name, description, schema }) => ({ name, description, schema }));
 }
 
-export const effectOf = (spec: ToolSpec, input: JsonObject): ToolEffect => spec.effectOf?.(input) ?? spec.effect;
+export const effectOf = (spec: ToolSpec, input: JsonObject): ToolEffect => {
+  const r = spec.via?.(input);
+  return r ? effectOf(r.spec, r.input) : (spec.effectOf?.(input) ?? spec.effect);
+};
 
 export const MAX_OUTPUT_CHARS = 30_000;
 

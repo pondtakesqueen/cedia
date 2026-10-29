@@ -1,6 +1,7 @@
+import type { JsonObject } from '../types.ts';
 import type { ToolSpec } from './registry.ts';
 
-export type DeferredTool = { name: string; description: string; defer_loading?: boolean };
+export type DeferredTool = { name: string; description: string; schema?: JsonObject; defer_loading?: boolean };
 
 const deferred: DeferredTool[] = [];
 
@@ -28,7 +29,7 @@ function score(t: DeferredTool, q: string): number {
 
 export const toolSearchTool: ToolSpec = {
   name: 'ToolSearch',
-  description: 'Search tools by keyword or select:<name>. MCP server tools (mcp__*) live here: search what you want, then call the exact name.',
+  description: 'Search tools by keyword or select:<name>. MCP server tools (mcp__*) left out of your tool list live here: search what you want, then run it with mcp_call, giving the exact name and an input that follows its schema.',
   schema: {
     type: 'object',
     properties: {
