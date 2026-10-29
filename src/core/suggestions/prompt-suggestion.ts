@@ -1,7 +1,7 @@
 import { runPrompt } from '../loop/run.ts';
 import { resolveModel } from '../providers/catalog.ts';
 import { providerFor } from '../providers/index.ts';
-import { SessionLog } from '../session/log.ts';
+import { SessionLog, sessionPath } from '../session/log.ts';
 import { loadPrivacy } from '../config.ts';
 
 export type Suggestion = { text: string };
@@ -12,7 +12,9 @@ export async function generateSuggestion(opts: { cwd: string; model?: string; la
   const { readFileSync } = await import('node:fs');
   const model = resolveModel(opts.model ?? 'beam');
   const script = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
-  const log = SessionLog.create({ path: null });
+  // Logged like any session, so `cedia usage` counts what the suggestions cost.
+  const id = crypto.randomUUID();
+  const log = SessionLog.create({ id, path: sessionPath(opts.cwd, id) });
   const r = await runPrompt(
     {
       log,

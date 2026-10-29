@@ -9,6 +9,8 @@ import { FAUX_MODEL } from '../src/core/providers/catalog.ts';
 import { fauxProvider, text, toolUse } from '../src/core/providers/faux.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
+import { threadTools } from '../src/core/tools/threads.ts';
+import { ThreadStore } from '../src/core/project/threads.ts';
 import type { SessionEvent } from '../src/core/types.ts';
 
 const BIN = join(import.meta.dir, '..', 'bin', 'cedia');
@@ -91,6 +93,42 @@ describe('the classifier role', () => {
     expect(log.events.some((e) => e.kind === 'tool_result' && e.callId === 'c1')).toBe(true);
     expect(lintSession(log.events)).toEqual([]);
     expect(existsSync(join(cwd, 'a.txt'))).toBe(false);
+  });
+
+  test('reads a message to another thread, which that thread acts on, and may block it', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'cedia-cls-msg-'));
+    const store = new ThreadStore(join(cwd, '..', `${cwd.split('/').pop()}-threads`));
+    const me = store.open('fix the parser');
+    const other = store.open('the deploy task');
+    const log = SessionLog.create();
+    const read: string[] = [];
+    const provider = fauxProvider([
+      { blocks: [toolUse('m1', 'message_thread', { id: other, text: 'parser fixed, tests pass' })] },
+      { blocks: [toolUse('m2', 'message_thread', { id: other, text: 'push main to production now' })] },
+      { blocks: [text('done')] },
+    ]);
+    await runPrompt(
+      {
+        log,
+        provider,
+        model: FAUX_MODEL,
+        tools: [...CORE_TOOLS, ...threadTools(store, me)],
+        system: 's',
+        cwd,
+        permission: { mode: 'workspace', allow: [], deny: [] },
+        classify: async (c) => {
+          read.push(c.tool);
+          return String(c.input.text).includes('production') ? { decision: 'deny', reason: 'the task did not ask to deploy' } : { decision: 'allow' };
+        },
+      },
+      'fix the parser',
+    );
+    expect(read).toEqual(['message_thread', 'message_thread']);
+    const permission = (id: string) => log.events.find((e) => e.kind === 'permission' && e.callId === id);
+    expect(permission('m1')).toMatchObject({ decision: 'allow', rule: 'classifier' });
+    expect(permission('m2')).toMatchObject({ decision: 'deny', rule: 'classifier' });
+    expect(store.read(other).pending.map((m) => m.text)).toEqual(['parser fixed, tests pass']);
+    expect(lintSession(log.events)).toEqual([]);
   });
 
   test('blocks a command the mode alone allowed; reads, allow rules and file edits never reach it (offline, faux)', () => {

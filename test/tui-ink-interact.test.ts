@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import React from 'react';
 import { render } from 'ink';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { App } from '../src/clients/tui-ink/app.tsx';
@@ -199,6 +199,36 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       // prompt, padding, all behind its bar.
       expect(f).toContain('/actions');
       expect(f).toMatch(/▌\s*\n\s*▌ › \/\s*\n\s*▌\s*\n/);
+    } finally {
+      h.stop();
+    }
+  });
+
+  test('a on a denial notice adds its allow rule to the user settings, and the notice closes', async () => {
+    let home = '';
+    const h = start({
+      files: ['notes.txt'],
+      script: [
+        { blocks: [{ type: 'tool_use', id: 'c1', name: 'edit', input: { path: 'notes.txt', edits: [{ old_text: 'x', new_text: 'y' }] } }] },
+        { blocks: [{ type: 'text', text: 'blocked, carrying on' }] },
+      ],
+      before: (_dir, hm) => {
+        home = hm;
+      },
+    });
+    try {
+      await Bun.sleep(500);
+      h.write('change it');
+      await Bun.sleep(300);
+      h.write('\r');
+      for (let i = 0; i < 40 && !h.frame().includes('✓ Done'); i++) await Bun.sleep(250);
+      expect(h.frame()).toContain('allow edit(notes.txt) from your next message');
+      h.drain();
+      h.write('a');
+      for (let i = 0; i < 20 && !h.frame().includes('allowed edit(notes.txt)'); i++) await Bun.sleep(150);
+      expect(h.frame()).toContain('allowed edit(notes.txt) in ~/.cedia/settings.json');
+      expect(h.frame()).not.toContain('✗ Blocked');
+      expect(JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8')).permissions.allow).toEqual(['edit(notes.txt)']);
     } finally {
       h.stop();
     }

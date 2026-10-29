@@ -9,6 +9,8 @@
 - `sleep` ends on a stop; `Monitor` output is clipped like bash's (the whole in a file) and a watch holds at most 4M characters.
 - `cedia daemon` yields to the desktop's daemon while it holds `~/.cedia/desktop.lock` (`daemon.desktop-lock`).
 - `cedia threads send --image`: images on a thread message, shown with it at the next turn; a fork returns the forked run's images and `-p --image sha256:<hex>` shows a stored one again (`threads.send-images`).
+- `cedia context [--thread <id>] [--json]` and the TUI's `/context`: what fills a session's context now, by part: the system prompt, built-in tools and each MCP server's, AGENTS.md, memory, the skills list, and the history by kind, with the largest tool results and a bar of the window (`context`, `ContextBreakdown`).
+- Away recap: `cedia threads recap <id> [--since <time|30m>] [--json]`, and in the TUI "while you were away" when turns end three minutes or more after you last touched the terminal (held until focus comes back when it reports blur): the runs and how each ended, files changed, checks, cost, todo, messages from other threads and an open question. Read from the logs, no model call (`threads.recap`, `AwayRecap`).
 - `cedia inline-edit`: a selection and an instruction, answered with the new text and its patch; nothing is written (`inline-edit`).
 
 ## 1.0.0

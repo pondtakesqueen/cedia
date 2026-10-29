@@ -14,6 +14,8 @@ export type PermissionDialogProps = {
   input?: unknown;
   reason?: string;
   rule?: string;
+  // The allow rule the owner may add with `a` (core/safety/suggest.ts, allowRuleFor); absent when none would lift it.
+  allow?: string;
   // Where a blocked edit's file is looked up, for the lines its diff starts on.
   cwd?: string;
   // The rows the notice may take; its diff gives way first.
@@ -279,10 +281,11 @@ function rowLine(ln: RowLine, i: number, width: number, T: ThemeTokens): React.R
   );
 }
 
+export const allowNote = (allow: string) => `Press a to allow ${allow} from your next message (in ~/.cedia/settings.json).`;
 export const NOTICE_NOTE = 'This call did not run. The writer got the reason and carries on.';
 
 export function PermissionDialog(props: PermissionDialogProps): React.ReactElement {
-  const { tool, input, reason, rule, cwd, maxRows = 24 } = props;
+  const { tool, input, reason, rule, allow, cwd, maxRows = 24 } = props;
   const screenReader = useCediaScreenReader();
   const { stdout } = useStdout();
   const label = toolLabel(tool);
@@ -295,6 +298,7 @@ export function PermissionDialog(props: PermissionDialogProps): React.ReactEleme
         {blocks.map((block, i) => renderBlock(block, i, true, T))}
         {reason ? <Text>{reason}</Text> : null}
         {rule ? <Text>{`rule: ${rule}`}</Text> : null}
+        {allow ? <Text>{allowNote(allow)}</Text> : null}
         <Text>{DISMISS_NOTE}</Text>
       </Box>
     );
@@ -328,7 +332,10 @@ export function PermissionDialog(props: PermissionDialogProps): React.ReactEleme
       {fields.map((block, i) => renderBlock(block, i, false, T))}
       <Text> </Text>
       <Text color={T.textMuted}>{NOTICE_NOTE}</Text>
-      <Text><Text bold>esc</Text><Text color={T.textMuted}> close</Text></Text>
+      <Text>
+        {allow ? <><Text bold>a</Text><Text color={T.textMuted}> allow </Text><Text color={T.accent}>{allow}</Text><Text color={T.textMuted}> from your next message  </Text></> : null}
+        <Text bold>esc</Text><Text color={T.textMuted}> close</Text>
+      </Text>
     </Box>
   );
 }

@@ -384,3 +384,36 @@ describe('MCP reconnect', () => {
     expect(lintSession(log.events)).toEqual([]);
   });
 });
+
+describe('MCP presets', () => {
+  const BIN = join(import.meta.dir, '..', 'bin', 'cedia');
+  const cli = (home: string, args: string[], env: Record<string, string> = {}) => {
+    const base: Record<string, string | undefined> = { ...process.env, CEDIA_HOME: home };
+    delete base.TAVILY_API_KEY;
+    delete base.BRAVE_API_KEY;
+    const p = Bun.spawnSync([BIN, 'mcp', ...args], { env: { ...base, ...env } });
+    return { code: p.exitCode, out: p.stdout.toString(), err: p.stderr.toString() };
+  };
+
+  test('a search preset is added with its key named, never written, and read from the environment when a run starts it', () => {
+    const home = mkdtempSync(join(tmpdir(), 'cedia-mcp-preset-'));
+    const added = cli(home, ['add', 'search', '--preset', 'tavily']);
+    expect(added.code).toBe(0);
+    expect(added.out).toContain('TAVILY_API_KEY is not set here');
+    expect(cli(home, ['add', 'brave', '--preset', 'brave'], { BRAVE_API_KEY: 'from-env' }).out).not.toContain('is not set');
+    const written = readFileSync(join(home, 'settings.json'), 'utf8');
+    expect(written).not.toContain('from-env');
+    const saved = process.env.CEDIA_HOME;
+    process.env.CEDIA_HOME = home;
+    try {
+      const servers = loadMcp({ TAVILY_API_KEY: 'tv-key', BRAVE_API_KEY: 'bv-key' });
+      expect(servers.search).toMatchObject({ url: 'https://mcp.tavily.com/mcp/', headers: { Authorization: 'Bearer tv-key' }, readOnly: true });
+      expect(servers.brave).toMatchObject({ command: 'npx', args: ['-y', '@brave/brave-search-mcp-server'], env: { BRAVE_API_KEY: 'bv-key' }, readOnly: true });
+    } finally {
+      process.env.CEDIA_HOME = saved;
+    }
+    expect(cli(home, ['presets']).out).toContain('tavily');
+    expect(cli(home, ['add', 'x', '--preset', 'bing']).err).toContain('no MCP preset bing (known: tavily, brave)');
+    expect(cli(home, ['add', 'x', '--preset', 'tavily', '--url', 'https://e.com']).code).toBe(1);
+  });
+});

@@ -267,6 +267,33 @@ describe('ink key context', () => {
     expect(text).not.toContain('[Deny]');
   });
 
+  test('a notice with an allow rule offers `a` for it; the key is bound in the notice only', async () => {
+    const stdin = new PassThrough() as PassThrough & { isTTY: boolean; setRawMode: () => void; ref: () => void; unref: () => void };
+    stdin.isTTY = true;
+    stdin.setRawMode = () => {};
+    stdin.ref = () => {};
+    stdin.unref = () => {};
+    const stdout = new PassThrough() as PassThrough & { columns: number; rows: number; isTTY: boolean };
+    let out = '';
+    stdout.isTTY = true;
+    stdout.columns = 120;
+    stdout.rows = 24;
+    stdout.on('data', (d: Buffer) => { out += d.toString(); });
+    const { unmount } = render(React.createElement(PermissionDialog, { tool: 'bash', input: { command: 'bun test' }, reason: 'this session is read-only', rule: 'mode:read-only', allow: 'bash(bun test*)' }), {
+      stdin: stdin as unknown as NodeJS.ReadStream,
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      exitOnCtrlC: false,
+    });
+    await Bun.sleep(200);
+    unmount();
+    const text = out.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+    expect(text).toContain('a allow bash(bun test*) from your next message');
+    expect(text).toContain('esc close');
+    const bindings = resolveBindings([]);
+    expect(findCommand(bindings, 'a', 'Confirmation')).toBe('allowRule');
+    expect(findCommand(bindings, 'a', 'Chat')).toBeUndefined();
+  });
+
   test('a blocked edit is numbered from where its old text is in the file, and a write is all added lines', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cedia-notice-'));
     writeFileSync(join(dir, 'a.ts'), 'one\ntwo\nthree\nfour\n');

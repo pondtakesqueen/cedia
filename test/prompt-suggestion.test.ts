@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { projectKey } from '../src/core/session/log.ts';
 import { generateSuggestion } from '../src/core/suggestions/prompt-suggestion.ts';
 
 const realFetch = globalThis.fetch;
@@ -27,3 +28,17 @@ test('a prompt suggestion honours the zdr privacy level', async () => {
   await generateSuggestion({ cwd: process.env.CEDIA_HOME, model: 'beam', lastResult: 'the code' });
   expect(calls).toBeGreaterThan(0);
 }, 60_000);
+
+// A suggestion is a model request like any other: its session is on disk, so `cedia usage` counts it.
+test('a prompt suggestion is logged as a suggest session', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'cedia-sug-log-'));
+  process.env.CEDIA_HOME = home;
+  const script = join(home, 'script.json');
+  writeFileSync(script, JSON.stringify([{ blocks: [{ type: 'text', text: 'run the tests' }] }]));
+  process.env.CEDIA_FAUX_SCRIPT = script;
+  expect(await generateSuggestion({ cwd: home, model: 'faux', lastResult: 'the code' })).toEqual({ text: 'run the tests' });
+  const dir = join(home, 'sessions', projectKey(home));
+  const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+  expect(files).toHaveLength(1);
+  expect(JSON.parse(readFileSync(join(dir, files[0]!), 'utf8').split('\n')[0]!)).toMatchObject({ kind: 'session', role: 'suggest' });
+});

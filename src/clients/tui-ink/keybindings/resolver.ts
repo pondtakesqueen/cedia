@@ -69,6 +69,7 @@ export const DEFAULT_BINDINGS: Binding[] = [
   { key: 'down', command: 'selectDown', context: 'Autocomplete' },
   { key: 'escape', command: 'dismiss', context: 'Confirmation' },
   { key: 'enter', command: 'dismiss', context: 'Confirmation' },
+  { key: 'a', command: 'allowRule', context: 'Confirmation' },
   { key: 'escape', command: 'close', context: 'Select' },
   { key: 'enter', command: 'accept', context: 'Select' },
   { key: 'up', command: 'selectUp', context: 'Select' },

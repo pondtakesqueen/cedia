@@ -5,8 +5,10 @@ export function teamTool(store: TeamStore, threadId: string): ToolSpec {
   return {
     name: 'team',
     description: 'Manage a shared task list for a team of sub-threads: create/join teams, add/update/list tasks.',
-    effect: 'read',
-    replay: 'safe',
+    // The task list is shared state outside this session: a read-only session may list and get, not change it.
+    effect: 'write_workspace',
+    effectOf: (input) => (input.action === 'list' || input.action === 'get' ? 'read' : 'write_workspace'),
+    replay: 'unsafe',
     schema: {
       type: 'object',
       properties: {

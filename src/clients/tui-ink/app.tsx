@@ -25,8 +25,8 @@ import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { askedReviewPrompt, fixPrompt, parseVerdict, type ReviewSubject } from '../../core/trust/review.ts';
 import { decode, type CoreMessage } from '../../protocol/index.ts';
 import type { TuiArgs } from './args.ts';
-import type { SessionEvent } from '../../core/types.ts';
-import { cediaHome, loadPromptSuggestions, loadRoles, isMode, loadPolicy, loadPrivacy, readSettings } from '../../core/config.ts';
+import type { JsonObject, SessionEvent } from '../../core/types.ts';
+import { cediaHome, loadHandoffAt, loadPromptSuggestions, loadRoles, isMode, loadPolicy, loadPrivacy, readSettings } from '../../core/config.ts';
 import { modelLabel } from '../../core/providers/models.ts';
 import { versionInfo } from '../../protocol/version.ts';
 import { runStatusLineCommand } from './statusline.ts';
@@ -52,6 +52,7 @@ import { listMcp } from '../../core/mcp/manage.ts';
 import { threadChanges, commitFiles, prBlocked, currentBranch, defaultBranch, pushAndOpenPr, pullRequest } from '../../core/project/commit.ts';
 import { draftCommitMessage } from '../../core/project/draft.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
+import { allowRuleFor, applyAllowRules } from '../../core/safety/suggest.ts';
 import { restoreTurn } from '../../core/project/undo.ts';
 import { rewindThread, rewoundText, runLines } from '../../core/project/rewind.ts';
 import { forkThread } from '../../core/project/fork.ts';
@@ -61,6 +62,9 @@ import { join } from 'node:path';
 import { readFileSync as fsRead, writeFileSync as fsWrite, existsSync as fsExists, readdirSync as fsReaddir, statSync as fsStat, unlinkSync as fsUnlink, mkdirSync as fsMkdir } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { loadProjectUsage } from './usage-summary.ts';
+import { awayText, presentIn, recapWhen, type PendingRecap } from './away.ts';
+import { contextBreakdown, formatContext, writerSessionOf } from '../../core/context/breakdown.ts';
+import { readEventsLenient } from '../../core/session/usage.ts';
 import type { VimMode } from './vim-input.tsx';
 
 // A row of the transcript. text is what shows (search, selection and the row budget count it); a row with lines
@@ -82,7 +86,7 @@ const INK_COMMANDS: { name: string; description: string }[] = [
   { name: 'clear', description: 'clear the chat view' },
   { name: 'quit', description: 'leave' },
   { name: 'cost', description: 'spend, context tokens, rate' },
-  { name: 'context', description: 'context window usage' },
+  { name: 'context', description: 'what fills the context: prompt, tools, MCP, history' },
   { name: 'status', description: 'the status line' },
   { name: 'transcript', description: 'show the full transcript' },
   { name: 'search', description: 'search the chat transcript' },
@@ -434,7 +438,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     const t = setInterval(() => setSubTick((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, [subView !== null]);
-  const [permissionDialog, setPermissionDialog] = useState<{ tool: string; input?: unknown; reason?: string; rule?: string } | null>(null);
+  const [permissionDialog, setPermissionDialog] = useState<{ tool: string; input?: unknown; reason?: string; rule?: string; allow?: string } | null>(null);
   const toolInputByCallRef = useRef<Record<string, unknown>>({});
   const toolStartByCallRef = useRef<Record<string, number>>({});
   const toolNameByCallRef = useRef<Record<string, string>>({});
@@ -511,7 +515,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       for (const f of e.changed) turnRef.current.files.add(f);
     } else if (e.kind === 'permission' && e.decision === 'deny') {
       const input = toolInputByCallRef.current[e.callId];
-      setPermissionDialog({ tool: e.tool, input, reason: e.reason, rule: e.rule });
+      // The rule the owner may add from the notice, when only a missing allow rule stopped the call.
+      const allow = input && typeof input === 'object' && !Array.isArray(input) ? allowRuleFor(e.tool, input as JsonObject, e.rule, args.cwd) : undefined;
+      setPermissionDialog({ tool: e.tool, input, reason: e.reason, rule: e.rule, ...(allow ? { allow } : {}) });
       push(rowMsg(deniedRow(e.tool, input, e.rule, e.reason, rowWidth()), { status: 'error', callId: e.callId }));
     }
   };
@@ -630,9 +636,20 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       case 'cost':
         say(`spent $${spent.toFixed(4)} · context ${context} tokens · rate ${lastRate > 0 ? `${Math.round(lastRate)} tok/s` : '—'}`);
         return;
-      case 'context':
+      case 'context': {
+        // What fills the thread's writer session now, from its log (core/context/breakdown.ts).
+        const s = thread && store.has(thread) ? writerSessionOf(store.read(thread), args.cwd, cediaHome()) : undefined;
+        if (s && fsExists(s.path)) {
+          try {
+            const events = readEventsLenient(fsRead(s.path, 'utf8'));
+            const spec = events[0]?.kind === 'session' ? resolveModel(events[0].model) : undefined;
+            say(formatContext(contextBreakdown(events, { sessionId: s.sessionId, ...(spec ? { handoffAt: loadHandoffAt(spec) } : {}) })));
+            return;
+          } catch {}
+        }
         say(`context: ${context} tokens${context ? ` (~${Math.round(context / 1000)}k)` : ''}`);
         return;
+      }
       case 'status':
         say(`${model ?? 'auto'} · ${permission ?? 'auto'} · ${thread ?? 'new thread'} · ${running ? 'working' : 'idle'}`);
         return;
@@ -1154,6 +1171,21 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // queued: a prompt that waited for the last turn; what the person is typing now stays in the prompt.
   // Whether this terminal has focus, from its focus reports (notify.ts); a turn that ends unseen says so.
   const focusRef = useRef<Focus>('unknown');
+  // When the owner last showed they were here (away.ts), and a recap held for their return.
+  const seenRef = useRef(Date.now());
+  const recapRef = useRef<PendingRecap | undefined>(undefined);
+  const ownerHereRef = useRef<() => void>(() => {});
+  const showRecap = (p: PendingRecap) => {
+    const text = awayText(store, p, args.cwd, cediaHome());
+    if (text) push({ role: 'system', text });
+  };
+  const ownerHere = () => {
+    seenRef.current = Date.now();
+    const p = recapRef.current;
+    recapRef.current = undefined;
+    if (p) showRecap(p);
+  };
+  ownerHereRef.current = ownerHere;
   // `!` commands run since the last prompt went to the model (shell.ts): their output goes with the next one.
   const shellRunsRef = useRef<ShellRun[]>([]);
   // The terminal Ink draws on (process.stdout outside tests): escapes that are not drawing go to it as well.
@@ -1338,6 +1370,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     stopRef.current = stop;
     const takeShellNote = () => { const note = shellNote(shellRunsRef.current); shellRunsRef.current = []; return note; };
     let resultCost = 0;
+    let turnThread = thread;
     const turnStart = Date.now();
     turnStartRef.current = turnStart;
     try {
@@ -1346,6 +1379,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         handleChunk,
       );
       setThread(result.thread ?? thread);
+      turnThread = result.thread ?? thread;
       if (typeof result.peakContext === 'number') setContext(result.peakContext);
       resultCost = result.costUsd ?? 0;
       setSpent((prev) => prev + resultCost);
@@ -1379,6 +1413,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         lastCostThresholdRef.current = Math.floor(newSpent);
       }
       lastActivityRef.current = Date.now();
+      // The last of the turns the owner left running: a recap of them all, if they were away (away.ts).
+      if (!queueRef.current.length && !stop.signal.aborted && turnThread) {
+        const when = recapWhen(seenRef.current, Date.now(), focusRef.current);
+        const p = { thread: turnThread, since: seenRef.current };
+        if (when === 'now') showRecap(p);
+        else if (when === 'on-return') recapRef.current = p;
+      }
       drainQueue(stop.signal.aborted);
     }
   }, [args, running, thread, handleCommand, goal, picker, closeDialog, permission, model, effort, effModel]);
@@ -1471,7 +1512,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         push({ role: 'system', text: 'copied selection' });
       }
     };
-    const onFocus = (data: Buffer) => { const f = focusFrom(data.toString()); if (f) focusRef.current = f; };
+    const onFocus = (data: Buffer) => {
+      const text = data.toString();
+      const f = focusFrom(text);
+      if (f) focusRef.current = f;
+      if (presentIn(text)) ownerHereRef.current();
+    };
     stdin.on('data', handler);
     stdin.on('data', onFocus);
     process.stdout.write('\x1b[?1000h\x1b[?1006h');
@@ -1813,6 +1859,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       })();
       if (ctx === 'Confirmation') {
         if (overlayCmd === 'dismiss') setPermissionDialog(null);
+        // The run goes on without it (SPEC: cedia never stops to ask); the rule holds from the next message.
+        if (overlayCmd === 'allowRule' && permissionDialog?.allow) {
+          const rule = permissionDialog.allow;
+          setPermissionDialog(null);
+          try {
+            const { added } = applyAllowRules(cediaHome(), [rule]);
+            push({ role: 'system', text: added.length ? `allowed ${rule} in ~/.cedia/settings.json; it holds from your next message` : `${rule} was already allowed; it holds from your next message` });
+          } catch (err) {
+            push({ role: 'system', text: `could not add ${rule}: ${(err as Error).message}`, tone: 'red' });
+          }
+        }
         return;
       }
       if (ctx === 'Select' && picker) {
@@ -2387,7 +2444,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           })()
         ) : null}
         {permissionDialog ? (
-          <PermissionDialog tool={permissionDialog.tool} input={permissionDialog.input} reason={permissionDialog.reason} rule={permissionDialog.rule} cwd={args.cwd} maxRows={overlayBudget} />
+          <PermissionDialog tool={permissionDialog.tool} input={permissionDialog.input} reason={permissionDialog.reason} rule={permissionDialog.rule} {...(permissionDialog.allow ? { allow: permissionDialog.allow } : {})} cwd={args.cwd} maxRows={overlayBudget} />
         ) : null}
         {settingsOpen ? (
           <Box flexDirection="column" paddingX={1}>

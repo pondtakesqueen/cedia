@@ -31,6 +31,12 @@
     "UsageReport": {
       "$ref": "#/definitions/UsageReport"
     },
+    "ContextBreakdown": {
+      "$ref": "#/definitions/ContextBreakdown"
+    },
+    "AwayRecap": {
+      "$ref": "#/definitions/AwayRecap"
+    },
     "Restored": {
       "$ref": "#/definitions/Restored"
     },
@@ -198,6 +204,133 @@
         "quota"
       ]
     },
+    "AwayRecap": {
+      "type": "object",
+      "properties": {
+        "thread": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "since": {
+          "type": "string"
+        },
+        "until": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/ThreadState"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RecapRun"
+          }
+        },
+        "costUsd": {
+          "type": "number"
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "passed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "command",
+              "passed"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "unverified": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subthreads": {
+          "type": "number"
+        },
+        "todo": {
+          "type": "object",
+          "properties": {
+            "done": {
+              "type": "number"
+            },
+            "total": {
+              "type": "number"
+            },
+            "doing": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "done",
+            "total"
+          ],
+          "additionalProperties": false
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "at": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "from",
+              "at",
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "question": {
+          "$ref": "#/definitions/Question"
+        }
+      },
+      "required": [
+        "thread",
+        "title",
+        "since",
+        "until",
+        "state",
+        "running",
+        "runs",
+        "costUsd",
+        "changed",
+        "checks",
+        "unverified",
+        "subthreads",
+        "messages"
+      ],
+      "additionalProperties": false
+    },
     "CacheMiss": {
       "type": "object",
       "properties": {
@@ -273,6 +406,8 @@
         "media-route",
         "code-review",
         "complete",
+        "context",
+        "threads.recap",
         "inline-edit"
       ]
     },
@@ -656,6 +791,101 @@
           "additionalProperties": false
         }
       ]
+    },
+    "ContextBreakdown": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "window": {
+          "type": "number"
+        },
+        "handoffAt": {
+          "type": "number"
+        },
+        "tokens": {
+          "type": "number"
+        },
+        "measured": {
+          "type": "boolean"
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ContextPart"
+          }
+        },
+        "largest": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "callId": {
+                "type": "string"
+              },
+              "tool": {
+                "type": "string"
+              },
+              "tokens": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "callId",
+              "tool",
+              "tokens"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "model",
+        "tokens",
+        "measured",
+        "parts",
+        "largest"
+      ],
+      "additionalProperties": false
+    },
+    "ContextPart": {
+      "type": "object",
+      "properties": {
+        "part": {
+          "type": "string"
+        },
+        "group": {
+          "type": "string",
+          "enum": [
+            "fixed",
+            "conversation"
+          ]
+        },
+        "chars": {
+          "type": "number"
+        },
+        "tokens": {
+          "type": "number"
+        },
+        "share": {
+          "type": "number"
+        },
+        "count": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "part",
+        "group",
+        "chars",
+        "tokens",
+        "share"
+      ],
+      "additionalProperties": false
     },
     "CoreMessage": {
       "anyOf": [
@@ -1689,6 +1919,34 @@
         "up",
         "down"
       ]
+    },
+    "RecapRun": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "subtype": {
+          "$ref": "#/definitions/ResultSubtype"
+        },
+        "result": {
+          "type": "string"
+        },
+        "wallMs": {
+          "type": "number"
+        },
+        "costUsd": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "at",
+        "prompt"
+      ],
+      "additionalProperties": false
     },
     "Restored": {
       "type": "object",
