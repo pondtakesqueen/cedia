@@ -832,9 +832,11 @@ function askedIn(results: SessionEvent[], calls: Extract<AssistantBlock, { type:
 
 // A guard's denial is final; a command cedia could not read can be rewritten, since nothing was refused.
 function deniedText(rule: string, reason: string): string {
+  // Not a refusal: the pass is on record, so there is nothing to report or work around.
+  if (rule === 'repeat-check') return `not run: ${reason}`;
   if (rule.startsWith('shell:'))
     return `not run: cedia could not read this command (${reason}). Rewrite it: put file contents in the write tool instead of a shell string, or simplify the quoting.`;
-  return `denied (${rule}): ${reason}. Do not retry it another way; go on with the rest of the task and tell the user what you needed.`;
+  return `denied (${rule}): ${reason.replace(/\.$/, '')}. Do not retry it another way; go on with the rest of the task and tell the user what you needed.`;
 }
 
 // The policy decides each call first; a denied call gets a denied result and no intent.

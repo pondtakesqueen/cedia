@@ -204,7 +204,9 @@ export const bashTool: ToolSpec = {
   effectOf: (input) => (checkReadOnly(String(input.command ?? '')).ok ? 'read' : 'exec'),
   async run(input, ctx) {
     const command = String(input.command ?? '');
-    const timeout = Math.min(Number(input.timeout_ms ?? 120_000), 600_000);
+    // A timeout that is not a positive number (a string such as "5m", 0) would end the command at once.
+    const asked = Number(input.timeout_ms);
+    const timeout = Math.min(Number.isFinite(asked) && asked > 0 ? asked : 120_000, 600_000);
     const script = ctx.wrap ? await ctx.wrap(command) : command;
     // Its own process group, so a timeout or an abort ends what the command started too, not only bash.
     const started = Date.now();

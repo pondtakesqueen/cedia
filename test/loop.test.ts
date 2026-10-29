@@ -691,6 +691,9 @@ describe('repeat checks', () => {
     expect(results[0]).toMatchObject({ status: 'completed' });
     expect(results[1]).toMatchObject({ status: 'denied' });
     expect(results[1]!.output.text).toContain('already passed with nothing written since');
+    // A skipped repeat is not a refusal the report should mention.
+    expect(results[1]!.output.text).toStartWith('not run: ');
+    expect(results[1]!.output.text).not.toContain('tell the user');
     expect(of(log.events, 'permission').filter((p) => p.decision === 'deny').map((p) => p.rule)).toEqual(['repeat-check']);
     expectPaired(log.events);
   });

@@ -109,6 +109,13 @@ describe('running a command', () => {
     expect(alive(pid)).toBe(false);
   });
 
+  test('a timeout that is not a positive number takes the default instead of ending the command at once', async () => {
+    for (const timeout_ms of ['5m', 0, -1]) {
+      const r = await bashTool.run({ command: 'sleep 0.2; echo ran', timeout_ms }, { cwd, signal: new AbortController().signal });
+      expect([timeout_ms, r.text]).toEqual([timeout_ms, 'ran\n\n[exit 0]']);
+    }
+  });
+
   test('an abort ends it too', async () => {
     const ac = new AbortController();
     setTimeout(() => ac.abort(), 200);
