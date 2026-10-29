@@ -25,7 +25,7 @@ import { CORE_TOOLS } from '../../core/tools/index.ts';
 import { askedReviewPrompt, fixPrompt, parseVerdict, type ReviewSubject } from '../../core/trust/review.ts';
 import { decode, type CoreMessage } from '../../protocol/index.ts';
 import type { TuiArgs } from './args.ts';
-import type { SessionEvent } from '../../core/types.ts';
+import type { JsonObject, SessionEvent } from '../../core/types.ts';
 import { cediaHome, loadPromptSuggestions, loadRoles, isMode, loadPolicy, loadPrivacy, readSettings } from '../../core/config.ts';
 import { modelLabel } from '../../core/providers/models.ts';
 import { versionInfo } from '../../protocol/version.ts';
@@ -52,6 +52,7 @@ import { listMcp } from '../../core/mcp/manage.ts';
 import { threadChanges, commitFiles, prBlocked, currentBranch, defaultBranch, pushAndOpenPr, pullRequest } from '../../core/project/commit.ts';
 import { draftCommitMessage } from '../../core/project/draft.ts';
 import { workspaceSnapshots } from '../../core/safety/snapshot.ts';
+import { allowRuleFor, applyAllowRules } from '../../core/safety/suggest.ts';
 import { restoreTurn } from '../../core/project/undo.ts';
 import { rewindThread, rewoundText, runLines } from '../../core/project/rewind.ts';
 import { forkThread } from '../../core/project/fork.ts';
@@ -434,7 +435,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     const t = setInterval(() => setSubTick((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, [subView !== null]);
-  const [permissionDialog, setPermissionDialog] = useState<{ tool: string; input?: unknown; reason?: string; rule?: string } | null>(null);
+  const [permissionDialog, setPermissionDialog] = useState<{ tool: string; input?: unknown; reason?: string; rule?: string; allow?: string } | null>(null);
   const toolInputByCallRef = useRef<Record<string, unknown>>({});
   const toolStartByCallRef = useRef<Record<string, number>>({});
   const toolNameByCallRef = useRef<Record<string, string>>({});
@@ -511,7 +512,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       for (const f of e.changed) turnRef.current.files.add(f);
     } else if (e.kind === 'permission' && e.decision === 'deny') {
       const input = toolInputByCallRef.current[e.callId];
-      setPermissionDialog({ tool: e.tool, input, reason: e.reason, rule: e.rule });
+      // The rule the owner may add from the notice, when only a missing allow rule stopped the call.
+      const allow = input && typeof input === 'object' && !Array.isArray(input) ? allowRuleFor(e.tool, input as JsonObject, e.rule, args.cwd) : undefined;
+      setPermissionDialog({ tool: e.tool, input, reason: e.reason, rule: e.rule, ...(allow ? { allow } : {}) });
       push(rowMsg(deniedRow(e.tool, input, e.rule, e.reason, rowWidth()), { status: 'error', callId: e.callId }));
     }
   };
@@ -1813,6 +1816,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       })();
       if (ctx === 'Confirmation') {
         if (overlayCmd === 'dismiss') setPermissionDialog(null);
+        // The run goes on without it (SPEC: cedia never stops to ask); the rule holds from the next message.
+        if (overlayCmd === 'allowRule' && permissionDialog?.allow) {
+          const rule = permissionDialog.allow;
+          setPermissionDialog(null);
+          try {
+            const { added } = applyAllowRules(cediaHome(), [rule]);
+            push({ role: 'system', text: added.length ? `allowed ${rule} in ~/.cedia/settings.json; it holds from your next message` : `${rule} was already allowed; it holds from your next message` });
+          } catch (err) {
+            push({ role: 'system', text: `could not add ${rule}: ${(err as Error).message}`, tone: 'red' });
+          }
+        }
         return;
       }
       if (ctx === 'Select' && picker) {
@@ -2387,7 +2401,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           })()
         ) : null}
         {permissionDialog ? (
-          <PermissionDialog tool={permissionDialog.tool} input={permissionDialog.input} reason={permissionDialog.reason} rule={permissionDialog.rule} cwd={args.cwd} maxRows={overlayBudget} />
+          <PermissionDialog tool={permissionDialog.tool} input={permissionDialog.input} reason={permissionDialog.reason} rule={permissionDialog.rule} {...(permissionDialog.allow ? { allow: permissionDialog.allow } : {})} cwd={args.cwd} maxRows={overlayBudget} />
         ) : null}
         {settingsOpen ? (
           <Box flexDirection="column" paddingX={1}>
