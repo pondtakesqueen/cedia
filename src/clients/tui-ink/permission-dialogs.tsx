@@ -1,14 +1,23 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { readFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
+import { Box, Text, useStdout } from 'ink';
 import { useCediaScreenReader } from './a11y.ts';
-import { inkTheme } from './theme-tokens.ts';
+import { inkTheme, PANEL_BAR, type ThemeTokens } from './theme-tokens.ts';
 import { cediaHome } from '../../core/config.ts';
+import { diffRows, hunkOf, langOf, type Hunk } from './diff-rows.ts';
+import { spanProps } from './markdown.tsx';
+import { rowProps, type RowBand, type RowLine } from './rows.ts';
 
 export type PermissionDialogProps = {
   tool: string;
   input?: unknown;
   reason?: string;
   rule?: string;
+  // Where a blocked edit's file is looked up, for the lines its diff starts on.
+  cwd?: string;
+  // The rows the notice may take; its diff gives way first.
+  maxRows?: number;
 };
 
 export function toolLabel(tool: string): string {
@@ -227,19 +236,102 @@ function renderBlock(
   );
 }
 
+// The rows a blocked edit or write would have changed: an edit's hunks, numbered from where its old text is in
+// the file now when it is found there, and a write's content as added lines.
+export function noticeHunks(tool: string, input: unknown, cwd?: string): { hunks: Hunk[]; lang: string } | undefined {
+  const label = toolLabel(tool);
+  const record = asRecord(input);
+  const path = textOf(record?.path) ?? '';
+  if (!record || (label !== 'edit' && label !== 'write')) return undefined;
+  if (label === 'write') {
+    if (typeof record.content !== 'string') return undefined;
+    return { hunks: [record.content.split('\n').map((text, k) => ({ sign: '+' as const, new: k + 1, text }))], lang: langOf(path) };
+  }
+  let file: string | undefined;
+  try { file = path && cwd ? readFileSync(isAbsolute(path) ? path : join(cwd, path), 'utf8').replace(/\r\n/g, '\n') : undefined; } catch {}
+  const edits = Array.isArray(record.edits) ? record.edits : [record];
+  const hunks: Hunk[] = [];
+  for (const e of edits) {
+    const r = asRecord(e);
+    const oldText = textOf(r?.old_text);
+    const newText = textOf(r?.new_text);
+    if (oldText === undefined || newText === undefined) continue;
+    const at = file && oldText ? file.indexOf(oldText) : -1;
+    const from = at >= 0 ? file!.slice(0, at).split('\n').length : undefined;
+    const h = hunkOf(oldText, newText, from);
+    if (h.added || h.removed) hunks.push(h.hunk);
+  }
+  return hunks.length ? { hunks, lang: langOf(path) } : undefined;
+}
+
+const bandColor = (band: RowBand, T: ThemeTokens): string =>
+  band === 'add' ? T.diffAddedBg : band === 'del' ? T.diffRemovedBg : band === 'addWord' ? T.diffAddedWordBg : T.diffRemovedWordBg;
+
+function rowLine(ln: RowLine, i: number, width: number, T: ThemeTokens): React.ReactNode {
+  const used = ln.spans.reduce((n, sp) => n + sp.text.length, 0);
+  return (
+    <Text key={`d-${i}`} wrap="truncate" color={T.text} backgroundColor={ln.band ? bandColor(ln.band, T) : undefined}>
+      {ln.spans.map((sp, si) => (
+        <Text key={si} {...(rowProps(sp.style, T) ?? spanProps(sp.style as Parameters<typeof spanProps>[0], T))} backgroundColor={sp.bg ? bandColor(sp.bg, T) : undefined}>{sp.text}</Text>
+      ))}
+      {ln.band ? ' '.repeat(Math.max(0, width - used)) : null}
+    </Text>
+  );
+}
+
+export const NOTICE_NOTE = 'This call did not run. The writer got the reason and carries on.';
+
 export function PermissionDialog(props: PermissionDialogProps): React.ReactElement {
-  const { tool, input, reason, rule } = props;
+  const { tool, input, reason, rule, cwd, maxRows = 24 } = props;
   const screenReader = useCediaScreenReader();
+  const { stdout } = useStdout();
   const label = toolLabel(tool);
   const T = inkTheme(cediaHome()).tokens;
   const blocks = noticeBlocks(tool, input);
-  return React.createElement(
-    Box,
-    { flexDirection: 'column', borderStyle: screenReader ? undefined : 'round', borderColor: screenReader ? undefined : T.error, paddingX: 1, marginX: screenReader ? 0 : 1 },
-    React.createElement(Text, { bold: !screenReader, color: screenReader ? undefined : T.error }, `${screenReader ? '' : '✗ '}${label} denied`),
-    ...blocks.map((block, i) => renderBlock(block, i, screenReader, T)),
-    reason ? React.createElement(Text, { color: screenReader ? undefined : T.error }, reason) : null,
-    rule ? React.createElement(Text, { dimColor: !screenReader }, `rule: ${rule}`) : null,
-    React.createElement(Text, { dimColor: !screenReader }, DISMISS_NOTE),
+  if (screenReader) {
+    return (
+      <Box flexDirection="column" paddingX={1}>
+        <Text>{`${label} denied`}</Text>
+        {blocks.map((block, i) => renderBlock(block, i, true, T))}
+        {reason ? <Text>{reason}</Text> : null}
+        {rule ? <Text>{`rule: ${rule}`}</Text> : null}
+        <Text>{DISMISS_NOTE}</Text>
+      </Box>
+    );
+  }
+  // A panel like the prompt's, its bar red: what was blocked and by which rule, the diff it would have made, and
+  // how to close it. Inside: the screen less the margin, the bar and the padding.
+  const width = Math.max(20, ((stdout as NodeJS.WriteStream | undefined)?.columns ?? 80) - 5);
+  const diff = noticeHunks(tool, input, cwd);
+  // The head, the rule, the note, the key and the blank and padding rows around them take 9.
+  const rows = diff ? diffRows(diff.hunks, width, diff.lang, 0, Math.max(2, Math.min(12, maxRows - 9))) : undefined;
+  const target = textOf(asRecord(input)?.path) ?? textOf(asRecord(input)?.command) ?? textOf(asRecord(input)?.url);
+  // Without a diff, the fields say what the call was.
+  const fields = rows ? [] : blocks;
+  return (
+    <Box flexDirection="column" borderStyle={PANEL_BAR} borderTop={false} borderRight={false} borderBottom={false} borderLeftColor={T.error} backgroundColor={T.backgroundElement} paddingX={1} paddingY={1} marginX={1}>
+      <Text wrap="truncate">
+        <Text color={T.error} bold>✗ Blocked  </Text>
+        <Text bold>{toolDisplayName(label)}</Text>
+        {target ? <Text>{`  ${target.split('\n')[0]}`}</Text> : null}
+      </Text>
+      {rule || reason ? (
+        <Text wrap="wrap">
+          <Text color={T.textMuted}>rule  </Text>
+          {rule ? <Text color={T.accent}>{rule}</Text> : null}
+          {reason ? <Text color={T.textMuted}>{`${rule ? ' · ' : ''}${reason}`}</Text> : null}
+        </Text>
+      ) : null}
+      {rows || fields.length ? <Text> </Text> : null}
+      {rows ? rows.lines.map((ln, i) => rowLine(ln, i, width, T)) : null}
+      {rows?.hidden ? <Text color={T.textFaint}>{`… ${rows.hidden} more line${rows.hidden === 1 ? '' : 's'}`}</Text> : null}
+      {fields.map((block, i) => renderBlock(block, i, false, T))}
+      <Text> </Text>
+      <Text color={T.textMuted}>{NOTICE_NOTE}</Text>
+      <Text><Text bold>esc</Text><Text color={T.textMuted}> close</Text></Text>
+    </Box>
   );
 }
+
+const DISPLAY: Record<string, string> = { bash: 'Bash', edit: 'Edit', write: 'Write', read: 'Read', grep: 'Grep', glob: 'Glob', web_fetch: 'Fetch', browser: 'Browser', skill: 'Skill' };
+const toolDisplayName = (label: string) => DISPLAY[label] ?? label;

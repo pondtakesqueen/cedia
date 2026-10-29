@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DISMISS_NOTE, noticeBlocks, noticeLines, PermissionDialog } from '../src/clients/tui-ink/permission-dialogs.tsx';
+import { DISMISS_NOTE, NOTICE_NOTE, noticeBlocks, noticeHunks, noticeLines, PermissionDialog } from '../src/clients/tui-ink/permission-dialogs.tsx';
 import { completedNames, isComplete, reconcileOnboarding, saveOnboarding } from '../src/clients/tui-ink/onboarding.ts';
 import { activeContext, findCommand, IDLE_OVERLAY, resolveBindings, vimInputGate } from '../src/clients/tui-ink/keybindings/resolver.ts';
 import { keybindingsPath, watchKeybindings } from '../src/clients/tui-ink/keybindings/loader.ts';
@@ -256,13 +256,26 @@ describe('ink key context', () => {
     await Bun.sleep(200);
     unmount();
     const text = out.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
-    expect(text).toContain('edit denied');
-    expect(text).toContain('path: a.ts');
+    // A panel: what was blocked, by which rule, the diff it would have made and how to close it.
+    expect(text).toContain('✗ Blocked  Edit  a.ts');
+    expect(text).toContain('rule  read-only · blocked');
     expect(text).toContain('- foo');
     expect(text).toContain('+ bar');
-    expect(text).toContain(DISMISS_NOTE);
+    expect(text).toContain(NOTICE_NOTE);
+    expect(text).toContain('esc close');
     expect(text).not.toContain('[Allow]');
     expect(text).not.toContain('[Deny]');
+  });
+
+  test('a blocked edit is numbered from where its old text is in the file, and a write is all added lines', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-notice-'));
+    writeFileSync(join(dir, 'a.ts'), 'one\ntwo\nthree\nfour\n');
+    const edit = noticeHunks('edit', { path: 'a.ts', edits: [{ old_text: 'two\nthree', new_text: 'two\n3' }] }, dir);
+    expect(edit?.hunks).toEqual([[{ sign: ' ', old: 2, new: 2, text: 'two' }, { sign: '-', old: 3, text: 'three' }, { sign: '+', new: 3, text: '3' }]]);
+    // Not in the file (or no file): no numbers.
+    expect(noticeHunks('edit', { path: 'gone.ts', old_text: 'x', new_text: 'y' }, dir)?.hunks[0]?.[0]).toEqual({ sign: '-', old: undefined, text: 'x' });
+    expect(noticeHunks('write', { path: 'n.py', content: 'a\nb' })).toEqual({ hunks: [[{ sign: '+', new: 1, text: 'a' }, { sign: '+', new: 2, text: 'b' }]], lang: 'py' });
+    expect(noticeHunks('bash', { command: 'ls' })).toBeUndefined();
   });
 
   test('onboarding is complete only when every step is recorded', () => {

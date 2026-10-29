@@ -35,6 +35,9 @@ export type ThemeTokens = {
   diffRemoved: string;
   diffAddedBg: string;
   diffRemovedBg: string;
+  // The characters that changed in an added or removed line: a step stronger than its band.
+  diffAddedWordBg: string;
+  diffRemovedWordBg: string;
   diffContext: string;
   diffHunkHeader: string;
   // Thinking and plan mode.
@@ -75,6 +78,8 @@ const dark: ThemeTokens = {
   diffRemoved: '#e67e80',
   diffAddedBg: '#1c3326',
   diffRemovedBg: '#3a2227',
+  diffAddedWordBg: '#2d5a3d',
+  diffRemovedWordBg: '#6b2f38',
   diffContext: '#7d8590',
   diffHunkHeader: '#5ec4b6',
   thinking: '#a69be8',
@@ -114,6 +119,8 @@ const light: ThemeTokens = {
   diffRemoved: '#c4414a',
   diffAddedBg: '#e1f2e4',
   diffRemovedBg: '#f8e1e3',
+  diffAddedWordBg: '#b5e3bf',
+  diffRemovedWordBg: '#f3b9c0',
   diffContext: '#6a717c',
   diffHunkHeader: '#13877a',
   thinking: '#6b5bc4',
@@ -129,13 +136,16 @@ const light: ThemeTokens = {
 
 export const INK_THEMES: Record<ThemeName, ThemeTokens> = { dark, light };
 
+// A panel's border: a bar on its left only, drawn in the color the panel gives it (the prompt, a blocked call).
+export const PANEL_BAR = { topLeft: '', top: '', topRight: '', right: '', bottomRight: '', bottom: '', bottomLeft: '', left: '▌' };
+
 // A terminal with 256 colors gets each hex mapped to a palette entry, and the faint tints of the bands above
 // all land on the same mid grey. There the bands take values that map to chosen entries instead: greys exactly,
 // and #003300 / #330000 / #003333, which the mapping (a linear 0-5 scale per channel) sends to entries 22, 52
-// and 23 (#005f00, #5f0000, #005f5f).
+// and 23 (#005f00, #5f0000, #005f5f); the changed characters' #006600 / #660000 go to 28 and 88 (#008700, #870000).
 const BANDS_256: Record<ThemeName, Partial<ThemeTokens>> = {
-  dark: { background: '#1c1c1c', backgroundElement: '#262626', userRowBg: '#262626', selectedBg: '#303030', diffAddedBg: '#003300', diffRemovedBg: '#330000', selectionBg: '#003333' },
-  light: { background: '#ffffff', backgroundElement: '#eeeeee', userRowBg: '#eeeeee', selectedBg: '#dadada', diffAddedBg: '#d7ffd7', diffRemovedBg: '#ffd7d7', selectionBg: '#afd7d7' },
+  dark: { background: '#1c1c1c', backgroundElement: '#262626', userRowBg: '#262626', selectedBg: '#303030', diffAddedBg: '#003300', diffRemovedBg: '#330000', diffAddedWordBg: '#006600', diffRemovedWordBg: '#660000', selectionBg: '#003333' },
+  light: { background: '#ffffff', backgroundElement: '#eeeeee', userRowBg: '#eeeeee', selectedBg: '#dadada', diffAddedBg: '#d7ffd7', diffRemovedBg: '#ffd7d7', diffAddedWordBg: '#afffaf', diffRemovedWordBg: '#ffafaf', selectionBg: '#afd7d7' },
 };
 
 /** Whether the terminal shows 24-bit color, by the same signals supports-color reads. */

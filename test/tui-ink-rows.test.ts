@@ -8,17 +8,19 @@ describe('ink transcript rows', () => {
     const input = { path: 'math.js', edits: [{ old_text: 'export function add(a, b) {\n  return a - b;\n}', new_text: 'export function add(a, b) {\n  return a + b;\n}' }] };
     expect(plain(intentRow('edit', input, 80))).toEqual(['● Edit  math.js']);
     const done = resultRow('edit', input, { text: 'edited math.js\nedit 1: lines 1-3', isError: false }, 1500, 80);
-    expect(plain(done)).toEqual(['● Edit  math.js · +1 −1 · 1.5s', '   2 -   return a - b;', '   2 +   return a + b;']);
-    expect(done.slice(1).map((l) => l.band)).toEqual(['del', 'add']);
+    // The changed lines with the unchanged ones around them; a narrow row is one column.
+    expect(plain(done)).toEqual(['● Edit  math.js · +1 −1 · 1.5s', '   1   export function add(a, b) {', '   2 -   return a - b;', '   2 +   return a + b;', '   3   }']);
+    expect(done.slice(1).map((l) => l.band)).toEqual([undefined, 'del', 'add', undefined]);
   });
 
-  test('a diff past six lines says how many more', () => {
-    const old_text = Array.from({ length: 5 }, (_, i) => `old ${i}`).join('\n');
-    const new_text = Array.from({ length: 5 }, (_, i) => `new ${i}`).join('\n');
-    const d = editDiff({ edits: [{ old_text, new_text }] }, 'edited x\nedit 1: lines 10-14');
-    expect(d).toMatchObject({ added: 5, removed: 5 });
-    expect(d.lines[0]).toEqual({ sign: '-', n: 10, text: 'old 0' });
-    const rows = plain(resultRow('edit', { path: 'x', edits: [{ old_text, new_text }] }, { text: 'edited x\nedit 1: lines 10-14' }, 0, 80));
+  test('a diff past twelve rows says how many more changed lines there are', () => {
+    const old_text = Array.from({ length: 8 }, (_, i) => `old ${i}`).join('\n');
+    const new_text = Array.from({ length: 8 }, (_, i) => `new ${i}`).join('\n');
+    const d = editDiff({ edits: [{ old_text, new_text }] }, 'edited x\nedit 1: lines 10-17');
+    expect(d).toMatchObject({ added: 8, removed: 8 });
+    expect(d.hunks[0]![0]).toEqual({ sign: '-', old: 10, text: 'old 0' });
+    const rows = plain(resultRow('edit', { path: 'x', edits: [{ old_text, new_text }] }, { text: 'edited x\nedit 1: lines 10-17' }, 0, 80));
+    expect(rows).toHaveLength(1 + 12 + 1);
     expect(rows.at(-1)).toBe('     … 4 more lines · /diff');
   });
 

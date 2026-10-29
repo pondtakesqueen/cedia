@@ -1,17 +1,21 @@
 import type { MdStyle } from './markdown.tsx';
+import { diffRows, hunkOf, langOf, type Hunk } from './diff-rows.ts';
 
 // The transcript rows a turn adds besides the reply itself: one per tool call, the thinking marker and the line
 // that ends a turn. A row is styled spans per line; its text (the spans joined) is exactly what shows, so the
 // row budget, selection and search count the same characters the terminal paints.
 //
 //   ✓ Edit  math.js · +1 −1          status glyph, tool name, target, then a summary
-//       2 - return a - b;           an edit's lines, on a red or green band
-//       2 + return a + b;
+//       1   export function add() {  an edit's lines with two around them, the changed ones on a band;
+//       2 -   return a - b;         side by side on a wide screen (diff-rows.ts)
+//       2 +   return a + b;
 //   ✗ Bash  rm -rf dist · blocked
 //     └ deny rule: rm -rf *        detail under the call, quieter
 
 export type RowStyle = MdStyle | 'status' | 'name' | 'ok' | 'err' | 'accent' | 'thinking';
-export type RowSpan = { text: string; style: RowStyle };
+// A span's own band: an edit's line (add, del) or the characters that changed in it (addWord, delWord).
+export type RowBand = 'add' | 'del' | 'addWord' | 'delWord';
+export type RowSpan = { text: string; style: RowStyle; bg?: RowBand };
 export type RowLine = { spans: RowSpan[]; band?: 'add' | 'del' };
 
 export const rowText = (lines: RowLine[]): string => lines.map((l) => l.spans.map((s) => s.text).join('')).join('\n');
@@ -46,35 +50,23 @@ export function intentRow(tool: string, input: unknown, width: number): RowLine[
   return [{ spans: head(tool, input, width) }];
 }
 
-export type DiffLine = { sign: '+' | '-'; n: number; text: string };
-
-/** An edit call's changed lines, from its input and the line numbers the edit tool reports. */
-export function editDiff(input: unknown, output: string): { added: number; removed: number; lines: DiffLine[] } {
+/** An edit call's hunks, from its input and the line each edit starts on, as the edit tool reports it. */
+export function editDiff(input: unknown, output: string): { added: number; removed: number; hunks: Hunk[] } {
   const edits = (input as { edits?: unknown })?.edits;
-  if (!Array.isArray(edits)) return { added: 0, removed: 0, lines: [] };
+  if (!Array.isArray(edits)) return { added: 0, removed: 0, hunks: [] };
   const starts = [...output.matchAll(/^edit (\d+): lines (\d+)-/gm)].reduce<Record<number, number>>((acc, m) => ({ ...acc, [Number(m[1])]: Number(m[2]) }), {});
   let added = 0;
   let removed = 0;
-  const lines: DiffLine[] = [];
+  const hunks: Hunk[] = [];
   edits.forEach((e, i) => {
-    const o = String((e as { old_text?: unknown })?.old_text ?? '').split('\n');
-    const n = String((e as { new_text?: unknown })?.new_text ?? '').split('\n');
-    let pre = 0;
-    while (pre < o.length && pre < n.length && o[pre] === n[pre]) pre++;
-    let post = 0;
-    while (post < o.length - pre && post < n.length - pre && o[o.length - 1 - post] === n[n.length - 1 - post]) post++;
-    const from = (starts[i + 1] ?? 1) + pre;
-    const gone = o.slice(pre, o.length - post);
-    const come = n.slice(pre, n.length - post);
-    removed += gone.length;
-    added += come.length;
-    gone.forEach((t, k) => lines.push({ sign: '-', n: from + k, text: t }));
-    come.forEach((t, k) => lines.push({ sign: '+', n: from + k, text: t }));
+    const h = hunkOf(String((e as { old_text?: unknown })?.old_text ?? ''), String((e as { new_text?: unknown })?.new_text ?? ''), starts[i + 1] ?? 1);
+    added += h.added;
+    removed += h.removed;
+    if (h.added || h.removed) hunks.push(h.hunk);
   });
-  return { added, removed, lines };
+  return { added, removed, hunks };
 }
 
-const MAX_DIFF = 6;
 const BASH_LINES = 3;
 
 export function resultRow(
@@ -100,18 +92,10 @@ export function resultRow(
   } else if (tool === 'edit') {
     const d = editDiff(input, text);
     sum.push({ text: `+${d.added}`, style: 'ok' }, { text: ' ', style: 'muted' }, { text: `−${d.removed}`, style: 'err' });
-    const w = String(Math.max(0, ...d.lines.map((l) => l.n))).length;
-    for (const l of d.lines.slice(0, MAX_DIFF)) {
-      detail.push({
-        band: l.sign === '+' ? 'add' : 'del',
-        spans: [
-          { text: `   ${String(l.n).padStart(w)} `, style: 'muted' },
-          { text: l.sign === '+' ? '+' : '-', style: l.sign === '+' ? 'ok' : 'err' },
-          { text: ` ${clip(l.text.replace(/\t/g, '  '), Math.max(10, width - w - 8))}`, style: 'text' },
-        ],
-      });
-    }
-    if (d.lines.length > MAX_DIFF) detail.push({ spans: [{ text: `     … ${d.lines.length - MAX_DIFF} more lines · /diff`, style: 'faint' }] });
+    const path = String((input as { path?: unknown })?.path ?? '');
+    const rows = diffRows(d.hunks, width, langOf(path), 3);
+    detail.push(...rows.lines);
+    if (rows.hidden) detail.push({ spans: [{ text: `     … ${rows.hidden} more line${rows.hidden === 1 ? '' : 's'} · /diff`, style: 'faint' }] });
   } else if (tool === 'write') {
     const n = String((input as { content?: unknown })?.content ?? '').split('\n').length;
     sum.push({ text: `+${n} line${n === 1 ? '' : 's'}`, style: 'ok' });
