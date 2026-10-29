@@ -29,6 +29,11 @@ export const MAX_HANDOFFS = 8;
 // The context the next request starts from: everything just sent plus the reply.
 export const contextSize = (u: Usage) => u.uncached + u.cacheRead + u.cacheWrite + u.output;
 
+// What every session of a thread sends before its first message, a handoff or not: the system prompt and the tool
+// definitions, at chars/4. That undercounts JSON schemas (a real 110k characters of definitions were about 41k
+// tokens), so a session is held to at least true doubling of the rest.
+export const fixedTokens = (header: { system: string; tools: unknown[] }) => Math.ceil((header.system.length + JSON.stringify(header.tools).length) / 4);
+
 export const HANDOFF_PROMPT = `Your context is long, so cedia will continue this task in a fresh session. It starts with the original task and the note you write now, and nothing else of this session. Do not call tools: reply with the note only.
 
 Write it for a capable engineer who has not seen this session:

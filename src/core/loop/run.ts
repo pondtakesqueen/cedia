@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildMessages, sessionHeader } from '../context/build.ts';
 import { cacheMissesOf } from '../context/cache.ts';
-import { contextSize, HANDOFF_NO_TOOLS, HANDOFF_PROMPT } from '../project/handoff.ts';
+import { contextSize, fixedTokens, HANDOFF_NO_TOOLS, HANDOFF_PROMPT } from '../project/handoff.ts';
 import { COMPACT_INSTRUCTIONS, compactionCut, compactPlan, firstReply } from '../project/compact.ts';
 import { hash, stableJson } from '../hash.ts';
 import { MAX_IMAGES_PER_SESSION, type ImageRef } from '../images.ts';
@@ -731,9 +731,12 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       const changedHere = () => ledgerEntries(log.events.slice(runStart), checks, opts.cwd).some((e) => e.kind === 'write' && e.path !== undefined);
       // A session that starts from a summary starts large by design (the kept turns, and the turns that ran while the
       // summary was written: 40k to 63k on Haiku at a 90k handoff point), so doubling would carry it past the handoff
-      // point; it must have grown by the share a compaction keeps instead.
+      // point; it must have grown by the share a compaction keeps instead. Otherwise what must double is the part a
+      // handoff can shrink: the system prompt and tool definitions come back whole in the next session, and with a
+      // big MCP server they were most of the first reply (46k of it on Haiku, 41k of that tools), so doubling the
+      // whole of it put the handoff past the 90k point, a turn short of the 100k price line.
       const base = contextSize(first.usage);
-      const grown = log.events.some((e) => e.kind === 'summary') ? base + (opts.compact?.keepTokens ?? compactPlan(opts.handoffAt ?? 0).keepTokens) : 2 * base;
+      const grown = log.events.some((e) => e.kind === 'summary') ? base + (opts.compact?.keepTokens ?? compactPlan(opts.handoffAt ?? 0).keepTokens) : base + Math.max(0, base - fixedTokens(header));
       const due = (at: number) => size >= at && size >= grown && (!opts.continues || changedHere());
       // By compaction: start it in the background, and at the handoff point wait for it to settle (the top of the
       // loop then ends the session, or falls back to the note when no summary came).
