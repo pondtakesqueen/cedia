@@ -42,6 +42,46 @@ describe('findSlop', () => {
     ]);
   });
 
+  test('checks turned off in their config', () => {
+    expect(
+      rules([
+        change('tsconfig.json', ['    "strict": false,', '    "noUncheckedIndexedAccess": false'], ['    "strict": true,']),
+        change('eslint.config.js', ["    '@typescript-eslint/no-explicit-any': 'off',", "    'no-console': 0,", "  { ignores: ['src/legacy/**'] },"]),
+        change('biome.json', ['      "recommended": false']),
+        change('pyproject.toml', ['extend-ignore = ["E501"]', 'disallow_untyped_defs = false', 'addopts = "--deselect tests/test_api.py::test_slow"']),
+        change('vitest.config.ts', ["    exclude: ['test/broken.test.ts'],"]),
+        change('package.json', ['    "test": "echo ok",', '    "lint": "eslint . || true",', '    "test:unit": "jest --passWithNoTests"']),
+      ]),
+    ).toEqual([
+      'config-weakened tsconfig.json',
+      'config-weakened tsconfig.json',
+      'config-weakened eslint.config.js',
+      'config-weakened eslint.config.js',
+      'config-weakened eslint.config.js',
+      'config-weakened biome.json',
+      'config-weakened pyproject.toml',
+      'config-weakened pyproject.toml',
+      'config-weakened pyproject.toml',
+      'config-weakened vitest.config.ts',
+      'config-weakened package.json',
+      'config-weakened package.json',
+      'config-weakened package.json',
+    ]);
+  });
+
+  test('config that keeps its checks on is not flagged', () => {
+    expect(
+      rules([
+        change('tsconfig.json', ['    "strict": true,', '    "skipLibCheck": true,', '    // "strict": false,']),
+        change('eslint.config.js', ["    'no-console': 'warn',", "    eqeqeq: ['error', 'always'],"]),
+        change('package.json', ['    "version": "0.2.0",', '    "test": "bun test",', '    "lint": "eslint .",', '    "dev": "echo starting && vite"']),
+        change('pyproject.toml', ['# extend-ignore = ["E501"]', 'strict = true']),
+        change('src/config.ts', ["export const exclude = ['a'];", "const mode = 'off';"]),
+        change('docs/setup.md', ['Set "strict": false only if you must.']),
+      ]),
+    ).toEqual([]);
+  });
+
   test('ordinary code is not flagged', () => {
     expect(
       rules([
