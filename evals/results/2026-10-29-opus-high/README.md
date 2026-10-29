@@ -265,3 +265,35 @@ What it says:
   - It was faster (123 s, since the fix step took 9 s) and its writer cost nine times as much. The gap to Claude Code on these tasks is in what the plan names, not in the writer model.
 
 Spent for this section: $0.30 Haiku, $3.09 Sonnet (Anthropic API). The panels ($4.21 and $4.41) and the plans and reviews ran at API price on the owner's subscription.
+
+## A plan line for throws from a callback (three runs, not adopted)
+
+Haiku and Sonnet writers both called `fn` on hard-memo-async after evicting entries, so a synchronous throw lost live keys, and no plan named it. This arm adds one line to the plan: where the code calls something that can throw (a callback, a parse, I/O), say what must happen before the call and what must not change until it returns. The patch is `judge-throw/throw-line.patch`.
+
+| 30 runs | pass | wins / losses / tie or split | steady tasks | tasks won 3 of 3 | time per task |
+|---|---|---|---|---|---|
+| shape (merged in #190) | 28/30 | 23 / 3 / 2 | 7 of 10 | 7 | 159 s |
+| + throw line | 30/30 | 21 / 5 / 4 | 6 of 10 | 5 | 156 s |
+
+The line did what it named: no panel found a synchronous throw on hard-memo-async any more, and all three memo runs passed. One memo run lost on the older miss, expired entries counted toward the size. Overall it is within a run's noise of the shape arm, so it stays out.
+
+## Held-out tasks: the merged prompts on eight tasks they were not tuned on (two runs)
+
+Every prompt change above was tuned on the same ten tasks it was scored on. This section asks whether the gain holds on tasks the tuning never saw:
+- tasks: hard-redact-bugs, hard-shell-split, hard-window, frontier-cron, frontier-semver, wide-deprecate, long-migrate, real-three-changes;
+- main before #190 (36c0e04) against main after it (e4ecfe8), each with `-m auto`'s roles and Haiku on the Anthropic API;
+- and Claude Code Opus high on the same tasks.
+
+The two cedia arms and Claude Code ran at the same time, so time per task here is not comparable with the sections above. Files: `held-out/`. Panels: `held-out/judge-main/` (`claude-*` diffs are main before #190) and `held-out/judge-cc/` (`claude-*` diffs are Claude Code). Tally: `python3 held-out/judge-cc/tally.py held-out/judge-cc pr`.
+
+| 16 runs | pass | wins / losses / tie or split for main after #190 | correctness | quality | tests | security |
+|---|---|---|---|---|---|---|
+| against CC Opus high | 16/16 vs 16/16 | 9 / 3 / 4 | 8.19 / 7.91 | 7.69 / 7.59 | 7.91 / 5.16 | 8.81 / 7.94 |
+| against main before #190 | 16/16 vs 15/16 | 7 / 7 / 1 | 8.27 / 8.27 | 8.03 / 7.73 | 7.50 / 6.47 | 8.40 / 8.40 |
+
+What it says:
+- On tasks it was not tuned on, auto still beats Claude Code Opus high, 9 to 3, at a fraction of the cost. Claude Code cost $0.54 per run at API price; the Haiku writer cost $0.02, with the plan and review on the owner's subscription.
+- Against the prompts before #190, the merged ones win as often as they lose, 7 to 7. They score higher on tests (7.50 against 6.47) and quality, and equal on correctness, and they passed one more run.
+- So part of the 18-7 → 23-3 gain on the tuning tasks is specific to those tasks. The merged prompts are not worse anywhere measured, but the next prompt change should be scored on held-out tasks too, not only on the ones that suggested it.
+
+Spent for this section: $0.38 + $0.69 Haiku (Anthropic API). Claude Code ($8.58) and the panels ($4.68, $3.32 and $3.20) ran at API price on the owner's subscription.
