@@ -137,3 +137,131 @@ What it says:
 - Plan and review are still most of the time (74 s of 127 s). They are the next place to look for speed.
 
 Spent for this section: $0.30 Haiku (Anthropic API). Plan and review ($5.68) and the panel ($4.54) ran at API price on the owner's subscription.
+
+## The plan checks defined words and puts new tests in a new file (three runs)
+
+The planner's examples had come from two of these tasks (a streaming parser, an expiring cache), so they are now generic. The plan also:
+- checks each place the code counts or reports a word the task or a doc comment defines (kept, used, done) against that definition;
+- puts new tests in a new file when the task says to leave the existing ones alone (a plan had told the writer to append to them).
+
+The writer's probe line keeps each added test fast (commit f30e1f5).
+
+- Run (`auto-defs.jsonl`): the same command and route as the arms above.
+- Panel: `judge-defs/`, against the same three CC Opus high runs. Tally: `python3 judge-defs/tally.py judge-defs defs`.
+
+| 30 runs | pass | wins / losses / tie or split vs CC Opus high | review sent back | time per task (plan, review, fix) |
+|---|---|---|---|---|
+| states and fast tests | 30/30 | 18 / 7 / 5 | 14 of 30 | 127 s (36, 38, 9) |
+| **+ defined words, new test file** | **30/30** | **22 / 5 / 3** | **10 of 30** | 140 s (35, 38, 7) |
+
+| | correctness | quality | scope | tests | security |
+|---|---|---|---|---|---|
+| defs / CC Opus high | 8.82 / 8.43 | 8.12 / 8.22 | 8.67 / 8.95 | 8.42 / 4.98 | 9.22 / 9.10 |
+
+What it says:
+- hard-memo-async won a run for the first time: one win, one loss, one split.
+  - No panel found expired entries counted toward the size limit any more.
+  - The two losses were on a synchronous throw from `fn`, which escaped as a throw and, in one run, after the cache had already evicted entries.
+- hard-pool lost two of three: the input array read live instead of snapshotted, and non-promise thenables adopted against the task's rule 3.
+- The panels flagged a wall-clock assertion (`< 1000 ms`) in two memo runs as flaky.
+- The time per task rose from 127 s to 140 s. The full test suite ran beside this eval for four minutes, so part of that rise is the machine, not the arm.
+
+Spent for this section: $0.31 Haiku (Anthropic API). The panel ($4.69) and the plan and review ran at API price on the owner's subscription.
+
+## One finishing order for the writer, and a review that goes rule by rule (three runs)
+
+The thorough writer prompt (any writer that works from a plan) had lines that pulled against each other:
+- "Prefer the smallest change" read as "the fewest lines" against rules no visible test held.
+- "When the task lets you change tests" read as "never" when the task said to leave the existing tests alone.
+- The stop line came before the probe and the diff read, so a run could stop before either.
+
+The thorough writer now gets its own versions of those lines, and a numbered finishing order: check, probe, read the diff, check again, stop. Each step says why the order matters. The wording follows Anthropic's prompting guide (`claude-prompting-best-practices`: "Be clear and direct" on sequential steps, "Add context", "Overeagerness" and "Avoid focusing on passing tests"). The diff read keeps what makes a stated rule hold, the state after an error included. The frugal prompt is byte-identical (`test/prompts.test.ts`).
+
+The review now starts with the rules: each rule the task and the touched doc comments state, one line each, with the line that makes it hold or the input that breaks it.
+
+- Run (`auto-order.jsonl`): the same command and route as the arms above.
+- Panel: `judge-order/`, against the same three CC Opus high runs. Tally: `python3 judge-order/tally.py judge-order order`.
+
+| 30 runs | pass | wins / losses / tie or split vs CC Opus high | review sent back | time per task (plan, review, fix) |
+|---|---|---|---|---|
+| defined words, new test file | 30/30 | 22 / 5 / 3 | 10 of 30 | 140 s (35, 38, 7) |
+| **+ finishing order, rule-by-rule review** | **30/30** | **23 / 6 / 1** | 17 of 30 | 148 s (34, 46, 14) |
+
+| | correctness | quality | scope | tests | security |
+|---|---|---|---|---|---|
+| order / CC Opus high | 8.85 / 8.20 | 8.07 / 8.18 | 8.62 / 8.95 | 8.62 / 4.93 | 9.15 / 8.75 |
+
+What it says:
+- hard-memo-async lost no run for the first time: two wins and a split. The one panel that went to CC was on a synchronous throw from `fn`.
+- hard-csv-stream lost all three, every time on the same point: the stream reads one character per call, where Claude Code scans runs with `indexOf` and `slice`. That is the next arm: the plan names the shape of new code.
+- hard-pool lost two again: the input array read live, and non-promise thenables adopted against rule 3. Two of its four losing panels named no defect in cedia's change and preferred CC's tests.
+- wide-three-features lost one run on rules the task states (spaces, not all whitespace; the raw input in the error), which the rule-by-rule review did not catch.
+- It costs time: the rule-by-rule review takes 46 s instead of 38 s and sends back 17 of 30, so a task takes 148 s.
+
+Spent for this section: $0.36 Haiku (Anthropic API). The panel ($4.66) and the plan and review ran at API price on the owner's subscription.
+
+## The plan gives the shape of new code (three runs)
+
+hard-csv-stream lost every panel of the last arm on one point: the stream read one character per call, where Claude Code scanned whole runs with `indexOf` and `slice`. The planner now names the shape of the code the change adds:
+- where input is large or arrives in pieces, scan whole runs with what the language provides instead of one item per call;
+- keep state in as few fields as the rules need, each named for what it means;
+- give each new type or function a doc comment that says what it keeps and what happens after an error.
+
+The code around the change is left as it is.
+
+- Run (`auto-shape.jsonl`): the same command and route as the arms above.
+- Panel: `judge-shape/`, against the same three CC Opus high runs. Tally: `python3 judge-shape/tally.py judge-shape shape`.
+
+| 30 runs | pass | wins / losses / tie or split vs CC Opus high | review sent back | time per task (plan, review, fix) |
+|---|---|---|---|---|
+| finishing order, rule-by-rule review | 30/30 | 23 / 6 / 1 | 17 of 30 | 148 s (34, 46, 14) |
+| **+ shape of new code** | 28/30 | **23 / 3 / 2** (of 28) | 14 of 30 | 159 s (38, 45, 14) |
+
+| | correctness | quality | scope | tests | security |
+|---|---|---|---|---|---|
+| shape / CC Opus high | 8.86 / 8.27 | 8.14 / 8.18 | 8.64 / 8.86 | 8.54 / 4.86 | 9.27 / 8.95 |
+
+What it says:
+- hard-csv-stream went from three losses to two losses and a tie. No panel named a per-character scan any more; every panel called both streams linear per chunk. The losses were on Claude Code's tests (every split, a row returned as soon as it ends) and its explicit state machine.
+- hard-pool went from two losses to one win, one loss and a tie.
+- Correctness is the highest of any arm (8.86 against 8.27).
+- hard-memo-async failed two of three runs. Each time a test the writer added awaited a promise that never settled, so the check hung until the run's time ran out.
+  - Six more runs of that task alone (`auto-shape-memo6.jsonl`) all passed, so it is 7 of 9 with this plan.
+  - The earlier arms passed it 9 of 9.
+  - It is not counted here as caused by this line, but a hung test can still cost a run.
+
+Spent for this section: $0.34 + $0.06 Haiku (Anthropic API). The panel ($4.39) and the plan and review ran at API price on the owner's subscription.
+
+## Two arms that lost: a shorter prompt, and Sonnet as the writer (three runs)
+
+Both start from the shape arm above and change one thing. `steady.py` counts the tasks whose three runs all got the same panel outcome, and the tasks won in all three runs: `python3 steady.py judge-shape:shape judge-lean:lean judge-sonnet:sonnet`.
+
+- **Shorter prompt** (`auto-lean.jsonl`, `judge-lean/`; the patch is `judge-lean/lean-prompts.patch`).
+  - Idea: cut the prompt down to the goal, the rules and how to verify, then add back only what the model misses. This follows Addy Osmani's "You're probably overprompting Claude" (2026-10-29), and Claude Code's team cut over 80% of its system prompt for Opus 5 with no loss.
+  - Change: the plan prompt was cut by about 60% to four bullets, and the writer's probe step to one sentence.
+- **Sonnet as the writer** (`auto-sonnet.jsonl`, `judge-sonnet/`).
+  - Idea: Haiku keeps missing the same multi-step cases, so a stronger writer might win more and vary less.
+  - Change: `--model anthropic/claude-sonnet-5-5 --effort medium`, with the shape arm's prompts.
+
+| 30 runs | pass | wins / losses / tie or split | steady tasks | tasks won 3 of 3 | review sent back | time per task | writer cost per task |
+|---|---|---|---|---|---|---|---|
+| shape (Haiku) | 28/30 | 23 / 3 / 2 | 7 of 10 | 7 | 14 of 30 | 159 s | $0.011 |
+| shorter prompt (Haiku) | 30/30 | 13 / 13 / 4 | 4 of 10 | 1 | 23 of 30 | 138 s | $0.010 |
+| Sonnet writer | 30/30 | 14 / 10 / 6 | 6 of 10 | 3 | 19 of 30 | 123 s | $0.103 |
+
+| | correctness | quality | scope | tests | security |
+|---|---|---|---|---|---|
+| shorter / CC Opus high | 8.43 / 8.28 | 8.05 / 8.17 | 8.90 / 8.80 | 6.80 / 5.58 | 9.07 / 8.97 |
+| Sonnet / CC Opus high | 8.50 / 8.10 | 7.85 / 8.23 | 8.78 / 8.88 | 7.62 / 5.47 | 9.07 / 8.85 |
+
+What it says:
+- **The shorter prompt lost ten wins.**
+  - hard-memo-async, hard-pool and hard-csv-stream lost every run, and the review sent back 23 of 30.
+  - For a Haiku writer, the plan's rule-by-rule lines are what make the result hold and repeat. They are not overprompting.
+  - The article's advice was measured on Opus and Fable, and Anthropic's Haiku 5.5 guide still adds verification lines.
+- **Sonnet won fewer than Haiku and was not steadier.**
+  - It wrote shorter diffs with fewer tests: memo 165 lines against 235, and a tests score of 7.62 against 8.54.
+  - It made the same miss on memo: `fn` called after eviction, so a synchronous throw evicts a live key.
+  - It was faster (123 s, since the fix step took 9 s) and its writer cost nine times as much. The gap to Claude Code on these tasks is in what the plan names, not in the writer model.
+
+Spent for this section: $0.30 Haiku, $3.09 Sonnet (Anthropic API). The panels ($4.21 and $4.41) and the plans and reviews ran at API price on the owner's subscription.

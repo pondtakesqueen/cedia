@@ -1,0 +1,168 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/memo.bugs.test.ts b/memo.bugs.test.ts
+--- a/memo.bugs.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/memo.bugs.test.ts	2026-10-29 17:33:57.038478235 +0000
+@@ -0,0 +1,117 @@
++import { expect, test } from "bun:test";
++import { memo } from "./memo";
++const tick = () => new Promise((r) => setTimeout(r, 0));
++function mk() {
++  const calls: { key: string; res: (v: string) => void; rej: (e: unknown) => void }[] = [];
++  const fn = (key: string) => new Promise<string>((res, rej) => void calls.push({ key, res, rej }));
++  return { fn, calls };
++}
++test("invalidated in-flight result does not replace the newer call", async () => {
++  const { fn, calls } = mk();
++  const m = memo(fn, { ttlMs: 1000, max: 10 });
++  m("k");
++  m.invalidate("k");
++  const second = m("k");
++  calls[0]!.res("old");
++  await tick();
++  expect(m("k")).toBe(second);
++  expect(calls).toHaveLength(2);
++});
++test("old rejection after invalidate does not drop newer call", async () => {
++  const { fn, calls } = mk();
++  const m = memo(fn, { ttlMs: 1000, max: 10 });
++  const firstOutcome = m("k").then(() => "resolved", (e: Error) => e.message);
++  m.invalidate("k");
++  const second = m("k");
++  calls[0]!.rej(new Error("x"));
++  expect(await firstOutcome).toBe("x");
++  await tick();
++  expect(m("k")).toBe(second);
++  expect(m.size).toBe(1);
++});
++test("evicted in-flight key is not kept when it settles", async () => {
++  const { fn, calls } = mk();
++  const m = memo(fn, { ttlMs: 1000, max: 1 });
++  m("a");
++  m("b");
++  calls[0]!.res("a");
++  await tick();
++  expect(m.size).toBe(1);
++  m("a");
++  expect(calls).toHaveLength(3);
++});
++test("clear while in flight is not revived", async () => {
++  const { fn, calls } = mk();
++  const m = memo(fn, { ttlMs: 1000, max: 3 });
++  m("a");
++  m.clear();
++  calls[0]!.res("a");
++  await tick();
++  expect(m.size).toBe(0);
++});
++test("a cache hit makes the key most recently used", async () => {
++  const { fn, calls } = mk();
++  const m = memo(fn, { ttlMs: 1000, max: 2 });
++  m("a");
++  m("b");
++  calls.forEach((c) => c.res(c.key));
++  await tick();
++  m("a");
++  m("c");
++  m("a");
++  expect(calls).toHaveLength(3);
++  m("b");
++  expect(calls).toHaveLength(4);
++});
++test("settling is not a use", async () => {
++  const { fn, calls } = mk();
++  const m = memo(fn, { ttlMs: 1000, max: 2 });
++  m("a");
++  m("b");
++  calls[1]!.res("b");
++  calls[0]!.res("a");
++  await tick();
++  m("c");
++  m("a");
++  expect(calls.map((c) => c.key)).toEqual(["a", "b", "c", "a"]);
++});
++test("a rejection reaches every waiter and is not kept", async () => {
++  const { fn, calls } = mk();
++  const m = memo(fn, { ttlMs: 1000, max: 2 });
++  const outcome = (p: Promise<string>) => p.then(() => "resolved", (e: Error) => e.message);
++  const a = outcome(m("k"));
++  const b = outcome(m("k"));
++  expect(calls).toHaveLength(1);
++  calls[0]!.rej(new Error("x"));
++  expect([await a, await b]).toEqual(["x", "x"]);
++  expect(m.size).toBe(0);
++  m("k");
++  expect(calls).toHaveLength(2);
++});
++test("an expired result does not push out a live key", async () => {
++  let t = 0;
++  const { fn, calls } = mk();
++  const m = memo(fn, { ttlMs: 100, max: 2, now: () => t });
++  m("a");
++  m("b");
++  calls[1]!.res("b");
++  await tick();
++  t = 100;
++  expect(m.size).toBe(1);
++  m("c");
++  calls[0]!.res("a");
++  await tick();
++  m("a");
++  expect(calls.map((c) => c.key)).toEqual(["a", "b", "c"]);
++});
++test("size excludes expired results", async () => {
++  let t = 0;
++  const { fn, calls } = mk();
++  const m = memo(fn, { ttlMs: 100, max: 2, now: () => t });
++  m("a");
++  calls[0]!.res("a");
++  await tick();
++  expect(m.size).toBe(1);
++  t = 100;
++  expect(m.size).toBe(0);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/memo.ts b/memo.ts
+--- a/memo.ts	2026-10-29 17:28:58.061877254 +0000
++++ b/memo.ts	2026-10-29 17:33:57.038090265 +0000
+@@ -29,21 +29,38 @@
+   const now = opts.now ?? Date.now;
+   // In insertion order, least recently used first. A key in flight does not expire.
+   const cache = new Map<K, { promise: Promise<V>; expires: number }>();
++  const dropExpired = () => {
++    for (const [k, e] of [...cache]) if (e.expires <= now()) cache.delete(k);
++  };
+   const call = ((key: K) => {
+     const hit = cache.get(key);
+-    if (hit && hit.expires > now()) return hit.promise;
++    if (hit && hit.expires > now()) {
++      cache.delete(key);
++      cache.set(key, hit);
++      return hit.promise;
++    }
+     cache.delete(key);
+-    if (cache.size > opts.max) cache.delete(cache.keys().next().value as K);
++    dropExpired();
++    while (cache.size >= opts.max) cache.delete(cache.keys().next().value as K);
+     const entry = { promise: fn(key), expires: Infinity };
+     cache.set(key, entry);
+     entry.promise.then(
+-      (value) => cache.set(key, { promise: Promise.resolve(value), expires: now() + opts.ttlMs }),
+-      () => cache.delete(key),
++      () => {
++        if (cache.get(key) === entry) entry.expires = now() + opts.ttlMs;
++      },
++      () => {
++        if (cache.get(key) === entry) cache.delete(key);
++      },
+     );
+     return entry.promise;
+   }) as Memo<K, V>;
+   call.invalidate = (key) => void cache.delete(key);
+   call.clear = () => cache.clear();
+-  Object.defineProperty(call, "size", { get: () => cache.size });
++  Object.defineProperty(call, "size", {
++    get: () => {
++      dropExpired();
++      return cache.size;
++    },
++  });
+   return call;
+ }

@@ -1,0 +1,163 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse.rules.test.ts b/sse.rules.test.ts
+--- a/sse.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/sse.rules.test.ts	2026-10-29 15:07:17.294866736 +0000
+@@ -0,0 +1,93 @@
++import { expect, test } from 'bun:test';
++import { readSse, streamFromString, type SseMessage } from './sse.ts';
++
++async function all(text: string, chunk = 7): Promise<SseMessage[]> {
++  const out: SseMessage[] = [];
++  for await (const m of readSse(streamFromString(text, chunk))) out.push(m);
++  return out;
++}
++
++test('output is the same for every chunk size', async () => {
++  const text = ': c\r\nid: 9\nevent: e\ndata: สวัสดี 🙂\r\ndata:  x \n\nevent: n\n\ndata\n\ndata: tail';
++  const whole = await all(text, text.length);
++  for (let chunk = 1; chunk <= text.length; chunk++) expect(await all(text, chunk)).toEqual(whole);
++});
++
++test('CRLF may be split across chunks at any size', async () => {
++  for (let chunk = 1; chunk <= 10; chunk++)
++    expect(await all('data: a\r\n\r\ndata: b\r\n\r\n', chunk)).toEqual([{ data: 'a' }, { data: 'b' }]);
++});
++
++test('comment lines are ignored, including a bare colon', async () => {
++  expect(await all(':x\ndata: a\n:\n\n')).toEqual([{ data: 'a' }]);
++});
++
++test('only one space after the colon is dropped; later colons are kept', async () => {
++  expect(await all('data:  x \n\n')).toEqual([{ data: ' x ' }]);
++  expect(await all('data: a: b\n\n')).toEqual([{ data: 'a: b' }]);
++});
++
++test('a bare field is an empty value, for data and for event', async () => {
++  expect(await all('data\ndata\n\n')).toEqual([{ data: '\n' }]);
++  expect(await all('event\ndata: x\n\n')).toEqual([{ event: '', data: 'x' }]);
++});
++
++test('id, retry and unknown fields are ignored; data lines join with newline', async () => {
++  expect(await all('id: 1\nfoo: bar\ndata: a\nretry: 5\ndata: b\n\n')).toEqual([{ data: 'a\nb' }]);
++});
++
++test('a blank line resets event; the next message has no event key', async () => {
++  expect(await all('event: e\n\n\n\ndata: x\n\n')).toEqual([{ data: 'x' }]);
++  const [msg] = await all('event: e\ndata: 1\n\ndata: 2\n\n');
++  expect(msg).toEqual({ event: 'e', data: '1' });
++  const second = (await all('event: e\ndata: 1\n\ndata: 2\n\n'))[1];
++  expect('event' in second).toBe(false);
++});
++
++test('pending data at end of body is yielded; a pending event alone is dropped', async () => {
++  expect(await all('event: e\ndata: x')).toEqual([{ event: 'e', data: 'x' }]);
++  expect(await all('event: e')).toEqual([]);
++  expect(await all('data: a\r')).toEqual([{ data: 'a' }]);
++});
++
++test('a multi-byte character at the very end of the body is decoded', async () => {
++  for (const chunk of [1, 2, 3]) expect(await all('data: 🙂', chunk)).toEqual([{ data: '🙂' }]);
++});
++
++test('a stream error rejects the generator with the same error', async () => {
++  let step = 0;
++  const body = new ReadableStream<Uint8Array>({
++    pull(c) {
++      if (step === 0) c.enqueue(new TextEncoder().encode('data: a\n\n'));
++      else c.error(new Error('boom'));
++      step++;
++    },
++  });
++  const it = readSse(body);
++  expect((await it.next()).value).toEqual({ data: 'a' });
++  await expect(it.next()).rejects.toThrow('boom');
++});
++
++test('a long line split into many small chunks is yielded whole', async () => {
++  expect(await all('data: ' + 'x'.repeat(4e5) + '\n\n', 16)).toEqual([{ data: 'x'.repeat(4e5) }]);
++});
++
++test('many short lines in one chunk are each yielded', async () => {
++  const out = await all('data: x\n\n'.repeat(4e5), 1 << 30);
++  expect(out.length).toBe(4e5);
++  expect(out.every((m) => m.data === 'x')).toBe(true);
++});
++
++test('stopping early cancels the body', async () => {
++  let cancelled = false;
++  const body = new ReadableStream<Uint8Array>({
++    pull(c) {
++      c.enqueue(new TextEncoder().encode('data: a\n\n'));
++    },
++    cancel() {
++      cancelled = true;
++    },
++  });
++  for await (const _ of readSse(body)) break;
++  expect(cancelled).toBe(true);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse.ts b/sse.ts
+--- a/sse.ts	2026-10-29 15:04:55.118863707 +0000
++++ b/sse.ts	2026-10-29 15:07:14.330866560 +0000
+@@ -15,7 +15,61 @@
+ // - When the body ends without a final blank line, data lines still pending (including a last line with no
+ //   newline) are yielded as one last message.
+ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseMessage> {
+-  throw new Error('not implemented');
++  const reader = body.getReader();
++  const dec = new TextDecoder();
++  let buf = '';
++  let event: string | undefined;
++  let data: string[] = [];
++  // Handles one line (without its \n); returns the message it completes, if any.
++  const line = (l: string): SseMessage | undefined => {
++    if (l.endsWith('\r')) l = l.slice(0, -1);
++    if (l === '') {
++      const msg = data.length > 0 ? { ...(event !== undefined && { event }), data: data.join('\n') } : undefined;
++      event = undefined;
++      data = [];
++      return msg;
++    }
++    if (l.startsWith(':')) return undefined;
++    const colon = l.indexOf(':');
++    const name = colon < 0 ? l : l.slice(0, colon);
++    let value = colon < 0 ? '' : l.slice(colon + 1);
++    if (value.startsWith(' ')) value = value.slice(1);
++    if (name === 'event') event = value;
++    else if (name === 'data') data.push(value);
++    return undefined;
++  };
++  let finished = false;
++  let failed = false;
++  try {
++    for (;;) {
++      let read;
++      try {
++        read = await reader.read();
++      } catch (err) {
++        failed = true;
++        throw err;
++      }
++      const { done, value } = read;
++      if (done) break;
++      const from = buf.length;
++      buf += dec.decode(value, { stream: true });
++      let start = 0;
++      for (let nl = buf.indexOf('\n', from); nl >= 0; nl = buf.indexOf('\n', start)) {
++        const msg = line(buf.slice(start, nl));
++        start = nl + 1;
++        if (msg) yield msg;
++      }
++      buf = buf.slice(start);
++    }
++    buf += dec.decode();
++    if (buf !== '') line(buf);
++    const last = line('');
++    finished = true;
++    if (last) yield last;
++  } finally {
++    if (!finished && !failed) await reader.cancel();
++    reader.releaseLock();
++  }
+ }
+ 
+ export function streamFromString(text: string, chunkSize = 7): ReadableStream<Uint8Array> {

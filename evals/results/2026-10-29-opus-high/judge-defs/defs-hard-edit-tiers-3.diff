@@ -1,0 +1,185 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.rules.test.ts b/edit.rules.test.ts
+--- a/edit.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/edit.rules.test.ts	2026-10-29 14:07:07.966652187 +0000
+@@ -0,0 +1,92 @@
++import { describe, expect, test } from 'bun:test';
++import { applyEdit } from './edit.ts';
++
++const ok = (r: ReturnType<typeof applyEdit>) => {
++  if ('error' in r) throw new Error(r.error);
++  return r;
++};
++
++describe('rules', () => {
++  test('empty old_text and no-op edits are rejected before matching', () => {
++    expect(applyEdit('a\n', { old_text: '', new_text: 'x' })).toEqual({ error: expect.stringContaining('use write') });
++    expect(applyEdit('a\n', { old_text: 'nope', new_text: 'nope' })).toEqual({ error: expect.stringContaining('same') });
++  });
++
++  test('exact is tried before the line tiers', () => {
++    const r = ok(applyEdit('a \na\n', { old_text: 'a \n', new_text: 'b\n' }));
++    expect(r.applied).toEqual({ from: 1, to: 1, tier: 'exact', count: 1 });
++    expect(r.content).toBe('b\na\n');
++  });
++
++  test('ambiguous exact is an error and tier 2 is not tried', () => {
++    const r = applyEdit('a\na \n', { old_text: 'a', new_text: 'b' });
++    expect('error' in r && r.error).toContain('matches 2 places');
++    expect('error' in r && r.error).toContain('line 1');
++  });
++
++  test('replace_all with 3 matches reports the first and last lines', () => {
++    const r = ok(applyEdit('x\ny\nx\nx\n', { old_text: 'x', new_text: 'z', replace_all: true }));
++    expect(r.content).toBe('z\ny\nz\nz\n');
++    expect(r.applied).toEqual({ from: 1, to: 4, tier: 'exact', count: 3 });
++  });
++
++  test('replace_all does not apply to the line tiers', () => {
++    const r = applyEdit('a \na  \n', { old_text: 'a\n', new_text: 'b\n', replace_all: true });
++    expect('error' in r && r.error).toContain('matches 2 places');
++  });
++
++  test('trailing-space tier keeps new_text as given', () => {
++    const r = ok(applyEdit('a \nb \n', { old_text: 'a\nb', new_text: '  X\n  Y' }));
++    expect(r.applied.tier).toBe('trailing-space');
++    expect(r.content).toBe('  X\n  Y\n');
++  });
++
++  test('indentation ambiguity lists its lines', () => {
++    const r = applyEdit('  x\n\tx\n', { old_text: 'x ', new_text: 'y' });
++    expect('error' in r && r.error).toContain('matches 2 places');
++    expect('error' in r && r.error).toContain('1, 2');
++  });
++
++  test('indentation tier re-indents non-blank lines and keeps blank ones empty', () => {
++    const r = ok(applyEdit('a\n    b\n\n    c\nd\n', { old_text: 'b\n\nc', new_text: 'B\n\nC' }));
++    expect(r.applied).toEqual({ from: 2, to: 4, tier: 'indentation', count: 1 });
++    expect(r.content).toBe('a\n    B\n\n    C\nd\n');
++  });
++
++  test('not-found pointer lists at most 5 lines', () => {
++    const r = applyEdit(Array(7).fill('foo').join('\n') + '\n', { old_text: 'foo\nzzz', new_text: '' });
++    expect('error' in r && r.error).toContain('first line appears at line 1, 2, 3, 4, 5');
++    expect('error' in r && r.error).not.toContain(', 6');
++  });
++
++  test('trailing newline is kept only when the input had one', () => {
++    expect(ok(applyEdit('a \nb', { old_text: 'a\nb', new_text: 'A\nB' })).content).toBe('A\nB');
++    expect(ok(applyEdit('a \nb\n', { old_text: 'a\nb', new_text: 'A\nB' })).content).toBe('A\nB\n');
++  });
++
++  test('agrees with a plain replace on seeded random slices', () => {
++    let seed = 1;
++    const rand = (n: number) => {
++      seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff;
++      return seed % n;
++    };
++    for (let c = 0; c < 200; c++) {
++      const lines = Array.from({ length: 2 + rand(8) }, (_, k) => `l${k}`);
++      const s = rand(lines.length);
++      const len = 1 + rand(lines.length - s);
++      const slice = lines.slice(s, s + len);
++      const content = lines.join('\n') + '\n';
++
++      const exact = ok(applyEdit(content, { old_text: slice.join('\n'), new_text: 'X' }));
++      expect(exact.applied.tier).toBe('exact');
++      expect(exact.content).toBe(content.replace(slice.join('\n'), 'X'));
++
++      if (len > 1) {
++        const padded = lines.map((l, k) => (k >= s && k < s + len ? l + ' ' : l));
++        const viaTier2 = ok(applyEdit(padded.join('\n') + '\n', { old_text: slice.join('\n'), new_text: 'X' }));
++        expect(viaTier2.applied.tier).toBe('trailing-space');
++        expect(viaTier2.content).toBe([...lines.slice(0, s), 'X', ...lines.slice(s + len), ''].join('\n'));
++      }
++    }
++  });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 14:05:28.156554806 +0000
++++ b/edit.ts	2026-10-29 14:07:01.462795885 +0000
+@@ -23,5 +23,84 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text: oldText, new_text: newText, replace_all: replaceAll } = edit;
++  if (oldText === '') return { error: 'old_text is empty; use write to create or overwrite content' };
++  if (oldText === newText) return { error: 'old_text and new_text are the same' };
++
++  const starts: number[] = [];
++  for (let i = content.indexOf(oldText); i !== -1; i = content.indexOf(oldText, i + oldText.length)) starts.push(i);
++  if (starts.length > 1 && !replaceAll) {
++    return { error: `old_text matches ${starts.length} places (first at line ${lineOf(content, starts[0])}); add context or set replace_all` };
++  }
++  if (starts.length > 0) {
++    const last = starts[starts.length - 1];
++    return {
++      content: content.split(oldText).join(newText),
++      applied: { from: lineOf(content, starts[0]), to: lineOf(content, last + oldText.length - 1), tier: 'exact', count: starts.length },
++    };
++  }
++
++  const lines = content.split('\n');
++  const oldLines = stripNewline(oldText).split('\n');
++  const stripped = stripNewline(newText);
++  const newLines = stripped === '' ? [] : stripped.split('\n');
++  const tiers: [Tier, (s: string) => string][] = [
++    ['trailing-space', s => s.trimEnd()],
++    ['indentation', s => s.trim()],
++  ];
++  for (const [tier, norm] of tiers) {
++    const hits: number[] = [];
++    for (let i = 0; i + oldLines.length <= lines.length; i++) {
++      if (oldLines.every((o, k) => norm(lines[i + k]) === norm(o))) hits.push(i);
++    }
++    if (hits.length === 0) continue;
++    if (hits.length > 1) {
++      return { error: `old_text matches ${hits.length} places (${tier}) at lines ${hits.map(i => i + 1).join(', ')}` };
++    }
++    const i = hits[0];
++    let repl = newLines;
++    if (tier === 'indentation') {
++      const oldFirst = oldLines.find(l => l.trim() !== '');
++      const fileFirst = lines.slice(i, i + oldLines.length).find(l => l.trim() !== '');
++      if (oldFirst !== undefined && fileFirst !== undefined) repl = reindent(newLines, indentOf(oldFirst), indentOf(fileFirst));
++    }
++    return {
++      content: [...lines.slice(0, i), ...repl, ...lines.slice(i + oldLines.length)].join('\n'),
++      applied: { from: i + 1, to: i + oldLines.length, tier, count: 1 },
++    };
++  }
++
++  let msg = 'old_text not found';
++  const first = oldText.split('\n').find(l => l.trim() !== '')?.trim();
++  if (first) {
++    const hits: number[] = [];
++    lines.forEach((l, idx) => {
++      if (hits.length < 5 && l.includes(first)) hits.push(idx + 1);
++    });
++    if (hits.length > 0) msg += `; first line appears at line ${hits.join(', ')}`;
++  }
++  return { error: msg };
++}
++
++// 1-based line number of the character at `index`.
++function lineOf(content: string, index: number): number {
++  return content.slice(0, index).split('\n').length;
++}
++
++// Drops one trailing newline, so old_text 'a\n' is the single line 'a'.
++function stripNewline(s: string): string {
++  return s.endsWith('\n') ? s.slice(0, -1) : s;
++}
++
++function indentOf(s: string): string {
++  return /^\s*/.exec(s)![0];
++}
++
++// Puts fileIndent in place of oldIndent on each non-blank line; blank lines stay as they are.
++function reindent(lines: string[], oldIndent: string, fileIndent: string): string[] {
++  return lines.map(l => {
++    if (l.trim() === '') return l;
++    const body = l.startsWith(oldIndent) ? l.slice(oldIndent.length) : l.trimStart();
++    return fileIndent + body;
++  });
+ }

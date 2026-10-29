@@ -1,0 +1,310 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/csv-stream.test.ts b/csv-stream.test.ts
+--- a/csv-stream.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/csv-stream.test.ts	2026-10-29 15:28:13.122941387 +0000
+@@ -0,0 +1,157 @@
++import { expect, test } from "bun:test";
++import { CsvStream, parseCsv } from "./csv";
++
++function rowsOf(chunks: string[]): string[][] {
++  const s = new CsvStream();
++  const rows: string[][] = [];
++  for (const c of chunks) rows.push(...s.push(c));
++  rows.push(...s.end());
++  return rows;
++}
++
++function lcg(seed: number) {
++  let s = seed >>> 0;
++  return (n: number) => {
++    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
++    return (s >>> 8) % n;
++  };
++}
++
++function randomChunks(input: string, rnd: (n: number) => number): string[] {
++  const chunks: string[] = [];
++  let cur = "";
++  for (const ch of input) {
++    if (rnd(5) === 0) {
++      chunks.push(cur);
++      cur = "";
++    }
++    if (rnd(6) === 0) chunks.push("");
++    cur += ch;
++  }
++  chunks.push(cur);
++  return chunks;
++}
++
++function outcome(input: string, chunks: string[]) {
++  const s = new CsvStream();
++  const rows: string[][] = [];
++  try {
++    for (const c of chunks) rows.push(...s.push(c));
++    rows.push(...s.end());
++    return { rows, error: undefined };
++  } catch (e) {
++    return { rows: [], error: e instanceof SyntaxError ? "SyntaxError" : String(e) };
++  }
++}
++
++function expectSameAsParseCsv(input: string, chunks: string[]) {
++  let want: { rows: string[][]; error: string | undefined };
++  try {
++    want = { rows: parseCsv(input), error: undefined };
++  } catch (e) {
++    want = { rows: [], error: e instanceof SyntaxError ? "SyntaxError" : String(e) };
++  }
++  expect({ input, chunks, ...outcome(input, chunks) }).toEqual({ input, chunks, ...want });
++}
++
++test("commas separate fields and a row ends at \\n", () => {
++  expect(rowsOf(["a,b\n"])).toEqual([["a", "b"]]);
++});
++
++test("a \\r\\n split across chunks ends the row once the \\n arrives", () => {
++  const s = new CsvStream();
++  expect(s.push("a\r")).toEqual([]);
++  expect(s.push("\nb")).toEqual([["a"]]);
++  expect(s.end()).toEqual([["b"]]);
++});
++
++test("a \\r that is not followed by \\n is part of its field", () => {
++  expect(rowsOf(["a\r", "b"])).toEqual([["a\rb"]]);
++  expect(rowsOf(["a\r"])).toEqual([["a\r"]]);
++});
++
++test("a quoted field can hold , \\r and \\n and doubled quotes, even split across chunks", () => {
++  expect(rowsOf(['"x', '"', '"y,\r\n"', "\n"])).toEqual([['x"y,\r\n']]);
++  expect(rowsOf(['"a""', '"\n'])).toEqual([['a"']]);
++});
++
++test("a closing quote must be followed by a comma, a row end or the end of input", () => {
++  expect(() => rowsOf(['"a"', "b"])).toThrow(SyntaxError);
++  const s = new CsvStream();
++  expect(s.push('"a"\r')).toEqual([]);
++  expect(() => s.push("x")).toThrow(SyntaxError);
++  expect(() => rowsOf(['"a"\r'])).toThrow(SyntaxError);
++  expect(rowsOf(['"a"'])).toEqual([["a"]]);
++});
++
++test("a quote in a field that is not quoted is a SyntaxError", () => {
++  expect(() => new CsvStream().push('a"')).toThrow(SyntaxError);
++  expect(() => rowsOf(["a,b\r", '"c'])).toThrow(SyntaxError);
++});
++
++test("a quoted field still open at the end of the input is a SyntaxError", () => {
++  const s = new CsvStream();
++  expect(s.push('"ab')).toEqual([]);
++  expect(() => s.end()).toThrow(SyntaxError);
++});
++
++test("a BOM is dropped only at the very start of the input", () => {
++  expect(rowsOf(["", "\uFEFFa"])).toEqual([["a"]]);
++  expect(rowsOf(["a", "\uFEFFb"])).toEqual([["a\uFEFFb"]]);
++  expect(rowsOf(["\uFEFF"])).toEqual([]);
++});
++
++test("empty input has no rows and a trailing row end adds none", () => {
++  expect(rowsOf([])).toEqual([]);
++  expect(rowsOf([""])).toEqual([]);
++  expect(rowsOf(["a\n"])).toEqual([["a"]]);
++  expect(rowsOf(["a,"])).toEqual([["a", ""]]);
++  expect(rowsOf(["a\n\nb"])).toEqual([["a"], [""], ["b"]]);
++});
++
++test("the rows from all calls equal parseCsv for random inputs and random splits", () => {
++  const rnd = lcg(42);
++  const alphabet = ["a", ",", '"', "\r", "\n", "\uFEFF"];
++  for (let n = 0; n < 3000; n++) {
++    let input = "";
++    const len = rnd(13);
++    for (let k = 0; k < len; k++) input += alphabet[rnd(alphabet.length)];
++    expectSameAsParseCsv(input, randomChunks(input, rnd));
++    expectSameAsParseCsv(input, [...input]);
++    if (input.length <= 8) {
++      for (let mask = 0; mask < 1 << (input.length - 1); mask++) {
++        const chunks: string[] = [];
++        let cur = "";
++        for (let k = 0; k < input.length; k++) {
++          if (k > 0 && mask & (1 << (k - 1))) {
++            chunks.push(cur);
++            cur = "";
++          }
++          cur += input[k];
++        }
++        chunks.push(cur);
++        expectSameAsParseCsv(input, chunks);
++      }
++    }
++  }
++});
++
++test("a long field and many rows fed in one-char chunks match parseCsv", () => {
++  const rows = Array.from({ length: 20000 }, (_, i) => `${i},y\n`).join("");
++  const input = `"${"x".repeat(200000)}"\n${rows}`;
++  expect(rowsOf([...input])).toEqual(parseCsv(input));
++});
++
++test("after a SyntaxError every later call throws it again", () => {
++  const s = new CsvStream();
++  expect(() => s.push('a"')).toThrow(SyntaxError);
++  expect(() => s.push("b\n")).toThrow(SyntaxError);
++  expect(() => s.end()).toThrow(SyntaxError);
++});
++
++test("after end() push and end throw an Error", () => {
++  const s = new CsvStream();
++  expect(s.end()).toEqual([]);
++  expect(() => s.push("a")).toThrow("CsvStream already ended");
++  expect(() => s.end()).toThrow("CsvStream already ended");
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/csv.ts b/csv.ts
+--- a/csv.ts	2026-10-29 15:25:15.412957913 +0000
++++ b/csv.ts	2026-10-29 15:27:56.088702874 +0000
+@@ -50,3 +50,145 @@
+   rows.push(row);
+   return rows;
+ }
++
++type StreamState = "rowStart" | "fieldStart" | "plain" | "quoted" | "quote" | "closed";
++
++const plainStop = /[,\r\n"]/g;
++
++/**
++ * parseCsv read in chunks. It keeps only the current row, the partial field and where the parse stands, so the work
++ * for a chunk depends on the chunk alone. push returns the rows whose row end has arrived, end returns the rest once
++ * the input is over. A SyntaxError is kept and thrown again by every later call; a call after end() throws an Error.
++ */
++export class CsvStream {
++  private row: string[] = [];
++  private field = "";
++  private state: StreamState = "rowStart";
++  private crAt = -1; // absolute offset of a \r whose meaning waits for the next char, or -1
++  private offset = 0; // absolute offset of the first char of the next chunk
++  private started = false;
++  private ended = false;
++  private error: SyntaxError | undefined;
++
++  push(chunk: string): string[][] {
++    this.guard();
++    const base = this.offset;
++    this.offset += chunk.length;
++    const rows: string[][] = [];
++    let i = 0;
++    if (!this.started && chunk !== "") {
++      this.started = true;
++      if (chunk[0] === "\uFEFF") i = 1;
++    }
++    while (i < chunk.length) {
++      if (this.crAt >= 0) {
++        if (chunk[i] === "\n") {
++          this.crAt = -1;
++          i++;
++          this.endRow(rows);
++        } else if (this.state === "closed") {
++          throw this.fail(`unexpected "\\r" after a closing quote at offset ${this.crAt}`);
++        } else {
++          this.crAt = -1;
++          this.field += "\r";
++        }
++        continue;
++      }
++      switch (this.state) {
++        case "quoted": {
++          const q = chunk.indexOf('"', i);
++          if (q < 0) {
++            this.field += chunk.slice(i);
++            i = chunk.length;
++          } else {
++            this.field += chunk.slice(i, q);
++            i = q + 1;
++            this.state = "quote";
++          }
++          break;
++        }
++        case "quote":
++          if (chunk[i] === '"') {
++            this.field += '"';
++            this.state = "quoted";
++            i++;
++          } else this.state = "closed";
++          break;
++        case "closed": {
++          const c = chunk[i]!;
++          if (c === ",") this.endField();
++          else if (c === "\n") this.endRow(rows);
++          else if (c === "\r") this.crAt = base + i;
++          else throw this.fail(`unexpected ${JSON.stringify(c)} after a closing quote at offset ${base + i}`);
++          i++;
++          break;
++        }
++        default: {
++          if (this.state === "plain") {
++            plainStop.lastIndex = i;
++            const m = plainStop.exec(chunk);
++            const stop = m ? m.index : chunk.length;
++            this.field += chunk.slice(i, stop);
++            i = stop;
++            if (i === chunk.length) break;
++          }
++          const c = chunk[i]!;
++          if (c === ",") {
++            this.endField();
++            i++;
++          } else if (c === "\n") {
++            this.endRow(rows);
++            i++;
++          } else if (c === "\r") {
++            this.crAt = base + i;
++            this.state = "plain";
++            i++;
++          } else if (c === '"') {
++            if (this.state === "plain") throw this.fail(`a quote in a field that is not quoted, at offset ${base + i}`);
++            this.state = "quoted";
++            i++;
++          } else this.state = "plain";
++        }
++      }
++    }
++    return rows;
++  }
++
++  end(): string[][] {
++    this.guard();
++    this.ended = true;
++    if (this.state === "quoted") throw this.fail("a quoted field is still open at the end of the input");
++    if (this.crAt >= 0) {
++      if (this.state === "closed") throw this.fail(`unexpected "\\r" after a closing quote at offset ${this.crAt}`);
++      this.crAt = -1;
++      this.field += "\r";
++    }
++    if (this.state === "rowStart") return [];
++    this.row.push(this.field);
++    return [this.row];
++  }
++
++  private guard() {
++    if (this.error) throw this.error;
++    if (this.ended) throw new Error("CsvStream already ended");
++  }
++
++  private fail(message: string): SyntaxError {
++    this.error = new SyntaxError(message);
++    return this.error;
++  }
++
++  private endField() {
++    this.row.push(this.field);
++    this.field = "";
++    this.state = "fieldStart";
++  }
++
++  private endRow(rows: string[][]) {
++    this.row.push(this.field);
++    rows.push(this.row);
++    this.row = [];
++    this.field = "";
++    this.state = "rowStart";
++  }
++}

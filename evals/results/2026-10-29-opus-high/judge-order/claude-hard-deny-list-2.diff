@@ -1,0 +1,99 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.ts b/deny.ts
+--- a/deny.ts	2026-10-29 09:47:19.456351804 +0000
++++ b/deny.ts	2026-10-29 09:48:07.094433924 +0000
+@@ -1,5 +1,5 @@
+ import { homedir } from 'node:os';
+-import { isAbsolute, relative, resolve } from 'node:path';
++import { basename, isAbsolute, relative, resolve } from 'node:path';
+ 
+ export type Hit = { name: 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside'; reason: string };
+ 
+@@ -32,9 +32,86 @@
+ //   under cwd and is fine.
+ //
+ // find with -delete, -exec or -execdir: the start paths are the words before the first word starting with -
+-//   (none means `.`). Any start path that cannot be resolved or is outside cwd: rm-outside. cwd itself is fine.
++//   (none means `.`), after skipping the leading options -H, -L, -P, -D <debugopts> and -O<level>. Any start path that cannot be resolved or is outside cwd: rm-outside. cwd itself is fine.
+ //
+ // Anything else: undefined.
+ export function denyListed(argv: string[], cwd: string): Hit | undefined {
+-  throw new Error('not implemented');
++  if (argv.length === 0) return undefined;
++  const cmd = basename(argv[0]);
++  if (cmd === 'git') return gitHit(argv.slice(1));
++  if (cmd === 'rm') return rmHit(argv.slice(1), cwd);
++  if (cmd === 'find') return findHit(argv.slice(1), cwd);
++  return undefined;
++}
++
++// A group of short flags such as -f or -fdx (not --long, not a lone -).
++const shortGroup = (w: string, letters: string) => /^-[^-]/.test(w) && [...letters].some(c => w.includes(c));
++// The long flag itself, or the flag with =value.
++const longFlag = (w: string, flag: string) => w === flag || w.startsWith(flag + '=');
++
++const GIT_VALUE_OPTIONS = ['-C', '-c', '--git-dir', '--work-tree', '--namespace'];
++
++function gitHit(args: string[]): Hit | undefined {
++  let i = 0;
++  while (i < args.length && args[i].startsWith('-')) i += GIT_VALUE_OPTIONS.includes(args[i]) ? 2 : 1;
++  const sub = args[i];
++  const rest = args.slice(i + 1);
++  if (sub === 'push') {
++    const bad = rest.find(
++      w =>
++        ['--force', '--force-with-lease', '--mirror', '--delete', '--prune'].some(f => longFlag(w, f)) ||
++        shortGroup(w, 'fd') ||
++        w.startsWith('+') ||
++        w.startsWith(':'),
++    );
++    if (bad !== undefined) return { name: 'force-push', reason: `git push ${bad} can overwrite or delete remote history` };
++  }
++  if (sub === 'reset' && rest.includes('--hard'))
++    return { name: 'reset-hard', reason: 'git reset --hard discards uncommitted changes' };
++  if (sub === 'clean') {
++    const force = rest.some(w => w === '--force' || shortGroup(w, 'f'));
++    const dryRun = rest.some(w => w === '-n' || w === '--dry-run');
++    if (force && !dryRun) return { name: 'clean-force', reason: 'git clean --force deletes untracked files' };
++  }
++  return undefined;
++}
++
++// A path whose value is only known when the shell runs it: a variable, or another user's home (~bob).
++const unresolvable = (p: string) => p.includes('$') || (p.startsWith('~') && p !== '~' && !p.startsWith('~/'));
++
++function rmHit(args: string[], cwd: string): Hit | undefined {
++  let recursive = false;
++  const targets: string[] = [];
++  let endOfFlags = false;
++  for (const w of args) {
++    if (endOfFlags) targets.push(w);
++    else if (w === '--') endOfFlags = true;
++    else if (w.startsWith('-')) recursive ||= w === '--recursive' || shortGroup(w, 'rR');
++    else targets.push(w);
++  }
++  if (!recursive) return undefined;
++  if (targets.length === 0) return { name: 'rm-outside', reason: 'rm -r without targets (e.g. from xargs) cannot be checked' };
++  for (const t of targets) {
++    if (unresolvable(t)) return { name: 'rm-outside', reason: `rm -r target ${t} cannot be resolved before it runs` };
++    if (!insideWorkspace(t, cwd) || sameDir(t, cwd))
++      return { name: 'rm-outside', reason: `rm -r target ${t} is outside the working directory or is the working directory itself` };
++  }
++  return undefined;
++}
++
++function findHit(args: string[], cwd: string): Hit | undefined {
++  if (!args.some(w => w === '-delete' || w === '-exec' || w === '-execdir')) return undefined;
++  let i = 0;
++  while (i < args.length) {
++    if (['-H', '-L', '-P'].includes(args[i]) || /^-O\d*$/.test(args[i])) i++;
++    else if (args[i] === '-D') i += 2;
++    else break;
++  }
++  const starts: string[] = [];
++  for (; i < args.length && !args[i].startsWith('-'); i++) starts.push(args[i]);
++  for (const s of starts) {
++    if (unresolvable(s)) return { name: 'rm-outside', reason: `find start path ${s} cannot be resolved before it runs` };
++    if (!insideWorkspace(s, cwd)) return { name: 'rm-outside', reason: `find deletes or runs commands under ${s}, outside the working directory` };
++  }
++  return undefined;
+ }

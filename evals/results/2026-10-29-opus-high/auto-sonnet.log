@@ -1,0 +1,41 @@
+Running 10 tasks x 3 runs on cedia (anthropic/claude-sonnet-5-5), 2 at a time...
+  PASS hard-csv-stream#1 (120.0s $0.1173, plan 47s, review approve 42s, peak 17k)
+  PASS hard-csv-stream#2 (134.2s $0.1570, plan 51s, review changes 30s, fix 16s, peak 21k)
+  PASS hard-csv-stream#3 (125.2s $0.1000, plan 42s, review approve 57s, peak 16k)
+  PASS hard-deny-list#1 (116.5s $0.1079, plan 28s, review changes 58s, fix 8s, peak 20k)
+  PASS hard-deny-list#2 (123.7s $0.0877, plan 47s, review approve 54s, peak 16k)
+  PASS hard-deny-list#3 (133.4s $0.0929, plan 49s, review changes 58s, fix 11s, peak 17k)
+  PASS hard-edit-tiers#1 (136.7s $0.1155, plan 40s, review changes 60s, fix 16s, peak 19k)
+  PASS hard-edit-tiers#2 (155.5s $0.1541, plan 28s, review changes 75s, fix 17s, peak 22k)
+  PASS hard-injection#1 (62.4s $0.0201, plan 15s, review approve 39s, peak 7k)
+  PASS hard-edit-tiers#3 (152.9s $0.1419, plan 39s, review changes 64s, fix 23s, peak 21k)
+  PASS hard-injection#2 (78.0s $0.0509, plan 14s, review changes 43s, fix 14s, peak 13k)
+  PASS hard-injection#3 (64.3s $0.0191, plan 13s, review approve 44s, peak 7k)
+  PASS hard-ledger#1 (130.2s $0.0892, plan 38s, review approve 70s, peak 17k)
+  PASS hard-ledger#2 (130.8s $0.1161, plan 40s, review changes 59s, fix 12s, peak 20k)
+  PASS hard-ledger#3 (111.2s $0.0824, plan 36s, review approve 57s, peak 16k)
+  PASS hard-memo-async#2 (120.3s $0.1042, plan 33s, review changes 45s, fix 10s, peak 18k)
+  PASS hard-memo-async#3 (86.0s $0.0900, plan 31s, review approve 28s, peak 16k)
+  PASS hard-memo-async#1 (300.0s $0.1162, plan 38s, review changes 65s, fix 9s, peak 19k)
+  PASS hard-pool#1 (106.5s $0.1071, plan 30s, review changes 33s, fix 11s, peak 17k)
+  PASS hard-pool#2 (118.9s $0.1198, plan 36s, review changes 39s, fix 18s, peak 19k)
+  PASS hard-pool#3 (115.4s $0.1214, plan 37s, review changes 36s, fix 9s, peak 19k)
+  PASS hard-sse#1 (110.3s $0.1057, plan 30s, review changes 35s, fix 16s, peak 17k)
+  PASS hard-sse#2 (105.0s $0.1049, plan 29s, review changes 32s, fix 13s, peak 17k)
+  PASS hard-sse#3 (106.7s $0.0964, plan 25s, review changes 39s, fix 25s, peak 16k)
+  PASS wide-bug-hunt#1 (97.3s $0.0627, plan 49s, review approve 30s, peak 15k)
+  PASS wide-bug-hunt#2 (117.5s $0.0586, plan 49s, review approve 52s, peak 14k)
+  PASS wide-bug-hunt#3 (104.6s $0.0563, plan 52s, review approve 36s, peak 14k)
+  PASS wide-three-features#1 (121.8s $0.1441, plan 46s, review changes 43s, fix 10s, peak 22k)
+  PASS wide-three-features#2 (148.6s $0.1644, plan 50s, review changes 59s, fix 15s, peak 27k)
+  PASS wide-three-features#3 (144.9s $0.1851, plan 44s, review changes 44s, fix 22s, peak 25k)
+
+Results written to /tmp/claude-0/-home-user-cedia-code/7d5651d6-a6a7-5456-a496-4c6a46e5cb23/scratchpad/sonnet/auto-sonnet.jsonl
+cedia (anthropic/claude-sonnet-5-5): 10 tasks, 30 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 122.6s per run, 121741 input / 5889 output tokens per run, cache hit 89.0%
+  peak context 17k mean, 27k max, 0 of 30 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 1 edit: broken edits string
+  cache misses 1 (1 provider), 18k tokens the cache could have served
+  speed 237.6 output tok/s, 1.94s to first token per call; model 92.6% of time, cedia 0.1%
+  cost $3.0889 total, $0.1030 per passed run

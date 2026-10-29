@@ -1,0 +1,82 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.test.ts b/edit.test.ts
+--- a/edit.test.ts	2026-10-29 16:41:30.060546707 +0000
++++ b/edit.test.ts	2026-10-29 16:43:54.681273969 +0000
+@@ -18,6 +18,11 @@
+     expect(r.applied).toEqual({ from: 2, to: 3, tier: 'exact', count: 1 });
+     expect(r.content).toBe('a\nB\nC\nX\nd\n');
+   });
++  test('a trailing newline on old_text does not add a line to the range', () => {
++    const r = ok(applyEdit('a\nfoo\nb\n', { old_text: 'foo\n', new_text: 'bar\n' }));
++    expect(r.applied).toEqual({ from: 2, to: 2, tier: 'exact', count: 1 });
++    expect(r.content).toBe('a\nbar\nb\n');
++  });
+   test('ambiguous without replace_all', () => {
+     const r = applyEdit('x\ny\nx\n', { old_text: 'x', new_text: 'z' });
+     expect('error' in r && r.error).toContain('matches 2 places');
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 16:41:30.060574913 +0000
++++ b/edit.ts	2026-10-29 16:43:57.806071832 +0000
+@@ -23,5 +23,62 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text: oldText, new_text: newText, replace_all: replaceAll } = edit;
++  if (oldText === '') return { error: 'old_text is empty; use write to create or overwrite a file' };
++  if (oldText === newText) return { error: 'old_text and new_text are the same' };
++
++  const stripNewline = (s: string) => (s.endsWith('\n') ? s.slice(0, -1) : s);
++  const lineOf = (idx: number) => content.slice(0, idx).split('\n').length;
++  const exact: number[] = [];
++  for (let i = content.indexOf(oldText); i !== -1; i = content.indexOf(oldText, i + oldText.length)) exact.push(i);
++  if (exact.length > 1 && !replaceAll) {
++    return { error: `old_text matches ${exact.length} places; first match at line ${lineOf(exact[0])}` };
++  }
++  if (exact.length > 0) {
++    const from = lineOf(exact[0]);
++    const to = from + stripNewline(oldText).split('\n').length - 1;
++    const out = replaceAll
++      ? content.split(oldText).join(newText)
++      : content.slice(0, exact[0]) + newText + content.slice(exact[0] + oldText.length);
++    return { content: out, applied: { from, to, tier: 'exact', count: exact.length } };
++  }
++
++  const lines = content.split('\n');
++  const oldLines = stripNewline(oldText).split('\n');
++  const newBody = stripNewline(newText);
++  const newLines = newBody === '' ? [] : newBody.split('\n');
++  const n = oldLines.length;
++  const indentOf = (s: string) => s.match(/^\s*/)![0];
++  const firstNonBlank = (ls: string[]) => ls.find((l) => l.trim() !== '') ?? '';
++
++  for (const [tier, norm] of [
++    ['trailing-space', (s: string) => s.trimEnd()],
++    ['indentation', (s: string) => s.trim()],
++  ] as const) {
++    const starts: number[] = [];
++    for (let i = 0; i + n <= lines.length; i++) {
++      if (oldLines.every((l, k) => norm(lines[i + k]) === norm(l))) starts.push(i);
++    }
++    if (starts.length === 0) continue;
++    if (starts.length > 1) {
++      return { error: `old_text matches ${starts.length} places at lines ${starts.map((i) => i + 1).join(', ')}` };
++    }
++    const i = starts[0];
++    let out = newLines;
++    if (tier === 'indentation') {
++      const oldIndent = indentOf(firstNonBlank(oldLines));
++      const fileIndent = indentOf(firstNonBlank(lines.slice(i, i + n)));
++      out = newLines.map((l) => {
++        if (l.trim() === '') return '';
++        return fileIndent + (l.startsWith(oldIndent) ? l.slice(oldIndent.length) : l);
++      });
++    }
++    lines.splice(i, n, ...out);
++    return { content: lines.join('\n'), applied: { from: i + 1, to: i + n, tier, count: 1 } };
++  }
++
++  const first = firstNonBlank(oldLines).trim();
++  const hits = first === '' ? [] : lines.flatMap((l, i) => (l.includes(first) ? [i + 1] : []));
++  const where = hits.length > 0 ? `; first line appears at line ${hits.slice(0, 5).join(', ')}` : '';
++  return { error: `old_text not found${where}` };
+ }

@@ -1,0 +1,162 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.extra.test.ts b/edit.extra.test.ts
+--- a/edit.extra.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/edit.extra.test.ts	2026-10-29 16:41:23.923100763 +0000
+@@ -0,0 +1,47 @@
++import { describe, expect, test } from 'bun:test';
++import { applyEdit } from './edit.ts';
++
++describe('extra', () => {
++  test('$ patterns in new_text stay literal', () => {
++    const r = applyEdit('a\nb\n', { old_text: 'a', new_text: '$&$1' });
++    expect('content' in r && r.content).toBe('$&$1\nb\n');
++  });
++  test('a tier-2 edit keeps a missing trailing newline missing', () => {
++    const r = applyEdit('a  \nb', { old_text: 'a', new_text: 'A' });
++    expect('content' in r && r.content).toBe('A  \nb');
++  });
++  test('not-found lists at most 5 lines where the first line appears', () => {
++    const r = applyEdit('x1\nx2\nx3\nx4\nx5\nx6\nq\n', { old_text: 'x\nzz', new_text: '' });
++    expect('error' in r && r.error).toBe('old_text not found; first line appears at line 1, 2, 3, 4, 5');
++  });
++});
++
++describe('review findings', () => {
++  test('exact tier: old_text ending in a newline ends on its own line', () => {
++    const r = applyEdit('a\nb\nc\n', { old_text: 'b\n', new_text: 'X\n' });
++    expect('content' in r && r.content).toBe('a\nX\nc\n');
++    expect('applied' in r && r.applied).toEqual({ from: 2, to: 2, tier: 'exact', count: 1 });
++  });
++  test('tier 3 dedent: a new_text line less indented than old_text is an error, not a deeper line', () => {
++    const r = applyEdit('  a\n    b\n', { old_text: '    a\n      b', new_text: '  z\n y' });
++    expect('error' in r && r.error).toContain('line 1');
++  });
++  test('tier 3 ambiguity lists the matched lines', () => {
++    const r = applyEdit('  a\n  b\n    a\n    b\n', { old_text: 'a\nb', new_text: 'c' });
++    expect('error' in r && r.error).toBe('old_text matches 2 places (lines 1, 3)');
++  });
++  test('tier 3 with old_text starting with a blank line', () => {
++    const r = applyEdit('  a\n\n  b\n  c\n', { old_text: '\nb\nc', new_text: 'x\ny' });
++    expect('content' in r && r.content).toBe('  a\n  x\n  y\n');
++    expect('applied' in r && r.applied).toEqual({ from: 2, to: 4, tier: 'indentation', count: 1 });
++  });
++  test('tier 2 with replace_all and one match', () => {
++    const r = applyEdit('a  \nb\n', { old_text: 'a\nb', new_text: 'c', replace_all: true });
++    expect('content' in r && r.content).toBe('c\n');
++    expect('applied' in r && r.applied).toEqual({ from: 1, to: 2, tier: 'trailing-space', count: 1 });
++  });
++  test('CRLF file in tier 2: matched lines are replaced by new_text as given (LF)', () => {
++    const r = applyEdit('a\r\nb\r\nc\r\n', { old_text: 'a\nb', new_text: 'x\ny' });
++    expect('content' in r && r.content).toBe('x\ny\nc\r\n');
++  });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 16:38:42.762183049 +0000
++++ b/edit.ts	2026-10-29 16:41:26.327100906 +0000
+@@ -20,8 +20,106 @@
+ // - empty old_text: message contains "use write"
+ // - old_text === new_text: message contains "same"
+ // - several matches: message contains "matches N places"
++// - tier 3, a non-blank new_text line not starting with old_text's indentation: message contains "cannot re-indent"
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text: oldText, new_text: newText, replace_all: replaceAll } = edit;
++  if (oldText === '') return { error: 'old_text is empty; use write to replace the whole file' };
++  if (oldText === newText) return { error: 'old_text and new_text are the same; nothing to change' };
++
++  // 1. exact: non-overlapping occurrences
++  const starts: number[] = [];
++  for (let i = content.indexOf(oldText); i !== -1; i = content.indexOf(oldText, i + oldText.length)) starts.push(i);
++  if (starts.length > 1 && !replaceAll) {
++    return { error: `old_text matches ${starts.length} places (first at line ${lineOf(content, starts[0])}); add context or set replace_all` };
++  }
++  if (starts.length > 0) {
++    const first = starts[0];
++    const last = starts[starts.length - 1];
++    const next = replaceAll
++      ? content.split(oldText).join(newText)
++      : content.slice(0, first) + newText + content.slice(first + oldText.length);
++    const applied = {
++      from: lineOf(content, first),
++      to: lineOf(content, last) + newlines(dropNewline(oldText)),
++      tier: 'exact' as const,
++      count: starts.length,
++    };
++    return { content: next, applied };
++  }
++
++  // Lines model for tiers 2 and 3.
++  const trailing = content.endsWith('\n') ? '\n' : '';
++  const fileLines = (trailing ? content.slice(0, -1) : content).split('\n');
++  const join = (lines: string[]) => (lines.length > 0 ? lines.join('\n') + trailing : '');
++  const oldLines = dropNewline(oldText).split('\n');
++  const newBody = dropNewline(newText);
++  const newLines = newBody === '' ? [] : newBody.split('\n');
++  const ambiguous = (windows: number[]) => ({
++    error: `old_text matches ${windows.length} places (lines ${windows.map(s => s + 1).join(', ')})`,
++  });
++
++  // 2. trailing-space: whole lines, ignoring trailing whitespace
++  const w2 = findWindows(fileLines, oldLines, s => s.trimEnd());
++  if (w2.length > 1) return ambiguous(w2);
++  if (w2.length === 1) {
++    const s = w2[0];
++    const out = [...fileLines.slice(0, s), ...newLines, ...fileLines.slice(s + oldLines.length)];
++    return { content: join(out), applied: { from: s + 1, to: s + oldLines.length, tier: 'trailing-space', count: 1 } };
++  }
++
++  // 3. indentation: whole lines, ignoring leading and trailing whitespace
++  const firstOld = oldLines.find(l => l.trim() !== '');
++  if (firstOld !== undefined) {
++    const w3 = findWindows(fileLines, oldLines, s => s.trim());
++    if (w3.length > 1) return ambiguous(w3);
++    if (w3.length === 1) {
++      const s = w3[0];
++      const k = oldLines.indexOf(firstOld);
++      const oldIndent = indentOf(firstOld);
++      const fileIndent = indentOf(fileLines[s + k]);
++      const misindented = newLines.findIndex(l => l.trim() !== '' && !l.startsWith(oldIndent));
++      if (misindented !== -1) {
++        return { error: `new_text line ${misindented + 1} does not start with old_text's indentation; cannot re-indent` };
++      }
++      const reindented = newLines.map(l => (l.trim() === '' ? '' : fileIndent + l.slice(oldIndent.length)));
++      const out = [...fileLines.slice(0, s), ...reindented, ...fileLines.slice(s + oldLines.length)];
++      return { content: join(out), applied: { from: s + 1, to: s + oldLines.length, tier: 'indentation', count: 1 } };
++    }
++  }
++
++  // Nothing matched.
++  let error = 'old_text not found';
++  if (firstOld !== undefined) {
++    const first = firstOld.trim();
++    const hits = fileLines.flatMap((l, i) => (l.includes(first) ? [i + 1] : [])).slice(0, 5);
++    if (hits.length > 0) error += `; first line appears at line ${hits.join(', ')}`;
++  }
++  return { error };
++}
++
++function lineOf(content: string, index: number): number {
++  return newlines(content.slice(0, index)) + 1;
++}
++
++function newlines(s: string): number {
++  return s.split('\n').length - 1;
++}
++
++function dropNewline(s: string): string {
++  return s.endsWith('\n') ? s.slice(0, -1) : s;
++}
++
++function indentOf(s: string): string {
++  return s.slice(0, s.length - s.trimStart().length);
++}
++
++// Start indexes where every line of oldLines equals the matching file line under norm.
++function findWindows(fileLines: string[], oldLines: string[], norm: (s: string) => string): number[] {
++  const starts: number[] = [];
++  for (let s = 0; s + oldLines.length <= fileLines.length; s++) {
++    if (oldLines.every((l, k) => norm(fileLines[s + k]) === norm(l))) starts.push(s);
++  }
++  return starts;
+ }

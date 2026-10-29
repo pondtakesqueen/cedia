@@ -1,0 +1,165 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.rules.test.ts b/deny.rules.test.ts
+--- a/deny.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/deny.rules.test.ts	2026-10-29 13:59:14.686624054 +0000
+@@ -0,0 +1,71 @@
++import { expect, test } from 'bun:test';
++import { denyListed, insideWorkspace, sameDir } from './deny.ts';
++
++const cwd = '/work/repo';
++const name = (argv: string[]) => denyListed(argv, cwd)?.name;
++
++test('git path in argv[0] and global options with values', () => {
++  expect(name(['/opt/x/git', 'push', '-f'])).toBe('force-push');
++  expect(name(['git', '--namespace', 'push', 'push'])).toBeUndefined();
++  expect(name(['git', '--work-tree', 'w', 'push', '-f'])).toBe('force-push');
++});
++
++test('long push flags with =value', () => {
++  for (const f of ['--mirror=x', '--delete=x', '--prune=x']) expect(name(['git', 'push', f])).toBe('force-push');
++});
++
++test('short push groups with d or f', () => {
++  expect(name(['git', 'push', '-df'])).toBe('force-push');
++  expect(name(['git', 'push', '-ud'])).toBe('force-push');
++  expect(name(['git', 'push', '-u'])).toBeUndefined();
++});
++
++test('refspec + or : only counts for push', () => {
++  expect(name(['git', 'commit', '-m', '+x'])).toBeUndefined();
++  expect(name(['git', 'push', 'origin', '+main'])).toBe('force-push');
++});
++
++test('reset without --hard and clean variants', () => {
++  expect(name(['git', 'reset', 'HEAD'])).toBeUndefined();
++  expect(name(['git', 'clean', '-x', '-f'])).toBe('clean-force');
++  expect(name(['git', 'clean', '--force', '--dry-run'])).toBeUndefined();
++  expect(name(['git', 'clean', '-nf'])).toBe('clean-force');
++});
++
++test('rm without recursion, and recursive spellings', () => {
++  expect(name(['rm', '-f', '/etc'])).toBeUndefined();
++  expect(name(['rm', '-R', '/etc'])).toBe('rm-outside');
++  expect(name(['rm', '--recursive', '/etc'])).toBe('rm-outside');
++  expect(name(['rm', '--', '-r', '/etc'])).toBeUndefined();
++  expect(name(['rm', '-rf', '--'])).toBe('rm-outside');
++});
++
++test('rm targets outside or equal to cwd', () => {
++  expect(name(['rm', '-rf', '..'])).toBe('rm-outside');
++  expect(name(['rm', '-rf', '~'])).toBe('rm-outside');
++  expect(name(['rm', '-rf', '~/x'])).toBe('rm-outside');
++  expect(name(['rm', '-rf', '/work/repo/../repo2'])).toBe('rm-outside');
++  expect(name(['rm', '-rf', 'build$X'])).toBe('rm-outside');
++});
++
++test('find without an action, or with an in-workspace start', () => {
++  expect(name(['find', '/etc', '-name', 'x'])).toBeUndefined();
++  expect(name(['find', '.', '-execdir', 'x', '{}', ';'])).toBeUndefined();
++  expect(name(['find', '~bob', '-delete'])).toBe('rm-outside');
++  expect(name(['find', 'src', '-name', '/etc', '-delete'])).toBeUndefined();
++});
++
++test('other tools pass', () => {
++  expect(name(['echo', 'git', 'push', '-f'])).toBeUndefined();
++  expect(name([])).toBeUndefined();
++});
++
++test('rm -r target rule agrees with insideWorkspace and sameDir', () => {
++  const targets = ['.', '..', 'src', '/', '/etc', '/work/repo/b', '*', '~'];
++  for (const t of targets) {
++    for (const flags of [['-r'], ['-fR'], ['--recursive']]) {
++      const want = !insideWorkspace(t, cwd) || sameDir(t, cwd) ? 'rm-outside' : undefined;
++      expect([t, flags, name(['rm', ...flags, t])]).toEqual([t, flags, want]);
++    }
++  }
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.ts b/deny.ts
+--- a/deny.ts	2026-10-29 13:58:15.000080585 +0000
++++ b/deny.ts	2026-10-29 13:59:09.190753703 +0000
+@@ -1,5 +1,5 @@
+ import { homedir } from 'node:os';
+-import { isAbsolute, relative, resolve } from 'node:path';
++import { basename, isAbsolute, relative, resolve } from 'node:path';
+ 
+ export type Hit = { name: 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside'; reason: string };
+ 
+@@ -14,6 +14,61 @@
+ // Same directory as cwd, e.g. `.`, `./`, or cwd's absolute path.
+ export const sameDir = (path: string, cwd: string) => relative(resolve(cwd), resolve(cwd, expandHome(path))) === '';
+ 
++const short = (w: string) => /^-[^-]/.test(w);
++const shortHas = (w: string, letter: string) => short(w) && w.includes(letter);
++// A path the guard cannot resolve before the command runs: a variable, or ~user.
++const unresolvable = (p: string) => p.includes('$') || (p.startsWith('~') && p !== '~' && !p.startsWith('~/'));
++
++const gitValueOptions = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
++
++function gitHit(args: string[]): Hit | undefined {
++  let i = 0;
++  while (i < args.length && args[i].startsWith('-')) i += gitValueOptions.has(args[i]) ? 2 : 1;
++  const sub = args[i];
++  const rest = args.slice(i + 1);
++  if (sub === 'push') {
++    const force = rest.find(
++      (a) =>
++        /^--(force|force-with-lease|mirror|delete|prune)(=|$)/.test(a) ||
++        shortHas(a, 'f') ||
++        shortHas(a, 'd') ||
++        /^[+:]/.test(a),
++    );
++    return force === undefined ? undefined : { name: 'force-push', reason: `git push ${force}` };
++  }
++  if (sub === 'reset' && rest.includes('--hard')) return { name: 'reset-hard', reason: 'git reset --hard' };
++  if (sub === 'clean' && !rest.some((a) => a === '-n' || a === '--dry-run')) {
++    if (rest.some((a) => a === '--force' || shortHas(a, 'f'))) return { name: 'clean-force', reason: 'git clean -f' };
++  }
++  return undefined;
++}
++
++function rmHit(args: string[], cwd: string): Hit | undefined {
++  const dd = args.indexOf('--');
++  const before = dd < 0 ? args : args.slice(0, dd);
++  const flags = before.filter((a) => a.startsWith('-'));
++  const targets = [...before.filter((a) => !a.startsWith('-')), ...(dd < 0 ? [] : args.slice(dd + 1))];
++  const recursive = flags.some((a) => a === '--recursive' || shortHas(a, 'r') || shortHas(a, 'R'));
++  if (!recursive) return undefined;
++  if (targets.length === 0) return { name: 'rm-outside', reason: 'rm -r with no targets' };
++  for (const t of targets) {
++    if (unresolvable(t) || !insideWorkspace(t, cwd) || sameDir(t, cwd)) {
++      return { name: 'rm-outside', reason: `rm -r target ${t} outside ${cwd}` };
++    }
++  }
++  return undefined;
++}
++
++function findHit(args: string[], cwd: string): Hit | undefined {
++  if (!args.some((a) => a === '-delete' || a === '-exec' || a === '-execdir')) return undefined;
++  const k = args.findIndex((a) => a.startsWith('-'));
++  const starts = k < 0 ? args : args.slice(0, k);
++  for (const p of starts.length > 0 ? starts : ['.']) {
++    if (unresolvable(p) || !insideWorkspace(p, cwd)) return { name: 'rm-outside', reason: `find start ${p} outside ${cwd}` };
++  }
++  return undefined;
++}
++
+ // Looks at one simple command's argv (already split, quotes removed) and returns a Hit when it must be denied.
+ //
+ // git (argv[0] may be a path such as /usr/bin/git). Global options before the subcommand are skipped; -C, -c,
+@@ -36,5 +91,16 @@
+ //
+ // Anything else: undefined.
+ export function denyListed(argv: string[], cwd: string): Hit | undefined {
+-  throw new Error('not implemented');
++  if (argv.length === 0) return undefined;
++  const args = argv.slice(1);
++  switch (basename(argv[0])) {
++    case 'git':
++      return gitHit(args);
++    case 'rm':
++      return rmHit(args, cwd);
++    case 'find':
++      return findHit(args, cwd);
++    default:
++      return undefined;
++  }
+ }

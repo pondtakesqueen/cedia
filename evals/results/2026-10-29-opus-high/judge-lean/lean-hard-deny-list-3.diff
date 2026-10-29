@@ -1,0 +1,99 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.test.ts b/deny.test.ts
+--- a/deny.test.ts	2026-10-29 16:36:37.675166198 +0000
++++ b/deny.test.ts	2026-10-29 16:39:37.221038837 +0000
+@@ -31,6 +31,11 @@
+     expect([line, hit(line)]).toEqual([line, undefined]);
+ });
+ 
++test('names starting with .. inside the working directory pass', () => {
++  for (const line of ['rm -rf ..foo', 'find ..cache -delete'])
++    expect([line, hit(line)]).toEqual([line, undefined]);
++});
++
+ test('words after -- are targets', () => {
+   expect(hit('rm -rf -- -weird')).toBeUndefined();
+   expect(denyListed(['rm', '-rf', '--', '/etc'], cwd)?.name).toBe('rm-outside');
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.ts b/deny.ts
+--- a/deny.ts	2026-10-29 16:36:37.675193939 +0000
++++ b/deny.ts	2026-10-29 16:39:40.087094591 +0000
+@@ -1,5 +1,5 @@
+ import { homedir } from 'node:os';
+-import { isAbsolute, relative, resolve } from 'node:path';
++import { basename, isAbsolute, relative, resolve } from 'node:path';
+ 
+ export type Hit = { name: 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside'; reason: string };
+ 
+@@ -8,12 +8,18 @@
+ // True when `path` (relative to cwd, or absolute, or ~/...) is cwd itself or inside it.
+ export function insideWorkspace(path: string, cwd: string): boolean {
+   const rel = relative(resolve(cwd), resolve(cwd, expandHome(path)));
+-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
++  return rel === '' || (rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel));
+ }
+ 
+ // Same directory as cwd, e.g. `.`, `./`, or cwd's absolute path.
+ export const sameDir = (path: string, cwd: string) => relative(resolve(cwd), resolve(cwd, expandHome(path))) === '';
+ 
++// True when a path cannot be resolved before the command runs: it contains $, or is ~user.
++const unresolvable = (p: string) => p.includes('$') || (p.startsWith('~') && p !== '~' && !p.startsWith('~/'));
++
++// True for a short flag group such as -fu that contains one of the letters in chars.
++const shortGroup = (w: string, chars: string) => /^-[^-]/.test(w) && [...chars].some(c => w.includes(c));
++
+ // Looks at one simple command's argv (already split, quotes removed) and returns a Hit when it must be denied.
+ //
+ // git (argv[0] may be a path such as /usr/bin/git). Global options before the subcommand are skipped; -C, -c,
+@@ -36,5 +42,52 @@
+ //
+ // Anything else: undefined.
+ export function denyListed(argv: string[], cwd: string): Hit | undefined {
+-  throw new Error('not implemented');
++  if (argv.length === 0) return undefined;
++  const cmd = basename(argv[0]);
++
++  if (cmd === 'git') {
++    let i = 1;
++    while (i < argv.length && argv[i].startsWith('-')) {
++      i += ['-C', '-c', '--git-dir', '--work-tree', '--namespace'].includes(argv[i]) ? 2 : 1;
++    }
++    const sub = argv[i];
++    const rest = argv.slice(i + 1);
++    if (sub === 'push') {
++      const force = rest.some(w => {
++        const flag = w.split('=')[0];
++        return ['--force', '--force-with-lease', '--mirror', '--delete', '--prune'].includes(flag) || shortGroup(w, 'fd') || (!w.startsWith('-') && /^[+:]/.test(w));
++      });
++      if (force) return { name: 'force-push', reason: 'git push would overwrite or delete remote refs' };
++    }
++    if (sub === 'reset' && rest.includes('--hard')) return { name: 'reset-hard', reason: 'git reset --hard discards uncommitted work' };
++    if (sub === 'clean' && !rest.some(w => w === '-n' || w === '--dry-run') && rest.some(w => w === '--force' || shortGroup(w, 'f'))) {
++      return { name: 'clean-force', reason: 'git clean -f deletes untracked files' };
++    }
++    return undefined;
++  }
++
++  if (cmd === 'rm') {
++    const dd = argv.indexOf('--');
++    const before = dd < 0 ? argv.slice(1) : argv.slice(1, dd);
++    const after = dd < 0 ? [] : argv.slice(dd + 1);
++    if (!before.some(w => w === '--recursive' || shortGroup(w, 'rR'))) return undefined;
++    const targets = [...before.filter(w => !w.startsWith('-')), ...after];
++    if (targets.length === 0 || targets.some(t => unresolvable(t) || !insideWorkspace(t, cwd) || sameDir(t, cwd))) {
++      return { name: 'rm-outside', reason: 'recursive rm outside the working directory' };
++    }
++    return undefined;
++  }
++
++  if (cmd === 'find') {
++    if (!argv.some(w => ['-delete', '-exec', '-execdir'].includes(w))) return undefined;
++    const firstOpt = argv.findIndex((w, i) => i > 0 && w.startsWith('-'));
++    const starts = firstOpt < 0 ? argv.slice(1) : argv.slice(1, firstOpt);
++    const paths = starts.length ? starts : ['.'];
++    if (paths.some(p => unresolvable(p) || !insideWorkspace(p, cwd))) {
++      return { name: 'rm-outside', reason: 'find would delete or run commands outside the working directory' };
++    }
++    return undefined;
++  }
++
++  return undefined;
+ }

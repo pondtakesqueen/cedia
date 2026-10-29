@@ -1,0 +1,16 @@
+Running 1 tasks x 6 runs on cedia (anthropic/claude-haiku-5-5), 2 at a time...
+  PASS hard-memo-async#1 (108.3s $0.0077, plan 34s, review changes 44s, fix 11s, peak 20k)
+  PASS hard-memo-async#2 (138.1s $0.0148, plan 31s, review approve 30s, peak 28k)
+  PASS hard-memo-async#3 (81.0s $0.0061, plan 29s, review approve 33s, peak 18k)
+  PASS hard-memo-async#4 (117.7s $0.0099, plan 30s, review approve 36s, peak 22k)
+  PASS hard-memo-async#5 (147.4s $0.0124, plan 38s, review approve 42s, peak 26k)
+  PASS hard-memo-async#6 (131.0s $0.0098, plan 36s, review changes 46s, fix 24s, peak 24k)
+
+Results written to /tmp/claude-0/-home-user-cedia-code/7d5651d6-a6a7-5456-a496-4c6a46e5cb23/scratchpad/memo6/memo6.jsonl
+cedia (anthropic/claude-haiku-5-5): 1 tasks, 6 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 120.6s per run, 208298 input / 11623 output tokens per run, cache hit 90.7%
+  peak context 23k mean, 28k max, 0 of 6 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 14 edit: broken edits string, 10 edit: top-level old_text/new_text
+  speed 257.2 output tok/s, 0.71s to first token per call; model 96.3% of time, cedia 0.0%
+  cost $0.0606 total, $0.0101 per passed run
