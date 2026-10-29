@@ -1,13 +1,14 @@
 import { clip, MAX_SHELL_OUTPUT_CHARS, preview, type ToolSpec } from './registry.ts';
 import { summarizeTestFailures } from './testfail.ts';
 
-// A command counts as read-only when every command in its pipeline or && chain is on this list and
-// nothing writes, substitutes or redirects. Read-only commands run in parallel and in read-only sessions;
+// A command counts as read-only when every command in its pipeline, && chain or ; list is on this list (or is a
+// `cd`) and nothing writes, substitutes or redirects. Read-only commands run in parallel and in read-only sessions;
 // anything else is an `exec` call that the permission policy decides.
 
 const READ_ONLY = new Set([
   'ls', 'cat', 'head', 'tail', 'wc', 'grep', 'rg', 'find', 'pwd', 'echo', 'sort', 'uniq', 'cut', 'tr',
   'file', 'stat', 'du', 'which', 'date', 'uname', 'basename', 'dirname', 'realpath', 'tree', 'diff', 'sed', 'awk', 'jq', 'git', 'true',
+  'nl', 'od',
 ]);
 const GIT_READ = new Set(['status', 'log', 'diff', 'show', 'branch', 'rev-parse', 'ls-files', 'blame', 'remote', 'describe', 'shortlog', 'grep']);
 // Flags that write a file or run another program (a preprocessor, a pager, a compressor, a diff driver).
@@ -52,17 +53,17 @@ export function splitWords(segment: string): string[] | null {
 const bareOf = (command: string) =>
   command
     .replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/(^|\s)\d?>&\d(?=\s|$)/g, ' ')
-    .replace(/(^|\s)2>\s*\/dev\/null(?=\s|$)/g, ' ');
+    .replace(/(^|\s)\d?>&\d(?=[\s;|&]|$)/g, ' ')
+    .replace(/(^|\s)2>\s*\/dev\/null(?=[\s;|&]|$)/g, ' ');
 
 // True when the command writes a file through `>`, `>>` or `&>`, which the split argv no longer shows.
 export const redirectsOutput = (command: string): boolean => />/.test(bareOf(command));
 
 export function checkReadOnly(command: string): Verdict {
-  if (/[`\n]|\$\(|<\(|>\(/.test(command)) return { ok: false, reason: 'command substitution and newlines are not allowed' };
+  if (/`|\$\(|<\(|>\(/.test(command)) return { ok: false, reason: 'command substitution is not allowed' };
   // Look for operators outside quotes, so `grep "a>b"` is fine.
   const bare = bareOf(command);
-  if (/[<>;]/.test(bare) || bare.replace(/&&/g, '').includes('&')) return { ok: false, reason: 'redirection, background jobs and ; are not allowed' };
+  if (/[<>]/.test(bare) || bare.replace(/&&/g, '').includes('&')) return { ok: false, reason: 'redirection and background jobs are not allowed' };
   const original = splitTopLevel(command);
   if (!original) return { ok: false, reason: 'unbalanced quotes' };
   for (const seg of original) {
@@ -70,11 +71,20 @@ export function checkReadOnly(command: string): Verdict {
     if (!words?.length) return { ok: false, reason: 'empty command' };
     const [cmd, ...args] = words;
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(cmd!)) return { ok: false, reason: 'environment assignments are not allowed' };
+    // `cd <dir> && cat x` only reads: models lead most commands with a cd to the working directory. The policy reads
+    // the paths after it from the directory it names, so only a plain directory is taken.
+    if (cmd === 'cd') {
+      if (args.length > 1 || args.some((a) => a.startsWith('-') || a.includes('$'))) return { ok: false, reason: 'cd takes one plain directory here' };
+      continue;
+    }
     if (!READ_ONLY.has(cmd!)) return { ok: false, reason: `"${cmd}" is not on the read-only list` };
     const bad = FORBIDDEN_FLAGS[cmd!];
     if (bad && args.some((a) => bad.test(a))) return { ok: false, reason: `"${cmd}" with that flag can write` };
     if (cmd === 'git') {
-      const sub = args.find((a) => !a.startsWith('-'));
+      // `git -C <dir> status`: the word after -C is a directory, not the subcommand.
+      let i = 0;
+      while (i < args.length && args[i]!.startsWith('-')) i += args[i] === '-C' ? 2 : 1;
+      const sub = args[i];
       if (!sub || !GIT_READ.has(sub)) return { ok: false, reason: `git ${sub ?? ''} is not read-only` };
       if (sub === 'branch' && args.some((a) => /^-(d|D|m|M|c|C|f)$|^--(delete|move|copy|force|set-upstream)/.test(a))) return { ok: false, reason: 'git branch with that flag writes' };
       if (sub === 'remote' && args.some((a) => /^(add|remove|rm|rename|set-url|prune|update)$/.test(a))) return { ok: false, reason: 'git remote with that subcommand writes' };
@@ -87,11 +97,13 @@ export function checkReadOnly(command: string): Verdict {
   return { ok: true };
 }
 
-// Splits on |, ||, && outside quotes.
+// Splits on |, ||, &&, ; and newlines outside quotes. A ; or newline that ends the command, or follows another,
+// leaves no empty command behind.
 function splitTopLevel(command: string): string[] | null {
   const out: string[] = [];
   let cur = '';
   let quote: string | null = null;
+  let soft = false;
   for (let i = 0; i < command.length; i++) {
     const ch = command[i]!;
     if (quote) {
@@ -107,11 +119,19 @@ function splitTopLevel(command: string): string[] | null {
     } else if ((ch === '|' || ch === '&') && (command[i + 1] === ch || ch === '|')) {
       out.push(cur);
       cur = '';
+      soft = false;
       if (command[i + 1] === ch) i++;
-    } else cur += ch;
+    } else if (ch === ';' || ch === '\n') {
+      if (cur.trim() || !soft) out.push(cur);
+      cur = '';
+      soft = true;
+    } else {
+      cur += ch;
+      if (ch.trim()) soft = false;
+    }
   }
   if (quote) return null;
-  out.push(cur);
+  if (cur.trim() || !soft) out.push(cur);
   return out;
 }
 
@@ -184,7 +204,9 @@ export const bashTool: ToolSpec = {
   effectOf: (input) => (checkReadOnly(String(input.command ?? '')).ok ? 'read' : 'exec'),
   async run(input, ctx) {
     const command = String(input.command ?? '');
-    const timeout = Math.min(Number(input.timeout_ms ?? 120_000), 600_000);
+    // A timeout that is not a positive number (a string such as "5m", 0) would end the command at once.
+    const asked = Number(input.timeout_ms);
+    const timeout = Math.min(Number.isFinite(asked) && asked > 0 ? asked : 120_000, 600_000);
     const script = ctx.wrap ? await ctx.wrap(command) : command;
     // Its own process group, so a timeout or an abort ends what the command started too, not only bash.
     const started = Date.now();

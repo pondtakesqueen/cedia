@@ -20,6 +20,16 @@ describe('read-only bash policy', () => {
     "awk '{print $1}' f",
     'rg --pre-glob "*.gz" x',
     'git grep -n needle',
+    // The shapes models batch their reads in (session logs, 2026-10-29): a cd to the working directory, ; lists,
+    // newlines between commands, git -C, nl and od.
+    'cd /work/repo && ls -la && cat package.json',
+    'ls -la; cat pool.ts; ls test* *.test.* 2>/dev/null; cat package.json 2>/dev/null',
+    'ls src;',
+    'cat a.ts\nwc -l a.ts',
+    'git -C /work/repo log --oneline -5',
+    'nl -ba src/a.ts | sed -n 1,40p',
+    "sed -n '24p' a.ts | od -c | head",
+    "grep -n 'a;b' f; echo done",
   ];
   const refused = [
     'rm -rf /',
@@ -59,6 +69,16 @@ describe('read-only bash policy', () => {
     'uniq in.txt out.txt',
     'cat <(ls)',
     'ls "unclosed',
+    'cd /work && rm -rf x',
+    'cd x; touch y',
+    'cd $DIR && ls',
+    'cd - && ls',
+    'cd a b',
+    'ls\nrm x',
+    '; ls',
+    'ls | ; cat x',
+    'git -C /work push',
+    'git -C',
   ];
   for (const c of allowed) test(`allows: ${c}`, () => expect(checkReadOnly(c)).toEqual({ ok: true }));
   for (const c of refused) test(`refuses: ${c}`, () => expect(checkReadOnly(c).ok).toBe(false));
@@ -87,6 +107,13 @@ describe('running a command', () => {
     const pid = Number(await Bun.file(join(cwd, 'child.pid')).text());
     await Bun.sleep(100);
     expect(alive(pid)).toBe(false);
+  });
+
+  test('a timeout that is not a positive number takes the default instead of ending the command at once', async () => {
+    for (const timeout_ms of ['5m', 0, -1]) {
+      const r = await bashTool.run({ command: 'sleep 0.2; echo ran', timeout_ms }, { cwd, signal: new AbortController().signal });
+      expect([timeout_ms, r.text]).toEqual([timeout_ms, 'ran\n\n[exit 0]']);
+    }
   });
 
   test('an abort ends it too', async () => {
