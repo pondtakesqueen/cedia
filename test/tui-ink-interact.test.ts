@@ -10,6 +10,7 @@ import { acceptTrust } from '../src/clients/tui-ink/onboarding.ts';
 import type { TuiArgs } from '../src/clients/tui-ink/args.ts';
 import { inkRenderOptions } from '../src/clients/tui-ink/render-options.ts';
 import { ThreadStore, threadsDir } from '../src/core/project/threads.ts';
+import { wordmark } from '../src/clients/tui-ink/splash.ts';
 import { projectKey } from '../src/core/session/log.ts';
 
 const strip = (s: string) =>
@@ -194,9 +195,10 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       expect(f).toContain('• notes.txt read');
       expect(f).not.toContain('## Result');
       expect(f).toMatch(/✓ Done in \d+\.\ds · 1 tool · \$/);
-      // The command menu opens over the transcript and the prompt box keeps its three rows.
+      // The command menu opens over the transcript and the prompt panel keeps its three rows: padding, the
+      // prompt, padding, all behind its bar.
       expect(f).toContain('/actions');
-      expect(f).toMatch(/╭─+╮\s*│ › \/\s+│\s*╰─+╯/);
+      expect(f).toMatch(/▌\s*\n\s*▌ › \/\s*\n\s*▌\s*\n/);
     } finally {
       h.stop();
     }
@@ -349,15 +351,16 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       const typedFrame = h.frame();
       expect(typedFrame).toContain('› สวัสดี 🎉');
       expect(typedFrame).not.toContain('abc');
-      expect(typedFrame).toMatch(/│ {3}next/);
+      expect(typedFrame).toMatch(/▌ {3}next/);
       // A paste with newlines stays in the prompt; it does not submit its first line.
       h.drain();
       h.write('\x1b[200~one\rtwo\x1b[201~');
       await Bun.sleep(400);
       const pasted = h.frame();
       expect(pasted).toContain('nextone');
-      expect(pasted).toMatch(/│ {3}two/);
-      expect(pasted).not.toContain('▌');
+      expect(pasted).toMatch(/▌ {3}two/);
+      // Nothing was sent: no prompt row (its bar without the prompt's ›) in the transcript.
+      expect(pasted).not.toMatch(/▌ สวัสดี/);
       // A long paste shows as a token.
       h.drain();
       h.write(`\x1b[200~${Array.from({ length: 30 }, (_, i) => `row ${i}`).join('\n')}\x1b[201~`);
@@ -548,6 +551,28 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       h.write('\x1b');
       await Bun.sleep(400);
       expect(h.frame()).not.toContain('Sub-thread 1 of 2');
+    } finally {
+      h.stop();
+    }
+  }, 30000);
+
+  test('the first screen shows the wordmark; a prompt replaces it and sits in a panel of its own', async () => {
+    const h = start({ script: [{ blocks: [{ type: 'text', text: 'hi there' }] }] });
+    try {
+      await Bun.sleep(500);
+      const first = h.frame();
+      expect(first).toContain(wordmark()[1]!);
+      expect(first).toContain('! shell');
+      h.drain();
+      h.write('hello');
+      await Bun.sleep(300);
+      h.write('\r');
+      for (let i = 0; i < 40 && !h.frame().includes('✓ Done'); i++) await Bun.sleep(250);
+      // The newest frame: it starts at the one-line header that takes the splash's place.
+      const f = h.frame().slice(h.frame().lastIndexOf('◆ cedia ·'));
+      expect(f).not.toContain(wordmark()[1]!);
+      // The prompt: its bar on a row of padding, its text, and padding again; the reply two columns in, under it.
+      expect(f).toMatch(/ ▌ *\n ▌ hello *\n ▌ *\n\n {3}hi there/);
     } finally {
       h.stop();
     }
