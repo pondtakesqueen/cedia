@@ -76,6 +76,9 @@ export type Settings = {
   maxEffort?: Effort;
   // The terminal UI's colors: "dark" (the default) or "light". cedia's run never reads it; /theme writes it.
   theme?: 'dark' | 'light';
+  // How the terminal UI tells the owner a turn ended while its terminal was in the background: "auto" (the
+  // default: a desktop notification where the terminal has one, else the bell), "bell" or "off". /notify writes it.
+  notify?: 'auto' | 'bell' | 'off';
 };
 
 // Every key cedia knows, with the keys allowed inside the objects it reads. A key that is not here is a typo or a
@@ -108,6 +111,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   localModels: 'any',
   maxEffort: 'any',
   theme: 'any',
+  notify: 'any',
 };
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -120,6 +124,7 @@ export function checkSettings(value: unknown): Settings {
     if (key === 'desktop' && !isObject(inner)) throw new Error('"desktop" must be an object');
     if (key === 'hooks') checkHooks(inner);
     if (key === 'theme' && inner !== 'dark' && inner !== 'light') throw new Error(`"theme" must be "dark" or "light": ${JSON.stringify(inner)}`);
+    if (key === 'notify' && inner !== 'auto' && inner !== 'bell' && inner !== 'off') throw new Error(`"notify" must be "auto", "bell" or "off": ${JSON.stringify(inner)}`);
     if (allowed === 'any') continue;
     if (!isObject(inner)) throw new Error(`"${key}" must be an object`);
     const unknown = Object.keys(inner).find((k) => !allowed.includes(k));

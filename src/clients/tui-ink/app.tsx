@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Box, Text, useInput, useApp, useWindowSize, useStdin } from 'ink';
+import { Box, Text, useInput, useApp, useWindowSize, useStdin, useStdout } from 'ink';
 import { selectedPrefix, useCediaScreenReader } from './a11y.ts';
 import { readPicks, savePick, pickBoost } from './picks.ts';
 import { sinceLabel } from './when.ts';
@@ -37,6 +37,9 @@ import { cancelStep, messageFullySelected, offsetForIndex, rowMapFromWalk, selec
 import { createHeightCache, heightCacheKey, visibleWindow } from './visible-window.ts';
 import { assignRecycleSlots, messageSlotKey, type RecycleSlot } from './virtual-list.ts';
 import { onTerminalResume } from './terminal-resume.ts';
+import { SUBTHREAD_HINT, childThreads, recentCalls, subthreadLines } from './subthreads.ts';
+import { runOwnerShell, shellCommand, shellEnd, shellNote, type ShellRun } from './shell.ts';
+import { FOCUS_OFF, FOCUS_ON, NOTIFY_MODES, channelFor, focusFrom, notifyModeFrom, notifySequence, shouldNotify, turnNotice, type Focus } from './notify.ts';
 import { matchesKey } from '@mariozechner/pi-tui';
 import { TeamStore } from '../../core/project/teams.ts';
 import { voiceInput } from '../../core/project/voice.ts';
@@ -107,8 +110,8 @@ const INK_COMMANDS: { name: string; description: string }[] = [
   { name: 'resume', description: 'go on with a thread' },
   { name: 'branch', description: 'git branches' },
   { name: 'copy', description: 'copy the last reply' },
-  { name: 'tasks', description: 'sub-threads / task list' },
-  { name: 'agents', description: 'sub-threads of this thread' },
+  { name: 'tasks', description: 'alias for /agents' },
+  { name: 'agents', description: 'watch this thread\'s sub-threads, even mid-turn (← → between them)' },
   { name: 'compact', description: 'show handoff/compaction status' },
   { name: 'fast', description: 'toggle fast mode' },
   { name: 'export', description: 'export this thread to a file' },
@@ -125,6 +128,7 @@ const INK_COMMANDS: { name: string; description: string }[] = [
   { name: 'trust', description: 'accept trust' },
   { name: 'onboarding', description: 'onboarding status' },
   { name: 'statusline', description: 'run a status line command' },
+  { name: 'notify', description: 'tell you when a turn ends while you look away (auto | bell | off)' },
 ];
 
 const INPUT_PLACEHOLDERS = [
@@ -303,6 +307,15 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const [messageSelector, setMessageSelector] = useState<{ open: boolean; selected: number }>({ open: false, selected: 0 });
   const [picker, setPicker] = useState<{ title: string; items: { value: string; label: string }[]; onPick: (v: string) => void } | null>(null);
   const [pickerSelected, setPickerSelected] = useState(0);
+  // The sub-thread view (subthreads.ts): the sub-threads it steps through and which one shows. It reads the store
+  // again each second while open, since sub-threads run beside the turn.
+  const [subView, setSubView] = useState<{ ids: string[]; at: number } | null>(null);
+  const [subTick, setSubTick] = useState(0);
+  useEffect(() => {
+    if (!subView) return;
+    const t = setInterval(() => setSubTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [subView !== null]);
   const [permissionDialog, setPermissionDialog] = useState<{ tool: string; input?: unknown; reason?: string; rule?: string } | null>(null);
   const toolInputByCallRef = useRef<Record<string, unknown>>({});
   const toolStartByCallRef = useRef<Record<string, number>>({});
@@ -462,12 +475,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           ['thread', ['/new', '/thread', '/resume', '/rename', '/fork', '/rewind', '/undo', '/redo', '/diff']],
           ['run', ['/plan', '/quick', '/model', '/goal', '/effort', '/permission']],
           ['project', ['/commit', '/pr', '/review', '/memory', '/skills', '/mcp']],
-          ['view', ['/clear', '/transcript', '/search', '/settings', '/doctor', '/theme', '/palette', '/actions', '/copy', '/export', '/compact', '/tasks', '/agents', '/branch', '/status', '/cost', '/context']],
-          ['other', ['/help', '/quit', '/vim', '/hooks', '/btw', '/suggest', '/trust', '/onboarding', '/statusline', '/output-style', '/config']],
+          ['view', ['/clear', '/transcript', '/search', '/settings', '/doctor', '/theme', '/palette', '/actions', '/copy', '/export', '/compact', '/agents', '/tasks', '/branch', '/status', '/cost', '/context']],
+          ['other', ['/help', '/quit', '/vim', '/hooks', '/btw', '/suggest', '/trust', '/onboarding', '/statusline', '/output-style', '/config', '/notify']],
         ];
         const byName = new Map(INK_COMMANDS.map((c) => [c.name, c.description]));
         say(groups.map(([g, names]) => `${g}: ${names.map((n) => `${n} — ${byName.get(n.slice(1)) ?? ''}`).join(' · ')}`).join('\n'));
-        say('keys: Esc stops a turn · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Ctrl+G external editor · Tab completes · Shift+Tab permission · Meta+P model · Meta+O fast · Meta+T thinking · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · Alt+Enter or \\+Enter newline · Ctrl+A/E/U/K/W edit the line' + (bindingHints ? ` · custom keys: ${bindingHints}` : ''));
+        say('keys: Esc stops a turn · !<command> runs it in your shell · Ctrl+C cancels/quits · Ctrl+R history · Ctrl+O rewind · Ctrl+F search · Ctrl+G external editor · Tab completes · Shift+Tab permission · Meta+P model · Meta+O fast · Meta+T thinking · ↑↓ navigate · PgUp/PgDn scroll · type / for commands · @ for files · Alt+Enter or \\+Enter newline · Ctrl+A/E/U/K/W edit the line' + (bindingHints ? ` · custom keys: ${bindingHints}` : ''));
         return;
       }
       case 'historyUp':
@@ -897,6 +910,21 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         say(`theme: ${themeName} (dark | light)`);
         return;
       }
+      case 'notify': {
+        const m = rest[0];
+        if (m && !(NOTIFY_MODES as readonly string[]).includes(m)) { say(`unknown notify mode: ${m} (${NOTIFY_MODES.join(' | ')})`); return; }
+        if (m) {
+          try {
+            const pp = join(cediaHome(), 'settings.json');
+            const raw = fsExists(pp) ? JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown> : {};
+            raw.notify = m;
+            fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
+          } catch (e) { say((e as Error).message, 'red'); return; }
+        }
+        const mode = notifyModeFrom(cediaHome());
+        say(`notify: ${mode}${mode === 'off' ? '' : ` (${channelFor(mode)}, when this terminal is in the background)`}`);
+        return;
+      }
       case 'settings':
       case 'config': {
         setSettingsTab('status');
@@ -942,8 +970,11 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       case 'tasks':
       case 'agents': {
         if (!thread) { say('no thread yet'); return; }
-        const children = store.list().filter((t) => (t as { parent?: string }).parent === thread);
-        say(children.length ? children.map((t) => `${t.id}  ${t.title}`).join('\n') : 'no sub-threads');
+        const children = childThreads(store.list(), thread);
+        if (!children.length) { say('no sub-threads'); return; }
+        // It opens on the first one still going, else the newest.
+        const live = children.findIndex((t) => t.running || t.state === 'working' || t.state === 'asking');
+        setSubView({ ids: children.map((t) => t.id), at: live >= 0 ? live : children.length - 1 });
         return;
       }
       case 'vim': {
@@ -999,10 +1030,84 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   }, [args, messages, running, store, thread, exit, spent, context, goal, transcriptExpanded, openDialog, model, permission, effort, switchThread, vimMode]);
 
   // queued: a prompt that waited for the last turn; what the person is typing now stays in the prompt.
+  // Whether this terminal has focus, from its focus reports (notify.ts); a turn that ends unseen says so.
+  const focusRef = useRef<Focus>('unknown');
+  // `!` commands run since the last prompt went to the model (shell.ts): their output goes with the next one.
+  const shellRunsRef = useRef<ShellRun[]>([]);
+  // The terminal Ink draws on (process.stdout outside tests): escapes that are not drawing go to it as well.
+  const termOutRef = useRef<NodeJS.WritableStream | undefined>(undefined);
+  const attention = (body: string | undefined, ms: number) => {
+    const mode = notifyModeFrom(cediaHome());
+    if (!body || !shouldNotify(mode, focusRef.current, ms)) return;
+    try { (termOutRef.current ?? process.stdout).write(notifySequence(channelFor(mode), 'cedia', body)); } catch {}
+  };
+  // What waited while a turn or a `!` command ran: back in the prompt when it was stopped, else the next prompt.
+  const drainQueue = (aborted: boolean) => {
+    const waiting = queueRef.current.map((x) => x.text);
+    queueRef.current = [];
+    setQueued([]);
+    if (waiting.length && aborted) {
+      const back = [...waiting, inputRef.current].filter((t) => t.trim()).join('\n');
+      setInput(back);
+      inputRef.current = back;
+    } else if (waiting.length) {
+      const [next, ...rest] = waiting;
+      queueRef.current = rest.map((t) => ({ text: t, at: 0 }));
+      setQueued(rest);
+      // After this render lets go of running, so the next prompt starts a turn of its own.
+      setTimeout(() => { void submitRef.current(next!, undefined, true); }, 0);
+    }
+  };
+  const runShell = async (text: string, command: string) => {
+    busyRef.current = true;
+    push({ role: 'user', text });
+    historyRef.current.push(text);
+    histPos.current = -1;
+    if (!command) { busyRef.current = false; push({ role: 'system', text: '!<command> runs it in your shell here; its output goes with your next message' }); return; }
+    setRunning(true);
+    setActivity('running your command');
+    const stop = new AbortController();
+    stopRef.current = stop;
+    turnStartRef.current = Date.now();
+    const callId = `owner-shell-${Date.now()}`;
+    push(rowMsg(intentRow('bash', { command }, rowWidth()), { status: 'running', callId }));
+    try {
+      const run = await runOwnerShell(command, args.cwd, stop.signal);
+      shellRunsRef.current.push(run);
+      const failed = run.exitCode !== 0;
+      const row = rowMsg(
+        resultRow('bash', { command }, { text: run.ended ? `${run.output}\n${shellEnd(run)}`.trim() : run.output, ...(run.exitCode !== null ? { exitCode: run.exitCode } : {}) }, run.ms, rowWidth()),
+        { status: failed ? 'error' : 'success', callId },
+      );
+      setMessages((prev) => {
+        const i = prev.findLastIndex((m) => m.callId === callId);
+        if (i < 0) return [...prev, row];
+        const next = prev.slice();
+        next[i] = row;
+        return next;
+      });
+      push({ role: 'system', text: 'the output goes with your next message', dim: true });
+    } catch (e) {
+      push({ role: 'system', text: `✗ ${(e as Error).message}`, tone: 'red' });
+    } finally {
+      busyRef.current = false;
+      setRunning(false);
+      setActivity('');
+      lastActivityRef.current = Date.now();
+      drainQueue(stop.signal.aborted);
+    }
+  };
   const submit = useCallback(async (text: string, planWhen?: 'always' | 'never', queued = false) => {
     if (!text.trim()) return;
     // A prompt sent while a turn runs waits its turn (like cc): it runs when this one ends, and Esc puts it back
     // in the prompt. The same text twice in one tick is the double fire below, not two prompts.
+    // The sub-thread view only reads, so it opens mid-turn instead of waiting: that is when sub-threads run.
+    if (running && /^\/(agents|tasks)\s*$/.test(text.trim())) {
+      setInput('');
+      inputRef.current = '';
+      handleCommand(text.trim().slice(1));
+      return;
+    }
     if (running) {
       const q = queueRef.current;
       if (q.at(-1)?.text === text && Date.now() - (q.at(-1)?.at ?? 0) < 100) return;
@@ -1044,6 +1149,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       push({ role: 'user', text });
       clearDraft();
       handleCommand(trimmedText.slice(1));
+      return;
+    }
+    const command = shellCommand(trimmedText);
+    if (command !== undefined) {
+      clearDraft();
+      await runShell(text, command);
       return;
     }
     busyRef.current = true;
@@ -1103,12 +1214,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     };
     const stop = new AbortController();
     stopRef.current = stop;
+    const takeShellNote = () => { const note = shellNote(shellRunsRef.current); shellRunsRef.current = []; return note; };
     let resultCost = 0;
     const turnStart = Date.now();
     turnStartRef.current = turnStart;
     try {
       const result = await runHeadless(
-        { ...args, model: model ?? args.model, permission: permission ?? args.permission, ...(effort ? { effort } : {}), cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: expandPastes(text, pastesRef.current), outputFormat: 'stream-json', note: (t: string) => { if (t.trim()) push({ role: 'system', text: t.trim(), dim: true }); }, ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
+        { ...args, model: model ?? args.model, permission: permission ?? args.permission, ...(effort ? { effort } : {}), cacheTtl: args.cacheTtl ?? '1h', streamingTools: true, prompt: takeShellNote() + expandPastes(text, pastesRef.current), outputFormat: 'stream-json', note: (t: string) => { if (t.trim()) push({ role: 'system', text: t.trim(), dim: true }); }, ...(thread ? { thread } : {}), ...(goal ? { goal } : {}), ...(planWhen ? { planWhen } : {}), signal: stop.signal },
         handleChunk,
       );
       setThread(result.thread ?? thread);
@@ -1122,6 +1234,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       if (result.subtype === 'asked' && result.question) {
         push({ role: 'system', text: askedBannerText(result.question) });
       }
+      attention(turnNotice(result.subtype, Date.now() - turnStart, result.question?.question), Date.now() - turnStart);
       if (loadPromptSuggestions(args.promptSuggestions)) {
         void (async () => {
           try {
@@ -1133,6 +1246,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
     } catch (e) {
       setMessages((m) => [...m, { role: 'system', text: `✗ error: ${(e as Error).message}`, tone: 'red' }]);
+      if (!stop.signal.aborted) attention(`Failed: ${(e as Error).message}`, Date.now() - turnStart);
     } finally {
       busyRef.current = false;
       setRunning(false);
@@ -1143,20 +1257,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         lastCostThresholdRef.current = Math.floor(newSpent);
       }
       lastActivityRef.current = Date.now();
-      const waiting = queueRef.current.map((x) => x.text);
-      queueRef.current = [];
-      setQueued([]);
-      if (waiting.length && stop.signal.aborted) {
-        const back = [...waiting, inputRef.current].filter((t) => t.trim()).join('\n');
-        setInput(back);
-        inputRef.current = back;
-      } else if (waiting.length) {
-        const [next, ...rest] = waiting;
-        queueRef.current = rest.map((t) => ({ text: t, at: 0 }));
-        setQueued(rest);
-        // After this render lets go of running, so the next prompt starts a turn of its own.
-        setTimeout(() => { void submitRef.current(next!, undefined, true); }, 0);
-      }
+      drainQueue(stop.signal.aborted);
     }
   }, [args, running, thread, handleCommand, goal, picker, closeDialog, permission, model, effort, effModel]);
   submitRef.current = submit;
@@ -1164,6 +1265,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
 
 
   const { stdin } = useStdin();
+  const { stdout: termOut } = useStdout();
+  termOutRef.current = termOut;
   React.useEffect(() => {
     const home = cediaHome();
     setLoadedKeybindings(loadKeybindings(home));
@@ -1249,13 +1352,18 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         push({ role: 'system', text: 'copied selection' });
       }
     };
+    const onFocus = (data: Buffer) => { const f = focusFrom(data.toString()); if (f) focusRef.current = f; };
     stdin.on('data', handler);
+    stdin.on('data', onFocus);
     process.stdout.write('\x1b[?1000h\x1b[?1006h');
+    termOut.write(FOCUS_ON);
     return () => {
       stdin.off('data', handler);
+      stdin.off('data', onFocus);
       process.stdout.write('\x1b[?1000l\x1b[?1006l');
+      termOut.write(FOCUS_OFF);
     };
-  }, [stdin]);
+  }, [stdin, termOut]);
 
   syncOnboardingRef.current = (openTrust = false) => {
     try {
@@ -1400,6 +1508,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const ctx = activeContext({
     permissionNotice: permissionDialog !== null,
     picker: focusedDialog === 'picker' && picker !== null,
+    subthreads: subView !== null,
     settings: settingsOpen,
     messageSelector: focusedDialog === 'messageSelector',
     historySearch: focusedDialog === 'historySearch',
@@ -1416,6 +1525,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const closeOverlay = (which: LiveContext) => {
     if (which === 'Confirmation') { setPermissionDialog(null); return; }
     if (which === 'Select') { closeDialog('picker'); setPicker(null); setPickerSelected(0); return; }
+    if (which === 'Task') { setSubView(null); return; }
     if (which === 'Settings') { closeSettingsStep(); return; }
     if (which === 'MessageSelector') {
       setMessageSelector({ open: false, selected: 0 });
@@ -1550,6 +1660,27 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           if (item) { picker.onPick(item.value); }
           closeDialog('picker'); setPicker(null); setPickerSelected(0);
           if (inputRef.current === before) { setInput(''); inputRef.current = ''; }
+          return;
+        }
+        return;
+      }
+      if (ctx === 'Task' && subView) {
+        if (overlayCmd === 'close') { setSubView(null); return; }
+        if (overlayCmd === 'prev' || overlayCmd === 'next') {
+          const step = overlayCmd === 'next' ? 1 : -1;
+          // New sub-threads join the end as the thread opens them.
+          const ids = thread ? childThreads(store.list(), thread).map((t) => t.id) : subView.ids;
+          const known = [...subView.ids, ...ids.filter((id) => !subView.ids.includes(id))];
+          setSubView({ ids: known, at: (subView.at + step + known.length) % known.length });
+          return;
+        }
+        if (overlayCmd === 'accept') {
+          if (running) { push({ role: 'system', text: 'a turn is running: Enter goes on with a sub-thread once it ends' }); return; }
+          const id = subView.ids[subView.at]!;
+          const parent = thread;
+          setSubView(null);
+          switchThread(id);
+          push({ role: 'system', text: `going on with ${id}, a sub-thread${parent ? ` of ${parent} (/thread ${parent} goes back)` : ''}` });
           return;
         }
         return;
@@ -1835,6 +1966,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             Bun.spawnSync([editor, tmp], { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' });
           });
           process.stdout.write('\x1b[?1000h\x1b[?1006h');
+          (termOutRef.current ?? process.stdout).write(FOCUS_ON);
           const edited = fsRead(tmp, 'utf8').replace(/\n+$/, '');
           setInput(edited);
           inputRef.current = edited;
@@ -1997,6 +2129,29 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             ))}
             <Text dimColor={!screenReader}>Enter to confirm · Esc to cancel</Text>
           </Box>
+        ) : null}
+        {subView ? (
+          (() => {
+            void subTick;
+            const id = subView.ids[subView.at]!;
+            let lines: RowLine[];
+            try {
+              const t = store.read(id);
+              lines = subthreadLines(t, { at: subView.at, of: subView.ids.length }, recentCalls(t.sessions.at(-1)?.path), columns - 6, overlayBudget);
+            } catch (e) {
+              lines = [{ spans: [{ text: `${id}: ${(e as Error).message}`, style: 'err' }] }];
+            }
+            return (
+              <Box flexDirection="column" borderStyle={screenReader ? undefined : 'round'} borderColor={screenReader ? undefined : T.borderActive} paddingX={1} marginX={screenReader ? 0 : 1}>
+                {lines.map((ln, li) => (
+                  <Text key={li} wrap="truncate" color={T.text}>
+                    {ln.spans.map((sp, si) => <Text key={si} {...(screenReader ? {} : (rowProps(sp.style, T) ?? spanProps(sp.style as Parameters<typeof spanProps>[0], T)))}>{sp.text}</Text>)}
+                  </Text>
+                ))}
+                <Text dimColor={!screenReader}>{SUBTHREAD_HINT}</Text>
+              </Box>
+            );
+          })()
         ) : null}
         {focusedDialog === 'picker' && picker ? (
           (() => {
@@ -2269,13 +2424,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         {trustOpen ? null : (() => {
           const mode = permission ?? args.permission ?? 'auto';
           const modeColor = mode === 'plan' ? T.thinking : mode === 'read-only' ? T.textMuted : T.primary;
-          // The box says what the prompt will do: brand while a turn runs, violet in plan mode, amber in vim normal.
-          const border = running ? T.primary : vimMode !== 'insert' ? T.accent : mode === 'plan' ? T.thinking : T.border;
+          // The box says what the prompt will do: brand while a turn runs, amber for a `!` shell command or in vim
+          // normal, violet in plan mode.
+          const shellMode = !running && input.trimStart().startsWith('!');
+          const border = running ? T.primary : shellMode || vimMode !== 'insert' ? T.accent : mode === 'plan' ? T.thinking : T.border;
           return (
             <>
               {/* A short terminal (under 16 rows) keeps the prompt flat: the frame's two rows go to the transcript. */}
               <Box borderStyle={screenReader || rows < 16 ? undefined : 'round'} borderColor={border} paddingX={1} marginX={screenReader || rows < 16 ? 0 : 1}>
-                <Text color={screenReader ? undefined : modeColor}>{screenReader ? 'prompt: ' : '› '}</Text>
+                {shellMode
+                  ? <Text color={screenReader ? undefined : T.accent}>{screenReader ? 'shell command: ' : '$ '}</Text>
+                  : <Text color={screenReader ? undefined : modeColor}>{screenReader ? 'prompt: ' : '› '}</Text>}
                 <VimInput value={input} onChange={setInput} onSubmit={submit} vimMode={vimMode} setVimMode={setVimMode} placeholder={INPUT_PLACEHOLDERS[new Date().getDate() % INPUT_PLACEHOLDERS.length]} captured={gate.captured} suppressSubmit={gate.suppressSubmit} onPaste={onPaste} />
               </Box>
               <StatusBar

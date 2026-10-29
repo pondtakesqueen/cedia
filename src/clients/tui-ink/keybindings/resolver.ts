@@ -3,6 +3,7 @@ import type { Binding, Context } from './types.ts';
 export type OverlayState = {
   permissionNotice: boolean;
   picker: boolean;
+  subthreads: boolean;
   settings: boolean;
   messageSelector: boolean;
   historySearch: boolean;
@@ -13,6 +14,7 @@ export type OverlayState = {
 export const IDLE_OVERLAY: OverlayState = {
   permissionNotice: false,
   picker: false,
+  subthreads: false,
   settings: false,
   messageSelector: false,
   historySearch: false,
@@ -23,6 +25,7 @@ export const IDLE_OVERLAY: OverlayState = {
 export const ORDER = [
   ['permissionNotice', 'Confirmation'],
   ['picker', 'Select'],
+  ['subthreads', 'Task'],
   ['settings', 'Settings'],
   ['messageSelector', 'MessageSelector'],
   ['historySearch', 'HistorySearch'],
@@ -70,6 +73,11 @@ export const DEFAULT_BINDINGS: Binding[] = [
   { key: 'enter', command: 'accept', context: 'Select' },
   { key: 'up', command: 'selectUp', context: 'Select' },
   { key: 'down', command: 'selectDown', context: 'Select' },
+  { key: 'escape', command: 'close', context: 'Task' },
+  { key: 'up', command: 'close', context: 'Task' },
+  { key: 'left', command: 'prev', context: 'Task' },
+  { key: 'right', command: 'next', context: 'Task' },
+  { key: 'enter', command: 'accept', context: 'Task' },
   { key: 'escape', command: 'close', context: 'Settings' },
   { key: 'tab', command: 'nextTab', context: 'Settings' },
   { key: 'right', command: 'nextTab', context: 'Settings' },
