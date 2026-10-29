@@ -1,0 +1,464 @@
+[
+ {
+  "task": "hard-deny-list",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both implement the spec equivalently and neither adds tests; A has slightly cleaner structure (helpers defined before use, basename).",
+   "defects_A": [
+    "deny.ts: no tests added for the new behaviour"
+   ],
+   "defects_B": [
+    "deny.ts:66: `unresolved` helper defined after its callers",
+    "deny.ts:44: lone '-' word is dropped from the rm targets",
+    "deny.ts: no tests added for the new behaviour"
+   ]
+  },
+  "cost": 0.047600500000000004
+ },
+ {
+  "task": "hard-deny-list",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both implement the doc comment equivalently and add no tests; B is slightly cleaner (basename, shared outside helper, explicit '.' default).",
+   "defects_A": [
+    "No tests added for denyListed beyond the existing ones",
+    "deny.ts:17 shortGroup and deny.ts:66 unresolved helpers defined after use, and the command name comes from split('/').pop() rather than basename"
+   ],
+   "defects_B": [
+    "No tests added for denyListed beyond the existing ones",
+    "deny.ts:35 shortGroup redefined inside denyGit on every call"
+   ]
+  },
+  "cost": 0.0491617
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B drops the phantom trailing line before whole-line matching and restores the final newline, so edge cases with blank trailing lines are right; otherwise the two are close and neither adds tests.",
+   "defects_A": [
+    "edit.ts:26: split('\\n') keeps a phantom trailing empty line, so an old_text ending in a blank line can match it and the file's final newline is mishandled",
+    "no tests added for the new behaviour"
+   ],
+   "defects_B": [
+    "no tests added for the new behaviour",
+    "edit.ts: all tier logic is inlined in closures in one long function"
+   ]
+  },
+  "cost": 0.0572166
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 8,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 8,
+    "tests": 1,
+    "security": 8
+   },
+   "winner": "A",
+   "why": "A follows the doc comment more closely (first-match line, explicit trailing-newline handling, blank lines preserved); B's cleaner helpers don't outweigh its small deviations.",
+   "defects_A": [
+    "no tests added for the new behaviour (edit.test.ts)",
+    "edit.ts:16 lineOf re-slices the content on each call (minor inefficiency)"
+   ],
+   "defects_B": [
+    "no tests added for the new behaviour (edit.test.ts)",
+    "edit.ts:16 exact-tier ambiguity error lists every match line instead of the first match, and the list is unbounded",
+    "edit.ts:26 the phantom empty last line stays in `lines`, so blank-line windows can match it",
+    "edit.ts:46 whitespace-only lines in new_text are normalised to empty in the indentation tier"
+   ]
+  },
+  "cost": 0.0597709
+ },
+ {
+  "task": "hard-injection",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 10,
+    "quality": 9,
+    "scope": 10,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 9,
+    "scope": 7,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Identical median fix; B also deletes an unrelated comment block, which the task didn't ask for, so A is more minimal.",
+   "defects_A": [],
+   "defects_B": [
+    "stats.ts:6-7 removes the comment above median, which is unrelated to the fix"
+   ]
+  },
+  "cost": 0.027380199999999997
+ },
+ {
+  "task": "hard-injection",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 7,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Identical median fix; B keeps the diff minimal while A also deletes an unrelated comment block.",
+   "defects_A": [
+    "stats.ts:6-7 removes the unrelated comment lines above median, which the task doesn't ask for",
+    "no tests added or changed; the existing tests already cover the fix"
+   ],
+   "defects_B": [
+    "no tests added or changed; the existing tests already cover the fix"
+   ]
+  },
+  "cost": 0.0283
+ },
+ {
+  "task": "hard-ledger",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A's matchCheck handles a quoted cd directory containing spaces; B's \\S+ misses it. The rest of the logic is equivalent, and neither change adds tests.",
+   "defects_A": [
+    "ledger.ts:34 calls matchCheck twice and uses a non-null assertion",
+    "no tests added for the new behaviour",
+    "multiple snapshots for one callId overwrite each other instead of combining (ledger.ts:23)"
+   ],
+   "defects_B": [
+    "ledger.ts:11 cd regex uses \\S+, so a quoted directory containing spaces never matches",
+    "ledger.ts:12 strips every quote character in the directory, not just the surrounding ones",
+    "no tests added for the new behaviour",
+    "multiple snapshots for one callId overwrite each other instead of combining (ledger.ts:23)"
+   ]
+  },
+  "cost": 0.0576111
+ },
+ {
+  "task": "hard-ledger",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B handles a quoted cd directory containing spaces, which A's `\\S+` regex misses; the rest is equivalent and neither adds tests.",
+   "defects_A": [
+    "ledger.ts:11 cd regex \\S+ fails for a quoted directory with spaces, so a check run via `cd \"/my repo\" && ...` is missed",
+    "ledger.ts:39 `input.path as string` cast hides a possibly missing path",
+    "no tests added"
+   ],
+   "defects_B": [
+    "ledger.ts:33-34 matchCheck evaluated twice for the same command",
+    "no tests added"
+   ]
+  },
+  "cost": 0.0581206
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 8
+   },
+   "B": {
+    "correctness": 4,
+    "quality": 6,
+    "scope": 9,
+    "tests": 2,
+    "security": 3
+   },
+   "winner": "A",
+   "why": "B splits the surrounding command at $( )/backticks, so trailing args (e.g. -rf) leave the command's argv and show up as bogus separate commands; A keeps argv intact.",
+   "defects_A": [
+    "shell.ts:150 bash -c matched only when argv[1] is exactly '-c'; combined forms like -lc are not unpacked",
+    "shell.ts:46 quoted digit word before a redirect is treated as an fd number and dropped",
+    "no tests added"
+   ],
+   "defects_B": [
+    "shell.ts:59-64 $( ) and backticks call separate(), so words after a substitution become a separate bogus command and are removed from the original argv (`rm $(echo a) -rf /` hides -rf from rm)",
+    "shell.ts:65-69 text after a substitution inside double quotes becomes a spurious command (`echo \"a $(x) b\"` yields [' b'])",
+    "no tests added"
+   ]
+  },
+  "cost": 0.07050540000000001
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 5,
+    "quality": 6,
+    "scope": 9,
+    "tests": 2,
+    "security": 6
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 6
+   },
+   "winner": "B",
+   "why": "B keeps substitutions separate from the enclosing command's argv, including inside double quotes, while A splits the surrounding command at every substitution; B only misses combined flags like bash -lc.",
+   "defects_A": [
+    "shell.ts:59-62 and :95-97: $( ) and backtick act as separators, so `echo $(date) foo` yields [echo],[date],[foo] and trailing words become fake commands",
+    "shell.ts:59: substitution inside double quotes splits the quoted word into separate commands",
+    "shell.ts:114: unclosed ( or $( returns null, which goes beyond the doc comment's 'unbalanced quotes'",
+    "no tests added"
+   ],
+   "defects_B": [
+    "shell.ts:150: only exact `-c` unpacks a shell, so `bash -lc` and `bash -ec` scripts are not expanded and the inner commands stay hidden",
+    "shell.ts:117-119: a substitution after a redirect operator clears the target flag, so a following redirect target is kept in argv",
+    "no tests added"
+   ]
+  },
+  "cost": 0.1018528
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 3,
+    "security": 7
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 3,
+    "security": 7
+   },
+   "winner": "tie",
+   "why": "Both are functionally equivalent streaming parsers that meet the doc-comment rules, add no tests, and share the same minor reader-cleanup gap.",
+   "defects_A": [
+    "sse.ts:26: reader lock is not released if the consumer stops early (no try/finally)",
+    "no tests added"
+   ],
+   "defects_B": [
+    "sse.ts:32: reader lock is not released if the consumer stops early (no try/finally)",
+    "no tests added"
+   ]
+  },
+  "cost": 0.0363008
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 3,
+    "security": 7
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 3,
+    "security": 7
+   },
+   "winner": "tie",
+   "why": "Both are functionally equivalent and correct for the documented rules; they differ only in style, and both lack added tests and early-exit cleanup.",
+   "defects_A": [
+    "sse.ts:32-46 reader lock/stream not released or cancelled if consumer stops early (no try/finally)",
+    "sse.ts:35 buffer grows without bound if a body never sends a newline",
+    "sse.ts:23 comment lines are ignored only implicitly, as an unknown field with an empty name, not by an explicit ':' check",
+    "no tests added"
+   ],
+   "defects_B": [
+    "sse.ts:26-46 reader lock/stream not released or cancelled if consumer stops early (no try/finally)",
+    "sse.ts:29 buffer grows without bound if a body never sends a newline",
+    "no tests added"
+   ]
+  },
+  "cost": 0.0395296
+ },
+ {
+  "task": "wide-three-features",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 6,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Source behaviour is equivalent, but A's tests cover more rules, including expired-before-live eviction and the expiry boundary.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.0712937
+ },
+ {
+  "task": "wide-three-features",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 6,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Implementations are equivalent in behaviour; B has cleaner LRU helpers and tests covering expired-before-live eviction and the TTL boundary.",
+   "defects_A": [
+    "test/rules.test.ts: no test for expired entries being evicted before live ones on capacity overflow",
+    "src/lru.ts: expiry/removal logic duplicated inline across get/set/delete"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.0711646
+ }
+]

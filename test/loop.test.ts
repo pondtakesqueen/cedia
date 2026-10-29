@@ -374,6 +374,8 @@ describe('loop', () => {
     expect(result.output.text).toContain('OPENAI_API_KEY=[cedia:redacted]');
     expect(result.output.text).toContain('DEBUG=1');
     expect(result.output.redacted).toBe(1);
+    // The model is told a value was hidden, and that the file still holds it.
+    expect(result.output.text).toContain('[cedia: a value in this result looked like a secret');
     expect(readFileSync(path, 'utf8')).not.toContain(key);
     expect(provider.state.bodies.length).toBe(2);
     expect(JSON.stringify(provider.state.bodies)).not.toContain(key);

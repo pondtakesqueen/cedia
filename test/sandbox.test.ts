@@ -10,7 +10,7 @@ import { openSandbox, sandboxConfig } from '../src/core/safety/sandbox.ts';
 import { openSnapshots } from '../src/core/safety/snapshot.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 import { SessionLog } from '../src/core/session/log.ts';
-import { bashTool, scrubbedEnv } from '../src/core/tools/bash.ts';
+import { bashTool, commandEnv, scrubbedEnv } from '../src/core/tools/bash.ts';
 import { writeTool } from '../src/core/tools/edit.ts';
 import { CORE_TOOLS } from '../src/core/tools/index.ts';
 import type { EventOf, SessionEvent } from '../src/core/types.ts';
@@ -105,6 +105,9 @@ describe('bash environment and protected paths', () => {
 
   test('shell startup files cannot leak in: BASH_ENV, ENV and ZDOTDIR are stripped', () => {
     expect(scrubbedEnv({ PATH: '/bin', BASH_ENV: '/x/env', ENV: '/y/env', ZDOTDIR: '/z', HOME: '/root' })).toEqual({ PATH: '/bin', HOME: '/root' });
+    // Commands also run with Python's bytecode files off, unless the user's environment sets it.
+    expect(commandEnv({ PATH: '/bin', OPENAI_API_KEY: 'k' })).toEqual({ PYTHONDONTWRITEBYTECODE: '1', PATH: '/bin' });
+    expect(commandEnv({ PATH: '/bin', PYTHONDONTWRITEBYTECODE: '' }).PYTHONDONTWRITEBYTECODE).toBe('');
   });
 
   test('bash runs --noprofile --norc and still runs ordinary commands', async () => {
