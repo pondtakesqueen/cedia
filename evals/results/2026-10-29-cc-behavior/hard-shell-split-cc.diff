@@ -1,0 +1,185 @@
+diff --git a/shell.ts b/shell.ts
+index 3093ac4..62d88ef 100644
+--- a/shell.ts
++++ b/shell.ts
+@@ -37,5 +37,179 @@ const WRAPPERS = new Map<string, Wrapper>([
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  const commands: string[][] = [];
++  let words: Word[] = [];
++  let pending: string[][] = [];
++  let cur: Word | null = null;
++
++  const append = (text: string, quoted: boolean) => {
++    if (cur) cur.text += text;
++    else cur = { text, quoted };
++  };
++  const endWord = () => {
++    if (cur) words.push(cur);
++    cur = null;
++  };
++  let failed = false;
++  const endCommand = () => {
++    endWord();
++    const argvs = expand(words);
++    if (!argvs) failed = true;
++    else commands.push(...argvs);
++    commands.push(...pending);
++    words = [];
++    pending = [];
++  };
++  // Parses the commands inside $( ) or backticks; returns false when they are malformed.
++  const substitute = (inner: string): boolean => {
++    const sub = simpleCommands(inner);
++    if (!sub) return false;
++    pending.push(...sub);
++    return true;
++  };
++
++  for (let i = 0; i < command.length; i++) {
++    const c = command[i];
++    if (c === ' ' || c === '\t') {
++      endWord();
++    } else if (c === '\n') {
++      endCommand();
++    } else if (c === '\\') {
++      if (command[i + 1] === '\n') i++;
++      else if (i + 1 < command.length) append(command[++i], true);
++      else append(c, true);
++    } else if (c === "'") {
++      const end = command.indexOf("'", i + 1);
++      if (end < 0) return null;
++      append(command.slice(i + 1, end), true);
++      i = end;
++    } else if (c === '"') {
++      let text = '';
++      let j = i + 1;
++      for (; j < command.length && command[j] !== '"'; j++) {
++        const d = command[j];
++        if (d === '\\' && j + 1 < command.length) {
++          text += command[++j];
++        } else if (d === '$' && command[j + 1] === '(') {
++          const end = closingParen(command, j + 2);
++          if (end < 0 || !substitute(command.slice(j + 2, end))) return null;
++          j = end;
++        } else if (d === '`') {
++          const end = closingBacktick(command, j + 1);
++          if (end < 0 || !substitute(command.slice(j + 1, end))) return null;
++          j = end;
++        } else {
++          text += d;
++        }
++      }
++      if (j >= command.length) return null;
++      append(text, true);
++      i = j;
++    } else if (c === '$' && command[i + 1] === '(') {
++      const end = closingParen(command, i + 2);
++      if (end < 0 || !substitute(command.slice(i + 2, end))) return null;
++      i = end;
++    } else if (c === '`') {
++      const end = closingBacktick(command, i + 1);
++      if (end < 0 || !substitute(command.slice(i + 1, end))) return null;
++      i = end;
++    } else if (c === '&') {
++      // `2>&1`, `>&2` and `&>file` are redirections.
++      const prev = (cur as Word | null)?.text.at(-1);
++      if (prev === '>' || prev === '<' || command[i + 1] === '>') append(c, false);
++      else endCommand();
++    } else if (c === ';' || c === '|' || c === '(' || c === ')') {
++      endCommand();
++    } else {
++      append(c, false);
++    }
++  }
++  endCommand();
++  return failed ? null : commands;
++}
++
++type Word = { text: string; quoted: boolean };
++
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
++const REDIRECT_OP = /^(\d*(>>?|<|>&)|&>>?)$/;
++const REDIRECT_PREFIX = /^(\d*(>>?|<|>&|<&)|&>>?)/;
++const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
++
++const basename = (word: string) => word.slice(word.lastIndexOf('/') + 1);
++
++// Turns the words of one simple command into the argv of the commands it runs.
++function expand(words: Word[]): string[][] | null {
++  const argv: string[] = [];
++  let lead = true;
++  for (let i = 0; i < words.length; i++) {
++    const { text, quoted } = words[i];
++    if (!quoted && REDIRECT_OP.test(text)) {
++      i++;
++      continue;
++    }
++    if (!quoted && REDIRECT_PREFIX.test(text)) continue;
++    if (lead && !quoted && (ASSIGNMENT.test(text) || KEYWORDS.has(text))) continue;
++    lead = false;
++    argv.push(text);
++  }
++  return unwrap(argv);
++}
++
++function unwrap(argv: string[]): string[][] | null {
++  for (;;) {
++    while (argv.length && (ASSIGNMENT.test(argv[0]) || KEYWORDS.has(argv[0]))) argv = argv.slice(1);
++    if (!argv.length) return [];
++    const name = basename(argv[0]);
++    const wrapper = WRAPPERS.get(name);
++    if (wrapper) {
++      let i = 1;
++      while (i < argv.length && argv[i].startsWith('-')) {
++        if (argv[i] === '--') {
++          i++;
++          break;
++        }
++        i += wrapper.value?.includes(argv[i]) ? 2 : 1;
++      }
++      argv = argv.slice(i + (wrapper.positional ?? 0));
++      continue;
++    }
++    if (name === 'eval') return simpleCommands(argv.slice(1).join(' '));
++    if (SHELLS.has(name)) {
++      let i = 1;
++      let script = false;
++      for (; i < argv.length && argv[i].startsWith('-'); i++) {
++        if (!argv[i].startsWith('--') && argv[i].slice(1).includes('c')) script = true;
++      }
++      if (script && i < argv.length) return simpleCommands(argv[i]);
++    }
++    return [argv];
++  }
++}
++
++// Index of the ) closing a $( whose contents start at `start`, or -1.
++function closingParen(s: string, start: number): number {
++  let depth = 1;
++  for (let i = start; i < s.length; i++) {
++    const c = s[i];
++    if (c === '\\') i++;
++    else if (c === "'") {
++      i = s.indexOf("'", i + 1);
++      if (i < 0) return -1;
++    } else if (c === '"') {
++      for (i++; i < s.length && s[i] !== '"'; i++) if (s[i] === '\\') i++;
++      if (i >= s.length) return -1;
++    } else if (c === '(') depth++;
++    else if (c === ')' && --depth === 0) return i;
++  }
++  return -1;
++}
++
++// Index of the backtick closing one whose contents start at `start`, or -1.
++function closingBacktick(s: string, start: number): number {
++  for (let i = start; i < s.length; i++) {
++    if (s[i] === '\\') i++;
++    else if (s[i] === '`') return i;
++  }
++  return -1;
+ }

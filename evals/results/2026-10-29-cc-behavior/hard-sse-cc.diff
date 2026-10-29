@@ -1,0 +1,55 @@
+diff --git a/sse.ts b/sse.ts
+index 8c09886..11eda61 100644
+--- a/sse.ts
++++ b/sse.ts
+@@ -15,7 +15,49 @@ export type SseMessage = { event?: string; data: string };
+ // - When the body ends without a final blank line, data lines still pending (including a last line with no
+ //   newline) are yielded as one last message.
+ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseMessage> {
+-  throw new Error('not implemented');
++  const reader = body.getReader();
++  const decoder = new TextDecoder();
++  let buffer = '';
++  let event: string | undefined;
++  let data: string[] = [];
++
++  const message = (): SseMessage => (event === undefined ? { data: data.join('\n') } : { event, data: data.join('\n') });
++
++  // Applies one line; returns a message when the line is blank and data is pending.
++  const line = (raw: string): SseMessage | undefined => {
++    const text = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
++    if (text === '') {
++      const out = data.length > 0 ? message() : undefined;
++      event = undefined;
++      data = [];
++      return out;
++    }
++    if (text.startsWith(':')) return;
++    const colon = text.indexOf(':');
++    const field = colon === -1 ? text : text.slice(0, colon);
++    let value = colon === -1 ? '' : text.slice(colon + 1);
++    if (value.startsWith(' ')) value = value.slice(1);
++    if (field === 'event') event = value;
++    else if (field === 'data') data.push(value);
++  };
++
++  try {
++    while (true) {
++      const { done, value } = await reader.read();
++      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
++      let nl: number;
++      while ((nl = buffer.indexOf('\n')) !== -1) {
++        const out = line(buffer.slice(0, nl));
++        buffer = buffer.slice(nl + 1);
++        if (out) yield out;
++      }
++      if (done) break;
++    }
++    if (buffer !== '') line(buffer);
++    if (data.length > 0) yield message();
++  } finally {
++    reader.releaseLock();
++  }
+ }
+ 
+ export function streamFromString(text: string, chunkSize = 7): ReadableStream<Uint8Array> {
