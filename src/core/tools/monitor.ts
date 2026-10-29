@@ -1,4 +1,4 @@
-import { scrubbedEnv } from './bash.ts';
+import { commandEnv } from './bash.ts';
 import { clip, MAX_SHELL_OUTPUT_CHARS, preview, type ToolSpec } from './registry.ts';
 
 // What a watch holds in memory: a chatty command (`yes`, a dev server) left for ten minutes must not grow without end.
@@ -32,7 +32,7 @@ export const monitorTool: ToolSpec = {
       return { text: `invalid filter: ${(e as Error).message}`, isError: true };
     }
     const script = ctx.wrap ? await ctx.wrap(command) : command;
-    const proc = Bun.spawn(['bash', '--noprofile', '--norc', '-c', script], { cwd: ctx.cwd, env: scrubbedEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', detached: true });
+    const proc = Bun.spawn(['bash', '--noprofile', '--norc', '-c', script], { cwd: ctx.cwd, env: commandEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', detached: true });
     let stopped = '';
     const kill = (why: string) => () => {
       stopped ||= why;

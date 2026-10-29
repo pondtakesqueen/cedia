@@ -130,6 +130,11 @@ export function scrubbedEnv(env: Record<string, string | undefined> = process.en
   );
 }
 
+// What the model's commands run with: the scrubbed environment, and Python told not to leave __pycache__ beside
+// the code a test run imports (a panel marked those files down as stray in a diff, 2026-10-28-opus-quality), unless
+// the user's own environment already says.
+export const commandEnv = (env: Record<string, string | undefined> = process.env): Record<string, string> => ({ PYTHONDONTWRITEBYTECODE: '1', ...scrubbedEnv(env) });
+
 const PIPE_GRACE_MS = 500;
 
 // Reads a pipe as it fills, so what arrived is there to return even when the pipe never closes.
@@ -185,7 +190,7 @@ export const bashTool: ToolSpec = {
     const started = Date.now();
     // --noprofile --norc (with BASH_ENV/ENV/ZDOTDIR scrubbed above): no startup file runs, inside the
     // sandbox or out, so a planted one cannot run code before the command.
-    const proc = Bun.spawn(['bash', '--noprofile', '--norc', '-c', script], { cwd: ctx.cwd, env: scrubbedEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', detached: true });
+    const proc = Bun.spawn(['bash', '--noprofile', '--norc', '-c', script], { cwd: ctx.cwd, env: commandEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', detached: true });
     let stopped = '';
     const kill = (why: string) => () => {
       stopped ||= why;
