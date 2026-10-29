@@ -30,3 +30,20 @@ One run of each, with the `-m auto` roles (`--review claude-code:sonnet@high --c
 | ci-already-green | yes | 26.1 s | $0.064 | 16 s | none (no change) |
 
 Both CI notices were planned. That follows the triage prompt, which plans a fix whose cause is not given, and it cost about $0.05 a notice. These tasks are not in `evals/gate/suite.json`, so the gate's baseline is unchanged.
+
+## The CI notices without a planner: the `ci` profile
+
+The plan above cost most of a CI notice's run. The same two tasks were run three times each in two more setups:
+
+| | runs | pass | mean time | mean cost |
+|---|---|---|---|---|
+| auto roles, plan and review (above) | 2 | 2 | 29 s | $0.070 |
+| Haiku alone, no plan or review (`ci-noprofile.jsonl`) | 6 | 6 | 9 s | $0.001 |
+| auto roles with `--profile ci` (`ci-profile.jsonl`): no plan, Sonnet review kept | 6 | 6 | 14 s | $0.014 |
+
+So cedia now ships a `ci` profile for the PR watcher's prompts:
+- `planWhen: never`, so the planner is skipped.
+- A workspace session.
+- Short rules for the fix: run the named check first, and if it passes change nothing and say so; never skip, loosen or rewrite a test to get green.
+
+The review still reads the change when a review role is set. These are one-line fixes, so a failure that needs a plan has not been measured.

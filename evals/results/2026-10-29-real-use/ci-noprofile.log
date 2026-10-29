@@ -1,0 +1,15 @@
+Running 2 tasks x 3 runs on cedia (opencode-go/claude-haiku-5-5), 4 at a time...
+  PASS ci-fix-notice#1 (8.1s $0.0007, peak 6k)
+  PASS ci-already-green#3 (8.5s $0.0012, peak 7k)
+  PASS ci-already-green#1 (12.0s $0.0014, peak 8k)
+  PASS ci-already-green#2 (12.2s $0.0012, peak 7k)
+  PASS ci-fix-notice#2 (5.6s $0.0007, peak 6k)
+  PASS ci-fix-notice#3 (9.6s $0.0010, peak 6k)
+
+Results written to evals/results/2026-10-29-real-use/ci-noprofile.jsonl
+cedia (opencode-go/claude-haiku-5-5): 2 tasks, 6 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 9.3s per run, 25693 input / 1013 output tokens per run, cache hit 90.8%
+  peak context 7k mean, 8k max, 0 of 6 runs past 100k; 0 handoffs, 0 sub-threads
+  speed 264.3 output tok/s, 1.05s to first token per call; model 98.0% of time, cedia 0.1%
+  cost $0.0062 total, $0.0010 per passed run
