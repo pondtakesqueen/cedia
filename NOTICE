@@ -4,7 +4,7 @@ cedia adapts code from the following sources:
 
 - ponytail (MIT) — the idea of its "ladder" (no code, then existing code, the standard library, an installed dependency, one line, and only then the smallest new code, with a test for risky logic), restated in cedia's own words in DEEPSEEK_PROMPT (src/core/providers/catalog.ts). Its text was not copied.
 
-- Ink (MIT, Copyright (c) Vadim Demedes) — patches/ink@8.0.0.patch changes its build: Output keeps its caches across frames and reuses an unchanged row's text, Text memoizes its style transform, squashed text and transformed lines are cached, and on the alternate screen a new frame writer (build/log-screen.js) writes each frame by position, moving shifted rows with a scroll region and writing only the changed cells of a changed row. Each change is marked "cedia:" in the patched files.
+- Ink (MIT, Copyright (c) Vadim Demedes) — patches/ink@8.0.0.patch changes its build: Output keeps its caches across frames and reuses an unchanged row's text, Text memoizes its style transform, squashed text and transformed lines are cached, and on the alternate screen a new frame writer (build/log-screen.js) writes each frame by position, moving shifted rows with a scroll region and writing only the changed cells of a changed row; a box or text with no change since it was drawn draws its last operations again. Each change is marked "cedia:" in the patched files.
 
 Claude Code (no license) — read only for understanding; no code copied.
 

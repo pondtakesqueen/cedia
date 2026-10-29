@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import React from 'react';
-import { Box, renderToString, Text } from 'ink';
+import { PassThrough } from 'node:stream';
+import { Box, render, renderToString, Text } from 'ink';
 
 // The styles are what is under test, so Ink's own chalk draws them even though the output is not a terminal.
 const inkChalk = (await import(join(import.meta.dir, '../node_modules/ink/node_modules/chalk/source/index.js'))).default as { level: number };
@@ -46,5 +47,49 @@ describe('the Ink patch', () => {
     expect(clipped('abcdefgh')).toBe('abcd…');
     expect(clipped('abcdxfgh')).toBe('abcd…');
     expect(clipped('zbcdefgh')).toBe('zbcd…');
+  });
+
+  test('a box drawn again from its last frame moves with the layout and shows changes inside it', async () => {
+    type S = { above: number; inner: string; tint: string; width: number };
+    const Inner = React.memo(function Inner({ inner, tint }: { inner: string; tint: string }) {
+      return (
+        <Box flexDirection="column" borderStyle="single">
+          <Text>fixed <Text color={tint}>{inner}</Text> end</Text>
+          <Text wrap="wrap">{'word '.repeat(12)}</Text>
+        </Box>
+      );
+    });
+    const Tree = ({ above, inner, tint, width }: S) => (
+      <Box flexDirection="column" width={width}>
+        {Array.from({ length: above }, (_, i) => <Text key={i}>above {i}</Text>)}
+        <Box overflow="hidden" height={6}><Inner inner={inner} tint={tint} /></Box>
+        <Text>below</Text>
+      </Box>
+    );
+    let set: (s: S) => void = () => {};
+    function Live() {
+      const [s, setS] = React.useState<S>({ above: 1, inner: 'one', tint: 'red', width: 30 });
+      set = setS;
+      return <Tree {...s} />;
+    }
+    const stdout = new PassThrough() as unknown as NodeJS.WriteStream;
+    Object.assign(stdout, { columns: 40, rows: 30 });
+    const app = render(<Live />, { stdout, debug: true, patchConsole: false });
+    const instances = (await import(join(import.meta.dir, '../node_modules/ink/build/instances.js'))).default as WeakMap<object, { lastOutput: string }>;
+    try {
+      for (const s of [
+        { above: 3, inner: 'one', tint: 'red', width: 30 },
+        { above: 3, inner: 'two', tint: 'red', width: 30 },
+        { above: 0, inner: 'two', tint: 'blue', width: 30 },
+        { above: 0, inner: 'two', tint: 'blue', width: 20 },
+        { above: 2, inner: 'three', tint: 'blue', width: 20 },
+      ]) {
+        set(s);
+        await Bun.sleep(20);
+        expect(instances.get(stdout)!.lastOutput).toBe(renderToString(<Tree {...s} />, { columns: 40 }));
+      }
+    } finally {
+      app.unmount();
+    }
   });
 });

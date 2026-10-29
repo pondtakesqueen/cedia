@@ -8,7 +8,7 @@ import { buildAutoItems, menuStart, highlightSpans, paintRuns, truncateDescripti
 import { humanizeSettingKey, settingDisplayValue } from './settings-format.ts';
 import { VimInput } from './vim-input.tsx';
 import { collapses, expandPastes, pasteToken } from './line-edit.ts';
-import Markdown, { clipLines, mdPlain, spanProps } from './markdown.tsx';
+import Markdown, { clipLines, clipRange, mdPlain, spanProps } from './markdown.tsx';
 import { deniedRow, doneRow, intentRow, resultRow, rowProps, rowText, thinkingRow, type RowBand, type RowLine } from './rows.ts';
 import { inkTheme, PANEL_BAR, type ThemeTokens } from './theme-tokens.ts';
 import { PermissionDialog } from './permission-dialogs.tsx';
@@ -178,6 +178,101 @@ function paintedWidth(role: Msg['role'] | undefined, columns: number, screenRead
   const bar = screenReader ? 0 : 2;
   return Math.max(10, columns - 2 - bar);
 }
+
+type Clip = { drop: number; tail?: number };
+type SlotProps = {
+  m: Msg;
+  gap: number;
+  pad: number;
+  clip: Clip | undefined;
+  T: ThemeTokens;
+  screenReader: boolean;
+  contentWidth: number;
+  query: string;
+  bounds: { start: number; end: number } | undefined;
+  fullySelected: boolean;
+  spinner: string;
+};
+const sameClip = (a: Clip | undefined, b: Clip | undefined) => a === b || (!!a && !!b && a.drop === b.drop && a.tail === b.tail);
+const sameBounds = (a: SlotProps['bounds'], b: SlotProps['bounds']) => a === b || (!!a && !!b && a.start === b.start && a.end === b.end);
+// One message of the transcript. Memoized: a keystroke or a wheel step redraws the App, and the messages it did
+// not change skip their render (and Ink's work on them) when their props are the same.
+const MessageSlot = React.memo(function MessageSlot({ m, gap, pad, clip: slotClip, T, screenReader, contentWidth, query: q, bounds, fullySelected, spinner }: SlotProps) {
+  const capped = truncateLongText(m.text);
+  const queryHit = q.length > 0 && capped.toLowerCase().includes(q.toLowerCase());
+  const hasSel = !!bounds;
+  // Selection and search count characters from the message's start, so they keep all of it.
+  const clip = hasSel || queryHit ? undefined : slotClip;
+  const keep = <X,>(xs: X[]): X[] => clipLines(xs, clip);
+  const isUserRow = m.role === 'user' && !hasSel && !queryHit;
+  const isToolError = m.role === 'tool' && m.status === 'error';
+  const userLines = isUserRow && !screenReader
+    ? keep(capped.split('\n')).map((ln) => ln.padEnd(Math.max(ln.length, contentWidth)))
+    : null;
+  const full = hasSel || queryHit ? capped : keep(capped.split('\n')).join('\n');
+  // The row above and below a prompt's text, on its band behind its bar; blank while the prompt is selected.
+  const panelPad = (band: boolean, width: number) => (
+    band ? <Text backgroundColor={T.userRowBg}><Text color={T.primary}>▌</Text>{' '.repeat(width + 1)}</Text> : <Text> </Text>
+  );
+  if (screenReader) {
+    return (
+      <Box flexDirection="column" flexShrink={0}>
+        <Text wrap="wrap">{m.role}: {m.text}</Text>
+      </Box>
+    );
+  }
+  return (
+    <Box flexDirection="column" flexShrink={0} marginTop={gap} paddingLeft={isUserRow ? 0 : 2} backgroundColor={fullySelected ? T.selectedBg : isUserRow ? T.userRowBg : undefined}>
+      {pad ? panelPad(isUserRow, contentWidth) : null}
+      {hasSel || queryHit ? (
+        <Text wrap="wrap">
+          {paintRuns(full, { query: q, selection: hasSel ? bounds : undefined }).map((sp, si) => (
+            <Text
+              key={si}
+              backgroundColor={sp.selected ? T.selectionBg : sp.hit ? T.searchHitBg : undefined}
+              color={sp.selected ? T.selectionFg : sp.hit ? T.searchHitFg : themedColorFor(T, m.role)}
+              bold={sp.hit || sp.selected}
+            >{sp.text}</Text>
+          ))}
+        </Text>
+      ) : m.role === 'assistant' ? (
+        <Markdown T={T} clip={clip}>{m.text}</Markdown>
+      ) : m.lines ? (
+        <Box flexDirection="column">
+          {keep(m.lines).map((ln, i) => {
+            const li = clipRange(m.lines!.length, clip)[0] + i;
+            const used = ln.spans.reduce((n, sp) => n + sp.text.length, 0);
+            return (
+              <Text key={li} wrap="truncate" color={T.text} backgroundColor={ln.band ? bandColor(ln.band, T) : undefined}>
+                {ln.spans.map((sp, si) =>
+                  sp.style === 'status' ? (
+                    <Text key={si} color={m.status === 'running' ? T.accent : m.status === 'error' ? T.error : T.success}>
+                      {m.status === 'running' ? spinner : m.status === 'error' ? '✗' : '✓'}
+                    </Text>
+                  ) : (
+                    <Text key={si} {...(rowProps(sp.style, T) ?? spanProps(sp.style as Parameters<typeof spanProps>[0], T))} backgroundColor={sp.bg ? bandColor(sp.bg, T) : undefined}>{sp.text}</Text>
+                  ),
+                )}
+                {ln.band ? ' '.repeat(Math.max(0, contentWidth - used)) : null}
+              </Text>
+            );
+          })}
+        </Box>
+      ) : isUserRow ? (
+        <>{(userLines ?? [capped]).map((ln, i) => (
+          <Text key={clipRange(capped.split('\n').length, clip)[0] + i} wrap="wrap" backgroundColor={T.userRowBg} color={T.text}>
+            <Text color={T.primary}>▌ </Text>{ln}
+          </Text>
+        ))}</>
+      ) : (
+        <Text color={isToolError || m.tone === 'red' ? T.error : m.tone === 'accent' ? T.accent : themedColorFor(T, m.role)} dimColor={!!m.dim} wrap="wrap">{full}</Text>
+      )}
+      {pad ? panelPad(isUserRow, contentWidth) : null}
+    </Box>
+  );
+}, (a, b) =>
+  a.m === b.m && a.gap === b.gap && a.pad === b.pad && a.T === b.T && a.screenReader === b.screenReader && a.contentWidth === b.contentWidth &&
+  a.query === b.query && a.fullySelected === b.fullySelected && a.spinner === b.spinner && sameClip(a.clip, b.clip) && sameBounds(a.bounds, b.bounds));
 
 function paintedCol(termCol: number, role: Msg['role'] | undefined, screenReader: boolean): number {
   void role;
@@ -2053,10 +2148,6 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // height, the transcript flex-grows between the header and the input, and
   // overflow clips the top (oldest) first. The slice above already keeps the
   // newest content, so clipping only absorbs rounding.
-  // The row above and below a prompt's text, on its band behind its bar; blank while the prompt is selected.
-  const panelPad = (band: boolean, width: number) => (
-    band ? <Text backgroundColor={T.userRowBg}><Text color={T.primary}>▌</Text>{' '.repeat(width + 1)}</Text> : <Text> </Text>
-  );
   const termRows = Math.max(10, rows || 24);
   const splash = displayMessages.length === 0 && showSplash(termRows, columns, screenReader);
   const KEY_HINTS = [['/help', 'commands'], ['ctrl+p', 'palette'], ['!', 'shell'], ['esc', 'stop a turn']] as const;
@@ -2128,76 +2219,22 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const m = displayMessages[globalIdx];
             if (!m) return null;
             const capped = truncateLongText(m.text);
-            const q = transcriptSearch.query.trim();
-            const queryHit = q.length > 0 && capped.toLowerCase().includes(q.toLowerCase());
             const bounds = selection ? selectionBounds(selection, globalIdx, capped.length) : undefined;
-            const hasSel = !!bounds && bounds.end > bounds.start;
-            // Selection and search count characters from the message's start, so they keep all of it.
-            const clip = hasSel || queryHit ? undefined : clipAt(globalIdx);
-            const keep = <X,>(xs: X[]): X[] => clipLines(xs, clip);
-            const fullySelected = messageFullySelected(selection, globalIdx, capped.length);
-            const isUserRow = m.role === 'user' && !hasSel && !queryHit;
-            const isToolError = m.role === 'tool' && m.status === 'error';
-            const contentWidth = paintedWidth(m.role, columns, screenReader);
-            const userLines = isUserRow && !screenReader
-              ? keep(capped.split('\n')).map((ln) => ln.padEnd(Math.max(ln.length, contentWidth)))
-              : null;
-            const full = hasSel || queryHit ? capped : keep(capped.split('\n')).join('\n');
-            if (screenReader) {
-              return (
-                <Box key={`slot-${slot.slot}`} flexDirection="column" flexShrink={0}>
-                  <Text wrap="wrap">{m.role}: {m.text}</Text>
-                </Box>
-              );
-            }
-              return (
-            <Box key={`slot-${slot.slot}`} flexDirection="column" flexShrink={0} marginTop={gapBefore(globalIdx)} paddingLeft={isUserRow ? 0 : 2} backgroundColor={fullySelected ? T.selectedBg : isUserRow ? T.userRowBg : undefined}>
-              {padAt(globalIdx) ? panelPad(isUserRow, contentWidth) : null}
-
-              {hasSel || queryHit ? (
-                <Text wrap="wrap">
-                  {paintRuns(full, { query: q, selection: hasSel ? bounds : undefined }).map((sp, si) => (
-                    <Text
-                      key={si}
-                      backgroundColor={sp.selected ? T.selectionBg : sp.hit ? T.searchHitBg : undefined}
-                      color={sp.selected ? T.selectionFg : sp.hit ? T.searchHitFg : themedColorFor(T, m.role)}
-                      bold={sp.hit || sp.selected}
-                    >{sp.text}</Text>
-                  ))}
-                </Text>
-              ) : m.role === 'assistant' ? (
-                <Markdown T={T} clip={clip}>{m.text}</Markdown>
-              ) : m.lines ? (
-                <Box flexDirection="column">
-                  {keep(m.lines).map((ln, li) => {
-                    const used = ln.spans.reduce((n, sp) => n + sp.text.length, 0);
-                    return (
-                      <Text key={li} wrap="truncate" color={T.text} backgroundColor={ln.band ? bandColor(ln.band, T) : undefined}>
-                        {ln.spans.map((sp, si) =>
-                          sp.style === 'status' ? (
-                            <Text key={si} color={m.status === 'running' ? T.accent : m.status === 'error' ? T.error : T.success}>
-                              {m.status === 'running' ? SPINNER_FRAMES[spin % SPINNER_FRAMES.length] : m.status === 'error' ? '✗' : '✓'}
-                            </Text>
-                          ) : (
-                            <Text key={si} {...(rowProps(sp.style, T) ?? spanProps(sp.style as Parameters<typeof spanProps>[0], T))} backgroundColor={sp.bg ? bandColor(sp.bg, T) : undefined}>{sp.text}</Text>
-                          ),
-                        )}
-                        {ln.band ? ' '.repeat(Math.max(0, contentWidth - used)) : null}
-                      </Text>
-                    );
-                  })}
-                </Box>
-              ) : isUserRow && !screenReader ? (
-                <>{(userLines ?? [capped]).map((ln, li) => (
-                  <Text key={li} wrap="wrap" backgroundColor={T.userRowBg} color={T.text}>
-                    <Text color={T.primary}>▌ </Text>{ln}
-                  </Text>
-                ))}</>
-              ) : (
-                <Text color={screenReader ? undefined : isToolError || m.tone === 'red' ? T.error : m.tone === 'accent' ? T.accent : themedColorFor(T, m.role)} dimColor={screenReader ? false : !!m.dim} wrap="wrap">{full}</Text>
-              )}
-              {padAt(globalIdx) ? panelPad(isUserRow, contentWidth) : null}
-            </Box>
+            return (
+              <MessageSlot
+                key={`slot-${slot.slot}`}
+                m={m}
+                gap={gapBefore(globalIdx)}
+                pad={padAt(globalIdx)}
+                clip={clipAt(globalIdx)}
+                T={T}
+                screenReader={screenReader}
+                contentWidth={paintedWidth(m.role, columns, screenReader)}
+                query={transcriptSearch.query.trim()}
+                bounds={bounds && bounds.end > bounds.start ? bounds : undefined}
+                fullySelected={messageFullySelected(selection, globalIdx, capped.length)}
+                spinner={m.status === 'running' ? SPINNER_FRAMES[spin % SPINNER_FRAMES.length]! : ''}
+              />
             );
           })}
               </>

@@ -38,6 +38,89 @@ index 6a7f29fa5f96edc1528434bff93a5686d86bdccd..210f86e59ec2aa64a90f98b31ce75248
      return (React.createElement(BackgroundContext, { value: effectiveBackgroundColor },
          React.createElement("ink-text", { style: {
                  flexGrow: 0,
+diff --git a/build/dom.js b/build/dom.js
+index d017ce0c32da795c09d88216611a2034e5df32d6..9efe1823eb47443a7c3b08af46a4fe692cf24c3d 100644
+--- a/build/dom.js
++++ b/build/dom.js
+@@ -2,6 +2,14 @@ import Yoga from 'yoga-layout';
+ import measureText from './measure-text.js';
+ import wrapText from './wrap-text.js';
+ import squashTextNodes from './squash-text-nodes.js';
++// cedia: a box whose subtree did not change since it was drawn draws its last operations again (see
++// render-node-to-output.js). Every change marks the node it lands on and every node above it, all the way up:
++// nested text is never drawn on its own, so its mark is never cleared and cannot stand for its parents'.
++export const markOutputChanged = (node) => {
++    for (let current = node; current; current = current.parentNode) {
++        current.internal_outputDirty = true;
++    }
++};
+ export const createNode = (nodeName) => {
+     const node = {
+         nodeName,
+@@ -24,6 +32,7 @@ export const appendChildNode = (node, childNode) => {
+     }
+     childNode.parentNode = node;
+     node.childNodes.push(childNode);
++    markOutputChanged(node);
+     if (childNode.yogaNode) {
+         node.yogaNode?.insertChild(childNode.yogaNode, node.yogaNode.getChildCount());
+     }
+@@ -36,6 +45,7 @@ export const insertBeforeNode = (node, newChildNode, beforeChildNode) => {
+         removeChildNode(newChildNode.parentNode, newChildNode);
+     }
+     newChildNode.parentNode = node;
++    markOutputChanged(node);
+     const index = node.childNodes.indexOf(beforeChildNode);
+     if (index >= 0) {
+         node.childNodes.splice(index, 0, newChildNode);
+@@ -58,6 +68,7 @@ export const removeChildNode = (node, removedNode) => {
+         removedNode.parentNode?.yogaNode?.removeChild(removedNode.yogaNode);
+     }
+     removedNode.parentNode = undefined;
++    markOutputChanged(node);
+     const index = node.childNodes.indexOf(removedNode);
+     if (index >= 0) {
+         node.childNodes.splice(index, 1);
+@@ -90,6 +101,7 @@ export const freeYogaSubtree = (removedNode) => {
+     nullifyYogaNodes(removedNode);
+ };
+ export const setAttribute = (node, key, value) => {
++    markOutputChanged(node);
+     if (key === 'internal_accessibility') {
+         node.internal_accessibility = value;
+         return;
+@@ -101,6 +113,7 @@ Update a text transform and invalidate measurements that include its output.
+ */
+ export const setTransform = (node, transform) => {
+     node.internal_transform = transform;
++    markOutputChanged(node);
+     // Nested transforms contribute to the enclosing text node's measured content.
+     if (node.nodeName === 'ink-virtual-text') {
+         markNodeAsDirty(node);
+@@ -113,6 +126,7 @@ export const setStyle = (node, style) => {
+     }
+     // Rendering code assumes style is always an object.
+     node.style = style ?? {};
++    markOutputChanged(node);
+ };
+ export const createTextNode = (text) => {
+     const node = {
+@@ -151,6 +165,7 @@ const markNodeAsDirty = (node) => {
+ };
+ export const setNodeHidden = (node, isHidden) => {
+     node.isHidden = isHidden;
++    markOutputChanged(node);
+     node.yogaNode?.setDisplay(isHidden || node.style.display === 'none'
+         ? Yoga.DISPLAY_NONE
+         : Yoga.DISPLAY_FLEX);
+@@ -165,6 +180,7 @@ export const setTextNodeValue = (node, text) => {
+     }
+     node.nodeValue = text;
+     markNodeAsDirty(node);
++    markOutputChanged(node.parentNode);
+ };
+ export const addLayoutListener = (rootNode, listener) => {
+     if (rootNode.nodeName !== 'ink-root') {
 diff --git a/build/ink.js b/build/ink.js
 index 550cdf00d2b15ac43f5d1cd708bc82c52c513569..6011dd5bd2d5e94b9964126b54bc66f51ffbe615 100644
 --- a/build/ink.js
@@ -302,7 +385,7 @@ index 0000000000000000000000000000000000000000..e6e148c0af5419ca011983baa4fa6145
 +};
 +export default createScreen;
 diff --git a/build/output.js b/build/output.js
-index 10a94568e2e9fc005dd383babf36456cb31ef572..f61a95fb2aeb8135f8b8d70db6448bd50c20f2f8 100644
+index 10a94568e2e9fc005dd383babf36456cb31ef572..907a41b57215bbb8f5cc197ddb211997b511b504 100644
 --- a/build/output.js
 +++ b/build/output.js
 @@ -1,5 +1,6 @@
@@ -402,7 +485,36 @@ index 10a94568e2e9fc005dd383babf36456cb31ef572..f61a95fb2aeb8135f8b8d70db6448bd5
              }
              const characters = this.caches.getStyledChars(line);
              // Nothing to write (e.g. line was clipped away).
-@@ -205,6 +238,17 @@ export default class Output {
+@@ -189,6 +222,28 @@ export default class Output {
+             transformers,
+         });
+     }
++    // cedia: operations made for an earlier frame, moved by (dx, dy).
++    replay(operations, dx, dy) {
++        if (dx === 0 && dy === 0) {
++            for (const operation of operations) {
++                this.operations.push(operation);
++            }
++            return;
++        }
++        const move = (value, by) => (value === undefined ? undefined : value + by);
++        for (const operation of operations) {
++            if (operation.type === 'write') {
++                this.operations.push({ ...operation, x: operation.x + dx, y: operation.y + dy });
++            }
++            else if (operation.type === 'clip') {
++                const { x1, x2, y1, y2 } = operation.clip;
++                this.operations.push({ type: 'clip', clip: { x1: move(x1, dx), x2: move(x2, dx), y1: move(y1, dy), y2: move(y2, dy) } });
++            }
++            else {
++                this.operations.push(operation);
++            }
++        }
++    }
+     clip(clip) {
+         this.operations.push({
+             type: 'clip',
+@@ -205,6 +260,17 @@ export default class Output {
          if (from >= to) {
              return '';
          }
@@ -420,7 +532,7 @@ index 10a94568e2e9fc005dd383babf36456cb31ef572..f61a95fb2aeb8135f8b8d70db6448bd5
          const result = [];
          let column = 0;
          for (const character of this.caches.getStyledChars(line)) {
-@@ -229,18 +273,10 @@ export default class Output {
+@@ -229,18 +295,10 @@ export default class Output {
      }
      get() {
          // Initialize output array with a specific set of rows, so that margin/padding at the bottom is preserved
@@ -441,7 +553,7 @@ index 10a94568e2e9fc005dd383babf36456cb31ef572..f61a95fb2aeb8135f8b8d70db6448bd5
          }
          const clips = [];
          for (const operation of this.operations) {
-@@ -255,13 +291,35 @@ export default class Output {
+@@ -255,13 +313,35 @@ export default class Output {
                  this.applyWriteOperation(output, operation, clips.at(-1));
              }
          }
@@ -483,6 +595,92 @@ index 10a94568e2e9fc005dd383babf36456cb31ef572..f61a95fb2aeb8135f8b8d70db6448bd5
          return {
              output: generatedOutput,
              height: output.length,
+diff --git a/build/render-node-to-output.js b/build/render-node-to-output.js
+index 6f48cd03d15de0f56aed72978579acea84f473ee..e34a16fea1a77fb8b3f15d4ed7b0e2fa8fc96de2 100644
+--- a/build/render-node-to-output.js
++++ b/build/render-node-to-output.js
+@@ -68,8 +68,41 @@ export const renderNodeToScreenReaderOutput = (node, options = {}) => {
+     return output;
+ };
+ // After nodes are laid out, render each to output object, which later gets rendered to terminal
++const NO_TRANSFORMERS = [];
++const sameTransformers = (a, b) => a === b || (a.length === b.length && a.every((transformer, index) => transformer === b[index]));
++// cedia: a box drawn before, with no change in it since (see markOutputChanged in dom.js) and the same size and
++// transformers, draws the operations it made then, moved to where it is now.
+ const renderNodeToOutput = (node, output, options) => {
+-    const { offsetX = 0, offsetY = 0, transformers = [], skipStaticElements, } = options;
++    if (node.nodeName !== 'ink-box' || (options.skipStaticElements && node.internal_static)) {
++        renderNodeToOutputUncached(node, output, options);
++        return;
++    }
++    const { yogaNode } = node;
++    if (!yogaNode || yogaNode.getDisplay() === Yoga.DISPLAY_NONE) {
++        return;
++    }
++    const { offsetX = 0, offsetY = 0, transformers = NO_TRANSFORMERS, skipStaticElements } = options;
++    const x = offsetX + yogaNode.getComputedLeft();
++    const y = offsetY + yogaNode.getComputedTop();
++    const width = yogaNode.getComputedWidth();
++    const height = yogaNode.getComputedHeight();
++    const cache = node.internal_outputCache;
++    if (!node.internal_outputDirty &&
++        cache !== undefined &&
++        cache.width === width &&
++        cache.height === height &&
++        cache.skipStaticElements === skipStaticElements &&
++        sameTransformers(cache.transformers, transformers)) {
++        output.replay(cache.operations, x - cache.x, y - cache.y);
++        return;
++    }
++    const from = output.operations.length;
++    renderNodeToOutputUncached(node, output, options);
++    node.internal_outputCache = { x, y, width, height, transformers, skipStaticElements, operations: output.operations.slice(from) };
++    node.internal_outputDirty = false;
++};
++const renderNodeToOutputUncached = (node, output, options) => {
++    const { offsetX = 0, offsetY = 0, transformers = NO_TRANSFORMERS, skipStaticElements, } = options;
+     if (skipStaticElements && node.internal_static) {
+         return;
+     }
+@@ -86,15 +119,30 @@ const renderNodeToOutput = (node, output, options) => {
+         ? [node.internal_transform, ...transformers]
+         : transformers;
+     if (node.nodeName === 'ink-text') {
+-        let text = squashTextNodes(node);
+-        if (text.length > 0) {
+-            const currentWidth = widestLine(text);
+-            const maxWidth = getMaxWidth(yogaNode);
+-            if (currentWidth > maxWidth) {
+-                const textWrap = node.style.textWrap ?? 'wrap';
+-                text = wrapText(text, maxWidth, textWrap);
++        // cedia: an unchanged text at the same width and padding is the text it was last frame.
++        const maxWidth = getMaxWidth(yogaNode);
++        const padding = node.childNodes.at(0)?.yogaNode;
++        const padX = padding ? padding.getComputedLeft() : 0;
++        const padY = padding ? padding.getComputedTop() : 0;
++        const cached = node.internal_textCache;
++        let text;
++        if (!node.internal_outputDirty && cached !== undefined && cached.maxWidth === maxWidth && cached.padX === padX && cached.padY === padY) {
++            text = cached.text;
++        }
++        else {
++            text = squashTextNodes(node);
++            if (text.length > 0) {
++                const currentWidth = widestLine(text);
++                if (currentWidth > maxWidth) {
++                    const textWrap = node.style.textWrap ?? 'wrap';
++                    text = wrapText(text, maxWidth, textWrap);
++                }
++                text = applyPaddingToText(node, text);
+             }
+-            text = applyPaddingToText(node, text);
++            node.internal_textCache = { maxWidth, padX, padY, text };
++            node.internal_outputDirty = false;
++        }
++        if (text.length > 0) {
+             output.write(x, y, text, { transformers: newTransformers });
+         }
+         return;
 diff --git a/build/squash-text-nodes.js b/build/squash-text-nodes.js
 index 7c86abb1b2efade62e261ffa6f237e5a45a94f78..e39de68d260d4aa7f48b8425d7c006706b6cfa62 100644
 --- a/build/squash-text-nodes.js
