@@ -664,18 +664,27 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
           log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: 'not run: the session stopped', isError: true } });
         return overBudget ? finish('error_max_budget_usd', 'budget') : finish('interrupted', 'aborted');
       }
-      // A turn that would change something before the plan is in waits for it; with a plan, the turn's calls are
-      // not run and the plan goes first, so the model decides them again with it.
+      // A turn that would change something before the plan is in waits for it; with a plan, the turn's other calls
+      // are not run and the plan follows, so the model decides them again with it. Its reads still run: a read cut
+      // off was not tried again in a gate run, and the writer then said the file could not be read.
+      let run = calls;
       if (plan && !plan.done && !calls.every(readsOnly)) {
         await awaitPlan();
-        if (signal.aborted || plan.text) {
-          const why = signal.aborted ? 'not run: the session stopped' : PLAN_FIRST;
-          for (const c of calls) log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: why, isError: true } });
-          if (signal.aborted) return finish('interrupted', 'aborted');
-          deliverPlan();
-          continue;
+        if (signal.aborted) {
+          for (const c of calls)
+            log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: 'not run: the session stopped', isError: true } });
+          return finish('interrupted', 'aborted');
         }
-        deliverPlan();
+        if (plan.text) {
+          run = calls.filter(readsOnly);
+          for (const c of calls)
+            if (!run.includes(c)) log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: PLAN_FIRST, isError: true } });
+          // The plan follows the reads' results, at the top of the next turn.
+          if (!run.length) {
+            deliverPlan();
+            continue;
+          }
+        } else deliverPlan();
       }
       const toolStart = performance.now();
       const before = log.events.length;
@@ -685,11 +694,11 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
         cost += c;
         if (opts.meter) opts.meter.usd += c;
       });
-      await runTools(calls, byName, opts, signal, log, snap, shared, early);
+      await runTools(run, byName, opts, signal, log, snap, shared, early);
       await warm.stop();
       timing.toolMs += performance.now() - toolStart;
       // A question for the owner ends the run once the turn's other calls are done; the answer is the next prompt.
-      const asked = askedIn(log.events.slice(before), calls);
+      const asked = askedIn(log.events.slice(before), run);
       if (asked) return { ...finish('asked', 'asked', asked.question), question: asked };
       // Stuck guard: the same call and result over and over. One reminder; repeating on after it ends the run.
       const stuck = handoff === 0 ? findStuck(log.events.slice(stuckFrom)) : undefined;
