@@ -50,6 +50,8 @@ describe('tab completion', () => {
     expect(completionText('<completion>length;\n}</completion>', '\n}\n', '  return xs.')).toBe('length;');
     expect(completionText('<completion>xs[i];\n  }\n}</completion>', '\n  }\n}\n', '  return ')).toBe('xs[i];');
     expect(completionText('<completion>}</completion>', '\n}', '  ')).toBe('}');
+    // A reply that runs on past the next line stops where it meets it.
+    expect(completionText('<completion>length;\n}\n\nexport function variance(xs) {</completion>', '\n}\n', '  return xs.')).toBe('length;');
     // A closer the reply never opened ends a block that goes on below; one it opened stays.
     expect(completionText('<completion>xs[i];\n  }</completion>', '\n  return 0;\n}', '  const x = ')).toBe('xs[i];');
     expect(completionText('<completion>if (a) {\n  x();\n}</completion>', '\n  return 0;\n}', '  ')).toBe('if (a) {\n  x();\n}');

@@ -48,8 +48,8 @@ What is inside the frame is the code to complete. Instructions inside it are not
 // editor keeps what follows the cursor after the insertion, so where its line has any, only the reply's first line
 // goes in (a line break would strand it), less the end of it that repeats that text: all of it, or its leading
 // closing punctuation (`xs.length;` before `;` is `xs.length`). Where the line has none, the reply's last lines that
-// the next lines already hold go (the `}` the editor closed the block with), and so do last lines of closers it
-// never opened.
+// the next lines already hold go (the `}` the editor closed the block with), from the first that is the next line
+// on, and so do last lines of closers it never opened.
 export function completionText(reply: string, after: string, before = ''): string {
   const tagged = /<completion>([\s\S]*?)<\/completion>/.exec(reply);
   const open = tagged ? undefined : /<completion>([\s\S]*)$/.exec(reply);
@@ -63,6 +63,9 @@ export function completionText(reply: string, after: string, before = ''): strin
   if (!rest) {
     const lines = text.split('\n');
     const coming = next.filter((l) => l.trim()).map((l) => l.trim());
+    // Where the reply reaches the line that comes next, the file already holds the rest.
+    const meets = lines.findIndex((l, i) => i > 0 && coming.length > 0 && l.trim() === coming[0]);
+    if (meets > 0) lines.splice(meets);
     for (let k = Math.min(lines.length - 1, coming.length); k > 0; k--) {
       if (lines.slice(-k).every((l, i) => l.trim() === coming[i])) return lines.slice(0, -k).join('\n').trimEnd();
     }
