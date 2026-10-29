@@ -5,7 +5,7 @@ import type { McpServerConfig } from './mcp/client.ts';
 import { GUARDS, PERMISSION_SETTINGS, type Guard, type PermissionSetting, type Policy } from './safety/policy.ts';
 import { DEFAULT_DOMAINS, SANDBOX_SETTINGS, type SandboxSetting } from './safety/sandbox.ts';
 import { defaultHandoffAt } from './project/handoff.ts';
-import { FALLBACKS, resolveModel } from './providers/catalog.ts';
+import { FALLBACKS, FAUX_MEDIA, resolveModel } from './providers/catalog.ts';
 import { secretPaths } from './safety/secrets.ts';
 import { checkHooks, type Hooks } from './hooks.ts';
 import type { Effort, ModelSpec, PrivacyLevel } from './types.ts';
@@ -20,6 +20,8 @@ export type Settings = {
   context?: string | string[];
   // Model (alias or ref) -> the model to continue on when its quota runs out, or "none". User settings only.
   fallback?: Record<string, string>;
+  // The model a run with images or video goes to when the code model reads text only (a ref, or "none").
+  media?: string;
   // The model for each role: an alias or ref (with `@<effort>` for plan and review), `claude-code[:<model>][@<effort>]`
   // for plan and review, or "none". triage is the model that says whether a message needs the planner (default:
   // the code model). User settings only: a repo must not pick what the user pays for.
@@ -90,6 +92,7 @@ const SETTINGS_KEYS: Record<keyof Settings, readonly string[] | 'any'> = {
   privacy: 'any',
   context: 'any',
   fallback: 'any',
+  media: 'any',
   roles: ['plan', 'code', 'review', 'swarm', 'advisor', 'classifier', 'workers', 'triage'],
   planWhen: 'any',
   planOverlap: 'any',
@@ -209,6 +212,19 @@ export function loadFallback(model: ModelSpec, flag?: string): ModelSpec | undef
   if (!ref || ref === 'none') return undefined;
   const fallback = resolveModel(ref);
   return fallback.ref === model.ref ? undefined : fallback;
+}
+
+// The model a run whose prompt brings images or video goes to when `model` reads text only: flag > user settings >
+// Haiku 5.5, the cheapest Claude model, which reads images (decided 2026-10-21). "none" keeps the code model, which
+// is then told each image's size in its place. Undefined when `model` reads images itself.
+export const MEDIA_MODEL = 'anthropic/claude-haiku-5-5';
+export function loadMedia(model: ModelSpec, flag?: string): ModelSpec | undefined {
+  if (model.caps.input.includes('image')) return undefined;
+  const ref = flag ?? readSettings(join(cediaHome(), 'settings.json')).media ?? (model.wire === 'faux' ? FAUX_MEDIA.ref : MEDIA_MODEL);
+  if (ref === 'none') return undefined;
+  const media = resolveModel(ref);
+  if (!media.caps.input.includes('image')) throw new Error(`--media ${ref}: ${media.ref} reads text only`);
+  return media;
 }
 
 // How long a run may wait for a spent quota that says when it comes back: flag > user settings > not at all

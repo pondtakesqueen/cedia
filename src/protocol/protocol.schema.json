@@ -263,6 +263,8 @@
         "daemon",
         "daemon.desktop-lock",
         "threads.send-images",
+        "video",
+        "media-route",
         "inline-edit"
       ]
     },

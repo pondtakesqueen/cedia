@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { storeImage } from './core/images.ts';
+import { storeAttachment } from './core/video.ts';
 import { inlineEdit, parseRange, type InlineEdit } from './core/project/inline-edit.ts';
 import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
@@ -127,7 +127,10 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --handoff <note|compact> how a session hands off: the model writes a note, or the provider summarizes the
                                older turns and the newest are kept (Claude API models only; default: settings, note)
       --check <command>        declared check for the done gate, e.g. 'bun test'; repeatable
-      --image <file>           show the model this image (PNG, JPEG, GIF, WebP) with the prompt; repeatable
+      --image <file>           show the model this image (PNG, JPEG, GIF, WebP) with the prompt, or a video (MP4, MOV,
+                               WebM, MKV, AVI) as up to 8 frames where its picture changes (needs ffmpeg); repeatable
+      --media <ref|none>       model a run with images goes to when the code model reads text only (default:
+                               settings media, then anthropic/claude-haiku-5-5)
       --sandbox <s>            auto | on | off: OS sandbox for bash (default: $CEDIA_SANDBOX, settings, auto)
       --allow-domain <host>    let sandboxed commands reach this host; repeatable
       --no-session-file        keep the session log in memory only
@@ -261,6 +264,7 @@ export async function main(argv: string[]): Promise<number> {
       unlock: { type: 'string', multiple: true },
       privacy: { type: 'string' },
       fallback: { type: 'string' },
+      media: { type: 'string' },
       'on-quota': { type: 'string' },
       thread: { type: 'string' },
       spawn: { type: 'string' },
@@ -329,6 +333,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.unlock ? { unlock: values.unlock } : {}),
     ...(values.privacy ? { privacy: values.privacy } : {}),
     ...(values.fallback ? { fallback: values.fallback } : {}),
+    ...(values.media ? { media: values.media } : {}),
     ...(values['on-quota'] ? { onQuota: values['on-quota'] } : {}),
     ...(values.thread ? { thread: values.thread } : {}),
     ...(values.spawn ? { spawn: values.spawn } : {}),
@@ -529,12 +534,15 @@ function threads(argv: string[]): number {
     }
     if (cmd === 'send' && id && rest.length) {
       // The images are stored now, so a pasted image's file needs to last only until the send returns.
-      const images = (values.image ?? []).map((path) => {
-        const ref = storeImage(readFileSync(resolve(values.cwd ?? process.cwd(), path)), path);
-        if ('error' in ref) throw new Error(`--image ${path}: ${ref.error}`);
-        return ref;
+      // A video goes as its frames, with a line that says what they show.
+      const notes: string[] = [];
+      const images = (values.image ?? []).flatMap((path) => {
+        const got = storeAttachment(resolve(values.cwd ?? process.cwd(), path), path);
+        if ('error' in got) throw new Error(`--image ${path}: ${got.error}`);
+        if (got.note) notes.push(got.note);
+        return got.images;
       });
-      const mid = store.send(id, 'user', rest.join(' '), new Date(), images);
+      const mid = store.send(id, 'user', [rest.join(' '), ...notes].join('\n'), new Date(), images);
       console.log(`sent to ${id} as ${mid}`);
       return 0;
     }

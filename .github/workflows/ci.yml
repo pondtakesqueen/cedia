@@ -22,7 +22,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q bubblewrap socat ripgrep
+          sudo apt-get install -y -q bubblewrap socat ripgrep ffmpeg
           # Ubuntu 24.04 strips capabilities from unprivileged user namespaces, which bubblewrap needs.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Sandbox dependencies (macOS)

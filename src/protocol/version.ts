@@ -44,6 +44,8 @@ export type Capability =
   | 'daemon' // cedia daemon [--once]: run queued threads and due schedules in cedia processes of their own
   | 'daemon.desktop-lock' // cedia daemon yields to the desktop's daemon while it holds ~/.cedia/desktop.lock (DesktopLock)
   | 'threads.send-images' // cedia threads send --image <file>; -p --image sha256:<hex>; a fork's ForkResult names the run's images
+  | 'video' // --image and threads send --image take a video (needs ffmpeg) as its frames; read opens video files
+  | 'media-route' // -p with images on a text-only code model runs on --media (default Haiku 5.5)
   | 'inline-edit'; // cedia inline-edit --file --range --instruction [--stdin] --json (InlineEdit): a selection's new text and patch
 
 export type VersionInfo = { name: 'cedia'; version: string; protocol: string; capabilities: Capability[] };
@@ -52,7 +54,7 @@ export type VersionInfo = { name: 'cedia'; version: string; protocol: string; ca
 export const PROTOCOL = hash(schemaText as unknown as string);
 
 export function versionInfo(): VersionInfo {
-  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask', 'todo', 'profiles', 'open_thread', 'schedules', 'worktree.newest-wins', 'spawn.best-of-n', 'models', 'permissions', 'commands', 'threads.fork', 'usage', 'threads.restore-json', 'images', 'browser', 'cache-ttl', 'threads.rename', 'threads.delete', 'mcp.manage', 'commit', 'pr', 'threads.side', 'daemon', 'daemon.desktop-lock', 'threads.send-images', 'inline-edit'];
+  const capabilities: Capability[] = ['stream-json', 'threads', 'threads.send', 'threads.unsend', 'threads.rate', 'evidence.check-thread', 'spawn', 'handoff', 'plan', 'review', 'ask', 'todo', 'profiles', 'open_thread', 'schedules', 'worktree.newest-wins', 'spawn.best-of-n', 'models', 'permissions', 'commands', 'threads.fork', 'usage', 'threads.restore-json', 'images', 'browser', 'cache-ttl', 'threads.rename', 'threads.delete', 'mcp.manage', 'commit', 'pr', 'threads.side', 'daemon', 'daemon.desktop-lock', 'threads.send-images', 'inline-edit', 'video', 'media-route'];
   if (processKeychain()) capabilities.push('keychain');
   return { name: 'cedia', version: VERSION, protocol: PROTOCOL, capabilities };
 }

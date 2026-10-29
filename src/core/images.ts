@@ -118,4 +118,5 @@ export function storedImage(name: string, home = cediaHome()): ImageRef | { erro
 
 // The line a task gets for the images that came with it, so a role that only gets text (plan and review in the
 // user's Claude Code) can open them.
-export const attachedNote = (paths: string[]) => `The owner attached ${paths.length === 1 ? 'an image' : `${paths.length} images`}; open ${paths.length === 1 ? 'it' : 'them'} with your read tool to look: ${paths.join(', ')}`;
+// A video among them makes them files: the read tool shows a video as its frames.
+export const attachedNote = (paths: string[], video = false) => `The owner attached ${paths.length === 1 ? (video ? 'a file' : 'an image') : `${paths.length} ${video ? 'files' : 'images'}`}; open ${paths.length === 1 ? 'it' : 'them'} with your read tool to look: ${paths.join(', ')}`;
