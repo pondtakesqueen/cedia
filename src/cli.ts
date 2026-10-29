@@ -6,10 +6,10 @@ import { inlineEdit, parseRange, type InlineEdit } from './core/project/inline-e
 import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
 import type { TuiArgs } from './clients/tui-ink/args.ts';
-import { ALIASES } from './core/providers/catalog.ts';
+import { ALIASES, resolveModel } from './core/providers/catalog.ts';
 import { GUARDS, PERMISSION_ENTRIES, type PermissionList } from './core/safety/policy.ts';
 import { applyAllowRules, suggestAllowRules } from './core/safety/suggest.ts';
-import { cediaHome, loadCompleteModel, loadPermissionSetting, loadPolicy, loadRoles } from './core/config.ts';
+import { cediaHome, loadCompleteModel, loadHandoffAt, loadPermissionSetting, loadPolicy, loadRoles } from './core/config.ts';
 import { processKeychain } from './core/providers/keychain.ts';
 import { modelLine, modelList } from './core/providers/models.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
@@ -40,6 +40,8 @@ import { lintSession } from './core/session/lint.ts';
 import { projectKey, sessionPath, SessionLog } from './core/session/log.ts';
 import { formatUsage, isUsageEvent, readEventsLenient, sinceOf, usageReport, type SessionInput } from './core/session/usage.ts';
 import { selectSessions } from './core/session/select.ts';
+import { contextBreakdown, formatContext, writerSessionOf } from './core/context/breakdown.ts';
+import { awayRecap, formatRecap, lastRunStart, recapSince } from './core/project/recap.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
 import { doctorReport } from './core/doctor.ts';
 import { versionInfo } from './protocol/version.ts';
@@ -145,8 +147,15 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                             cache misses by cause, and cost by day, model, project and thread
                                             (default: this project's last 20 sessions; --since: every session
                                             in the range; --all: every project)
+       cedia context [<file.jsonl> | --thread <id>] [--json] [--cwd <dir>]
+                                            what fills a session's context now: system prompt, tools (built-in
+                                            and each MCP server), instructions, memory, history by kind, and the
+                                            largest tool results (default: the newest thread's writer session)
        cedia threads [--all] [--cwd <dir>]  list this project's threads (--all: archived ones and side chats too)
        cedia threads show <id>              a thread's task, state, sessions, handoff note, result and messages
+       cedia threads recap <id> [--since <time|30m|2h>] [--json]
+                                            what the thread did since then (default: its last run): runs and how
+                                            they ended, files changed, checks, cost, and what waits for you
        cedia threads send <id> <text> [--image <file>]...
                                             leave a message the thread sees at its next turn; prints the message id
        cedia threads unsend <id> [<msg>...] take back your messages it has not seen yet (all of them by default)
@@ -257,6 +266,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'complete') return completeCmd(argv.slice(1));
   if (argv[0] === 'pr') return pr(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
+  if (argv[0] === 'context') return context(argv.slice(1));
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
@@ -493,11 +503,41 @@ function usage(argv: string[]): number {
   }
 }
 
+function context(argv: string[]): number {
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: { cwd: { type: 'string' }, thread: { type: 'string' }, json: { type: 'boolean' } } });
+  const cwd = values.cwd ?? process.cwd();
+  const home = cediaHome();
+  try {
+    let found: { sessionId: string; path: string } | undefined;
+    if (positionals[0]) found = { sessionId: basename(positionals[0]).replace(/\.jsonl$/, ''), path: positionals[0] };
+    else {
+      const store = new ThreadStore(threadsDir(home, projectKey(cwd)));
+      const t = values.thread ? store.read(values.thread) : store.list().find((x) => !x.archived && !x.side && !x.parent && writerSessionOf(x, cwd, home));
+      if (!t) throw new Error('no thread with a session in this project');
+      found = writerSessionOf(t, cwd, home);
+      if (!found) throw new Error(`thread ${t.id} has no writer session yet`);
+    }
+    if (!existsSync(found.path)) throw new Error(`no session log at ${found.path}`);
+    const events = readEventsLenient(readFileSync(found.path, 'utf8'));
+    if (events[0]?.kind !== 'session') throw new Error(`${found.path} does not start with a session event`);
+    let handoffAt: number | undefined;
+    try {
+      handoffAt = loadHandoffAt(resolveModel(events[0].model));
+    } catch {}
+    const c = contextBreakdown(events, { sessionId: found.sessionId, ...(handoffAt ? { handoffAt } : {}) });
+    console.log(values.json ? JSON.stringify(c) : formatContext(c));
+    return 0;
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 1;
+  }
+}
+
 function threads(argv: string[]): number {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' }, side: { type: 'boolean' }, json: { type: 'boolean' }, image: { type: 'string', multiple: true } },
+    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' }, side: { type: 'boolean' }, json: { type: 'boolean' }, image: { type: 'string', multiple: true }, since: { type: 'string' } },
   });
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(values.cwd ?? process.cwd())));
   const [cmd = 'list', id, ...rest] = positionals;
@@ -520,6 +560,15 @@ function threads(argv: string[]): number {
       if (t.question) lines.push('', `question from ${t.question.sessionId}:`, t.question.question, ...(t.question.options ?? []).map((o, i) => `  ${i + 1}. ${o}`), `answer with: cedia -p "<answer>" --thread ${t.id}`);
       for (const r of t.ratings) lines.push('', `rated ${r.rating} at ${r.at}${r.sessionId ? ` (session ${r.sessionId})` : ''}${r.note ? `: ${r.note}` : ''}`);
       console.log(lines.join('\n'));
+      return 0;
+    }
+    if (cmd === 'recap' && id) {
+      const cwd = values.cwd ?? process.cwd();
+      const t = store.read(id);
+      const since = values.since ? recapSince(values.since) : lastRunStart(t);
+      if (!since) throw new Error(`thread ${id} has no runs yet`);
+      const r = awayRecap(t, since, { cwd, home: cediaHome() });
+      console.log(values.json ? JSON.stringify(r) : formatRecap(r));
       return 0;
     }
     if ((cmd === 'archive' || cmd === 'unarchive') && id) {
@@ -618,7 +667,7 @@ function threads(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia threads [list [--all] | show <id> | send <id> <text> [--image <file>]... | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run|end> [--side] [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id> | rename <id> <title> | delete <id> [--force] [--json]] [--cwd <dir>]');
+  console.error('usage: cedia threads [list [--all] | show <id> | recap <id> [--since <time|span>] [--json] | send <id> <text> [--image <file>]... | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run|end> [--side] [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id> | rename <id> <title> | delete <id> [--force] [--json]] [--cwd <dir>]');
   return 2;
 }
 
