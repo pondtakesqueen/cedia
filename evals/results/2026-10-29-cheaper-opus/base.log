@@ -1,0 +1,29 @@
+Running 19 tasks x 1 runs on cedia (opencode-go/claude-haiku-5-5), 2 at a time...
+  PASS feature-simple#1 (6.3s $0.0009, peak 5k)
+  PASS bugfix-simple#1 (9.4s $0.0004, peak 5k)
+  PASS hard-csv-stream#1 (142.0s $0.0071, plan 53s, review changes 47s, fix 9s, peak 19k)
+  PASS hard-deny-list#1 (180.6s $0.0097, plan 33s, review changes 94s, fix 38s, peak 25k)
+  PASS hard-injection#1 (48.1s $0.0014, plan 15s, review approve 25s, peak 8k)
+  PASS hard-edit-tiers#1 (152.4s $0.0093, plan 45s, review changes 61s, fix 23s, peak 23k)
+  PASS hard-ledger#1 (119.5s $0.0064, plan 30s, review changes 58s, fix 17s, peak 20k)
+  PASS hard-memo-async#1 (137.1s $0.0106, plan 37s, review changes 48s, fix 18s, peak 25k)
+  PASS hard-pool#1 (122.5s $0.0066, plan 39s, review changes 50s, fix 8s, peak 18k)
+  PASS hard-redact-bugs#1 (120.9s $0.0059, plan 43s, review changes 47s, fix 17s, peak 20k)
+  PASS hard-sse#1 (93.6s $0.0071, plan 20s, review changes 34s, fix 31s, peak 18k)
+  PASS hard-shell-split#1 (288.8s $0.0209, plan 84s, review changes 88s, fix 52s, peak 42k)
+  PASS hard-window#1 (156.3s $0.0088, plan 34s, review changes 56s, fix 21s, peak 19k)
+  PASS refactor-rename#1 (7.4s $0.0008, peak 5k)
+  PASS tb-dedup#1 (8.3s $0.0006, peak 5k)
+  PASS long-migrate#1 (80.8s $0.0048, plan 34s, review approve 28s, peak 18k)
+  PASS wide-deprecate#1 (65.6s $0.0043, plan 31s, review approve 17s, peak 18k)
+  PASS wide-bug-hunt#1 (113.3s $0.0035, plan 53s, review approve 46s, peak 16k)
+  PASS wide-three-features#1 (143.5s $0.0074, plan 55s, review changes 51s, fix 9s, peak 20k)
+
+Results written to evals/results/2026-10-29-cheaper-opus/base.jsonl
+cedia (opencode-go/claude-haiku-5-5): 19 tasks, 19 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 105.1s per run, 115410 input / 6851 output tokens per run, cache hit 88.2%
+  peak context 17k mean, 42k max, 0 of 19 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 11 edit: broken edits string, 9 edit: top-level old_text/new_text
+  speed 287.8 output tok/s, 0.91s to first token per call; model 99.3% of time, cedia 0.0%
+  cost $0.1166 total, $0.0061 per passed run

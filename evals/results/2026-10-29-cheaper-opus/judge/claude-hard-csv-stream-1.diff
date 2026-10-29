@@ -1,0 +1,223 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/csv.test.ts b/csv.test.ts
+--- a/csv.test.ts	2026-10-29 01:30:28.241646975 +0000
++++ b/csv.test.ts	2026-10-29 01:32:45.339966894 +0000
+@@ -23,3 +23,116 @@
+   expect(s.push("d")).toEqual([]);
+   expect(s.end()).toEqual([["c", "d"]]);
+ });
++
++function streamed(chunks: string[]): string[][] {
++  const s = new CsvStream();
++  const rows: string[][] = [];
++  for (const chunk of chunks) rows.push(...s.push(chunk));
++  rows.push(...s.end());
++  return rows;
++}
++
++function same(input: string, chunks: string[]) {
++  if (throwsOnWhole(input)) expect(() => streamed(chunks)).toThrow(SyntaxError);
++  else expect(streamed(chunks)).toEqual(parseCsv(input));
++}
++
++function throwsOnWhole(input: string): boolean {
++  try {
++    parseCsv(input);
++    return false;
++  } catch {
++    return true;
++  }
++}
++
++const cases = [
++  "",
++  "\uFEFF",
++  "\uFEFFa",
++  "a\uFEFF",
++  "\n",
++  "\n\n",
++  "a,",
++  "a\r",
++  "a\r\r\n",
++  "\r\n",
++  "\r",
++  '\r"x',
++  '"a""b"',
++  '"a"',
++  '"a",b\r\n',
++  '"x\r\ny"\n',
++  '"a"\r',
++  '"a"\rb',
++  '"a"b',
++  'a"b',
++  '"open',
++  '""',
++  '""""',
++  "a\r\nb\r\n",
++  '"a""',
++];
++
++test("every split of the cases gives the rows of parseCsv", () => {
++  for (const input of cases) {
++    for (let a = 0; a <= input.length; a++) {
++      same(input, [input.slice(0, a), input.slice(a)]);
++      for (let b = a; b <= input.length; b++) {
++        same(input, [input.slice(0, a), input.slice(a, b), input.slice(b)]);
++      }
++    }
++    same(input, [...input]);
++  }
++});
++
++test("a BOM is dropped only at the very start of the input", () => {
++  expect(streamed(["", "\uFEFFa"])).toEqual([["a"]]);
++  expect(streamed(["\uFEFF", "\uFEFF"])).toEqual([["\uFEFF"]]);
++});
++
++test("a row comes out as soon as its end arrives", () => {
++  const s = new CsvStream();
++  expect(s.push("a\r")).toEqual([]);
++  expect(s.push("\nb")).toEqual([["a"]]);
++  expect(s.end()).toEqual([["b"]]);
++});
++
++test("random inputs and random splits give the rows of parseCsv", () => {
++  let seed = 12345;
++  const rand = (n: number) => {
++    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
++    return seed % n;
++  };
++  const alphabet = ["a", ",", '"', "\r", "\n", "\uFEFF"];
++  for (let n = 0; n < 2000; n++) {
++    let input = "";
++    const len = rand(13);
++    for (let i = 0; i < len; i++) input += alphabet[rand(alphabet.length)];
++    const chunks: string[] = [];
++    let at = 0;
++    while (at < input.length) {
++      const size = rand(4);
++      chunks.push(input.slice(at, at + size));
++      at += size;
++    }
++    if (chunks.length === 0 || rand(2) === 0) chunks.push(input.slice(at));
++    same(input, chunks);
++  }
++});
++
++test("the work for a chunk does not grow with the input before it", () => {
++  const s = new CsvStream();
++  const rows: string[][] = [];
++  rows.push(...s.push('"'));
++  for (let i = 0; i < 300_000; i++) rows.push(...s.push("x"));
++  rows.push(...s.push('"\n'));
++  expect(rows).toEqual([["x".repeat(300_000)]]);
++});
++
++test("the error for a \\r after a closing quote points at the \\r", () => {
++  const message = 'unexpected "\\r" after a closing quote at offset 3';
++  expect(() => parseCsv('"a"\rb')).toThrow(message);
++  expect(() => new CsvStream().push('"a"\rb')).toThrow(message);
++  expect(() => new CsvStream().push('"a"\r')).not.toThrow();
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/csv.ts b/csv.ts
+--- a/csv.ts	2026-10-29 01:30:28.241692619 +0000
++++ b/csv.ts	2026-10-29 01:32:45.327966894 +0000
+@@ -50,3 +50,99 @@
+   rows.push(row);
+   return rows;
+ }
++
++/**
++ * The same rows as `parseCsv`, for input that comes in chunks. Each character is looked at once, and the state
++ * is kept between calls, so the work for a chunk does not depend on the input before it.
++ */
++export class CsvStream {
++  private started = false;
++  private state: "start" | "plain" | "quoted" | "quote" | "closed" = "start";
++  // A `\r` came last and it is not known yet whether a `\n` follows. Only set in `plain` and `closed`.
++  private cr = false;
++  private field = "";
++  private row: string[] = [];
++  private rowOpen = false;
++  private offset = 0;
++
++  push(chunk: string): string[][] {
++    const out: string[][] = [];
++    for (let k = 0; k < chunk.length; k++, this.offset++) {
++      const c = chunk[k]!;
++      if (!this.started) {
++        this.started = true;
++        if (c === "﻿") continue;
++      }
++      this.rowOpen = true;
++      if (this.cr) {
++        this.cr = false;
++        if (c === "\n") {
++          this.endRow(out);
++          continue;
++        }
++        if (this.state === "closed") throw new SyntaxError(`unexpected "\\r" after a closing quote at offset ${this.offset - 1}`);
++        this.field += "\r";
++      }
++      if (this.state === "quote") {
++        if (c === '"') {
++          this.field += '"';
++          this.state = "quoted";
++          continue;
++        }
++        this.state = "closed";
++      }
++      if (this.state === "start") {
++        if (c === '"') this.state = "quoted";
++        else if (c === ",") this.endField();
++        else if (c === "\n") this.endRow(out);
++        else if (c === "\r") {
++          this.state = "plain";
++          this.cr = true;
++        } else {
++          this.field = c;
++          this.state = "plain";
++        }
++      } else if (this.state === "plain") {
++        if (c === '"') throw new SyntaxError(`a quote in a field that is not quoted, at offset ${this.offset}`);
++        else if (c === ",") this.endField();
++        else if (c === "\n") this.endRow(out);
++        else if (c === "\r") this.cr = true;
++        else this.field += c;
++      } else if (this.state === "quoted") {
++        if (c === '"') this.state = "quote";
++        else this.field += c;
++      } else {
++        if (c === ",") this.endField();
++        else if (c === "\n") this.endRow(out);
++        else if (c === "\r") this.cr = true;
++        else throw new SyntaxError(`unexpected ${JSON.stringify(c)} after a closing quote at offset ${this.offset}`);
++      }
++    }
++    return out;
++  }
++
++  end(): string[][] {
++    const out: string[][] = [];
++    if (this.state === "quoted") throw new SyntaxError("a quoted field is still open at the end of the input");
++    if (this.cr) {
++      if (this.state === "closed") throw new SyntaxError('unexpected "\\r" after a closing quote at the end of the input');
++      this.cr = false;
++      this.field += "\r";
++    }
++    if (this.rowOpen) this.endRow(out);
++    return out;
++  }
++
++  private endField() {
++    this.row.push(this.field);
++    this.field = "";
++    this.state = "start";
++  }
++
++  private endRow(out: string[][]) {
++    this.endField();
++    out.push(this.row);
++    this.row = [];
++    this.rowOpen = false;
++  }
++}

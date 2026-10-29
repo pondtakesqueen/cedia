@@ -1,0 +1,123 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit-tiers.test.ts b/edit-tiers.test.ts
+--- a/edit-tiers.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/edit-tiers.test.ts	2026-10-29 01:34:57.243679620 +0000
+@@ -0,0 +1,40 @@
++import { describe, expect, test } from 'bun:test';
++import { applyEdit } from './edit.ts';
++
++const errOf = (r: ReturnType<typeof applyEdit>) => ('error' in r ? r.error : '');
++
++describe('end of file', () => {
++  test('whitespace-only old_text does not match past the final newline', () => {
++    expect(errOf(applyEdit('a\nb\n', { old_text: ' ', new_text: 'X' }))).toContain('not found');
++  });
++  test('a match ending in the final newline is not silently dropped', () => {
++    expect(errOf(applyEdit('a\nb\n', { old_text: 'b  \n ', new_text: 'B' }))).toContain('not found');
++  });
++  test('blank line matches only real lines', () => {
++    const r = applyEdit('a\n\nb\n', { old_text: '  \n', new_text: 'x' });
++    expect('error' in r).toBe(false);
++    if (!('error' in r)) {
++      expect(r.content).toBe('a\nx\nb\n');
++      expect(r.applied).toEqual({ from: 2, to: 2, tier: 'trailing-space', count: 1 });
++    }
++  });
++});
++
++describe('new branches', () => {
++  test('indentation tier with several matches is an error', () => {
++    expect(errOf(applyEdit('\ta\nx\n\ta\n', { old_text: '  a', new_text: 'b' }))).toContain('matches 2 places at lines 1, 3');
++  });
++  test('replace_all does not widen tiers 2 and 3', () => {
++    expect(errOf(applyEdit('a \nb\na \nb\n', { old_text: 'a\nb', new_text: 'c', replace_all: true }))).toContain('matches 2 places');
++  });
++  test('exact tier to-line for old_text ending in newline', () => {
++    const r = applyEdit('a\nb\nc\n', { old_text: 'b\n', new_text: 'B\n' });
++    expect('error' in r).toBe(false);
++    if (!('error' in r)) expect(r.applied).toEqual({ from: 2, to: 2, tier: 'exact', count: 1 });
++  });
++  test('not-found pointer lists at most 5 lines', () => {
++    const msg = errOf(applyEdit('foo bar baz\n'.repeat(7), { old_text: 'foo bar\nnope', new_text: 'x' }));
++    expect(msg).toContain('first line appears at line 1, 2, 3, 4, 5');
++    expect(msg).not.toContain(', 6');
++  });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 01:33:14.450422812 +0000
++++ b/edit.ts	2026-10-29 01:34:59.935974895 +0000
+@@ -23,5 +23,74 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text, new_text, replace_all } = edit;
++  if (old_text === '') return { error: 'old_text is empty; use write to create or overwrite a file' };
++  if (old_text === new_text) return { error: 'old_text and new_text are the same; nothing to change' };
++
++  const lineAt = (idx: number) => 1 + content.slice(0, idx).split('\n').length - 1;
++
++  // Tier 1: exact.
++  const starts: number[] = [];
++  for (let i = content.indexOf(old_text); i !== -1; i = content.indexOf(old_text, i + old_text.length)) starts.push(i);
++  if (starts.length > 1 && !replace_all) {
++    return { error: `old_text matches ${starts.length} places (first at line ${lineAt(starts[0])}); add context or set replace_all` };
++  }
++  if (starts.length > 0) {
++    const from = lineAt(starts[0]);
++    const to = from + old_text.replace(/\n$/, '').split('\n').length - 1;
++    const next = replace_all
++      ? content.split(old_text).join(new_text)
++      : content.slice(0, starts[0]) + new_text + content.slice(starts[0] + old_text.length);
++    return { content: next, applied: { from, to, tier: 'exact', count: replace_all ? starts.length : 1 } };
++  }
++
++  // Tiers 2 and 3: whole lines.
++  const oldLines = old_text.replace(/\n$/, '').split('\n');
++  const newLines = new_text.replace(/\n$/, '') === '' ? [] : new_text.replace(/\n$/, '').split('\n');
++  const lines = content.split('\n');
++  // A final newline leaves an empty element that is not a line of the file.
++  const lineCount = content.endsWith('\n') ? lines.length - 1 : lines.length;
++  const findWindows = (norm: (s: string) => string) => {
++    const found: number[] = [];
++    for (let i = 0; i + oldLines.length <= lineCount; i++) {
++      if (oldLines.every((l, k) => norm(lines[i + k]) === norm(l))) found.push(i);
++    }
++    return found;
++  };
++  const tiers: { tier: Tier; norm: (s: string) => string }[] = [
++    { tier: 'trailing-space', norm: (s) => s.trimEnd() },
++    { tier: 'indentation', norm: (s) => s.trim() },
++  ];
++  for (const { tier, norm } of tiers) {
++    const windows = findWindows(norm);
++    if (windows.length > 1) {
++      return { error: `old_text matches ${windows.length} places at lines ${windows.map((s) => s + 1).join(', ')}` };
++    }
++    if (windows.length === 0) continue;
++    const i = windows[0];
++    let replacement = newLines;
++    if (tier === 'indentation') {
++      const indentOf = (s: string) => /^\s*/.exec(s)![0];
++      const oldIndent = indentOf(oldLines.find((l) => l.trim() !== '') ?? '');
++      const fileIndent = indentOf(lines.slice(i, i + oldLines.length).find((l) => l.trim() !== '') ?? '');
++      replacement = newLines.map((l) => {
++        if (l.trim() === '') return '';
++        return fileIndent + (l.startsWith(oldIndent) ? l.slice(oldIndent.length) : l.trimStart());
++      });
++    }
++    lines.splice(i, oldLines.length, ...replacement);
++    return { content: lines.join('\n'), applied: { from: i + 1, to: i + oldLines.length, tier, count: 1 } };
++  }
++
++  // Nothing matched.
++  let error = 'old_text not found';
++  const first = (oldLines.find((l) => l.trim() !== '') ?? '').trim();
++  const nums: number[] = [];
++  if (first !== '') {
++    lines.forEach((l, idx) => {
++      if (nums.length < 5 && l.includes(first)) nums.push(idx + 1);
++    });
++  }
++  if (nums.length > 0) error += `; first line appears at line ${nums.join(', ')}`;
++  return { error };
+ }

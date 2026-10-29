@@ -1,0 +1,9 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/utils.js b/src/utils.js
+--- a/src/utils.js	2026-10-29 01:30:21.870542607 +0000
++++ b/src/utils.js	2026-10-29 01:30:32.952829167 +0000
+@@ -1,4 +1,4 @@
+ function last(arr) {
+-  return arr[arr.length - 2];
++  return arr[arr.length - 1];
+ }
+ module.exports = { last };

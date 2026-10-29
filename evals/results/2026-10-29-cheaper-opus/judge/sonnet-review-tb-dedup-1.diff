@@ -1,0 +1,57 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/.pytest_cache/.gitignore b/.pytest_cache/.gitignore
+--- a/.pytest_cache/.gitignore	1970-01-01 00:00:00.000000000 +0000
++++ b/.pytest_cache/.gitignore	2026-10-29 01:43:29.690485790 +0000
+@@ -0,0 +1,2 @@
++# Created by pytest automatically.
++*
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/.pytest_cache/CACHEDIR.TAG b/.pytest_cache/CACHEDIR.TAG
+--- a/.pytest_cache/CACHEDIR.TAG	1970-01-01 00:00:00.000000000 +0000
++++ b/.pytest_cache/CACHEDIR.TAG	2026-10-29 01:43:29.690526280 +0000
+@@ -0,0 +1,4 @@
++Signature: 8a477f597d28d172789f06886806bc55
++# This file is a cache directory tag created by pytest.
++# For information about cache directory tags, see:
++#	https://bford.info/cachedir/spec.html
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/.pytest_cache/README.md b/.pytest_cache/README.md
+--- a/.pytest_cache/README.md	1970-01-01 00:00:00.000000000 +0000
++++ b/.pytest_cache/README.md	2026-10-29 01:43:29.690433541 +0000
+@@ -0,0 +1,8 @@
++# pytest cache directory #
++
++This directory contains data from the pytest's cache plugin,
++which provides the `--lf` and `--ff` options, as well as the `cache` fixture.
++
++**Do not** commit this to version control.
++
++See [the docs](https://docs.pytest.org/en/stable/how-to/cache.html) for more information.
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/.pytest_cache/v/cache/nodeids b/.pytest_cache/v/cache/nodeids
+--- a/.pytest_cache/v/cache/nodeids	1970-01-01 00:00:00.000000000 +0000
++++ b/.pytest_cache/v/cache/nodeids	2026-10-29 01:43:29.690729070 +0000
+@@ -0,0 +1,5 @@
++[
++  "test_solution.py::test_basic",
++  "test_solution.py::test_empty",
++  "test_solution.py::test_no_dup"
++]
+\ No newline at end of file
+Binary files a/__pycache__/solution.cpython-313.pyc and b/__pycache__/solution.cpython-313.pyc differ
+Binary files a/__pycache__/test_solution.cpython-313-pytest-9.2.0.pyc and b/__pycache__/test_solution.cpython-313-pytest-9.2.0.pyc differ
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/solution.py b/solution.py
+--- a/solution.py	2026-10-29 01:43:24.147767784 +0000
++++ b/solution.py	2026-10-29 01:43:28.112005103 +0000
+@@ -1,2 +1,14 @@
+ def dedup(items):
+-    raise NotImplementedError
++    result = []
++    seen = set()
++    for item in items:
++        try:
++            if item in seen:
++                continue
++            seen.add(item)
++        except TypeError:
++            # unhashable item: fall back to a linear equality check
++            if item in result:
++                continue
++        result.append(item)
++    return result

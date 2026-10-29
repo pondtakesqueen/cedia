@@ -1,0 +1,16 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/app.js b/src/app.js
+--- a/src/app.js	2026-10-29 01:43:51.494678243 +0000
++++ b/src/app.js	2026-10-29 01:43:56.699230074 +0000
+@@ -1,2 +1,2 @@
+-const { compute } = require('./math');
+-module.exports = { run: (a, b) => compute(a, b) };
++const { calculate } = require('./math');
++module.exports = { run: (a, b) => calculate(a, b) };
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/math.js b/src/math.js
+--- a/src/math.js	2026-10-29 01:43:51.494619375 +0000
++++ b/src/math.js	2026-10-29 01:43:56.693037561 +0000
+@@ -1,2 +1,2 @@
+-function compute(a, b) { return a + b; }
+-module.exports = { compute };
++function calculate(a, b) { return a + b; }
++module.exports = { calculate };

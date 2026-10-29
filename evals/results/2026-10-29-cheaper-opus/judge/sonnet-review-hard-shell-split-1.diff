@@ -1,0 +1,313 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.review.test.ts b/shell.review.test.ts
+--- a/shell.review.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/shell.review.test.ts	2026-10-29 01:44:23.428008391 +0000
+@@ -0,0 +1,52 @@
++import { expect, test } from 'bun:test';
++import { simpleCommands } from './shell.ts';
++
++test('substitutions are words: they do not shift redirect targets or wrapper values', () => {
++  expect(simpleCommands('> $(echo f) rm -rf /')).toEqual([['rm', '-rf', '/'], ['echo', 'f']]);
++  expect(simpleCommands('sudo -u $(whoami) rm -rf /')).toEqual([['rm', '-rf', '/'], ['whoami']]);
++  expect(simpleCommands('nice -n $(x) make')).toEqual([['make'], ['x']]);
++  expect(simpleCommands('cmd >$(echo f) arg')).toEqual([['cmd', 'arg'], ['echo', 'f']]);
++});
++
++test('a substitution in command position keeps an empty command name', () => {
++  expect(simpleCommands('$(echo rm) -rf /')).toEqual([['', '-rf', '/'], ['echo', 'rm']]);
++});
++
++test('escaped nested backticks are unpacked', () => {
++  expect(simpleCommands('echo `echo \\`rm -rf /\\``')).toEqual([['echo'], ['echo'], ['rm', '-rf', '/']]);
++});
++
++test('arithmetic expansion is not a command, but substitutions inside it are', () => {
++  expect(simpleCommands('echo $((i+1))')).toEqual([['echo']]);
++  expect(simpleCommands('echo $((1 + $(rm x)))')).toEqual([['echo'], ['rm', 'x']]);
++});
++
++test('>| is a redirection, not a pipe', () => {
++  expect(simpleCommands('echo x >| out')).toEqual([['echo', 'x']]);
++});
++
++test('substitutions inside double quotes are commands', () => {
++  expect(simpleCommands('echo "$(rm x)"')).toEqual([['echo', ''], ['rm', 'x']]);
++  expect(simpleCommands('echo "`rm x`"')).toEqual([['echo', ''], ['rm', 'x']]);
++});
++
++test('unclosed substitutions and eval return null', () => {
++  expect(simpleCommands('echo $(rm x')).toBeNull();
++  expect(simpleCommands('eval "rm x')).toBeNull();
++  expect(simpleCommands('bash -c "rm x')).toBeNull();
++});
++
++test('redirections glued to words and fd duplications', () => {
++  expect(simpleCommands('cmd &>log arg')).toEqual([['cmd', 'arg']]);
++  expect(simpleCommands('cmd x>&2 arg')).toEqual([['cmd', 'x', 'arg']]);
++});
++
++test('-- and positional operands in wrappers', () => {
++  expect(simpleCommands('sudo -- rm x')).toEqual([['rm', 'x']]);
++  expect(simpleCommands('timeout 5 make')).toEqual([['make']]);
++});
++
++test('bash -c after other shell options, and bash -c with no script', () => {
++  expect(simpleCommands('bash -O extglob -c "rm -rf /"')).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands('bash -c')).toEqual([['bash', '-c']]);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.ts b/shell.ts
+--- a/shell.ts	2026-10-29 01:38:21.111678303 +0000
++++ b/shell.ts	2026-10-29 01:44:14.708007872 +0000
+@@ -18,6 +18,238 @@
+ ]);
+ 
+ 
++type Word = { text: string; raw: string }; // text: unquoted value; raw: source slice
++type Cmd = { words: Word[]; subs: string[][] }; // subs: commands inside $( ) and backticks
++
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
++const SHELL_VALUE_OPTS = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']); // shell options whose next word is their value
++const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
++const REDIRECT = /^(?:\d*(?:>>|>&|>\||<<<|<<|<&|<>|>|<)|&>>|&>)/;
++const OPERATOR = /^(?:\d+|&)?[<>]*$/; // raw text that may continue a redirection operator
++
++const basename = (text: string) => text.slice(text.lastIndexOf('/') + 1);
++
++// Argument texts. An unquoted word that came from a substitution and expanded to nothing is left out; the command name stays.
++const texts = (words: Word[]) => words.filter((w, k) => k === 0 || w.text !== '' || /["']/.test(w.raw)).map(w => w.text);
++
++// Index of the quote that closes the quote at src[j], or -1. A backslash escapes inside " and `.
++function closeQuote(src: string, j: number): number {
++  for (let k = j + 1; k < src.length; k++) {
++    if (src[j] !== "'" && src[k] === '\\') k++;
++    else if (src[k] === src[j]) return k;
++  }
++  return -1;
++}
++
++// Index of the ) that closes a $( whose body starts at `from`, or -1.
++function closeParen(src: string, from: number): number {
++  let depth = 0;
++  for (let j = from; j < src.length; j++) {
++    const c = src[j];
++    if (c === '\\') j++;
++    else if (c === "'" || c === '"' || c === '`') {
++      j = closeQuote(src, j);
++      if (j < 0) return -1;
++    } else if (c === '(') depth++;
++    else if (c === ')') {
++      if (depth === 0) return j;
++      depth--;
++    }
++  }
++  return -1;
++}
++
++// The $( ), $(( )) or `` at src[at]: the index after it and the commands inside, or null if it is unclosed.
++function substitution(src: string, at: number): { end: number; subs: string[][] } | null {
++  if (src.startsWith('$((', at)) {
++    const close = closeParen(src, at + 3);
++    if (close < 0 || src[close + 1] !== ')') return null;
++    const subs = commandsIn(src.slice(at + 3, close));
++    return subs && { end: close + 2, subs };
++  }
++  const back = src[at] === '`';
++  const from = back ? at + 1 : at + 2;
++  const end = back ? closeQuote(src, at) : closeParen(src, from);
++  if (end < 0) return null;
++  // A backtick body keeps the backslashes that escape its nested backticks; drop them before parsing it.
++  const body = back ? src.slice(from, end).replace(/\\([`\\$])/g, '$1') : src.slice(from, end);
++  const subs = simpleCommands(body);
++  return subs && { end: end + 1, subs };
++}
++
++// Commands of the substitutions inside an arithmetic body; null if one is unclosed.
++function commandsIn(body: string): string[][] | null {
++  const out: string[][] = [];
++  for (let j = 0; j < body.length; j++) {
++    if (body.startsWith('$(', j) || body[j] === '`') {
++      const sub = substitution(body, j);
++      if (sub === null) return null;
++      out.push(...sub.subs);
++      j = sub.end - 1;
++    }
++  }
++  return out;
++}
++
++// Splits the line into commands. Returns null if quotes or substitutions are unbalanced.
++function tokenize(src: string): Cmd[] | null {
++  const cmds: Cmd[] = [];
++  let cmd: Cmd = { words: [], subs: [] };
++  let text = '';
++  let inWord = false;
++  let start = 0;
++  let i = 0;
++  const begin = () => {
++    if (!inWord) {
++      inWord = true;
++      start = i;
++    }
++  };
++  const endWord = () => {
++    if (inWord) cmd.words.push({ text, raw: src.slice(start, i) });
++    inWord = false;
++    text = '';
++  };
++  const endCmd = () => {
++    endWord();
++    cmds.push(cmd);
++    cmd = { words: [], subs: [] };
++  };
++  // Runs the substitution opened at src[at] as a word of its own; returns the index after it, or -1.
++  const substitute = (at: number): number => {
++    const sub = substitution(src, at);
++    if (sub === null) return -1;
++    begin();
++    cmd.subs.push(...sub.subs);
++    return sub.end;
++  };
++
++  while (i < src.length) {
++    const c = src[i];
++    if (c === ' ' || c === '\t') {
++      endWord();
++      i++;
++    } else if (c === '|' && src[i - 1] === '>') {
++      text += c; // >| is a redirection, not a pipe
++      i++;
++    } else if ('\n;|()'.includes(c)) {
++      endCmd();
++      i++;
++    } else if (c === '&') {
++      if (inWord && /[<>]$/.test(text)) {
++        text += '&';
++        i++;
++      } else if (src[i + 1] === '>') {
++        endWord();
++        begin();
++        text += '&';
++        i++;
++      } else {
++        endCmd();
++        i++;
++      }
++    } else if (c === '<' || c === '>') {
++      if (!(inWord && OPERATOR.test(src.slice(start, i)))) endWord();
++      begin();
++      text += c;
++      i++;
++    } else if (c === '\\') {
++      if (src[i + 1] === '\n') {
++        i += 2;
++      } else {
++        begin();
++        text += src[i + 1] ?? '\\';
++        i += 2;
++      }
++    } else if (c === "'") {
++      const end = closeQuote(src, i);
++      if (end < 0) return null;
++      begin();
++      text += src.slice(i + 1, end);
++      i = end + 1;
++    } else if (c === '"') {
++      begin();
++      i++;
++      while (src[i] !== '"') {
++        if (i >= src.length) return null;
++        if (src[i] === '\\') {
++          if (i + 1 >= src.length) return null;
++          text += src[i + 1];
++          i += 2;
++        } else if (src[i] === '`' || src.startsWith('$(', i)) {
++          i = substitute(i);
++          if (i < 0) return null;
++        } else {
++          text += src[i];
++          i++;
++        }
++      }
++      i++;
++    } else if (c === '`' || src.startsWith('$(', i)) {
++      i = substitute(i);
++      if (i < 0) return null;
++    } else {
++      begin();
++      text += c;
++      i++;
++    }
++  }
++  endCmd();
++  return cmds;
++}
++
++// The argv of one simple command, without redirections, assignments, keywords and wrappers.
++function resolve(words: Word[]): string[][] | null {
++  const argv: Word[] = [];
++  for (let i = 0; i < words.length; i++) {
++    const m = REDIRECT.exec(words[i].raw);
++    if (!m) argv.push(words[i]);
++    else if (m[0].length === words[i].raw.length) i++; // operator alone: its target is the next word
++  }
++
++  let i = 0;
++  let wrapped = -1; // first wrapper; it is the command if nothing follows it
++  while (i < argv.length) {
++    const { text, raw } = argv[i];
++    const wrapper = WRAPPERS.get(basename(text));
++    if (ASSIGN.test(raw) || (raw === text && KEYWORDS.has(text))) {
++      i++;
++    } else if (wrapper) {
++      if (wrapped < 0) wrapped = i;
++      i++;
++      while (i < argv.length && argv[i].text.startsWith('-') && argv[i].text.length > 1) {
++        const flag = argv[i++].text;
++        if (flag === '--') break;
++        if (wrapper.value?.includes(flag)) i++;
++      }
++      i += wrapper.positional ?? 0;
++    } else {
++      break;
++    }
++  }
++  if (i >= argv.length) return wrapped < 0 ? [] : [texts(argv.slice(wrapped))];
++
++  const rest = argv.slice(i);
++  const name = basename(rest[0].text);
++  if (name === 'eval') return simpleCommands(rest.slice(1).map(w => w.text).join(' '));
++  if (SHELLS.has(name)) {
++    let script = false;
++    for (let j = 1; j < rest.length; j++) {
++      const w = rest[j].text;
++      if (SHELL_VALUE_OPTS.has(w)) j++;
++      else if (w.startsWith('--')) continue;
++      else if (w.startsWith('-')) {
++        if (w.includes('c')) script = true;
++      } else {
++        if (script) return simpleCommands(w);
++        break;
++      }
++    }
++  }
++  return [texts(rest)];
++}
++
+ // Splits a shell command line into the argv of each simple command, so a permission policy can check every
+ // command a line would run. It is not a full shell parser; it must never hide a command from the policy.
+ //
+@@ -37,5 +269,13 @@
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  const cmds = tokenize(command);
++  if (cmds === null) return null;
++  const out: string[][] = [];
++  for (const cmd of cmds) {
++    const argv = resolve(cmd.words);
++    if (argv === null) return null;
++    out.push(...argv, ...cmd.subs);
++  }
++  return out;
+ }

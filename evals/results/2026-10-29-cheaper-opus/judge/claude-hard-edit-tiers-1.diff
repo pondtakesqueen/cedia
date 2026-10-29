@@ -1,0 +1,123 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.review.test.ts b/edit.review.test.ts
+--- a/edit.review.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/edit.review.test.ts	2026-10-29 01:35:19.007976029 +0000
+@@ -0,0 +1,39 @@
++import { describe, expect, test } from 'bun:test';
++import { applyEdit } from './edit.ts';
++
++const ok = (r: ReturnType<typeof applyEdit>) => {
++  if ('error' in r) throw new Error(r.error);
++  return r;
++};
++
++describe('CRLF files', () => {
++  test('trailing-space tier keeps CRLF endings', () => {
++    const r = ok(applyEdit('a\r\nb  \r\nc\r\n', { old_text: 'a\nb', new_text: 'A\nB' }));
++    expect(r.content).toBe('A\r\nB\r\nc\r\n');
++  });
++  test('indentation tier keeps CRLF endings', () => {
++    const r = ok(applyEdit('x\r\n  a\r\n  b\r\ny\r\n', { old_text: 'a\nb', new_text: 'a\nc' }));
++    expect(r.content).toBe('x\r\n  a\r\n  c\r\ny\r\n');
++  });
++});
++
++describe('untested branches', () => {
++  test('not-found pointer lists at most 5 lines', () => {
++    const r = applyEdit('x\n'.repeat(7), { old_text: 'x\nq', new_text: 'z' });
++    expect('error' in r && r.error).toContain('line 1, 2, 3, 4, 5');
++    expect('error' in r && r.error).not.toContain('6');
++  });
++  test('indentation tier ambiguity names the lines', () => {
++    const r = applyEdit('\ta\nq\n\ta\nq\n', { old_text: '  a\nq', new_text: 'b' });
++    expect('error' in r && r.error).toContain('matches 2 places');
++    expect('error' in r && r.error).toContain('lines 1, 3');
++  });
++  test('replace_all reports from/to of first and last match', () => {
++    const r = ok(applyEdit('x\ny\nx\n', { old_text: 'x', new_text: 'z', replace_all: true }));
++    expect(r.applied).toEqual({ from: 1, to: 3, tier: 'exact', count: 2 });
++  });
++  test('new_text line indented less than old_text is left unchanged', () => {
++    const r = ok(applyEdit('    if (a) {\n        x();\n    }\n', { old_text: '    if (a) {\n        x();', new_text: '  if (b) {\n        y();' }));
++    expect(r.content).toBe('  if (b) {\n        y();\n    }\n');
++  });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 01:32:50.446886906 +0000
++++ b/edit.ts	2026-10-29 01:35:16.903975904 +0000
+@@ -23,5 +23,75 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text, new_text, replace_all } = edit;
++  if (old_text === '') return { error: 'old_text is empty; use write to create or overwrite a file' };
++  if (old_text === new_text) return { error: 'old_text and new_text are the same; nothing to change' };
++
++  const strip1 = (s: string) => (s.endsWith('\n') ? s.slice(0, -1) : s);
++  const lineOf = (index: number) => content.slice(0, index).split('\n').length;
++
++  const starts: number[] = [];
++  for (let pos = content.indexOf(old_text); pos !== -1; pos = content.indexOf(old_text, pos + old_text.length)) {
++    starts.push(pos);
++  }
++  if (starts.length > 1 && !replace_all) {
++    return { error: `old_text matches ${starts.length} places (first at line ${lineOf(starts[0])}); add more context or set replace_all` };
++  }
++  if (starts.length > 0) {
++    const from = lineOf(starts[0]);
++    const to = lineOf(starts[starts.length - 1]) + strip1(old_text).split('\n').length - 1;
++    return { content: content.split(old_text).join(new_text), applied: { from, to, tier: 'exact', count: starts.length } };
++  }
++
++  const oldLines = strip1(old_text).split('\n');
++  const newText = strip1(new_text);
++  const newLines = newText === '' ? [] : newText.split('\n');
++  const lines = content.split('\n');
++  const limit = content.endsWith('\n') ? lines.length - 1 : lines.length;
++
++  const findWindows = (norm: (s: string) => string) => {
++    const hits: number[] = [];
++    for (let i = 0; i + oldLines.length <= limit; i++) {
++      if (oldLines.every((o, k) => norm(lines[i + k]) === norm(o))) hits.push(i);
++    }
++    return hits;
++  };
++  const ambiguous = (hits: number[]) =>
++    `old_text matches ${hits.length} places (lines ${hits.map((i) => i + 1).join(', ')}); add more context`;
++
++  // Keep CRLF endings: when the replaced window's lines end in '\r', so do the new lines.
++  const withEol = (start: number) =>
++    lines[start + oldLines.length - 1].endsWith('\r') ? newLines.map((l) => (l.endsWith('\r') ? l : l + '\r')) : newLines;
++
++  const trailing = findWindows((s) => s.trimEnd());
++  if (trailing.length > 1) return { error: ambiguous(trailing) };
++  if (trailing.length === 1) {
++    const i = trailing[0];
++    lines.splice(i, oldLines.length, ...withEol(i));
++    return { content: lines.join('\n'), applied: { from: i + 1, to: i + oldLines.length, tier: 'trailing-space', count: 1 } };
++  }
++
++  const indented = findWindows((s) => s.trim());
++  if (indented.length > 1) return { error: ambiguous(indented) };
++  if (indented.length === 1) {
++    const start = indented[0];
++    const indentOf = (s: string) => s.match(/^\s*/)![0];
++    const firstNonBlank = (ls: string[]) => ls.find((l) => l.trim() !== '') ?? '';
++    const oldIndent = indentOf(firstNonBlank(oldLines));
++    const fileIndent = indentOf(firstNonBlank(lines.slice(start, start + oldLines.length)));
++    const reindented = withEol(start).map((l) =>
++      l.trim() === '' || !l.startsWith(oldIndent) ? l : fileIndent + l.slice(oldIndent.length),
++    );
++    lines.splice(start, oldLines.length, ...reindented);
++    return { content: lines.join('\n'), applied: { from: start + 1, to: start + oldLines.length, tier: 'indentation', count: 1 } };
++  }
++
++  const first = oldLines.find((l) => l.trim() !== '')?.trim();
++  const where: number[] = [];
++  if (first) {
++    for (let i = 0; i < limit && where.length < 5; i++) {
++      if (lines[i].includes(first)) where.push(i + 1);
++    }
++  }
++  return { error: 'old_text not found' + (where.length ? `; first line appears at line ${where.join(', ')}` : '') };
+ }

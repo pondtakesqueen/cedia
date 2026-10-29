@@ -1,0 +1,113 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.test.ts b/edit.test.ts
+--- a/edit.test.ts	2026-10-29 01:32:17.798015309 +0000
++++ b/edit.test.ts	2026-10-29 01:34:44.931974003 +0000
+@@ -82,3 +82,38 @@
+     expect('error' in r && r.error).not.toContain('appears');
+   });
+ });
++
++describe('review cases', () => {
++  test('tier 3 ambiguity names both windows', () => {
++    const r = applyEdit('  x\n  y\n\tx\n\ty\n', { old_text: 'x\ny', new_text: 'z' });
++    expect('error' in r && r.error).toContain('matches 2 places (lines 1, 3)');
++  });
++  test('not-found lists at most 5 lines', () => {
++    const r = applyEdit('a\nxq\nxq\nxq\nxq\nxq\nxq\n', { old_text: 'xq\nzz', new_text: 'x' });
++    expect('error' in r && r.error).toContain('first line appears at line 2, 3, 4, 5, 6');
++    expect('error' in r && r.error).not.toContain('7');
++  });
++  test('replace_all reports first and last lines', () => {
++    const r = ok(applyEdit('a\nb\na\nb\n', { old_text: 'a\nb', new_text: 'c', replace_all: true }));
++    expect(r.applied).toEqual({ from: 1, to: 4, tier: 'exact', count: 2 });
++    expect(r.content).toBe('c\nc\n');
++  });
++  test('old_text ending in newline reports one line', () => {
++    const r = ok(applyEdit('a\nb\nc\n', { old_text: 'b\n', new_text: 'B\n' }));
++    expect(r.applied).toEqual({ from: 2, to: 2, tier: 'exact', count: 1 });
++    expect(r.content).toBe('a\nB\nc\n');
++  });
++  test('content without trailing newline', () => {
++    const r = ok(applyEdit('a \nb', { old_text: 'b\n', new_text: 'B' }));
++    expect(r.applied).toEqual({ from: 2, to: 2, tier: 'trailing-space', count: 1 });
++    expect(r.content).toBe('a \nB');
++  });
++  test('dedented new_text line is an error, not left unchanged', () => {
++    const r = applyEdit('a\n        b\n        c\n', { old_text: '    b\n    c', new_text: '  d\n    e' });
++    expect('error' in r && r.error).toContain('cannot re-indent');
++  });
++  test('CRLF content keeps CRLF in replaced lines', () => {
++    const r = ok(applyEdit('a  \r\nb\r\n', { old_text: 'a\nb', new_text: 'c\nd' }));
++    expect(r.content).toBe('c\r\nd\r\n');
++  });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 01:32:17.798057071 +0000
++++ b/edit.ts	2026-10-29 01:34:38.035973593 +0000
+@@ -23,5 +23,66 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text, new_text, replace_all } = edit;
++  if (old_text === '') return { error: 'old_text is empty; use write to create content' };
++  if (old_text === new_text) return { error: 'old_text and new_text are the same' };
++
++  // 1-based line of a character index
++  const lineAt = (idx: number) => content.slice(0, idx).split('\n').length;
++
++  const starts: number[] = [];
++  for (let i = content.indexOf(old_text); i !== -1; i = content.indexOf(old_text, i + old_text.length)) starts.push(i);
++  if (starts.length > 1 && !replace_all)
++    return { error: `old_text matches ${starts.length} places (first at line ${lineAt(starts[0])}); add context or set replace_all` };
++  if (starts.length > 0) {
++    const nl = old_text.split('\n').length - 1;
++    const trailing = old_text.endsWith('\n') ? 1 : 0;
++    return {
++      content: content.split(old_text).join(new_text),
++      applied: { from: lineAt(starts[0]), to: lineAt(starts[starts.length - 1]) + nl - trailing, tier: 'exact', count: starts.length },
++    };
++  }
++
++  const stripNl = (s: string) => (s.endsWith('\n') ? s.slice(0, -1) : s);
++  const oldLines = stripNl(old_text).split('\n');
++  const stripped = stripNl(new_text);
++  // a CRLF file gets CRLF on the inserted lines too
++  const eol = content.includes('\r\n') ? '\r' : '';
++  const newLines = stripped === '' ? [] : stripped.split('\n').map(l => l.replace(/\r$/, '') + eol);
++  const lines = content.split('\n');
++  const realCount = lines.length - (content.endsWith('\n') ? 1 : 0);
++  const firstNonBlank = (ls: string[]) => ls.find(l => l.trim() !== '') ?? '';
++
++  // start indexes of every window of lines equal to old_text under norm
++  const find = (norm: (s: string) => string) => {
++    const hits: number[] = [];
++    for (let i = 0; i + oldLines.length <= realCount; i++)
++      if (oldLines.every((o, k) => norm(lines[i + k]) === norm(o))) hits.push(i);
++    return hits;
++  };
++  const apply = (tier: Tier, hits: number[], replacement: (i: number) => string[]) => {
++    if (hits.length > 1) return { error: `old_text matches ${hits.length} places (lines ${hits.map(i => i + 1).join(', ')})` };
++    const i = hits[0];
++    lines.splice(i, oldLines.length, ...replacement(i));
++    return { content: lines.join('\n'), applied: { from: i + 1, to: i + oldLines.length, tier, count: 1 } };
++  };
++
++  const rtrimHits = find(s => s.trimEnd());
++  if (rtrimHits.length > 0) return apply('trailing-space', rtrimHits, () => newLines);
++
++  const trimHits = find(s => s.trim());
++  if (trimHits.length > 0) {
++    const indentOf = (s: string) => /^\s*/.exec(s)![0];
++    const oldIndent = indentOf(firstNonBlank(oldLines));
++    if (newLines.some(l => l.trim() !== '' && !l.startsWith(oldIndent)))
++      return { error: `new_text has a line indented less than old_text's first line (${oldIndent.length} columns); cannot re-indent` };
++    return apply('indentation', trimHits, i => {
++      const fileIndent = indentOf(firstNonBlank(lines.slice(i, i + oldLines.length)));
++      return newLines.map(l => (l.trim() !== '' && l.startsWith(oldIndent) ? fileIndent + l.slice(oldIndent.length) : l));
++    });
++  }
++
++  const first = firstNonBlank(oldLines).trim();
++  const hits = first === '' ? [] : lines.slice(0, realCount).flatMap((l, i) => (l.includes(first) ? [i + 1] : [])).slice(0, 5);
++  return { error: 'old_text not found' + (hits.length > 0 ? `; first line appears at line ${hits.join(', ')}` : '') };
+ }
