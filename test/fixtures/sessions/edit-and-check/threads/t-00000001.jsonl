@@ -1,5 +1,5 @@
-{"at":"2026-10-27T07:42:35.701Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
-{"at":"2026-10-27T07:42:35.756Z","kind":"run","id":"r-ea60285b","prompt":"make f.txt say good","cwd":"/fixture/repo","tree":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","permission":"workspace"}
-{"at":"2026-10-27T07:42:35.766Z","run":"r-ea60285b","kind":"session","sessionId":"bf59cf11-0c3b-4fe3-ac4c-029d960de981","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/bf59cf11-0c3b-4fe3-ac4c-029d960de981.jsonl"}
-{"at":"2026-10-27T07:42:35.918Z","run":"r-ea60285b","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["bf59cf11-0c3b-4fe3-ac4c-029d960de981"]}
-{"at":"2026-10-27T07:42:35.918Z","run":"r-ea60285b","kind":"state","state":"done","result":"f.txt now says good, and grep -q good f.txt passes."}
+{"at":"2026-10-29T06:00:10.224Z","kind":"open","title":"make f.txt say good","task":"make f.txt say good"}
+{"at":"2026-10-29T06:00:10.237Z","kind":"run","id":"r-a528fca8","prompt":"make f.txt say good","cwd":"/fixture/repo","tree":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","permission":"workspace"}
+{"at":"2026-10-29T06:00:10.240Z","run":"r-a528fca8","kind":"session","sessionId":"e79d8cc3-7403-4539-b578-9476182c51b2","model":"faux/scripted","role":"code","why":"start","path":"/fixture/home/sessions/fixture-repo/e79d8cc3-7403-4539-b578-9476182c51b2.jsonl"}
+{"at":"2026-10-29T06:00:10.309Z","run":"r-a528fca8","kind":"turn","cwd":"/fixture/repo","before":"4b825dc642cb6eb9a060e54bf8d69288fbee4904","after":"99f8c32e405deb9aaa1ecb9d26171f9c8936cfcf","sessions":["e79d8cc3-7403-4539-b578-9476182c51b2"]}
+{"at":"2026-10-29T06:00:10.309Z","run":"r-a528fca8","kind":"state","state":"done","result":"f.txt now says good, and grep -q good f.txt passes."}

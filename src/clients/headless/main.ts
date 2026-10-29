@@ -9,8 +9,9 @@ import { providerFor } from '../../core/providers/index.ts';
 import { projectKey, projectRoot, projectSlug, SessionLog, sessionExists, sessionPath, workspaceRoots } from '../../core/session/log.ts';
 import { DAILY_SPEND_WARN_USD, daySpendUsd } from '../../core/session/select.ts';
 import { dayOf } from '../../core/session/usage.ts';
-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadMaxEffort, capEffort, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPlanOverlap, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
-import { attachedNote, blobDir, STORED_IMAGE, storedImage, storeImage, type ImageRef } from '../../core/images.ts';
+import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadMedia, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadMaxEffort, capEffort, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPlanOverlap, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
+import { attachedNote, blobDir, STORED_IMAGE, storedImage, type ImageRef } from '../../core/images.ts';
+import { storeAttachment } from '../../core/video.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
@@ -75,6 +76,8 @@ export type HeadlessArgs = {
   unlock?: string[];
   privacy?: string;
   fallback?: string;
+  // The model a run with images or video goes to when the code model reads text only (a ref, or "none").
+  media?: string;
   // Continues this thread of the project instead of opening a new one.
   thread?: string;
   // Tokens of context at which a writer session hands off to a new one, or "off".
@@ -272,7 +275,11 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const cacheTtl = args.cacheTtl ?? '5m';
   warnDaySpend(args.cwd, cediaHome(), say);
   if (cacheTtl !== '5m' && cacheTtl !== '1h') throw new Error(`--cache-ttl must be 5m or 1h, not ${cacheTtl}`);
-  const model = roles.code;
+  // Images or video with the prompt, on a code model that reads text only: the run goes to the media model, in a
+  // session of its own (a session never switches model).
+  const media = args.images?.length ? loadMedia(roles.code, args.media) : undefined;
+  if (media) say(`cedia: ${roles.code.ref} reads text only; this run, which brings images, goes to ${media.ref}\n`);
+  const model = media ?? roles.code;
   const declared = loadChecks(args.cwd, args.checks);
   const checks = declared.length ? declared : detectChecks(args.cwd);
   const softChecks = !declared.length && checks.length > 0;
@@ -674,12 +681,20 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   // The owner's images: the writer is shown them, and the task names their files so plan and review can open them.
   // `sha256:<hex>` names one already stored (a fork's images, kept by the client that resends the run).
   const imagePath = (path: string) => (STORED_IMAGE.test(path) ? join(blobDir(), path.slice(7)) : resolve(args.cwd, path));
-  const images = (args.images ?? []).map((path) => {
-    const ref = STORED_IMAGE.test(path) ? storedImage(path) : storeImage(readFileSync(imagePath(path)), path);
-    if ('error' in ref) throw new Error(`--image ${path}: ${ref.error}`);
-    return ref;
+  // A video comes as its frames, and a note that says what they show.
+  const videoNotes: string[] = [];
+  const images = (args.images ?? []).flatMap((path) => {
+    if (STORED_IMAGE.test(path)) {
+      const ref = storedImage(path);
+      if ('error' in ref) throw new Error(`--image ${path}: ${ref.error}`);
+      return [ref];
+    }
+    const got = storeAttachment(imagePath(path), path);
+    if ('error' in got) throw new Error(`--image ${path}: ${got.error}`);
+    if (got.note) videoNotes.push(got.note);
+    return got.images;
   });
-  if (images.length) task = `${task}\n\n${attachedNote(args.images!.map(imagePath))}`;
+  if (images.length) task = `${task}\n\n${[attachedNote(args.images!.map(imagePath), videoNotes.length > 0), ...videoNotes].join('\n')}`;
   // The advisor: one session for the run, which reads each of the writer's turns and answers OK or a note. A
   // failed advisor (its quota, an error) is left out for the rest of the run; the writer goes on without it.
   const adv = { log: undefined as SessionLog | undefined, turns: 0, notes: 0, costUsd: 0, off: false };

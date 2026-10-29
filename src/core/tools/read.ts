@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { sniffImage, storeImage } from '../images.ts';
+import { fileHead, sniffVideo, videoFrames, videoNote } from '../video.ts';
 import { clip, type ToolSpec } from './registry.ts';
 
 const MAX_LINES = 2000;
@@ -8,7 +9,7 @@ const MAX_LINES = 2000;
 export const readTool: ToolSpec = {
   name: 'read',
   description:
-    'Read a text file, or look at an image (PNG, JPEG, GIF, WebP). Returns numbered lines. Use offset and limit for large files (default: first 2000 lines).',
+    'Read a text file, look at an image (PNG, JPEG, GIF, WebP), or look at a video (MP4, MOV, WebM, MKV, AVI) as frames where its picture changes. Returns numbered lines. Use offset and limit for large files (default: first 2000 lines).',
   schema: {
     type: 'object',
     properties: {
@@ -29,6 +30,11 @@ export const readTool: ToolSpec = {
     let bytes: Buffer;
     try {
       if (statSync(full).isDirectory()) return { text: `${path} is a directory`, isError: true };
+      if (sniffVideo(fileHead(full))) {
+        const v = videoFrames(full, path);
+        if ('error' in v) return { text: `cannot show ${path}: ${v.error}`, isError: true };
+        return { text: videoNote(path, v), isError: false, images: v.frames };
+      }
       bytes = readFileSync(full);
     } catch (e) {
       return { text: `cannot read ${path}: ${(e as Error).message}`, isError: true };

@@ -207,6 +207,9 @@ export const FAUX_MODEL: ModelSpec = {
 
 // A second scripted model, so tests can follow a fallback offline. It reads the same script as faux.
 export const FAUX_FALLBACK: ModelSpec = { ...FAUX_MODEL, ref: 'faux/fallback', id: 'fallback' };
+// A scripted model that reads images, which a faux run with images goes to (config.ts loadMedia), so tests follow
+// the media route offline.
+export const FAUX_MEDIA: ModelSpec = { ...FAUX_MODEL, ref: 'faux/media', id: 'media', caps: { ...FAUX_MODEL.caps, input: ['text', 'image'] } };
 
 export const ALIASES: Record<string, string> = {
   opus: 'anthropic/claude-opus-5-5',
@@ -420,6 +423,7 @@ export function resolveModel(ref: string): ModelSpec {
   const full = ALIASES[ref] ?? ref;
   if (full === FAUX_MODEL.ref) return FAUX_MODEL;
   if (full === FAUX_FALLBACK.ref) return FAUX_FALLBACK;
+  if (full === FAUX_MEDIA.ref) return FAUX_MEDIA;
   const m = [...CATALOG, ...localModels()].find((c) => c.ref === full);
   if (!m) throw new Error(`unknown model "${ref}". Known: ${[...Object.keys(ALIASES), ...CATALOG.map((c) => c.ref)].join(', ')}`);
   return m;
