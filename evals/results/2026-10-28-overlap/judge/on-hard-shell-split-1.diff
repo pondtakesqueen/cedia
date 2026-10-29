@@ -1,0 +1,247 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.review.test.ts b/shell.review.test.ts
+--- a/shell.review.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/shell.review.test.ts	2026-10-28 19:55:42.151791021 +0000
+@@ -0,0 +1,39 @@
++import { expect, test } from 'bun:test';
++import { simpleCommands } from './shell.ts';
++
++test('substitutions inside double quotes are commands', () => {
++  expect(simpleCommands('echo "$(rm -rf /)"')).toEqual([['echo'], ['rm', '-rf', '/']]);
++  expect(simpleCommands('echo "`id`"')).toEqual([['echo'], ['id']]);
++  expect(simpleCommands('echo "$(id)"')).toEqual([['echo'], ['id']]);
++});
++
++test('an escaped > is not a redirection', () => {
++  expect(simpleCommands('echo x\\>& rm -rf /')).toEqual([['echo', 'x>'], ['rm', '-rf', '/']]);
++});
++
++test('env -S and --split-string run their script', () => {
++  expect(simpleCommands("env -S 'rm -rf /'")).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands("env --split-string='rm -rf /'")).toEqual([['rm', '-rf', '/']]);
++});
++
++test('bundled short flags that take a value', () => {
++  expect(simpleCommands('sudo -iu root rm -rf /')).toEqual([['rm', '-rf', '/']]);
++});
++
++test('full paths of wrappers and shells', () => {
++  expect(simpleCommands('/usr/bin/sudo rm -rf /')).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands("/bin/bash -c 'rm -rf /'")).toEqual([['rm', '-rf', '/']]);
++});
++
++test('shell options with a value before -c', () => {
++  expect(simpleCommands("bash -o pipefail -c 'rm -rf /'")).toEqual([['rm', '-rf', '/']]);
++});
++
++test('redirections glued after a word', () => {
++  expect(simpleCommands('rm>/dev/null -rf /')).toEqual([['rm', '-rf', '/']]);
++});
++
++test('nested scripts that fail to parse return null', () => {
++  expect(simpleCommands(`bash -c "'"`)).toBeNull();
++  expect(simpleCommands(`eval "'"`)).toBeNull();
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.ts b/shell.ts
+--- a/shell.ts	2026-10-28 19:51:54.843743265 +0000
++++ b/shell.ts	2026-10-28 19:56:26.899793681 +0000
+@@ -17,6 +17,125 @@
+   ['xargs', { value: ['-a', '-d', '-E', '-e', '-I', '-i', '-L', '-l', '-n', '-P', '-s', '--arg-file', '--delimiter', '--eof', '--replace', '--max-lines', '--max-args', '--max-procs', '--max-chars', '--process-slot-var'] }],
+ ]);
+ 
++type Word = { value: string; raw: string };
++
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
++const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
++const REDIRECT_ONLY = /^(\d*(>>?|<|>&)|&>>?)$/;
++const REDIRECT = /^(\d*(>>?|<|>&)|&>>?)/;
++
++// The word `path` without its directory, so /usr/bin/sudo is sudo.
++function basename(path: string): string {
++  return path.slice(path.lastIndexOf('/') + 1);
++}
++
++// Whether `flag` takes its value from the next word: a listed flag, or the last letter of a bundle (`-iu root`).
++function takesValue(flag: string, list: string[] = []): boolean {
++  if (list.includes(flag)) return true;
++  if (!/^-[a-zA-Z]{2,}$/.test(flag)) return false;
++  const i = [...flag.slice(1)].findIndex((letter) => list.includes('-' + letter));
++  return i >= 0 && i === flag.length - 2;
++}
++
++// Splits a line into segments of words, one segment per simple command. Null if a quote is not closed.
++function tokenize(s: string): Word[][] | null {
++  const segments: Word[][] = [];
++  let words: Word[] = [];
++  let value = '';
++  let raw = '';
++  let started = false;
++  const endWord = () => {
++    if (started) words.push({ value, raw });
++    value = '';
++    raw = '';
++    started = false;
++  };
++  const endSegment = () => {
++    endWord();
++    segments.push(words);
++    words = [];
++  };
++  for (let i = 0; i < s.length; i++) {
++    const c = s[i];
++    if (c === ' ' || c === '\t' || c === '\r') {
++      endWord();
++    } else if (c === '\\') {
++      if (i + 1 < s.length) {
++        i++;
++        value += s[i];
++        raw += '\\' + s[i];
++      } else {
++        value += c;
++        raw += c;
++      }
++      started = true;
++    } else if (c === "'") {
++      const end = s.indexOf("'", i + 1);
++      if (end < 0) return null;
++      value += s.slice(i + 1, end);
++      raw += s.slice(i, end + 1);
++      i = end;
++      started = true;
++    } else if (c === '"') {
++      // Inside double quotes, $( ), backticks and ) still end a command, since the shell runs them.
++      started = true;
++      raw += c;
++      let j = i + 1;
++      let inSubstitution = false;
++      for (; j < s.length && s[j] !== '"'; j++) {
++        if (s[j] === '\\' && j + 1 < s.length) {
++          j++;
++          value += s[j];
++          raw += '\\' + s[j];
++        } else if (s[j] === '$' && s[j + 1] === '(') {
++          if (raw === '"') started = false;
++          endSegment();
++          inSubstitution = true;
++          j++;
++        } else if (s[j] === '`' || s[j] === ')') {
++          if (raw === '"') started = false;
++          endSegment();
++          inSubstitution = s[j] === '`' && !inSubstitution;
++        } else if (inSubstitution && (s[j] === ' ' || s[j] === '\t')) {
++          endWord();
++        } else {
++          value += s[j];
++          raw += s[j];
++          started = true;
++        }
++      }
++      if (j >= s.length) return null;
++      raw += '"';
++      i = j;
++    } else if (c === ';' || c === '|' || c === '\n' || c === '(' || c === ')' || c === '`') {
++      endSegment();
++    } else if (c === '$' && s[i + 1] === '(') {
++      endSegment();
++      i++;
++    } else if (c === '&') {
++      if (/(^|[^\\])>$/.test(raw) || s[i + 1] === '>') {
++        value += c;
++        raw += c;
++        started = true;
++      } else {
++        endSegment();
++      }
++    } else if (c === '>' || c === '<') {
++      // A redirection starts its own word, so `rm>/dev/null` is `rm` and `>/dev/null`. `2>` and `&>` keep their prefix.
++      if (started && !/^\d*$/.test(raw) && !/[>&]$/.test(raw)) endWord();
++      value += c;
++      raw += c;
++      started = true;
++    } else {
++      value += c;
++      raw += c;
++      started = true;
++    }
++  }
++  endSegment();
++  return segments;
++}
+ 
+ // Splits a shell command line into the argv of each simple command, so a permission policy can check every
+ // command a line would run. It is not a full shell parser; it must never hide a command from the policy.
+@@ -37,5 +156,73 @@
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  const segments = tokenize(command);
++  if (!segments) return null;
++  const out: string[][] = [];
++  segment: for (const segment of segments) {
++    let words: Word[] = [];
++    for (let i = 0; i < segment.length; i++) {
++      if (REDIRECT_ONLY.test(segment[i].raw)) i++;
++      else if (!REDIRECT.test(segment[i].raw)) words.push(segment[i]);
++    }
++    for (;;) {
++      if (words.length && (ASSIGNMENT.test(words[0].raw) || KEYWORDS.has(words[0].raw))) {
++        words = words.slice(1);
++        continue;
++      }
++      const name = words.length ? basename(words[0].value) : '';
++      const wrapper = WRAPPERS.get(name);
++      if (!wrapper) break;
++      words = words.slice(1);
++      while (words.length && words[0].value.startsWith('-')) {
++        const flag = words[0].value;
++        words = words.slice(1);
++        if (flag === '--') break;
++        if (name === 'env' && flag.startsWith('-S')) {
++          // env -S splits its string into a command line of its own.
++          let script = flag.slice(2);
++          if (flag === '-S') {
++            script = words.length ? words[0].value : '';
++            words = words.slice(1);
++          }
++          const nested = simpleCommands([script, ...words.map((w) => w.raw)].join(' '));
++          if (!nested) return null;
++          out.push(...nested);
++          continue segment;
++        }
++        if (name === 'env' && flag.startsWith('--split-string')) {
++          const script = flag.includes('=') ? flag.slice(flag.indexOf('=') + 1) : words.length ? words[0].value : '';
++          if (!flag.includes('=')) words = words.slice(1);
++          const nested = simpleCommands([script, ...words.map((w) => w.raw)].join(' '));
++          if (!nested) return null;
++          out.push(...nested);
++          continue segment;
++        }
++        if (takesValue(flag, wrapper.value)) words = words.slice(1);
++      }
++      words = words.slice(wrapper.positional ?? 0);
++    }
++    if (words.length === 0) continue;
++
++    const argv = words.map((w) => w.value);
++    if (SHELLS.has(basename(argv[0]))) {
++      let i = 1;
++      while (i < argv.length && /^[-+]/.test(argv[i])) i += ['-o', '-O', '+o', '+O'].includes(argv[i]) ? 2 : 1;
++      const flags = argv.slice(1, i);
++      if (i < argv.length && flags.some((f) => /^-[a-zA-Z]+$/.test(f) && f.includes('c'))) {
++        const nested = simpleCommands(argv[i]);
++        if (!nested) return null;
++        out.push(...nested);
++        continue;
++      }
++    }
++    if (argv[0] === 'eval') {
++      const nested = simpleCommands(argv.slice(1).join(' '));
++      if (!nested) return null;
++      out.push(...nested);
++      continue;
++    }
++    out.push(argv);
++  }
++  return out;
+ }

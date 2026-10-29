@@ -92,7 +92,7 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                ("planWhen" in settings)
       --plan-overlap <on|off>  with a plan role: on starts the writer reading while the plan is written; the plan
                                follows into its session and nothing changes before it arrives (default: settings
-                               planOverlap, off)
+                               planOverlap, on)
       --triage <ref>           the model that decides (default: the code model; roles.triage in settings)
       --output-style <name>    report style by name (default, explanatory, learning, terse; settings, cedia output-style)
       --cache-ttl <5m|1h>      how long the writer's cached prompt lasts on Claude API models between requests.

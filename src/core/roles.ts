@@ -48,8 +48,8 @@ ${inert(plan)}
 The plan was written before anything changed. Follow it where it holds; where the code shows a step is wrong, do what the task needs and say why.`;
 
 // Plan overlap: the writer starts reading while the planner writes, and the plan follows as a reminder in the same
-// session, after the task, so the prefix the writer has cached stays as it is. On the evals the plan took 29% of a
-// run's time with the writer idle (evals/results/README.md, 2026-10-28).
+// session, after the task, so the prefix the writer has cached stays as it is. It saved no time on the evals (the
+// writer spends the wait reading), but the work was better: 9 blind wins to 2 (evals/results/2026-10-28-overlap/).
 export const planComing = (task: string, by: string) =>
   `${task}
 

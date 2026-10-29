@@ -334,8 +334,8 @@ describe('cedia -p (offline, faux)', () => {
       return readdirSync(join(root, project!)).map((f) => SessionLog.load(join(root, project!, f)).events);
     };
 
-    test('a cedia planner reads only, and the writer gets its plan with the task', () => {
-      const r = cedia([call('p1', 'cat f.txt'), reply('1. Write good to f.txt.\n2. Run test -s f.txt.'), ...writes], [...base, '--plan', 'faux/fallback', '--plan-when', 'always']);
+    test('a cedia planner reads only, and with --plan-overlap off the writer gets its plan with the task', () => {
+      const r = cedia([call('p1', 'cat f.txt'), reply('1. Write good to f.txt.\n2. Run test -s f.txt.'), ...writes], [...base, '--plan', 'faux/fallback', '--plan-when', 'always', '--plan-overlap', 'off']);
       const result = JSON.parse(r.out);
       expect(result).toMatchObject({ subtype: 'success', plan: { model: 'faux/fallback', via: 'cedia', requests: 2 } });
       expect(result.plan.apiMs).toBeGreaterThanOrEqual(0);
@@ -371,7 +371,8 @@ describe('cedia -p (offline, faux)', () => {
       expect(small.err).toContain('no review');
       expect(sessionsOf(small.home).map((l) => (l[0] as { role: string }).role).sort()).toEqual(['code', 'triage']);
       // The same change after a plan is reviewed, and so is a direct one past SMALL_CHANGE_LINES.
-      const planned = cedia([reply('PLAN'), reply('1. Write good to f.txt.'), ...writes, reply('VERDICT: approve')], [...base, '--plan', 'faux/fallback', '--review', 'faux/fallback']);
+      // The faux planner and writer read one script, so the plan comes first here.
+      const planned = cedia([reply('PLAN'), reply('1. Write good to f.txt.'), ...writes, reply('VERDICT: approve')], [...base, '--plan', 'faux/fallback', '--review', 'faux/fallback', '--plan-overlap', 'off']);
       expect(JSON.parse(planned.out)).toMatchObject({ subtype: 'success', review: { verdict: 'approve' } });
       const long = cedia([reply('DIRECT'), call('c1', 'seq 50 > f.txt'), call('c2', 'test -s f.txt'), reply('done'), reply('VERDICT: approve')], [...base, '--plan', 'faux/fallback', '--review', 'faux/fallback']);
       expect(JSON.parse(long.out)).toMatchObject({ subtype: 'success', review: { verdict: 'approve' } });
@@ -443,7 +444,7 @@ describe('cedia -p (offline, faux)', () => {
       expect(err).not.toContain('step in Claude Code failed');
     });
 
-    test('claude-code plans and reviews in your own Claude Code, read-only and without API keys', () => {
+    test('claude-code plans and reviews in your own Claude Code, read-only and without API keys (plan overlap off)', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cedia-fake-claude-'));
       const bin = join(dir, 'claude');
       const result = (text: string) => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: 'cc-1', total_cost_usd: 0.5, num_turns: 3, duration_api_ms: 1200 });
@@ -454,7 +455,7 @@ describe('cedia -p (offline, faux)', () => {
         `#!/bin/sh\nn=$(($(cat ${dir}/n 2>/dev/null || echo 0) + 1)); echo $n > ${dir}/n\nprintf '%s\\n' "$@" > ${dir}/args$n; env > ${dir}/env$n\ncat > ${dir}/prompt$n\ncat ${dir}/$n\n`,
         { mode: 0o755 },
       );
-      const r = cedia([...writes, call('c3', 'echo good. > f.txt'), call('c4', 'test -s f.txt'), reply('fixed')], [...base, '--plan', 'claude-code', '--plan-when', 'always', '--review', 'claude-code'], undefined, {
+      const r = cedia([...writes, call('c3', 'echo good. > f.txt'), call('c4', 'test -s f.txt'), reply('fixed')], [...base, '--plan', 'claude-code', '--plan-when', 'always', '--review', 'claude-code', '--plan-overlap', 'off'], undefined, {
         CEDIA_CLAUDE_BIN: bin,
         ANTHROPIC_API_KEY: 'sk-ant-should-not-pass',
       });
@@ -488,14 +489,14 @@ describe('cedia -p (offline, faux)', () => {
       expect(userTexts(writer)).toEqual([expect.stringContaining('<plan by="claude-code:opus@medium">'), expect.stringContaining('<review>\nf.txt:1 needs a period.\n</review>')]);
     });
 
-    test('--plan-overlap on: the writer reads while Claude Code plans, and the plan follows into its session', () => {
+    test('by default the writer reads while Claude Code plans, and the plan follows into its session', () => {
       const dir = mkdtempSync(join(tmpdir(), 'cedia-overlap-claude-'));
       const bin = join(dir, 'claude');
       const result = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Write good to f.txt.', session_id: 'cc-1', total_cost_usd: 0.5, num_turns: 3, duration_api_ms: 1200 });
       writeFileSync(join(dir, 'plan'), result);
       // The plan takes a second, so the writer's first turns come before it.
       writeFileSync(bin, `#!/bin/sh\ncat > ${dir}/prompt\nsleep 1\ncat ${dir}/plan\n`, { mode: 0o755 });
-      const r = cedia([call('w0', 'ls'), call('w1', 'echo early > f.txt'), ...writes], [...base, '--plan', 'claude-code', '--plan-when', 'always', '--plan-overlap', 'on'], undefined, { CEDIA_CLAUDE_BIN: bin });
+      const r = cedia([call('w0', 'ls'), call('w1', 'echo early > f.txt'), ...writes], [...base, '--plan', 'claude-code', '--plan-when', 'always'], undefined, { CEDIA_CLAUDE_BIN: bin });
       const out = JSON.parse(r.out);
       expect(out).toMatchObject({ subtype: 'success', result: 'done', plan: { model: 'claude-code:opus@medium', via: 'claude-code' } });
       expect(r.err).toContain('the writer reads while the plan is written');

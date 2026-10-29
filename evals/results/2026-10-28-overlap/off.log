@@ -1,0 +1,29 @@
+Running 19 tasks x 1 runs on cedia (opencode-go/claude-haiku-5-5), 2 at a time...
+  PASS feature-simple#1 (5.5s $0.0005, peak 5k)
+  PASS bugfix-simple#1 (9.4s $0.0007, peak 5k)
+  PASS hard-deny-list#1 (103.6s $0.0029, plan 30s, review approve 58s, peak 12k)
+  PASS hard-csv-stream#1 (135.9s $0.0049, plan 56s, review approve 51s, peak 15k)
+  PASS hard-injection#1 (49.2s $0.0013, plan 19s, review approve 22s, peak 7k)
+  PASS hard-edit-tiers#1 (167.2s $0.0091, plan 45s, review changes 68s, fix 33s, peak 23k)
+  PASS hard-ledger#1 (119.3s $0.0055, plan 38s, review changes 55s, fix 12s, peak 19k)
+  PASS hard-pool#1 (129.0s $0.0089, plan 39s, review changes 40s, fix 18s, peak 22k)
+  PASS hard-redact-bugs#1 (132.4s $0.0059, plan 46s, review changes 54s, fix 15s, peak 20k)
+  FAIL hard-memo-async#1 (300.0s $0.0050, plan 38s, peak 15k)
+  PASS hard-sse#1 (104.7s $0.0065, plan 25s, review changes 41s, fix 29s, peak 18k)
+  PASS hard-window#1 (141.7s $0.0093, plan 38s, review changes 51s, fix 22s, peak 22k)
+  PASS hard-shell-split#1 (409.1s $0.0291, plan 136s, review changes 104s, fix 89s, peak 59k)
+  PASS refactor-rename#1 (5.5s $0.0007, peak 5k)
+  PASS tb-dedup#1 (12.1s $0.0012, peak 8k)
+  PASS long-migrate#1 (89.8s $0.0048, plan 38s, review approve 29s, peak 18k)
+  PASS wide-bug-hunt#1 (111.7s $0.0033, plan 45s, review approve 48s, peak 16k)
+  PASS wide-deprecate#1 (81.8s $0.0074, plan 31s, review changes 18s, fix 5s, peak 22k)
+  PASS wide-three-features#1 (157.3s $0.0073, plan 61s, review changes 60s, fix 8s, peak 20k)
+
+Results written to evals/results/2026-10-28-overlap/off.jsonl
+cedia (opencode-go/claude-haiku-5-5): 19 tasks, 19 scored runs
+  pass@1 94.7%  pass^k 94.7%  false-done 0.0%  refused claims 0.0%
+  avg 119.2s per run, 92471 input / 7063 output tokens per run, cache hit 85.3%
+  peak context 17k mean, 59k max, 0 of 19 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 21 edit: top-level old_text/new_text, 14 edit: broken edits string
+  speed 289.2 output tok/s, 0.96s to first token per call; model 71.5% of time, cedia 0.1%
+  cost $0.1141 total, $0.0063 per passed run

@@ -26,7 +26,7 @@ export type Settings = {
   roles?: { plan?: string; code?: string; review?: string; swarm?: string; advisor?: string; classifier?: string; workers?: string; triage?: string };
   // With a plan role, when a prompt is planned: auto (the triage model decides), always or never.
   planWhen?: string;
-  // "on": the writer starts reading while the plan is written, and the plan follows into its session (default off).
+  // "on": the writer starts reading while the plan is written, and the plan follows into its session (default on).
   planOverlap?: string;
   // Whether writer sessions get the spawn tool for sub-threads (default true), and "worktree" to run each work
   // sub-thread in a git worktree of its own, several at once. User settings only.
@@ -440,9 +440,9 @@ export function loadPlanWhen(flag?: string): 'auto' | 'always' | 'never' {
 }
 
 // Whether the writer starts reading while the plan is written (core/roles.ts, planComing): the flag, else the
-// user's settings, else off.
+// user's settings, else on (evals/results/2026-10-28-overlap/: 9 blind wins to 2, the same time).
 export function loadPlanOverlap(flag?: string): boolean {
-  const v = flag ?? readSettings(join(cediaHome(), 'settings.json')).planOverlap ?? 'off';
+  const v = flag ?? readSettings(join(cediaHome(), 'settings.json')).planOverlap ?? 'on';
   if (v !== 'on' && v !== 'off') throw new Error(`${flag !== undefined ? '--plan-overlap' : '"planOverlap"'} must be on or off, not ${v}`);
   return v === 'on';
 }
