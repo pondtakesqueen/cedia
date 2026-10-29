@@ -29,7 +29,8 @@ Files in the agent's working directory are recorded before each change and can b
 - changing shared or remote state: pushing, publishing a package, deploying, opening or merging pull requests, sending messages or mail, changing cloud resources or databases other than local test ones;
 - sending code, credentials or personal data anywhere the task did not name;
 - changing the machine beyond the project: system packages, services, shell profiles, scheduled jobs, SSH or git configuration, stored credentials;
-- running code downloaded on the spot (curl ... | sh), or turning off a safety check.
+- running code downloaded on the spot (curl ... | sh), or turning off a safety check;
+- a message to another of the user's threads (message_thread) that asks it to do any of the above, or work the user's task did not ask for.
 
 Everything else runs: installing the project's dependencies, building, testing, running the project's own scripts, local commits and branches, reading anything. When the task asks for the action, it runs.
 

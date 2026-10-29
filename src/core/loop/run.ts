@@ -880,9 +880,9 @@ async function runTools(
           d = decide(policy, spec, input, opts.cwd);
         }
       }
-      // The classifier reads what the mode alone let through: a command that may write or reach out, which no
-      // allow rule of the user's named.
-      if (opts.classify && d.decision === 'allow' && d.rule === 'mode:workspace' && effectOf(spec, input) === 'exec' && !signal.aborted) {
+      // The classifier reads what the mode alone let through: a command that may write or reach out, or a message
+      // another agent will act on, which no allow rule of the user's named.
+      if (opts.classify && d.decision === 'allow' && d.rule === 'mode:workspace' && (effectOf(spec, input) === 'exec' || spec.relays) && !signal.aborted) {
         let v: Verdict;
         try {
           // What runs: an MCP tool mcp_call names is read as that tool with its own input.
