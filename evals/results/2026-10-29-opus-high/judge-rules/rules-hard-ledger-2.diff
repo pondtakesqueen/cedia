@@ -1,0 +1,287 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/ledger.rules.test.ts b/ledger.rules.test.ts
+--- a/ledger.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/ledger.rules.test.ts	2026-10-29 11:17:14.077411168 +0000
+@@ -0,0 +1,191 @@
++import { describe, expect, test } from 'bun:test';
++import { evidence, ledgerEntries, matchCheck, verified, type LedgerEntry, type SessionEvent } from './ledger.ts';
++
++const cwd = '/work/repo';
++const intent = (callId: string, tool: string, input: Record<string, unknown>): SessionEvent => ({ kind: 'tool_intent', callId, tool, input });
++const result = (callId: string, status: 'completed' | 'failed' | 'denied' | 'not_started' = 'completed', output: { isError: boolean; exitCode?: number } = { isError: false }): SessionEvent => ({
++  kind: 'tool_result',
++  callId,
++  status,
++  output,
++});
++
++describe('matchCheck rules', () => {
++  test('a pipe, chain or extra argument is not a check, on either side', () => {
++    expect(matchCheck('bun test; ls', ['bun test'])).toBeUndefined();
++    expect(matchCheck('bun test || true', ['bun test'])).toBeUndefined();
++    expect(matchCheck('bun test', ['bun test extra'])).toBeUndefined();
++  });
++
++  test('whitespace is trimmed and collapsed on both sides', () => {
++    expect(matchCheck('\tbun\ntest', ['bun test'])).toBe('bun test');
++    expect(matchCheck('bun test', [' bun \t test '])).toBe(' bun \t test ');
++  });
++
++  test('only one trailing 2>&1 is dropped', () => {
++    expect(matchCheck('bun test 2>&1 2>&1', ['bun test'])).toBeUndefined();
++    expect(matchCheck('bun test', ['bun test 2>&1 2>&1'])).toBeUndefined();
++    expect(matchCheck('cd /work/repo && bun test 2>&1 2>&1', ['bun test'], '/work/repo')).toBeUndefined();
++  });
++
++  test('a quoted cd directory keeps its inner spaces when it is resolved', () => {
++    expect(matchCheck("cd '/work/my  repo' && bun test", ['bun test'], '/work/my  repo')).toBe('bun test');
++  });
++
++  test('cd prefix: quoted and trailing-slash forms resolve to cwd; .. does not', () => {
++    expect(matchCheck("cd '/work/repo/' && bun test", ['bun test'], cwd)).toBe('bun test');
++    expect(matchCheck('cd .. && bun test', ['bun test'], cwd)).toBeUndefined();
++    expect(matchCheck('cd  /work/repo  &&  bun test', ['bun test'], cwd)).toBe('bun test');
++  });
++
++  test('empty inputs give undefined', () => {
++    expect(matchCheck('', ['bun test'])).toBeUndefined();
++    expect(matchCheck('bun test', [])).toBeUndefined();
++    expect(matchCheck('', [''])).toBe('');
++  });
++});
++
++describe('ledgerEntries rules', () => {
++  test('a result without an intent since the last request is ignored', () => {
++    const events: SessionEvent[] = [intent('a', 'edit', { path: 'a.ts' }), { kind: 'request' }, result('a')];
++    expect(ledgerEntries(events, [])).toEqual([]);
++  });
++
++  test('denied and not_started never count, even with a snapshot', () => {
++    const events: SessionEvent[] = [
++      intent('a', 'bash', { command: 'bun test' }),
++      result('a', 'denied', { isError: true, exitCode: 0 }),
++      { kind: 'snapshot', callId: 'a', changed: ['x.ts'] },
++      intent('b', 'edit', { path: 'b.ts' }),
++      result('b', 'not_started'),
++    ];
++    expect(ledgerEntries(events, ['bun test'])).toEqual([]);
++  });
++
++  test('exit code falls back to isError, then 0', () => {
++    const events: SessionEvent[] = [intent('a', 'bash', { command: 'bun test' }), result('a', 'completed', { isError: false }), intent('b', 'bash', { command: 'bun test' }), result('b', 'failed', { isError: true })];
++    expect(ledgerEntries(events, ['bun test'])).toEqual([
++      { kind: 'check', at: 1, command: 'bun test', exitCode: 0 },
++      { kind: 'check', at: 3, command: 'bun test', exitCode: 1 },
++    ]);
++  });
++
++  test('a snapshot after the result applies and overrides an edit path', () => {
++    const events: SessionEvent[] = [intent('a', 'edit', { path: 'a.ts' }), result('a'), { kind: 'snapshot', callId: 'a', changed: ['b.ts'] }];
++    expect(ledgerEntries(events, [])).toEqual([{ kind: 'write', at: 1, tool: 'edit', path: 'b.ts' }]);
++  });
++
++  test('a failed edit with a snapshot still writes; a failed edit without one does not', () => {
++    const events: SessionEvent[] = [
++      intent('a', 'edit', { path: 'a.ts' }),
++      result('a', 'failed', { isError: true }),
++      { kind: 'snapshot', callId: 'a', changed: ['a.ts'] },
++      intent('b', 'edit', { path: 'b.ts' }),
++      result('b', 'failed', { isError: true }),
++    ];
++    expect(ledgerEntries(events, [])).toEqual([{ kind: 'write', at: 1, tool: 'edit', path: 'a.ts' }]);
++  });
++
++  test('an empty snapshot means no write, even for a completed edit or a writing command', () => {
++    const events: SessionEvent[] = [
++      intent('a', 'edit', { path: 'a.ts' }),
++      result('a'),
++      { kind: 'snapshot', callId: 'a', changed: [] },
++      intent('b', 'bash', { command: 'npm install' }),
++      result('b'),
++      { kind: 'snapshot', callId: 'b', changed: [] },
++    ];
++    expect(ledgerEntries(events, [])).toEqual([]);
++  });
++
++  test('a failed non-read-only bash command is a write; read-only and redirect rules', () => {
++    const events: SessionEvent[] = [
++      intent('a', 'bash', { command: 'npm install' }),
++      result('a', 'failed', { isError: true, exitCode: 1 }),
++      intent('b', 'bash', { command: 'git status' }),
++      result('b'),
++      intent('c', 'bash', { command: 'echo x > f' }),
++      result('c'),
++    ];
++    expect(ledgerEntries(events, [])).toEqual([
++      { kind: 'write', at: 1, tool: 'bash', command: 'npm install' },
++      { kind: 'write', at: 5, tool: 'bash', command: 'echo x > f' },
++    ]);
++  });
++
++  test('at is the index of the result event', () => {
++    const events: SessionEvent[] = [{ kind: 'request' }, { kind: 'text', text: 'hi' }, intent('a', 'write', { path: 'a.ts' }), result('a')];
++    expect(ledgerEntries(events, [])).toEqual([{ kind: 'write', at: 3, tool: 'write', path: 'a.ts' }]);
++  });
++});
++
++describe('evidence and verified rules', () => {
++  const w = (at: number, path: string): LedgerEntry => ({ kind: 'write', at, tool: 'edit', path });
++  const cmd = (at: number, command: string): LedgerEntry => ({ kind: 'write', at, tool: 'bash', command });
++  const c = (at: number, exitCode: number): LedgerEntry => ({ kind: 'check', at, command: 'bun test', exitCode });
++
++  test('changed and unverified are deduped, first seen first', () => {
++    const e = evidence([w(1, 'a.ts'), cmd(2, 'npm i'), w(3, 'a.ts'), cmd(4, 'npm i')]);
++    expect(e.changed).toEqual(['a.ts', 'bash: npm i']);
++    expect(e.unverified).toEqual(['a.ts', 'bash: npm i']);
++  });
++
++  test('unverified covers only writes after the last passing check', () => {
++    expect(evidence([w(1, 'a.ts'), c(2, 0), w(3, 'b.ts'), c(4, 1)]).unverified).toEqual(['b.ts']);
++  });
++
++  test('verified is true with no checks or no writes, false when a write follows the last pass', () => {
++    expect(verified([w(1, 'a.ts')], ['bun test'])).toBe(false);
++    expect(verified([w(1, 'a.ts'), c(2, 0), cmd(3, 'make')], ['bun test'])).toBe(false);
++    expect(verified([c(1, 0)], [])).toBe(true);
++  });
++
++  test('evidence.unverified is empty exactly when verified is true (seeded random logs)', () => {
++    let seed = 7;
++    const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
++    for (let t = 0; t < 500; t++) {
++      const entries: LedgerEntry[] = [];
++      const n = Math.floor(rand() * 10);
++      for (let i = 0; i < n; i++) {
++        const r = rand();
++        if (r < 0.4) entries.push(w(i, rand() < 0.5 ? 'a.ts' : 'b.ts'));
++        else if (r < 0.6) entries.push(cmd(i, 'npm i'));
++        else entries.push(c(i, rand() < 0.5 ? 0 : 1));
++      }
++      expect(verified(entries, ['x'])).toBe(evidence(entries).unverified.length === 0);
++      expect(evidence(entries).checks).toEqual(entries.filter((e) => e.kind === 'check').map((e) => ({ command: e.command, exitCode: e.exitCode })));
++    }
++  });
++
++  test('ledgerEntries of a log equals its request-delimited segments, shifted (seeded random logs)', () => {
++    let seed = 11;
++    const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
++    const pick = <T>(xs: T[]): T => xs[Math.floor(rand() * xs.length)]!;
++    for (let t = 0; t < 300; t++) {
++      const events: SessionEvent[] = [{ kind: 'request' }];
++      const steps = Math.floor(rand() * 15);
++      for (let k = 0; k < steps; k++) {
++        if (rand() < 0.25) {
++          events.push({ kind: 'request' });
++          continue;
++        }
++        const callId = `r${k}`;
++        const tool = pick(['bash', 'edit', 'write']);
++        const input = tool === 'bash' ? { command: pick(['bun test', 'git status', 'echo x > f', 'sed -i s/a/b/ a.ts', 'ls']) } : { path: pick(['a.ts', 'b.ts']) };
++        const status = pick(['completed', 'completed', 'failed', 'denied', 'not_started'] as const);
++        events.push(intent(callId, tool, input), result(callId, status, { isError: status !== 'completed', exitCode: pick([0, 1]) }));
++        if (rand() < 0.4) events.push({ kind: 'snapshot', callId, changed: pick([[], ['a.ts'], ['a.ts', 'c.ts']]) });
++      }
++      const whole = ledgerEntries(events, ['bun test'], cwd);
++      const expected: LedgerEntry[] = [];
++      let start = 0;
++      for (let i = 1; i <= events.length; i++) {
++        if (i === events.length || events[i]!.kind === 'request') {
++          for (const e of ledgerEntries(events.slice(start, i), ['bun test'], cwd)) expected.push({ ...e, at: e.at + start });
++          start = i;
++        }
++      }
++      expect(whole).toEqual(expected);
++    }
++  });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/ledger.ts b/ledger.ts
+--- a/ledger.ts	2026-10-29 11:14:57.598867807 +0000
++++ b/ledger.ts	2026-10-29 11:17:14.086035277 +0000
+@@ -25,7 +25,15 @@
+ // ` 2>&1` from both. A pipe or a chain would hide the check's exit code, so `bun test | tail` does not count.
+ // One exception: a leading `cd <dir> && ` is removed when <dir> (quotes stripped) resolves to `cwd`.
+ export function matchCheck(command: string, checks: string[], cwd?: string): string | undefined {
+-  throw new Error('not implemented');
++  const norm = (s: string) => s.trim().replace(/\s+/g, ' ');
++  const drop = (s: string) => norm(s).replace(/ 2>&1$/, '');
++  let c = drop(command);
++  const cd = /^cd\s+("[^"]*"|'[^']*'|\S+)\s*&&\s*([\s\S]*)$/.exec(command.trim());
++  if (cd && cwd !== undefined) {
++    if (resolve(cwd, cd[1]!.replace(/^(["'])(.*)\1$/, '$2')) !== resolve(cwd)) return undefined;
++    c = drop(cd[2]!);
++  }
++  return checks.find((check) => drop(check) === c);
+ }
+ 
+ // Walks the log and returns one entry per thing that happened, in log order.
+@@ -38,18 +46,68 @@
+ // - Otherwise an edit or write call that completed is a write entry with path = input.path.
+ // - Otherwise a bash call whose command is not read-only is a write entry with command set (no path).
+ export function ledgerEntries(events: SessionEvent[], checks: string[], cwd?: string): LedgerEntry[] {
+-  throw new Error('not implemented');
++  const snaps = new Map<string, string[]>();
++  for (const e of events) {
++    if (e.kind === 'snapshot' && e.callId !== undefined) snaps.set(e.callId, [...(snaps.get(e.callId) ?? []), ...e.changed]);
++  }
++  const out: LedgerEntry[] = [];
++  const intents = new Map<string, Extract<SessionEvent, { kind: 'tool_intent' }>>();
++  for (let at = 0; at < events.length; at++) {
++    const e = events[at]!;
++    if (e.kind === 'request') intents.clear();
++    else if (e.kind === 'tool_intent') intents.set(e.callId, e);
++    else if (e.kind === 'tool_result') {
++      const intent = intents.get(e.callId);
++      if (!intent || e.status === 'denied' || e.status === 'not_started') continue;
++      const { tool, input } = intent;
++      const cmd = typeof input.command === 'string' ? input.command : undefined;
++      const path = typeof input.path === 'string' ? input.path : undefined;
++      const m = tool === 'bash' && cmd !== undefined ? matchCheck(cmd, checks, cwd) : undefined;
++      if (m !== undefined) {
++        out.push({ kind: 'check', at, command: m, exitCode: e.output.exitCode ?? (e.output.isError ? 1 : 0) });
++      } else if (snaps.has(e.callId)) {
++        for (const p of snaps.get(e.callId)!) out.push({ kind: 'write', at, tool, path: p });
++      } else if ((tool === 'edit' || tool === 'write') && e.status === 'completed') {
++        out.push({ kind: 'write', at, tool, ...(path !== undefined ? { path } : {}) });
++      } else if (tool === 'bash' && cmd !== undefined && !isReadOnly(cmd)) {
++        out.push({ kind: 'write', at, tool, command: cmd });
++      }
++    }
++  }
++  return out;
+ }
+ 
+ // changed: every write's label (path, or `bash: <command>`), first seen first, no duplicates.
+ // checks: every check entry, in order, as { command, exitCode }.
+ // unverified: labels of writes after the last passing check (all of them when no check passed), deduped.
+ export function evidence(entries: LedgerEntry[]): Evidence {
+-  throw new Error('not implemented');
++  const label = (w: Extract<LedgerEntry, { kind: 'write' }>) => w.path ?? `bash: ${w.command}`;
++  let pass = -1;
++  entries.forEach((e, i) => {
++    if (e.kind === 'check' && e.exitCode === 0) pass = i;
++  });
++  const changed = new Set<string>();
++  const unverified = new Set<string>();
++  const checks: Evidence['checks'] = [];
++  entries.forEach((e, i) => {
++    if (e.kind === 'check') checks.push({ command: e.command, exitCode: e.exitCode });
++    else {
++      changed.add(label(e));
++      if (i > pass) unverified.add(label(e));
++    }
++  });
++  return { changed: [...changed], checks, unverified: [...unverified] };
+ }
+ 
+ // The done gate. With no declared checks, or no writes, it is satisfied. Otherwise a check with exit code 0
+ // must come after the last write.
+ export function verified(entries: LedgerEntry[], checks: string[]): boolean {
+-  throw new Error('not implemented');
++  if (checks.length === 0) return true;
++  let lastWrite = -1;
++  let lastPass = -1;
++  entries.forEach((e, i) => {
++    if (e.kind === 'write') lastWrite = i;
++    else if (e.exitCode === 0) lastPass = i;
++  });
++  return lastWrite === -1 || lastPass > lastWrite;
+ }

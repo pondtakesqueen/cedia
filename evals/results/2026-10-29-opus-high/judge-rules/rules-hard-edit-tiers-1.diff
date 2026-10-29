@@ -1,0 +1,114 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.extra.test.ts b/edit.extra.test.ts
+--- a/edit.extra.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/edit.extra.test.ts	2026-10-29 11:11:04.199881372 +0000
+@@ -0,0 +1,34 @@
++import { expect, test } from 'bun:test';
++import { applyEdit } from './edit.ts';
++
++test('new_text is inserted literally, with no $ expansion', () => {
++  const r = applyEdit('a\n', { old_text: 'a', new_text: '$&x' });
++  expect(r).toEqual({ content: '$&x\n', applied: { from: 1, to: 1, tier: 'exact', count: 1 } });
++});
++
++test('indentation tier: several matches are an error with their lines', () => {
++  const r = applyEdit('f:\n a()\nf:\n\ta()\n', { old_text: '  a()', new_text: '  b()' });
++  expect('error' in r && r.error).toContain('matches 2 places');
++  expect('error' in r && r.error).toContain('2, 4');
++});
++
++test('not-found pointer lists at most 5 lines', () => {
++  const r = applyEdit('x\n'.repeat(7), { old_text: 'x\ny', new_text: 'z' });
++  expect('error' in r && r.error).toContain('first line appears at line 1, 2, 3, 4, 5');
++  expect('error' in r && r.error).not.toContain(', 6');
++});
++
++test('replace_all with a multi-line old_text reports the first match and count', () => {
++  const r = applyEdit('a\nb\nc\na\nb\nc\n', { old_text: 'a\nb', new_text: 'X', replace_all: true });
++  expect(r).toEqual({ content: 'X\nc\nX\nc\n', applied: { from: 1, to: 2, tier: 'exact', count: 2 } });
++});
++
++test('$ in new_text is literal on the trailing-space tier', () => {
++  const r = applyEdit('x  \nq\n', { old_text: 'x\n', new_text: 'a$&' });
++  expect(r).toEqual({ content: 'a$&\nq\n', applied: { from: 1, to: 1, tier: 'trailing-space', count: 1 } });
++});
++
++test('$ in new_text is literal on the indentation tier', () => {
++  const r = applyEdit('  x\nq\n', { old_text: 'x\n', new_text: '$1$&\n' });
++  expect(r.content).toBe('  $1$&\nq\n');
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 11:08:52.774005816 +0000
++++ b/edit.ts	2026-10-29 11:09:47.601384628 +0000
+@@ -23,5 +23,71 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text: oldText, new_text: newText, replace_all: replaceAll } = edit;
++  if (oldText === '') return { error: 'old_text is empty; use write to create or overwrite a file' };
++  if (oldText === newText) return { error: 'old_text and new_text are the same; nothing to change' };
++
++  // split/join replaces literally, unlike String.replace, which expands $& in new_text.
++  const starts: number[] = [];
++  for (let i = content.indexOf(oldText); i !== -1; i = content.indexOf(oldText, i + oldText.length)) starts.push(i);
++  if (starts.length > 0) {
++    if (starts.length > 1 && !replaceAll) {
++      return { error: `old_text matches ${starts.length} places; the first match is at line ${lineOf(content, starts[0])}. Add context to make it unique, or set replace_all` };
++    }
++    const from = lineOf(content, starts[0]);
++    const span = oldText.endsWith('\n') ? oldText.slice(0, -1) : oldText;
++    const to = from + span.split('\n').length - 1;
++    const count = replaceAll ? starts.length : 1;
++    const next = replaceAll ? content.split(oldText).join(newText) : content.slice(0, starts[0]) + newText + content.slice(starts[0] + oldText.length);
++    return { content: next, applied: { from, to, tier: 'exact', count } };
++  }
++
++  const lines = content.split('\n');
++  const oldLines = (oldText.endsWith('\n') ? oldText.slice(0, -1) : oldText).split('\n');
++  const newBody = newText.endsWith('\n') ? newText.slice(0, -1) : newText;
++  const newLines = newBody === '' ? [] : newBody.split('\n');
++  const tiers: [Tier, (s: string) => string][] = [
++    ['trailing-space', (s) => s.trimEnd()],
++    ['indentation', (s) => s.trim()],
++  ];
++  for (const [tier, norm] of tiers) {
++    const want = oldLines.map(norm);
++    if (want.every((w) => w === '')) continue;
++    const hits: number[] = [];
++    for (let i = 0; i + want.length <= lines.length; i++) {
++      if (want.every((w, k) => norm(lines[i + k]) === w)) hits.push(i);
++    }
++    if (hits.length === 0) continue;
++    if (hits.length > 1) {
++      return { error: `old_text matches ${hits.length} places, at lines ${hits.map((h) => h + 1).join(', ')}. Add context to make it unique` };
++    }
++    const i = hits[0];
++    const body = tier === 'indentation' ? reindent(newLines, oldLines, lines.slice(i, i + want.length)) : newLines;
++    lines.splice(i, want.length, ...body);
++    return { content: lines.join('\n'), applied: { from: i + 1, to: i + oldLines.length, tier, count: 1 } };
++  }
++
++  const first = oldLines.find((l) => l.trim() !== '')?.trim() ?? '';
++  if (first === '') return { error: 'old_text not found in content' };
++  const at = lines.flatMap((l, j) => (l.includes(first) ? [j + 1] : [])).slice(0, 5);
++  if (at.length === 0) return { error: 'old_text not found in content' };
++  return { error: `old_text not found; first line appears at line ${at.join(', ')}` };
++}
++
++function lineOf(content: string, index: number): number {
++  return content.slice(0, index).split('\n').length;
++}
++
++// Swaps the indentation of old_text's first non-blank line for the window's, on each non-blank line of new_text.
++function reindent(newLines: string[], oldLines: string[], windowLines: string[]): string[] {
++  const oldIndent = leadingWhitespace(oldLines.find((l) => l.trim() !== '') ?? '');
++  const fileIndent = leadingWhitespace(windowLines.find((l) => l.trim() !== '') ?? '');
++  return newLines.map((l) => {
++    if (l.trim() === '') return '';
++    return fileIndent + (l.startsWith(oldIndent) ? l.slice(oldIndent.length) : l.trimStart());
++  });
++}
++
++function leadingWhitespace(s: string): string {
++  return s.match(/^\s*/)![0];
+ }
