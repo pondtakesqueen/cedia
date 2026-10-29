@@ -1,0 +1,40 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/redact.ts b/redact.ts
+--- a/redact.ts	2026-10-29 07:18:32.650773366 +0000
++++ b/redact.ts	2026-10-29 07:20:18.416603562 +0000
+@@ -15,9 +15,9 @@
+ 
+ // Token formats with a fixed prefix. The generic ones need a digit so prose and identifiers do not match.
+ const TOKENS: RegExp[] = [
+-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
++  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
+   /\bsk-ant-[A-Za-z0-9_-]{20,}/g, // Anthropic
+-  /\bsk-[A-Za-z0-9_-]{20,}/g, // OpenAI, DeepSeek and other sk- keys
++  /\bsk-(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}/g, // OpenAI, DeepSeek and other sk- keys
+   /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}/g, // Stripe
+   /\bgh[pousr]_[A-Za-z0-9]{30,}/g, // GitHub
+   /\bgithub_pat_[A-Za-z0-9_]{30,}/g,
+@@ -39,13 +39,13 @@
+ 
+ // Which assigned values count as secrets, so code that only names a secret (`password: hash(input)`,
+ // `token = getToken()`) still reads as written:
+-// - a dotenv line (`export NAME=value` at the start of a line): any value;
++// - a dotenv line (`NAME=value` or `export NAME=value` at the start of a line): any value with a letter, so numbers stay config;
+ // - a quoted value: 4+ characters for passwords and secrets, otherwise 8+ with a letter and a digit;
+ // - any other value: 8+ characters with a letter and a digit, and no call or member access.
+ function secretValue(kind: string, quote: string, value: string, dotenv: boolean): boolean {
+   if (/^(\$|process\.|os\.|env\.|getenv|none$|null$|undefined$|true$|false$)/i.test(value)) return false; // a reference
+   const tokenLike = value.length >= 8 && /[A-Za-z]/.test(value) && /\d/.test(value);
+-  if (dotenv) return true;
++  if (dotenv) return /[A-Za-z]/.test(value);
+   if (quote) return /passw|pwd|secret/i.test(kind) ? value.length >= 4 : tokenLike;
+   return tokenLike && !/[().[\]]/.test(value);
+ }
+@@ -61,7 +61,7 @@
+   out = out.replace(URL_PASSWORD, (_m, head: string, password: string) => {
+     if (password === REDACTED) return _m;
+     count++;
+-    return `${head}${REDACTED}`;
++    return `${head}${REDACTED}@`;
+   });
+   out = out.replace(ASSIGNMENT, (match, name: string, kind: string, sep: string, quote: string, value: string, offset: number, all: string) => {
+     if (value.includes(REDACTED)) return match;

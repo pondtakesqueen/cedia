@@ -1,0 +1,22 @@
+Running 12 tasks x 1 runs on cedia (opencode-go/claude-haiku-5-5), 3 at a time...
+  PASS hard-deny-list#1 (60.2s $0.0101, peak 22k)
+  PASS hard-edit-tiers#1 (69.3s $0.0115, peak 24k)
+  PASS hard-injection#1 (11.9s $0.0018, peak 10k)
+  PASS hard-ledger#1 (44.1s $0.0073, peak 19k)
+  PASS hard-csv-stream#1 (128.5s $0.0203, peak 37k)
+  PASS hard-memo-async#1 (79.3s $0.0134, peak 26k)
+  PASS hard-pool#1 (77.8s $0.0119, peak 25k)
+  PASS hard-redact-bugs#1 (111.2s $0.0178, peak 37k)
+  PASS hard-sse#1 (54.1s $0.0084, peak 18k)
+  PASS wide-bug-hunt#1 (54.4s $0.0101, peak 26k)
+  PASS wide-three-features#1 (90.3s $0.0151, peak 30k)
+  PASS hard-shell-split#1 (242.6s $0.0351, peak 64k)
+
+Results written to evals/results/2026-10-29-haiku-effort/high.jsonl
+cedia (opencode-go/claude-haiku-5-5): 12 tasks, 12 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 85.3s per run, 142431 input / 18663 output tokens per run, cache hit 82.8%
+  peak context 28k mean, 64k max, 0 of 12 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 8 edit: top-level old_text/new_text, 8 edit: broken edits string
+  speed 251.5 output tok/s, 0.87s to first token per call; model 98.3% of time, cedia 0.0%
+  cost $0.1629 total, $0.0136 per passed run

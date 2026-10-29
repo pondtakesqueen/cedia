@@ -127,10 +127,11 @@ export const CATALOG: ModelSpec[] = [
   // Fast mode (research preview, Claude API only): up to 2.5x output tokens per second at 2x the price.
   claude('claude-opus-5-5', p(8, 40, 0.4, 10), { ref: 'anthropic/claude-opus-5-5-fast', speed: 'fast', prompt: OPUS_PROMPT, thorough: true, headers: { 'anthropic-beta': 'fast-mode-2026-02-01' } }),
   claude('claude-sonnet-5-5', p(2, 10, 0.1, 2.5), { defaultEffort: 'high' }),
-  // Haiku starts at low and escalates to high when the done gate refuses a claim: on the gate suite that kept
-  // 48/48 and cost 21% less for the typical task than medium (2026-10-22, evals/gate/README.md).
-  claude('claude-haiku-5-5', haikuPrice, { defaultEffort: 'low' }),
-  go('claude-haiku-5-5', 'anthropic-messages', haikuPrice, { maxOutput: 128_000, dataPolicy: 'retained', defaultEffort: 'low' }),
+  // Haiku starts at medium and escalates to high when the done gate refuses a claim. Low kept the gate suite's
+  // 48/48 for 21% less (2026-10-22, evals/gate/README.md), but a blind panel preferred medium's changes 6 to 2 on
+  // 11 hard tasks, for under a cent more per task (evals/results/2026-10-29-haiku-effort/).
+  claude('claude-haiku-5-5', haikuPrice, { defaultEffort: 'medium' }),
+  go('claude-haiku-5-5', 'anthropic-messages', haikuPrice, { maxOutput: 128_000, dataPolicy: 'retained', defaultEffort: 'medium' }),
   go('deepseek-v4.1-flash', 'chat-completions', deepseekFlashPrice, { prompt: DEEPSEEK_PROMPT }),
   go('deepseek-v4-pro', 'chat-completions', { ...p(1.32, 3.96, 0.044), offPeak: { ...p(0.66, 1.98, 0.022), isOffPeak: deepseekOffPeak } }),
   go('beam-free', 'chat-completions', p(0, 0, 0), { dataPolicy: 'retained' }),
@@ -182,7 +183,7 @@ export const CATALOG: ModelSpec[] = [
     url: OPENROUTER_MESSAGES,
     auth: OPENROUTER_AUTH,
     maxOutput: 64_000,
-    defaultEffort: 'low',
+    defaultEffort: 'medium',
     price: haikuPrice,
     dataPolicy: 'zdr',
     body: { provider: { order: ['amazon-bedrock'], allow_fallbacks: false, zdr: true, data_collection: 'deny' } },
@@ -231,6 +232,7 @@ export const ALIASES: Record<string, string> = {
 // Where a session goes when its model's plan or balance runs out. Off the Go plan, so its quota does not apply,
 // and kept from training: Haiku 5.5 on the Claude API passed as many hard evals as Go's DeepSeek Flash for less.
 export const FALLBACKS: Record<string, string> = {
+  'opencode-go/claude-haiku-5-5': 'anthropic/claude-haiku-5-5',
   'opencode-go/deepseek-v4.1-flash': 'anthropic/claude-haiku-5-5',
   'openrouter/deepseek-v4.1-flash': 'anthropic/claude-haiku-5-5',
 };

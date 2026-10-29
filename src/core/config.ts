@@ -372,7 +372,7 @@ export function loadHandoff(flag?: string): 'note' | 'compact' {
   return raw;
 }
 
-// Roles: flags > CEDIA_MODEL (code only) > user settings > defaults (code: deepseek; plan and review: off).
+// Roles: flags > CEDIA_MODEL (code only) > user settings > defaults (code: haiku; plan and review: off).
 // `claude-code[:<model>][@<effort>]`: alone it means opus at medium effort for both plan and review. Opus at medium
 // scored above Sonnet at every effort and above Opus at high or max on agentic repo work (Artificial Analysis'
 // FrontierCode, research/NOTES.md), and the step names its effort so Claude Code's own default does not decide it.
@@ -382,7 +382,7 @@ export function loadRoles(
   env = process.env,
 ): { plan?: RoleChoice; code: ModelSpec; review?: RoleChoice; swarm: ModelSpec; advisor?: ModelSpec; classifier?: ModelSpec; workers: ModelSpec[]; triage: ModelSpec } {
   const user = readSettings(join(cediaHome(), 'settings.json')).roles ?? {};
-  const codeRef = flags.code ?? env.CEDIA_MODEL ?? user.code ?? 'deepseek';
+  const codeRef = flags.code ?? env.CEDIA_MODEL ?? user.code ?? 'haiku';
   if (/^claude-code\b/.test(codeRef)) throw new Error('the code role runs in cedia, where its writes are checked; use claude-code for plan or review');
   const role = (ref: string | undefined, claudeModel: string): RoleChoice | undefined => {
     if (!ref || ref === 'none') return undefined;

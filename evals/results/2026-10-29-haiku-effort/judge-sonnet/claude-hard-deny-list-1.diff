@@ -1,0 +1,75 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.ts b/deny.ts
+--- a/deny.ts	2026-10-29 07:16:23.861539791 +0000
++++ b/deny.ts	2026-10-29 07:17:19.136592905 +0000
+@@ -1,5 +1,5 @@
+ import { homedir } from 'node:os';
+-import { isAbsolute, relative, resolve } from 'node:path';
++import { basename, isAbsolute, relative, resolve } from 'node:path';
+ 
+ export type Hit = { name: 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside'; reason: string };
+ 
+@@ -14,6 +14,47 @@
+ // Same directory as cwd, e.g. `.`, `./`, or cwd's absolute path.
+ export const sameDir = (path: string, cwd: string) => relative(resolve(cwd), resolve(cwd, expandHome(path))) === '';
+ 
++// A short flag group such as -f or -fu: one dash, letters only, containing one of `letters`.
++const hasShortFlag = (word: string, letters: string) => /^-[a-zA-Z]+$/.test(word) && [...letters].some((c) => word.includes(c));
++
++// Paths that cannot be resolved before the command runs: shell variables and ~user.
++const unresolvable = (path: string) => /\$|^~[^/]/.test(path);
++
++const gitValueOptions = ['-C', '-c', '--git-dir', '--work-tree', '--namespace'];
++const pushForceFlags = ['--force', '--force-with-lease', '--mirror', '--delete', '--prune'];
++
++function gitHit(args: string[]): Hit | undefined {
++  let i = 0;
++  while (i < args.length && args[i].startsWith('-')) i += gitValueOptions.includes(args[i]) ? 2 : 1;
++  const sub = args[i];
++  const rest = args.slice(i + 1);
++  if (sub === 'push') {
++    const forced = rest.some((w) => pushForceFlags.includes(w.split('=')[0]) || hasShortFlag(w, 'fd') || /^[+:]/.test(w));
++    return forced ? { name: 'force-push', reason: 'git push that rewrites or deletes remote refs' } : undefined;
++  }
++  if (sub === 'reset' && rest.includes('--hard')) return { name: 'reset-hard', reason: 'git reset --hard discards local changes' };
++  if (sub === 'clean' && rest.some((w) => w === '--force' || hasShortFlag(w, 'f')) && !rest.some((w) => w === '-n' || w === '--dry-run'))
++    return { name: 'clean-force', reason: 'git clean -f deletes untracked files' };
++  return undefined;
++}
++
++function rmHit(args: string[], cwd: string): Hit | undefined {
++  const dd = args.indexOf('--');
++  const opts = dd < 0 ? args : args.slice(0, dd);
++  if (!opts.some((w) => w === '--recursive' || hasShortFlag(w, 'rR'))) return undefined;
++  const targets = [...opts.filter((w) => !w.startsWith('-')), ...(dd < 0 ? [] : args.slice(dd + 1))];
++  const bad = targets.length === 0 || targets.some((p) => unresolvable(p) || !insideWorkspace(p, cwd) || sameDir(p, cwd));
++  return bad ? { name: 'rm-outside', reason: 'recursive rm of a target outside the working directory, or of the working directory itself' } : undefined;
++}
++
++function findHit(args: string[], cwd: string): Hit | undefined {
++  if (!args.some((w) => w === '-delete' || w === '-exec' || w === '-execdir')) return undefined;
++  const firstFlag = args.findIndex((w) => w.startsWith('-'));
++  const starts = args.slice(0, firstFlag);
++  const bad = (starts.length ? starts : ['.']).some((p) => unresolvable(p) || !insideWorkspace(p, cwd));
++  return bad ? { name: 'rm-outside', reason: 'find deletes or runs commands under a path outside the working directory' } : undefined;
++}
++
+ // Looks at one simple command's argv (already split, quotes removed) and returns a Hit when it must be denied.
+ //
+ // git (argv[0] may be a path such as /usr/bin/git). Global options before the subcommand are skipped; -C, -c,
+@@ -36,5 +77,15 @@
+ //
+ // Anything else: undefined.
+ export function denyListed(argv: string[], cwd: string): Hit | undefined {
+-  throw new Error('not implemented');
++  const [cmd = '', ...args] = argv;
++  switch (basename(cmd)) {
++    case 'git':
++      return gitHit(args);
++    case 'rm':
++      return rmHit(args, cwd);
++    case 'find':
++      return findHit(args, cwd);
++    default:
++      return undefined;
++  }
+ }

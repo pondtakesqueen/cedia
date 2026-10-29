@@ -1,0 +1,49 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse.ts b/sse.ts
+--- a/sse.ts	2026-10-29 05:31:40.388223851 +0000
++++ b/sse.ts	2026-10-29 05:31:50.184216693 +0000
+@@ -15,7 +15,44 @@
+ // - When the body ends without a final blank line, data lines still pending (including a last line with no
+ //   newline) are yielded as one last message.
+ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseMessage> {
+-  throw new Error('not implemented');
++  const decoder = new TextDecoder();
++  const reader = body.getReader();
++  let buf = '';
++  let event: string | undefined;
++  let data: string[] = [];
++
++  // Applies one complete line; returns the message it completes, if any.
++  const apply = (line: string): SseMessage | undefined => {
++    if (line === '') {
++      const msg = data.length > 0 ? { event, data: data.join('\n') } : undefined;
++      event = undefined;
++      data = [];
++      return msg;
++    }
++    const colon = line.indexOf(':');
++    const field = colon === -1 ? line : line.slice(0, colon);
++    let value = colon === -1 ? '' : line.slice(colon + 1);
++    if (value.startsWith(' ')) value = value.slice(1);
++    if (field === 'event') event = value;
++    else if (field === 'data') data.push(value);
++    return undefined;
++  };
++
++  for (;;) {
++    const { done, value } = await reader.read();
++    if (done) break;
++    buf += decoder.decode(value, { stream: true });
++    let nl: number;
++    while ((nl = buf.indexOf('\n')) !== -1) {
++      const msg = apply(buf.slice(0, nl).replace(/\r$/, ''));
++      buf = buf.slice(nl + 1);
++      if (msg) yield msg;
++    }
++  }
++
++  buf += decoder.decode();
++  if (buf !== '') apply(buf.replace(/\r$/, ''));
++  if (data.length > 0) yield { event, data: data.join('\n') };
+ }
+ 
+ export function streamFromString(text: string, chunkSize = 7): ReadableStream<Uint8Array> {

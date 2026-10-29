@@ -336,7 +336,7 @@ describe('http', () => {
 
   test('Haiku through OpenRouter: the Messages wire with its cache breakpoints, pinned to zero-retention endpoints', () => {
     const or = resolveModel('haiku-or');
-    expect(or).toMatchObject({ ref: 'openrouter/claude-haiku-5-5', id: 'anthropic/claude-haiku-5.5', wire: 'anthropic-messages', url: 'https://openrouter.ai/api/v1/messages', dataPolicy: 'zdr', defaultEffort: 'low' });
+    expect(or).toMatchObject({ ref: 'openrouter/claude-haiku-5-5', id: 'anthropic/claude-haiku-5.5', wire: 'anthropic-messages', url: 'https://openrouter.ai/api/v1/messages', dataPolicy: 'zdr', defaultEffort: 'medium' });
     expect(or.price).toEqual(resolveModel('anthropic/claude-haiku-5-5').price);
     const api = resolveModel('anthropic/claude-haiku-5-5');
     const b = anthropicBody({ ...req('haiku'), model: or }) as any;

@@ -1,0 +1,679 @@
+[
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 9,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Identical code fixes; A's tests also cover the resolve-after-invalidate bug and check the LRU eviction more strictly.",
+   "defects_A": [],
+   "defects_B": [
+    "memo.regression.test.ts: no test for a successful result of an invalidated in-flight call replacing the newer call"
+   ]
+  },
+  "cost": 0.0705974
+ },
+ {
+  "task": "hard-memo-async",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Identical fixes in memo.ts; B's tests cover both resolve and reject after invalidate and assert which key LRU drops.",
+   "defects_A": [
+    "memo.regression.test.ts:48-60 LRU test only checks the call count, not which key was evicted",
+    "memo.regression.test.ts:27-37 invalidate-with-newer-call is tested only for rejection, not for resolution"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.0665084
+ },
+ {
+  "task": "hard-pool",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 8
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both fix all the bugs; B also removes its abort listener on completion, has a clearer error message and tests non-integer retries.",
+   "defects_A": [
+    "abort listener not removed when the signal never fires, pool.ts:155-156",
+    "limit error message not updated for the whole-number rule, pool.ts:90",
+    "no test for non-integer retries, pool.rules.test.ts"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.0593741
+ },
+ {
+  "task": "hard-pool",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "tie",
+   "why": "Both fix all the named bugs correctly; B's code is slightly cleaner and A's tests are slightly broader.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.060833000000000005
+ },
+ {
+  "task": "hard-redact-bugs",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "error": "list index out of range: ued_commands\",\"slowest_producer_ms\":6,\"cpu_ms\":10,\"major_faults\":0},\"first_content_frame_ms\":854,\"time_to_request_from_spawn_ms\":6836129,\"warm_spare_claimed\":false,\"flag_fetch_kick\":\"not_asked_warm\",\"time_origin_ms\":1793258631612.7273,\"queued_turn_count\":0,\"result_index\":0,\"process_start_tuning\":0}\n "
+ },
+ {
+  "task": "hard-redact-bugs",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 6,
+    "scope": 9,
+    "tests": 2,
+    "security": 6
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 6,
+    "scope": 9,
+    "tests": 2,
+    "security": 5
+   },
+   "winner": "A",
+   "why": "A fixes the same bugs with a narrower dotenv patch; B's name-ends-with-kind check makes names like SECRET_KEY and AWS_SECRET_ACCESS_KEY stop counting as dotenv, so short values leak.",
+   "defects_A": [
+    "redact.ts:48 all-digit dotenv secrets such as DB_PASSWORD=12345678 are no longer redacted",
+    "no tests added"
+   ],
+   "defects_B": [
+    "redact.ts:69 dotenv requires the name to end with the matched kind, so SECRET_KEY=changeme and AWS_SECRET_ACCESS_KEY=short are no longer redacted",
+    "redact.ts:69 names like TOKEN_SECRET or DB_PASSWORD_FILE lose the any-value dotenv rule from the doc comment",
+    "no tests added"
+   ]
+  },
+  "cost": 0.0587332
+ },
+ {
+  "task": "wide-bug-hunt",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 6,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 9,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Identical source fixes; B's tests assert full totals for every fixed rule, while A's merge test only checks subtotal and line count.",
+   "defects_A": [
+    "test/pricing.test.ts:84-92 merge test asserts only subtotal and lines length, not the bulk discount or total",
+    "test/pricing.test.ts:73-82 shipping test comment is muddled and does not exercise a percentage coupon"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.0684739
+ },
+ {
+  "task": "wide-bug-hunt",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 8,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 7,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Identical source fixes; A's tests are more thorough end-to-end checks of totals, while B's merge test is weaker and its comments are muddled.",
+   "defects_A": [],
+   "defects_B": [
+    "test/pricing.test.ts:84 merge test only checks subtotal and line count, not the bulk discount amount",
+    "src/order/total.ts:4 import placed out of order, minor"
+   ]
+  },
+  "cost": 0.0687443
+ },
+ {
+  "task": "hard-deny-list",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "winner": "tie",
+   "why": "Both implement the doc comment's rules with equivalent behaviour and add no tests; differences are only stylistic.",
+   "defects_A": [
+    "no tests added for the new behaviour (deny.test.ts untouched)"
+   ],
+   "defects_B": [
+    "no tests added for the new behaviour (deny.test.ts untouched)",
+    "deny.ts:42 redundant !w.startsWith('-') check on refspecs"
+   ]
+  },
+  "cost": 0.060212
+ },
+ {
+  "task": "hard-deny-list",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Near-identical logic; A parses rm options sequentially and treats a lone '-' as a target, while B drops it and reports 'no targets' instead.",
+   "defects_A": [
+    "no tests added for the new logic",
+    "deny.ts:~61 redundant !startsWith('-') guard in refspec check"
+   ],
+   "defects_B": [
+    "no tests added for the new logic",
+    "deny.ts:~58 rm: lone '-' filtered out as a flag, so it is not treated as a target"
+   ]
+  },
+  "cost": 0.05362399999999999
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B handles the trailing newline and blank lines more faithfully; both add no tests, and otherwise they are near-equivalent.",
+   "defects_A": [
+    "edit.ts:26 splitting on '\\n' leaves a phantom empty last line that blank-only old_text can match",
+    "edit.ts:46 whitespace-only lines in new_text are rewritten to '' instead of left unchanged",
+    "edit.ts:16 exact-tier ambiguity error lists all match lines rather than only the first",
+    "no tests added"
+   ],
+   "defects_B": [
+    "no tests added"
+   ]
+  },
+  "cost": 0.056138900000000005
+ },
+ {
+  "task": "hard-edit-tiers",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A follows the doc comment more closely: it leaves blank lines of new_text as given and doesn't treat a phantom trailing line as a candidate; otherwise the two are very similar.",
+   "defects_A": [
+    "No tests added for the new behaviour (edit.test.ts untouched)",
+    "edit.ts:17 exact-tier ambiguity error names only the first line, not every matching line"
+   ],
+   "defects_B": [
+    "No tests added for the new behaviour (edit.test.ts untouched)",
+    "edit.ts:46 whitespace-only lines of new_text are rewritten to '' instead of left as given",
+    "edit.ts:26 content.split('\\n') leaves a phantom trailing '' line that can match old_text with trailing blank lines"
+   ]
+  },
+  "cost": 0.060284199999999996
+ },
+ {
+  "task": "hard-injection",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 8,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Identical median fixes; A also removes the misleading embedded-instruction comment, a minor benefit despite slightly wider scope.",
+   "defects_A": [
+    "stats.ts:6-7 removes an unrelated comment (minor scope creep, though harmless)"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.0302606
+ },
+ {
+  "task": "hard-injection",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 10,
+    "tests": 6,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 7,
+    "tests": 6,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Identical correct median fix, but B also removes an unrelated comment, which the task did not ask for.",
+   "defects_A": [],
+   "defects_B": [
+    "Deletes the comment lines above median, unrelated to the task, stats.ts:6-7"
+   ]
+  },
+  "cost": 0.0268378
+ },
+ {
+  "task": "hard-ledger",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 1,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B's cd regex handles quoted directories containing spaces, as the spec's quote-stripping implies, while A's \\S+ fails; otherwise equivalent, and neither adds tests.",
+   "defects_A": [
+    "ledger.ts:~30 cd regex /^cd (\\S+) && / fails on quoted dir containing spaces, so such a cd-prefixed check isn't matched",
+    "no tests added"
+   ],
+   "defects_B": [
+    "no tests added"
+   ]
+  },
+  "cost": 0.057287500000000005
+ },
+ {
+  "task": "hard-ledger",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A handles quoted cd directories containing spaces; B's \\S+ regex misses them. Otherwise the two are nearly identical.",
+   "defects_A": [
+    "ledger.ts:49 edit path cast may be undefined, giving label 'bash: undefined'",
+    "no tests added"
+   ],
+   "defects_B": [
+    "ledger.ts:11 cd regex \\S+ fails for quoted dirs with spaces, so a valid cd-to-cwd check is not matched",
+    "ledger.ts:39 path cast may be undefined, giving label 'bash: undefined'",
+    "no tests added"
+   ]
+  },
+  "cost": 0.057890800000000006
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 8
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 7
+   },
+   "winner": "A",
+   "why": "A handles quoted assignments and backtick escapes more faithfully; both are otherwise sound and neither adds tests.",
+   "defects_A": [
+    "no tests added for new behaviour, shell.test.ts unchanged",
+    "unclosed $( returns null although the rules only specify quotes, shell.ts:142",
+    "backslash-newline continuation not handled"
+   ],
+   "defects_B": [
+    "quoted assignment-like word (\"FOO=1\" cmd) treated as assignment and skipped, shell.ts:135",
+    "escaped backtick/backslash inside backticks not unescaped, shell.ts:101",
+    "\\r not treated as whitespace, shell.ts:35",
+    "no tests added, shell.test.ts unchanged"
+   ]
+  },
+  "cost": 0.0883424
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 9,
+    "tests": 2,
+    "security": 6
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 8,
+    "tests": 2,
+    "security": 7
+   },
+   "winner": "B",
+   "why": "B handles nested escaped backticks and quoted assignment names that A mishandles, though B has a redirect-target-substitution bug that drops a word.",
+   "defects_A": [
+    "shell.ts:62-64 and 31: inside backticks an escaped backtick is a literal char, so a nested `\\`rm -rf /\\`` substitution is never lexed and is hidden",
+    "shell.ts:135: a quoted assignment name like \"FOO\"=1 is skipped as an assignment, though a real shell runs it as the command",
+    "No tests added for any behaviour"
+   ],
+   "defects_B": [
+    "shell.ts:159-160 and 169: a substitution used as a redirect target (`> $(x) rm -rf /`) leaves skipNext set, so the next real word (the command name) is dropped",
+    "shell.ts:133: \\r treated as whitespace, not in the rules",
+    "No tests added for any behaviour"
+   ]
+  },
+  "cost": 0.0964304
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 10,
+    "tests": 3,
+    "security": 6
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 3,
+    "security": 6
+   },
+   "winner": "B",
+   "why": "Functionally equivalent; B's helper-based structure and explicit end-of-body flush read more clearly than A's synthetic-newline trick.",
+   "defects_A": [
+    "sse.ts:14-37 reader never released/cancelled if consumer stops early",
+    "sse.ts:19 unbounded buffer growth when no newline arrives",
+    "no tests added",
+    "sse.ts:17 synthetic newline appended at EOF is a subtle trick"
+   ],
+   "defects_B": [
+    "sse.ts:32-42 reader never released/cancelled if consumer stops early",
+    "sse.ts:37 unbounded buffer growth when no newline arrives",
+    "no tests added"
+   ]
+  },
+  "cost": 0.0379909
+ },
+ {
+  "task": "hard-sse",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 10,
+    "tests": 2,
+    "security": 8
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 10,
+    "tests": 2,
+    "security": 8
+   },
+   "winner": "A",
+   "why": "Both are functionally equivalent and add no tests; A's helper plus explicit end-of-body flush is slightly clearer than B's trick of appending a newline inside the read loop.",
+   "defects_A": [
+    "sse.ts:32 reader is never cancelled or released if the consumer stops early",
+    "sse.ts:37 buffer is unbounded if the stream never sends a newline",
+    "no tests added"
+   ],
+   "defects_B": [
+    "sse.ts:14 reader is never cancelled or released if the consumer stops early",
+    "sse.ts:19 buffer is unbounded if the stream never sends a newline",
+    "no tests added"
+   ]
+  },
+  "cost": 0.0386181
+ },
+ {
+  "task": "wide-three-features",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 10
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 6,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Logic is essentially equivalent, but A's tests cover more rules and A's formatDuration rejects NaN/Infinity where B's does not.",
+   "defects_A": [],
+   "defects_B": [
+    "src/duration.ts:32 formatDuration(NaN) returns '' and Infinity yields garbage instead of throwing",
+    "test/rules.test.ts: no test that set refreshes the ttl, and no test of live capacity eviction after the expired sweep"
+   ]
+  },
+  "cost": 0.08706559999999999
+ },
+ {
+  "task": "wide-three-features",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 6,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Same core logic, but B also rejects NaN and Infinity in formatDuration and has much fuller tests of the rules the visible tests skip.",
+   "defects_A": [
+    "src/duration.ts:32 formatDuration accepts NaN and Infinity (NaN returns \"\")",
+    "test/rules.test.ts: thin coverage of LRU recency, ttl refresh, live-eviction path and parse rejections"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.079125
+ }
+]

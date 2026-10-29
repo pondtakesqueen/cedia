@@ -1,0 +1,33 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/redact.ts b/redact.ts
+--- a/redact.ts	2026-10-29 07:34:53.834443610 +0000
++++ b/redact.ts	2026-10-29 07:35:16.745075008 +0000
+@@ -15,9 +15,9 @@
+ 
+ // Token formats with a fixed prefix. The generic ones need a digit so prose and identifiers do not match.
+ const TOKENS: RegExp[] = [
+-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
++  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
+   /\bsk-ant-[A-Za-z0-9_-]{20,}/g, // Anthropic
+-  /\bsk-[A-Za-z0-9_-]{20,}/g, // OpenAI, DeepSeek and other sk- keys
++  /\bsk-(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}/g, // OpenAI, DeepSeek and other sk- keys
+   /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}/g, // Stripe
+   /\bgh[pousr]_[A-Za-z0-9]{30,}/g, // GitHub
+   /\bgithub_pat_[A-Za-z0-9_]{30,}/g,
+@@ -45,7 +45,7 @@
+ function secretValue(kind: string, quote: string, value: string, dotenv: boolean): boolean {
+   if (/^(\$|process\.|os\.|env\.|getenv|none$|null$|undefined$|true$|false$)/i.test(value)) return false; // a reference
+   const tokenLike = value.length >= 8 && /[A-Za-z]/.test(value) && /\d/.test(value);
+-  if (dotenv) return true;
++  if (dotenv) return !/^\d+$/.test(value) || /passw|pwd|secret/i.test(kind);
+   if (quote) return /passw|pwd|secret/i.test(kind) ? value.length >= 4 : tokenLike;
+   return tokenLike && !/[().[\]]/.test(value);
+ }
+@@ -61,7 +61,7 @@
+   out = out.replace(URL_PASSWORD, (_m, head: string, password: string) => {
+     if (password === REDACTED) return _m;
+     count++;
+-    return `${head}${REDACTED}`;
++    return `${head}${REDACTED}@`;
+   });
+   out = out.replace(ASSIGNMENT, (match, name: string, kind: string, sep: string, quote: string, value: string, offset: number, all: string) => {
+     if (value.includes(REDACTED)) return match;
