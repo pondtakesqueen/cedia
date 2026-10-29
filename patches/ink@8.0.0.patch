@@ -38,6 +38,269 @@ index 6a7f29fa5f96edc1528434bff93a5686d86bdccd..210f86e59ec2aa64a90f98b31ce75248
      return (React.createElement(BackgroundContext, { value: effectiveBackgroundColor },
          React.createElement("ink-text", { style: {
                  flexGrow: 0,
+diff --git a/build/ink.js b/build/ink.js
+index 550cdf00d2b15ac43f5d1cd708bc82c52c513569..6011dd5bd2d5e94b9964126b54bc66f51ffbe615 100644
+--- a/build/ink.js
++++ b/build/ink.js
+@@ -15,6 +15,7 @@ import render from './renderer.js';
+ import * as dom from './dom.js';
+ import { hideCursorEscape, showCursorEscape } from './cursor-helpers.js';
+ import logUpdate from './log-update.js';
++import createScreen from './log-screen.js';
+ import { bsu, esu, shouldSynchronize } from './write-synchronized.js';
+ import instances from './instances.js';
+ import App from './components/App.js';
+@@ -275,9 +276,12 @@ export default class Ink {
+         }
+         this.rootNode.onImmediateRender = this.onRender;
+         this.rootNode.onStaticChange = this.handleStaticChange;
+-        this.log = logUpdate.create(options.stdout, {
+-            incremental: options.incrementalRendering,
+-        });
++        // cedia: on the alternate screen the frame is written by position, a changed row's changed cells only.
++        this.log = options.incrementalRendering && options.alternateScreen && !this.isScreenReaderEnabled && this.interactive && options.stdout.isTTY
++            ? createScreen(options.stdout)
++            : logUpdate.create(options.stdout, {
++                incremental: options.incrementalRendering,
++            });
+         this.cursorPosition = undefined;
+         this.throttledLog = isUnthrottled
+             ? this.log
+diff --git a/build/log-screen.js b/build/log-screen.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..e6e148c0af5419ca011983baa4fa61451468eebe
+--- /dev/null
++++ b/build/log-screen.js
+@@ -0,0 +1,229 @@
++// cedia: a frame writer for the alternate screen. The screen is Ink's alone there, so each frame goes where it
++// belongs by absolute position: rows the frame moved up or down are moved by the terminal (a scroll region), and
++// of each row that changed, only its changed cells are written.
++import cliCursor from 'cli-cursor';
++import { styledCharsFromTokens, styledCharsToString, tokenize } from '@alcalzone/ansi-tokenize';
++import stringWidth from 'string-width';
++import { cursorPositionChanged, hideCursorEscape, showCursorEscape } from './cursor-helpers.js';
++const ESC = '\u001B[';
++const at = (row, column) => `${ESC}${row + 1};${column + 1}H`;
++// A move the terminal does is worth it once it keeps this many rows from being written again.
++const MIN_SCROLL_ROWS = 3;
++const LIMIT = 4_000;
++const cellsCache = new Map();
++// A row as one entry per column: a character, or null where a wide character before it continues.
++const cellsOf = (line) => {
++    let cells = cellsCache.get(line);
++    if (cells === undefined) {
++        cells = [];
++        for (const char of styledCharsFromTokens(tokenize(line))) {
++            cells.push(char);
++            for (let extra = stringWidth(char.value) - 1; extra > 0; extra--) {
++                cells.push(null);
++            }
++        }
++        if (cellsCache.size > LIMIT) {
++            cellsCache.clear();
++        }
++        cellsCache.set(line, cells);
++    }
++    return cells;
++};
++const sameStyles = (a, b) => a.length === b.length && a.every((code, index) => code.code === b[index].code);
++const sameCell = (a, b) => {
++    const blankA = a === undefined || (a !== null && a.value === ' ' && a.styles.length === 0);
++    const blankB = b === undefined || (b !== null && b.value === ' ' && b.styles.length === 0);
++    if (blankA || blankB) {
++        return blankA && blankB;
++    }
++    if (a === null || b === null) {
++        return a === b;
++    }
++    return a.value === b.value && sameStyles(a.styles, b.styles);
++};
++// What changing row `row` from `previous` to `next` takes: its changed columns only.
++const rowUpdate = (row, previous, next) => {
++    const before = cellsOf(previous);
++    const after = cellsOf(next);
++    const width = Math.max(before.length, after.length);
++    let first = 0;
++    while (first < width && sameCell(before[first], after[first])) {
++        first++;
++    }
++    if (first === width) {
++        return '';
++    }
++    let last = width - 1;
++    while (last > first && sameCell(before[last], after[last])) {
++        last--;
++    }
++    // Start and end on whole characters, on either screen.
++    while (first > 0 && (after[first] === null || before[first] === null)) {
++        first--;
++    }
++    while (last + 1 < width && (after[last + 1] === null || before[last + 1] === null)) {
++        last++;
++    }
++    const written = after.slice(first, Math.min(last + 1, after.length)).filter(cell => cell !== null);
++    // Past the end of the new row the old one had more: erase it.
++    const erase = last >= after.length ? `${ESC}K` : '';
++    return at(row, first) + styledCharsToString(written) + erase;
++};
++// The longest run of rows of `next` that are the rows of `previous` moved by `shift` (positive: up), counted by
++// the rows it saves writing (a row that is the same either way saves nothing).
++const bestScroll = (previous, next) => {
++    let best;
++    const rows = Math.min(previous.length, next.length);
++    for (let shift = -(rows - 1); shift < rows; shift++) {
++        if (shift === 0) {
++            continue;
++        }
++        let start = -1;
++        let saved = 0;
++        for (let row = 0; row <= rows; row++) {
++            const from = row + shift;
++            const moved = row < rows && from >= 0 && from < rows && next[row] === previous[from];
++            if (moved) {
++                if (start === -1) {
++                    start = row;
++                    saved = 0;
++                }
++                if (next[row] !== previous[row]) {
++                    saved++;
++                }
++                continue;
++            }
++            if (start !== -1 && saved >= MIN_SCROLL_ROWS && (!best || saved > best.saved)) {
++                best = { shift, start, length: row - start, saved };
++            }
++            start = -1;
++        }
++    }
++    return best;
++};
++const createScreen = (stream, { showCursor = false } = {}) => {
++    // The rows on screen; undefined when they are not known (first frame, or after a clear).
++    let screen;
++    let previousOutput = '';
++    let previousColumns;
++    let previousRows;
++    let hasHiddenCursor = false;
++    let cursorPosition;
++    let isCursorDirty = false;
++    let previousCursorPosition;
++    let wasCursorShown = false;
++    const getActiveCursor = () => (isCursorDirty ? cursorPosition : undefined);
++    const hasChanges = (text, activeCursor) => text !== previousOutput || cursorPositionChanged(activeCursor, previousCursorPosition);
++    const cursorTail = (activeCursor) => {
++        if (activeCursor) {
++            return at(activeCursor.y, activeCursor.x) + showCursorEscape;
++        }
++        return wasCursorShown ? hideCursorEscape : '';
++    };
++    const render = (text) => {
++        if (!showCursor && !hasHiddenCursor) {
++            cliCursor.hide(stream);
++            hasHiddenCursor = true;
++        }
++        const activeCursor = getActiveCursor();
++        isCursorDirty = false;
++        if (!hasChanges(text, activeCursor)) {
++            return false;
++        }
++        const lines = (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n');
++        const rows = stream.rows ?? lines.length;
++        const buffer = [];
++        if (wasCursorShown) {
++            buffer.push(hideCursorEscape);
++        }
++        if (lines.length > rows) {
++            // Taller than the screen: let the terminal scroll it as it is written, and start afresh next frame.
++            buffer.push(`${ESC}H${ESC}2J`, text);
++            stream.write(buffer.join(''));
++            screen = undefined;
++            previousOutput = text;
++            previousCursorPosition = undefined;
++            wasCursorShown = false;
++            return true;
++        }
++        if (screen === undefined || previousColumns !== stream.columns || previousRows !== rows) {
++            buffer.push(`${ESC}0m${ESC}H${ESC}2J`);
++            screen = [];
++        }
++        const before = Array.from({ length: rows }, (_, row) => screen[row] ?? '');
++        const after = Array.from({ length: rows }, (_, row) => lines[row] ?? '');
++        const scroll = bestScroll(before, after);
++        if (scroll) {
++            // The moved rows and the ones they move over; the terminal clears the rows that come in.
++            const { shift, start, length } = scroll;
++            const top = Math.min(start, start + shift);
++            const bottom = Math.max(start, start + shift) + length - 1;
++            buffer.push(`${ESC}0m${ESC}${top + 1};${bottom + 1}r`, shift > 0 ? `${ESC}${shift}S` : `${ESC}${-shift}T`, `${ESC}r`);
++            const moved = before.slice(top, bottom + 1);
++            for (let row = top; row <= bottom; row++) {
++                before[row] = moved[row - top + shift] ?? '';
++            }
++        }
++        for (let row = 0; row < rows; row++) {
++            if (before[row] !== after[row]) {
++                buffer.push(rowUpdate(row, before[row], after[row]));
++            }
++        }
++        buffer.push(cursorTail(activeCursor));
++        stream.write(buffer.join(''));
++        screen = after;
++        previousOutput = text;
++        previousColumns = stream.columns;
++        previousRows = rows;
++        previousCursorPosition = activeCursor ? { ...activeCursor } : undefined;
++        wasCursorShown = activeCursor !== undefined;
++        return true;
++    };
++    render.clear = () => {
++        stream.write(`${ESC}0m${ESC}H${ESC}2J`);
++        screen = undefined;
++        previousOutput = '';
++        previousCursorPosition = undefined;
++        wasCursorShown = false;
++    };
++    render.done = () => {
++        screen = undefined;
++        previousOutput = '';
++        previousCursorPosition = undefined;
++        wasCursorShown = false;
++        if (showCursor) {
++            return;
++        }
++        cliCursor.show(stream);
++        hasHiddenCursor = false;
++    };
++    render.reset = () => {
++        screen = undefined;
++        previousOutput = '';
++        previousCursorPosition = undefined;
++        wasCursorShown = false;
++    };
++    // `text` was written from the top-left corner by someone else: take it as the screen.
++    render.sync = (text) => {
++        const activeCursor = isCursorDirty ? cursorPosition : undefined;
++        isCursorDirty = false;
++        const lines = (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n');
++        const rows = stream.rows ?? lines.length;
++        screen = lines.length > rows ? undefined : lines;
++        previousOutput = text;
++        previousColumns = stream.columns;
++        previousRows = rows;
++        stream.write(cursorTail(activeCursor));
++        previousCursorPosition = activeCursor ? { ...activeCursor } : undefined;
++        wasCursorShown = activeCursor !== undefined;
++    };
++    render.setCursorPosition = (position) => {
++        cursorPosition = position;
++        isCursorDirty = true;
++    };
++    render.isCursorDirty = () => isCursorDirty;
++    render.willRender = (text) => hasChanges(text, getActiveCursor());
++    render.getCursorPosition = () => previousCursorPosition;
++    return render;
++};
++export default createScreen;
 diff --git a/build/output.js b/build/output.js
 index 10a94568e2e9fc005dd383babf36456cb31ef572..f61a95fb2aeb8135f8b8d70db6448bd50c20f2f8 100644
 --- a/build/output.js

@@ -12,6 +12,7 @@
   "devDependencies": {
     "@types/bun": "1.4.3",
     "@types/react": "^19.3.0",
+    "@xterm/headless": "5.5.0",
     "ts-json-schema-generator": "2.4.0",
     "typescript": "7.0.2"
   },
