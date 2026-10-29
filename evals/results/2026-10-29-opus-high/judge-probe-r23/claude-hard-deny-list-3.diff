@@ -1,0 +1,85 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.ts b/deny.ts
+--- a/deny.ts	2026-10-29 09:47:19.792081308 +0000
++++ b/deny.ts	2026-10-29 09:48:08.253093396 +0000
+@@ -36,5 +36,80 @@
+ //
+ // Anything else: undefined.
+ export function denyListed(argv: string[], cwd: string): Hit | undefined {
+-  throw new Error('not implemented');
++  if (argv.length === 0) return undefined;
++  const cmd = argv[0].slice(argv[0].lastIndexOf('/') + 1);
++  const args = argv.slice(1);
++  if (cmd === 'git') return gitHit(args);
++  if (cmd === 'rm') return rmHit(args, cwd);
++  if (cmd === 'find') return findHit(args, cwd);
++  return undefined;
++}
++
++const GIT_VALUE_OPTS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
++const FORCE_PUSH_OPTS = ['--force', '--force-with-lease', '--mirror', '--delete', '--prune'];
++
++// A group of single-letter flags such as -f or -fdx (not a long option, not a lone -).
++const shortGroup = (w: string) => w.length > 1 && w[0] === '-' && w[1] !== '-';
++const longOpt = (w: string, name: string) => w === name || w.startsWith(name + '=');
++
++function gitHit(args: string[]): Hit | undefined {
++  let i = 0;
++  while (i < args.length && args[i].startsWith('-')) i += GIT_VALUE_OPTS.has(args[i]) ? 2 : 1;
++  const sub = args[i];
++  const rest = args.slice(i + 1);
++  const dashDash = rest.indexOf('--');
++  const opts = dashDash === -1 ? rest : rest.slice(0, dashDash);
++
++  if (sub === 'push') {
++    const forced = opts.some(
++      (w) => FORCE_PUSH_OPTS.some((o) => longOpt(w, o)) || (shortGroup(w) && /[fd]/.test(w)),
++    );
++    if (forced || rest.some((w) => w !== '--' && (w.startsWith('+') || w.startsWith(':'))))
++      return { name: 'force-push', reason: 'git push that can overwrite or delete remote history' };
++  }
++  if (sub === 'reset' && opts.includes('--hard'))
++    return { name: 'reset-hard', reason: 'git reset --hard discards uncommitted work' };
++  if (sub === 'clean') {
++    const force = opts.some((w) => w === '--force' || (shortGroup(w) && w.includes('f')));
++    const dryRun = opts.some((w) => w === '-n' || w === '--dry-run');
++    if (force && !dryRun) return { name: 'clean-force', reason: 'git clean -f deletes untracked files' };
++  }
++  return undefined;
++}
++
++// $VAR and ~user can't be resolved until the shell runs the command.
++const unresolvable = (p: string) => p.includes('$') || (p.startsWith('~') && p !== '~' && !p.startsWith('~/'));
++
++function rmHit(args: string[], cwd: string): Hit | undefined {
++  const dashDash = args.indexOf('--');
++  const before = dashDash === -1 ? args : args.slice(0, dashDash);
++  const after = dashDash === -1 ? [] : args.slice(dashDash + 1);
++  const flags = before.filter((w) => w.startsWith('-'));
++  const recursive = flags.some((w) => w === '--recursive' || (shortGroup(w) && /[rR]/.test(w)));
++  if (!recursive) return undefined;
++
++  const targets = [...before.filter((w) => !w.startsWith('-')), ...after];
++  if (targets.length === 0) return { name: 'rm-outside', reason: 'rm -r with targets supplied at run time' };
++  for (const t of targets) {
++    if (unresolvable(t)) return { name: 'rm-outside', reason: `rm -r target ${t} cannot be resolved in advance` };
++    if (!insideWorkspace(t, cwd) || sameDir(t, cwd))
++      return { name: 'rm-outside', reason: `rm -r target ${t} is the workspace or outside it` };
++  }
++  return undefined;
++}
++
++const FIND_ACTIONS = new Set(['-delete', '-exec', '-execdir']);
++
++function findHit(args: string[], cwd: string): Hit | undefined {
++  if (!args.some((w) => FIND_ACTIONS.has(w))) return undefined;
++  // Skip find's own leading options (-H, -L, -P, -D debugopts, -Olevel) so they don't hide the start paths.
++  let i = 0;
++  while (i < args.length && /^-([HLP]|O\d*|D)$/.test(args[i])) i += args[i] === '-D' ? 2 : 1;
++  const starts: string[] = [];
++  for (; i < args.length && !args[i].startsWith('-') && !['(', '!', ','].includes(args[i]); i++) starts.push(args[i]);
++  for (const s of starts) {
++    if (unresolvable(s)) return { name: 'rm-outside', reason: `find start path ${s} cannot be resolved in advance` };
++    if (!insideWorkspace(s, cwd)) return { name: 'rm-outside', reason: `find deletes or executes outside the workspace (${s})` };
++  }
++  return undefined;
+ }
