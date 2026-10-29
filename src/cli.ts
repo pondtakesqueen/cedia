@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { storeAttachment } from './core/video.ts';
+import { complete, type Completion } from './core/project/complete.ts';
 import { inlineEdit, parseRange, type InlineEdit } from './core/project/inline-edit.ts';
 import { parseArgs } from 'node:util';
 import { runHeadless } from './clients/headless/main.ts';
@@ -8,7 +9,7 @@ import type { TuiArgs } from './clients/tui-ink/args.ts';
 import { ALIASES } from './core/providers/catalog.ts';
 import { GUARDS, PERMISSION_ENTRIES, type PermissionList } from './core/safety/policy.ts';
 import { applyAllowRules, suggestAllowRules } from './core/safety/suggest.ts';
-import { cediaHome, loadPermissionSetting, loadPolicy, loadRoles } from './core/config.ts';
+import { cediaHome, loadCompleteModel, loadPermissionSetting, loadPolicy, loadRoles } from './core/config.ts';
 import { processKeychain } from './core/providers/keychain.ts';
 import { modelLine, modelList } from './core/providers/models.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
@@ -248,6 +249,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'commit') return commit(argv.slice(1));
   if (argv[0] === 'review') return reviewCmd(argv.slice(1));
   if (argv[0] === 'inline-edit') return inlineEditCmd(argv.slice(1));
+  if (argv[0] === 'complete') return completeCmd(argv.slice(1));
   if (argv[0] === 'pr') return pr(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
   const { values, positionals } = parseArgs({
@@ -842,6 +844,29 @@ async function inlineEditCmd(argv: string[]): Promise<number> {
   if (values.json) console.log(JSON.stringify(r));
   else if ('error' in r) console.error(`cedia: ${r.error}`);
   else process.stdout.write(r.patch || 'no change\n');
+  return 'error' in r ? 1 : 0;
+}
+
+// `cedia complete`: the desktop's tab completion. Nothing is written; the editor shows the text as ghost text.
+async function completeCmd(argv: string[]): Promise<number> {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { file: { type: 'string' }, at: { type: 'string' }, stdin: { type: 'boolean' }, model: { type: 'string' }, cwd: { type: 'string' }, json: { type: 'boolean' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const { values } = parsed;
+  const range = values.at ? parseRange(`${values.at}-${values.at}`) : undefined;
+  if (!values.file || !range) {
+    console.error('usage: cedia complete --file <path> --at <line:col> [--stdin] [--model <ref>] [--cwd <dir>] [--json]');
+    return 2;
+  }
+  const cwd = resolve(values.cwd ?? process.cwd());
+  const r = await complete({ cwd, file: values.file, at: range.start, model: loadCompleteModel(values.model), ...(values.stdin ? { text: await Bun.stdin.text() } : {}) }).catch((e: Error): Completion => ({ error: e.message }));
+  if (values.json) console.log(JSON.stringify(r));
+  else if ('error' in r) console.error(`cedia: ${r.error}`);
+  else process.stdout.write(r.text);
   return 'error' in r ? 1 : 0;
 }
 

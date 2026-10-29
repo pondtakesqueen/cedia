@@ -64,6 +64,9 @@
     "InlineEdit": {
       "$ref": "#/definitions/InlineEdit"
     },
+    "Completion": {
+      "$ref": "#/definitions/Completion"
+    },
     "CodeReview": {
       "$ref": "#/definitions/CodeReview"
     },
@@ -269,6 +272,7 @@
         "video",
         "media-route",
         "code-review",
+        "complete",
         "inline-edit"
       ]
     },
@@ -604,6 +608,54 @@
         "opaque"
       ],
       "additionalProperties": false
+    },
+    "Completion": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string"
+            },
+            "at": {
+              "$ref": "#/definitions/InlineEditPosition"
+            },
+            "text": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "costUsd": {
+              "type": "number"
+            },
+            "ms": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "file",
+            "at",
+            "text",
+            "model",
+            "costUsd",
+            "ms"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "additionalProperties": false
+        }
+      ]
     },
     "CoreMessage": {
       "anyOf": [
@@ -2034,6 +2086,9 @@
             },
             "effort": {
               "$ref": "#/definitions/Effort"
+            },
+            "maxTokens": {
+              "type": "number"
             },
             "toolsHash": {
               "type": "string"

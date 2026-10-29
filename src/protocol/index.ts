@@ -19,6 +19,7 @@ export type { ForkResult } from '../core/project/fork.ts';
 export type { McpCheck, McpList } from '../core/mcp/manage.ts';
 export type { CommitDraft, Committed, PrOpened, PrPlan } from '../core/project/commit.ts';
 export type { CodeFinding, CodeReview } from '../core/project/code-review.ts';
+export type { Completion } from '../core/project/complete.ts';
 export type { InlineEdit, InlineEditPosition, InlineEditRange } from '../core/project/inline-edit.ts';
 export type { DesktopLock } from '../core/project/desktop-lock.ts';
 export type { Capability, VersionInfo } from './version.ts';

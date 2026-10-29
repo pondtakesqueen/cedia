@@ -57,6 +57,8 @@ type EventBody =
       kind: 'request';
       model: string;
       effort?: Effort;
+      // Set when the session asked for fewer output tokens than the model's most (a tab completion).
+      maxTokens?: number;
       toolsHash: string;
       systemHash: string;
       bodyHash: string;
