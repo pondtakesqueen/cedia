@@ -190,22 +190,34 @@ export function spanProps(style: MdStyle, T: ThemeTokens): { color?: string; bol
  * only the last of the rest (above it). Each line is at least one row; one line always stays.
  */
 export function clipLines<X>(xs: X[], clip: { drop: number; tail?: number } | undefined): X[] {
-  if (!clip) return xs;
-  const shown = xs.slice(0, Math.max(1, xs.length - clip.drop));
-  return clip.tail !== undefined && shown.length > clip.tail ? shown.slice(-clip.tail) : shown;
+  const [from, to] = clipRange(xs.length, clip);
+  return from === 0 && to === xs.length ? xs : xs.slice(from, to);
 }
+
+/** The lines `clipLines` keeps of `count`, as [from, to). Keys by `from + i` keep a line's node as the clip moves. */
+export function clipRange(count: number, clip: { drop: number; tail?: number } | undefined): [number, number] {
+  if (!clip) return [0, count];
+  const to = Math.min(count, Math.max(1, count - clip.drop));
+  return [clip.tail !== undefined && to > clip.tail ? to - clip.tail : 0, to];
+}
+
+// One rendered line; the same line object (Markdown memoizes them on the text) skips its render.
+const LineView = React.memo(function LineView({ line, T }: { line: ReturnType<typeof mdLines>[number]; T: ThemeTokens }) {
+  return (
+    <Text wrap="wrap" color={T.text}>
+      {line.length ? line.map((s, j) => <Text key={j} {...spanProps(s.style, T)}>{s.text}</Text>) : ' '}
+    </Text>
+  );
+});
 
 export default function Markdown({ children, T, plain, clip }: { children: string; T: ThemeTokens; plain?: boolean; clip?: { drop: number; tail?: number } }): React.ReactElement {
   const all = React.useMemo(() => mdLines(children ?? ''), [children]);
-  const lines = clipLines(all, clip);
+  const [from, to] = clipRange(all.length, clip);
+  const lines = all.slice(from, to);
   if (plain) return <Text wrap="wrap">{lines.map((l) => l.map((s) => s.text).join('')).join('\n')}</Text>;
   return (
     <Box flexDirection="column">
-      {lines.map((l, i) => (
-        <Text key={i} wrap="wrap" color={T.text}>
-          {l.length ? l.map((s, j) => <Text key={j} {...spanProps(s.style, T)}>{s.text}</Text>) : ' '}
-        </Text>
-      ))}
+      {lines.map((l, i) => <LineView key={from + i} line={l} T={T} />)}
     </Box>
   );
 }

@@ -1,0 +1,766 @@
+diff --git a/build/components/Text.js b/build/components/Text.js
+index 6a7f29fa5f96edc1528434bff93a5686d86bdccd..210f86e59ec2aa64a90f98b31ce75248844178ef 100644
+--- a/build/components/Text.js
++++ b/build/components/Text.js
+@@ -1,4 +1,4 @@
+-import React, { use } from 'react';
++import React, { use, useMemo } from 'react';
+ import chalk from 'chalk';
+ import colorize from '../colorize.js';
+ import { AccessibilityContext } from './AccessibilityContext.js';
+@@ -12,12 +12,9 @@ export default function Text({ color, backgroundColor, dimColor = false, bold =
+     // Use explicit backgroundColor if provided, otherwise inherit from the nearest parent Text or Box.
+     const effectiveBackgroundColor = backgroundColor ?? inheritedBackgroundColor;
+     const childrenOrAriaLabel = isScreenReaderEnabled && Boolean(ariaLabel) ? ariaLabel : children;
+-    if (childrenOrAriaLabel === undefined ||
+-        childrenOrAriaLabel === null ||
+-        (isScreenReaderEnabled && ariaHidden)) {
+-        return null;
+-    }
+-    const transform = (text) => {
++    // cedia: the same function while the styles stay, so redrawing an unchanged Text updates nothing and its styled
++    // lines come from the transform cache. Before the early return, so the hooks run on every render.
++    const transform = useMemo(() => (text) => {
+         if (dimColor) {
+             text = chalk.dim(text);
+         }
+@@ -40,7 +37,12 @@ export default function Text({ color, backgroundColor, dimColor = false, bold =
+             text = chalk.inverse(text);
+         }
+         return text;
+-    };
++    }, [dimColor, color, effectiveBackgroundColor, bold, italic, underline, strikethrough, inverse]);
++    if (childrenOrAriaLabel === undefined ||
++        childrenOrAriaLabel === null ||
++        (isScreenReaderEnabled && ariaHidden)) {
++        return null;
++    }
+     return (React.createElement(BackgroundContext, { value: effectiveBackgroundColor },
+         React.createElement("ink-text", { style: {
+                 flexGrow: 0,
+diff --git a/build/dom.js b/build/dom.js
+index d017ce0c32da795c09d88216611a2034e5df32d6..9efe1823eb47443a7c3b08af46a4fe692cf24c3d 100644
+--- a/build/dom.js
++++ b/build/dom.js
+@@ -2,6 +2,14 @@ import Yoga from 'yoga-layout';
+ import measureText from './measure-text.js';
+ import wrapText from './wrap-text.js';
+ import squashTextNodes from './squash-text-nodes.js';
++// cedia: a box whose subtree did not change since it was drawn draws its last operations again (see
++// render-node-to-output.js). Every change marks the node it lands on and every node above it, all the way up:
++// nested text is never drawn on its own, so its mark is never cleared and cannot stand for its parents'.
++export const markOutputChanged = (node) => {
++    for (let current = node; current; current = current.parentNode) {
++        current.internal_outputDirty = true;
++    }
++};
+ export const createNode = (nodeName) => {
+     const node = {
+         nodeName,
+@@ -24,6 +32,7 @@ export const appendChildNode = (node, childNode) => {
+     }
+     childNode.parentNode = node;
+     node.childNodes.push(childNode);
++    markOutputChanged(node);
+     if (childNode.yogaNode) {
+         node.yogaNode?.insertChild(childNode.yogaNode, node.yogaNode.getChildCount());
+     }
+@@ -36,6 +45,7 @@ export const insertBeforeNode = (node, newChildNode, beforeChildNode) => {
+         removeChildNode(newChildNode.parentNode, newChildNode);
+     }
+     newChildNode.parentNode = node;
++    markOutputChanged(node);
+     const index = node.childNodes.indexOf(beforeChildNode);
+     if (index >= 0) {
+         node.childNodes.splice(index, 0, newChildNode);
+@@ -58,6 +68,7 @@ export const removeChildNode = (node, removedNode) => {
+         removedNode.parentNode?.yogaNode?.removeChild(removedNode.yogaNode);
+     }
+     removedNode.parentNode = undefined;
++    markOutputChanged(node);
+     const index = node.childNodes.indexOf(removedNode);
+     if (index >= 0) {
+         node.childNodes.splice(index, 1);
+@@ -90,6 +101,7 @@ export const freeYogaSubtree = (removedNode) => {
+     nullifyYogaNodes(removedNode);
+ };
+ export const setAttribute = (node, key, value) => {
++    markOutputChanged(node);
+     if (key === 'internal_accessibility') {
+         node.internal_accessibility = value;
+         return;
+@@ -101,6 +113,7 @@ Update a text transform and invalidate measurements that include its output.
+ */
+ export const setTransform = (node, transform) => {
+     node.internal_transform = transform;
++    markOutputChanged(node);
+     // Nested transforms contribute to the enclosing text node's measured content.
+     if (node.nodeName === 'ink-virtual-text') {
+         markNodeAsDirty(node);
+@@ -113,6 +126,7 @@ export const setStyle = (node, style) => {
+     }
+     // Rendering code assumes style is always an object.
+     node.style = style ?? {};
++    markOutputChanged(node);
+ };
+ export const createTextNode = (text) => {
+     const node = {
+@@ -151,6 +165,7 @@ const markNodeAsDirty = (node) => {
+ };
+ export const setNodeHidden = (node, isHidden) => {
+     node.isHidden = isHidden;
++    markOutputChanged(node);
+     node.yogaNode?.setDisplay(isHidden || node.style.display === 'none'
+         ? Yoga.DISPLAY_NONE
+         : Yoga.DISPLAY_FLEX);
+@@ -165,6 +180,7 @@ export const setTextNodeValue = (node, text) => {
+     }
+     node.nodeValue = text;
+     markNodeAsDirty(node);
++    markOutputChanged(node.parentNode);
+ };
+ export const addLayoutListener = (rootNode, listener) => {
+     if (rootNode.nodeName !== 'ink-root') {
+diff --git a/build/ink.js b/build/ink.js
+index 550cdf00d2b15ac43f5d1cd708bc82c52c513569..6011dd5bd2d5e94b9964126b54bc66f51ffbe615 100644
+--- a/build/ink.js
++++ b/build/ink.js
+@@ -15,6 +15,7 @@ import render from './renderer.js';
+ import * as dom from './dom.js';
+ import { hideCursorEscape, showCursorEscape } from './cursor-helpers.js';
+ import logUpdate from './log-update.js';
++import createScreen from './log-screen.js';
+ import { bsu, esu, shouldSynchronize } from './write-synchronized.js';
+ import instances from './instances.js';
+ import App from './components/App.js';
+@@ -275,9 +276,12 @@ export default class Ink {
+         }
+         this.rootNode.onImmediateRender = this.onRender;
+         this.rootNode.onStaticChange = this.handleStaticChange;
+-        this.log = logUpdate.create(options.stdout, {
+-            incremental: options.incrementalRendering,
+-        });
++        // cedia: on the alternate screen the frame is written by position, a changed row's changed cells only.
++        this.log = options.incrementalRendering && options.alternateScreen && !this.isScreenReaderEnabled && this.interactive && options.stdout.isTTY
++            ? createScreen(options.stdout)
++            : logUpdate.create(options.stdout, {
++                incremental: options.incrementalRendering,
++            });
+         this.cursorPosition = undefined;
+         this.throttledLog = isUnthrottled
+             ? this.log
+diff --git a/build/log-screen.js b/build/log-screen.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..e6e148c0af5419ca011983baa4fa61451468eebe
+--- /dev/null
++++ b/build/log-screen.js
+@@ -0,0 +1,229 @@
++// cedia: a frame writer for the alternate screen. The screen is Ink's alone there, so each frame goes where it
++// belongs by absolute position: rows the frame moved up or down are moved by the terminal (a scroll region), and
++// of each row that changed, only its changed cells are written.
++import cliCursor from 'cli-cursor';
++import { styledCharsFromTokens, styledCharsToString, tokenize } from '@alcalzone/ansi-tokenize';
++import stringWidth from 'string-width';
++import { cursorPositionChanged, hideCursorEscape, showCursorEscape } from './cursor-helpers.js';
++const ESC = '\u001B[';
++const at = (row, column) => `${ESC}${row + 1};${column + 1}H`;
++// A move the terminal does is worth it once it keeps this many rows from being written again.
++const MIN_SCROLL_ROWS = 3;
++const LIMIT = 4_000;
++const cellsCache = new Map();
++// A row as one entry per column: a character, or null where a wide character before it continues.
++const cellsOf = (line) => {
++    let cells = cellsCache.get(line);
++    if (cells === undefined) {
++        cells = [];
++        for (const char of styledCharsFromTokens(tokenize(line))) {
++            cells.push(char);
++            for (let extra = stringWidth(char.value) - 1; extra > 0; extra--) {
++                cells.push(null);
++            }
++        }
++        if (cellsCache.size > LIMIT) {
++            cellsCache.clear();
++        }
++        cellsCache.set(line, cells);
++    }
++    return cells;
++};
++const sameStyles = (a, b) => a.length === b.length && a.every((code, index) => code.code === b[index].code);
++const sameCell = (a, b) => {
++    const blankA = a === undefined || (a !== null && a.value === ' ' && a.styles.length === 0);
++    const blankB = b === undefined || (b !== null && b.value === ' ' && b.styles.length === 0);
++    if (blankA || blankB) {
++        return blankA && blankB;
++    }
++    if (a === null || b === null) {
++        return a === b;
++    }
++    return a.value === b.value && sameStyles(a.styles, b.styles);
++};
++// What changing row `row` from `previous` to `next` takes: its changed columns only.
++const rowUpdate = (row, previous, next) => {
++    const before = cellsOf(previous);
++    const after = cellsOf(next);
++    const width = Math.max(before.length, after.length);
++    let first = 0;
++    while (first < width && sameCell(before[first], after[first])) {
++        first++;
++    }
++    if (first === width) {
++        return '';
++    }
++    let last = width - 1;
++    while (last > first && sameCell(before[last], after[last])) {
++        last--;
++    }
++    // Start and end on whole characters, on either screen.
++    while (first > 0 && (after[first] === null || before[first] === null)) {
++        first--;
++    }
++    while (last + 1 < width && (after[last + 1] === null || before[last + 1] === null)) {
++        last++;
++    }
++    const written = after.slice(first, Math.min(last + 1, after.length)).filter(cell => cell !== null);
++    // Past the end of the new row the old one had more: erase it.
++    const erase = last >= after.length ? `${ESC}K` : '';
++    return at(row, first) + styledCharsToString(written) + erase;
++};
++// The longest run of rows of `next` that are the rows of `previous` moved by `shift` (positive: up), counted by
++// the rows it saves writing (a row that is the same either way saves nothing).
++const bestScroll = (previous, next) => {
++    let best;
++    const rows = Math.min(previous.length, next.length);
++    for (let shift = -(rows - 1); shift < rows; shift++) {
++        if (shift === 0) {
++            continue;
++        }
++        let start = -1;
++        let saved = 0;
++        for (let row = 0; row <= rows; row++) {
++            const from = row + shift;
++            const moved = row < rows && from >= 0 && from < rows && next[row] === previous[from];
++            if (moved) {
++                if (start === -1) {
++                    start = row;
++                    saved = 0;
++                }
++                if (next[row] !== previous[row]) {
++                    saved++;
++                }
++                continue;
++            }
++            if (start !== -1 && saved >= MIN_SCROLL_ROWS && (!best || saved > best.saved)) {
++                best = { shift, start, length: row - start, saved };
++            }
++            start = -1;
++        }
++    }
++    return best;
++};
++const createScreen = (stream, { showCursor = false } = {}) => {
++    // The rows on screen; undefined when they are not known (first frame, or after a clear).
++    let screen;
++    let previousOutput = '';
++    let previousColumns;
++    let previousRows;
++    let hasHiddenCursor = false;
++    let cursorPosition;
++    let isCursorDirty = false;
++    let previousCursorPosition;
++    let wasCursorShown = false;
++    const getActiveCursor = () => (isCursorDirty ? cursorPosition : undefined);
++    const hasChanges = (text, activeCursor) => text !== previousOutput || cursorPositionChanged(activeCursor, previousCursorPosition);
++    const cursorTail = (activeCursor) => {
++        if (activeCursor) {
++            return at(activeCursor.y, activeCursor.x) + showCursorEscape;
++        }
++        return wasCursorShown ? hideCursorEscape : '';
++    };
++    const render = (text) => {
++        if (!showCursor && !hasHiddenCursor) {
++            cliCursor.hide(stream);
++            hasHiddenCursor = true;
++        }
++        const activeCursor = getActiveCursor();
++        isCursorDirty = false;
++        if (!hasChanges(text, activeCursor)) {
++            return false;
++        }
++        const lines = (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n');
++        const rows = stream.rows ?? lines.length;
++        const buffer = [];
++        if (wasCursorShown) {
++            buffer.push(hideCursorEscape);
++        }
++        if (lines.length > rows) {
++            // Taller than the screen: let the terminal scroll it as it is written, and start afresh next frame.
++            buffer.push(`${ESC}H${ESC}2J`, text);
++            stream.write(buffer.join(''));
++            screen = undefined;
++            previousOutput = text;
++            previousCursorPosition = undefined;
++            wasCursorShown = false;
++            return true;
++        }
++        if (screen === undefined || previousColumns !== stream.columns || previousRows !== rows) {
++            buffer.push(`${ESC}0m${ESC}H${ESC}2J`);
++            screen = [];
++        }
++        const before = Array.from({ length: rows }, (_, row) => screen[row] ?? '');
++        const after = Array.from({ length: rows }, (_, row) => lines[row] ?? '');
++        const scroll = bestScroll(before, after);
++        if (scroll) {
++            // The moved rows and the ones they move over; the terminal clears the rows that come in.
++            const { shift, start, length } = scroll;
++            const top = Math.min(start, start + shift);
++            const bottom = Math.max(start, start + shift) + length - 1;
++            buffer.push(`${ESC}0m${ESC}${top + 1};${bottom + 1}r`, shift > 0 ? `${ESC}${shift}S` : `${ESC}${-shift}T`, `${ESC}r`);
++            const moved = before.slice(top, bottom + 1);
++            for (let row = top; row <= bottom; row++) {
++                before[row] = moved[row - top + shift] ?? '';
++            }
++        }
++        for (let row = 0; row < rows; row++) {
++            if (before[row] !== after[row]) {
++                buffer.push(rowUpdate(row, before[row], after[row]));
++            }
++        }
++        buffer.push(cursorTail(activeCursor));
++        stream.write(buffer.join(''));
++        screen = after;
++        previousOutput = text;
++        previousColumns = stream.columns;
++        previousRows = rows;
++        previousCursorPosition = activeCursor ? { ...activeCursor } : undefined;
++        wasCursorShown = activeCursor !== undefined;
++        return true;
++    };
++    render.clear = () => {
++        stream.write(`${ESC}0m${ESC}H${ESC}2J`);
++        screen = undefined;
++        previousOutput = '';
++        previousCursorPosition = undefined;
++        wasCursorShown = false;
++    };
++    render.done = () => {
++        screen = undefined;
++        previousOutput = '';
++        previousCursorPosition = undefined;
++        wasCursorShown = false;
++        if (showCursor) {
++            return;
++        }
++        cliCursor.show(stream);
++        hasHiddenCursor = false;
++    };
++    render.reset = () => {
++        screen = undefined;
++        previousOutput = '';
++        previousCursorPosition = undefined;
++        wasCursorShown = false;
++    };
++    // `text` was written from the top-left corner by someone else: take it as the screen.
++    render.sync = (text) => {
++        const activeCursor = isCursorDirty ? cursorPosition : undefined;
++        isCursorDirty = false;
++        const lines = (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n');
++        const rows = stream.rows ?? lines.length;
++        screen = lines.length > rows ? undefined : lines;
++        previousOutput = text;
++        previousColumns = stream.columns;
++        previousRows = rows;
++        stream.write(cursorTail(activeCursor));
++        previousCursorPosition = activeCursor ? { ...activeCursor } : undefined;
++        wasCursorShown = activeCursor !== undefined;
++    };
++    render.setCursorPosition = (position) => {
++        cursorPosition = position;
++        isCursorDirty = true;
++    };
++    render.isCursorDirty = () => isCursorDirty;
++    render.willRender = (text) => hasChanges(text, getActiveCursor());
++    render.getCursorPosition = () => previousCursorPosition;
++    return render;
++};
++export default createScreen;
+diff --git a/build/output.js b/build/output.js
+index 10a94568e2e9fc005dd383babf36456cb31ef572..907a41b57215bbb8f5cc197ddb211997b511b504 100644
+--- a/build/output.js
++++ b/build/output.js
+@@ -1,5 +1,6 @@
+ import stringWidth from 'string-width';
+ import { styledCharsFromTokens, styledCharsToString, tokenize, } from '@alcalzone/ansi-tokenize';
++import cachedTransform from './transform-cache.js';
+ // Replaces a partially visible wide character with a space that keeps its styles.
+ const blankCell = (cell) => ({
+     ...cell,
+@@ -27,10 +28,44 @@ const intersectClips = (outer, inner) => {
+         y2: intersectBound(outer.y2, inner.y2, Math.min),
+     };
+ };
++// cedia: one blank cell for every empty position, so rows that did not change hold the same cells as the last frame.
++const BLANK = Object.freeze({ type: 'char', value: ' ', fullWidth: false, styles: Object.freeze([]) });
++// cedia: the caches outlive a frame (each frame builds a new Output), so text drawn again costs a lookup. They are
++// emptied when they grow past this many entries.
++const CACHE_LIMIT = 20_000;
+ class OutputCaches {
+     widths = new Map();
+     blockWidths = new Map();
+     styledChars = new Map();
++    textLines = new Map();
++    slices = new Map();
++    trim() {
++        if (this.styledChars.size > CACHE_LIMIT || this.widths.size > CACHE_LIMIT || this.textLines.size > CACHE_LIMIT || this.slices.size > CACHE_LIMIT) {
++            this.slices.clear();
++            this.widths.clear();
++            this.blockWidths.clear();
++            this.styledChars.clear();
++            this.textLines.clear();
++        }
++    }
++    // The rows of a write's text, styles carried across its newlines.
++    getTextLines(text) {
++        let cached = this.textLines.get(text);
++        if (cached === undefined) {
++            const characterLines = [[]];
++            for (const character of this.getStyledChars(text)) {
++                if (character.value === '\n') {
++                    characterLines.push([]);
++                }
++                else {
++                    characterLines.at(-1).push(character);
++                }
++            }
++            cached = characterLines.map(line => styledCharsToString(line));
++            this.textLines.set(text, cached);
++        }
++        return cached;
++    }
+     getStyledChars(line) {
+         let cached = this.styledChars.get(line);
+         if (cached === undefined) {
+@@ -61,9 +96,16 @@ class OutputCaches {
+         return cached;
+     }
+ }
++const sharedCaches = new OutputCaches();
++// cedia: the last frame's rows as cells and text, so a row whose cells are all the same objects keeps its text.
++let previousRows = [];
++// cedia: a number for each cell object, and a row's text by the numbers of its cells.
++const cellIds = new WeakMap();
++let nextCellId = 0;
++const rowTexts = new Map();
+ export default class Output {
+     operations = [];
+-    caches = new OutputCaches();
++    caches = sharedCaches;
+     width;
+     height;
+     constructor(options) {
+@@ -75,16 +117,7 @@ export default class Output {
+         const { text, transformers } = operation;
+         let { x, y } = operation;
+         // Preserve styles across explicit newlines before clipping individual rows.
+-        const characterLines = [[]];
+-        for (const character of this.caches.getStyledChars(text)) {
+-            if (character.value === '\n') {
+-                characterLines.push([]);
+-            }
+-            else {
+-                characterLines.at(-1).push(character);
+-            }
+-        }
+-        let lines = characterLines.map(line => styledCharsToString(line));
++        let lines = this.caches.getTextLines(text);
+         if (clip) {
+             // Two nested clips can intersect to nothing. Nothing is visible, so bail out before slicing.
+             if (isClipEmpty(clip)) {
+@@ -134,7 +167,7 @@ export default class Output {
+                 continue;
+             }
+             for (const transformer of transformers) {
+-                line = transformer(line, index + y - operation.y);
++                line = cachedTransform(transformer, line, index + y - operation.y);
+             }
+             const characters = this.caches.getStyledChars(line);
+             // Nothing to write (e.g. line was clipped away).
+@@ -189,6 +222,28 @@ export default class Output {
+             transformers,
+         });
+     }
++    // cedia: operations made for an earlier frame, moved by (dx, dy).
++    replay(operations, dx, dy) {
++        if (dx === 0 && dy === 0) {
++            for (const operation of operations) {
++                this.operations.push(operation);
++            }
++            return;
++        }
++        const move = (value, by) => (value === undefined ? undefined : value + by);
++        for (const operation of operations) {
++            if (operation.type === 'write') {
++                this.operations.push({ ...operation, x: operation.x + dx, y: operation.y + dy });
++            }
++            else if (operation.type === 'clip') {
++                const { x1, x2, y1, y2 } = operation.clip;
++                this.operations.push({ type: 'clip', clip: { x1: move(x1, dx), x2: move(x2, dx), y1: move(y1, dy), y2: move(y2, dy) } });
++            }
++            else {
++                this.operations.push(operation);
++            }
++        }
++    }
+     clip(clip) {
+         this.operations.push({
+             type: 'clip',
+@@ -205,6 +260,17 @@ export default class Output {
+         if (from >= to) {
+             return '';
+         }
++        // cedia: by the line and columns, since a clipped line is usually clipped again the same way next frame.
++        const key = `${from}\u{0}${to}\u{0}${line}`;
++        const cached = this.caches.slices.get(key);
++        if (cached !== undefined) {
++            return cached;
++        }
++        const sliced = this.sliceLineToColumnsUncached(line, from, to);
++        this.caches.slices.set(key, sliced);
++        return sliced;
++    }
++    sliceLineToColumnsUncached(line, from, to) {
+         const result = [];
+         let column = 0;
+         for (const character of this.caches.getStyledChars(line)) {
+@@ -229,18 +295,10 @@ export default class Output {
+     }
+     get() {
+         // Initialize output array with a specific set of rows, so that margin/padding at the bottom is preserved
++        this.caches.trim();
+         const output = [];
+         for (let y = 0; y < this.height; y++) {
+-            const row = [];
+-            for (let x = 0; x < this.width; x++) {
+-                row.push({
+-                    type: 'char',
+-                    value: ' ',
+-                    fullWidth: false,
+-                    styles: [],
+-                });
+-            }
+-            output.push(row);
++            output.push(Array.from({ length: this.width }, () => BLANK));
+         }
+         const clips = [];
+         for (const operation of this.operations) {
+@@ -255,13 +313,35 @@ export default class Output {
+                 this.applyWriteOperation(output, operation, clips.at(-1));
+             }
+         }
+-        const generatedOutput = output
+-            .map(line => {
++        const rows = output.map((line, y) => {
+             // See https://github.com/vadimdemedes/ink/pull/564#issuecomment-1637022742
+-            const lineWithoutEmptyItems = line.filter(item => item !== undefined);
+-            return styledCharsToString(lineWithoutEmptyItems).trimEnd();
+-        })
+-            .join('\n');
++            const cells = line.filter(item => item !== undefined);
++            const previous = previousRows[y];
++            if (previous && previous.cells.length === cells.length && previous.cells.every((cell, x) => cell === cells[x])) {
++                return previous;
++            }
++            // A row the transcript moved holds the same cells at another height: its text is looked up by them.
++            let key = '';
++            for (const cell of cells) {
++                let id = cellIds.get(cell);
++                if (id === undefined) {
++                    id = nextCellId++;
++                    cellIds.set(cell, id);
++                }
++                key += id + ',';
++            }
++            let text = rowTexts.get(key);
++            if (text === undefined) {
++                text = styledCharsToString(cells).trimEnd();
++                if (rowTexts.size > CACHE_LIMIT) {
++                    rowTexts.clear();
++                }
++                rowTexts.set(key, text);
++            }
++            return { cells, text };
++        });
++        previousRows = rows;
++        const generatedOutput = rows.map(row => row.text).join('\n');
+         return {
+             output: generatedOutput,
+             height: output.length,
+diff --git a/build/render-node-to-output.js b/build/render-node-to-output.js
+index 6f48cd03d15de0f56aed72978579acea84f473ee..e34a16fea1a77fb8b3f15d4ed7b0e2fa8fc96de2 100644
+--- a/build/render-node-to-output.js
++++ b/build/render-node-to-output.js
+@@ -68,8 +68,41 @@ export const renderNodeToScreenReaderOutput = (node, options = {}) => {
+     return output;
+ };
+ // After nodes are laid out, render each to output object, which later gets rendered to terminal
++const NO_TRANSFORMERS = [];
++const sameTransformers = (a, b) => a === b || (a.length === b.length && a.every((transformer, index) => transformer === b[index]));
++// cedia: a box drawn before, with no change in it since (see markOutputChanged in dom.js) and the same size and
++// transformers, draws the operations it made then, moved to where it is now.
+ const renderNodeToOutput = (node, output, options) => {
+-    const { offsetX = 0, offsetY = 0, transformers = [], skipStaticElements, } = options;
++    if (node.nodeName !== 'ink-box' || (options.skipStaticElements && node.internal_static)) {
++        renderNodeToOutputUncached(node, output, options);
++        return;
++    }
++    const { yogaNode } = node;
++    if (!yogaNode || yogaNode.getDisplay() === Yoga.DISPLAY_NONE) {
++        return;
++    }
++    const { offsetX = 0, offsetY = 0, transformers = NO_TRANSFORMERS, skipStaticElements } = options;
++    const x = offsetX + yogaNode.getComputedLeft();
++    const y = offsetY + yogaNode.getComputedTop();
++    const width = yogaNode.getComputedWidth();
++    const height = yogaNode.getComputedHeight();
++    const cache = node.internal_outputCache;
++    if (!node.internal_outputDirty &&
++        cache !== undefined &&
++        cache.width === width &&
++        cache.height === height &&
++        cache.skipStaticElements === skipStaticElements &&
++        sameTransformers(cache.transformers, transformers)) {
++        output.replay(cache.operations, x - cache.x, y - cache.y);
++        return;
++    }
++    const from = output.operations.length;
++    renderNodeToOutputUncached(node, output, options);
++    node.internal_outputCache = { x, y, width, height, transformers, skipStaticElements, operations: output.operations.slice(from) };
++    node.internal_outputDirty = false;
++};
++const renderNodeToOutputUncached = (node, output, options) => {
++    const { offsetX = 0, offsetY = 0, transformers = NO_TRANSFORMERS, skipStaticElements, } = options;
+     if (skipStaticElements && node.internal_static) {
+         return;
+     }
+@@ -86,15 +119,30 @@ const renderNodeToOutput = (node, output, options) => {
+         ? [node.internal_transform, ...transformers]
+         : transformers;
+     if (node.nodeName === 'ink-text') {
+-        let text = squashTextNodes(node);
+-        if (text.length > 0) {
+-            const currentWidth = widestLine(text);
+-            const maxWidth = getMaxWidth(yogaNode);
+-            if (currentWidth > maxWidth) {
+-                const textWrap = node.style.textWrap ?? 'wrap';
+-                text = wrapText(text, maxWidth, textWrap);
++        // cedia: an unchanged text at the same width and padding is the text it was last frame.
++        const maxWidth = getMaxWidth(yogaNode);
++        const padding = node.childNodes.at(0)?.yogaNode;
++        const padX = padding ? padding.getComputedLeft() : 0;
++        const padY = padding ? padding.getComputedTop() : 0;
++        const cached = node.internal_textCache;
++        let text;
++        if (!node.internal_outputDirty && cached !== undefined && cached.maxWidth === maxWidth && cached.padX === padX && cached.padY === padY) {
++            text = cached.text;
++        }
++        else {
++            text = squashTextNodes(node);
++            if (text.length > 0) {
++                const currentWidth = widestLine(text);
++                if (currentWidth > maxWidth) {
++                    const textWrap = node.style.textWrap ?? 'wrap';
++                    text = wrapText(text, maxWidth, textWrap);
++                }
++                text = applyPaddingToText(node, text);
+             }
+-            text = applyPaddingToText(node, text);
++            node.internal_textCache = { maxWidth, padX, padY, text };
++            node.internal_outputDirty = false;
++        }
++        if (text.length > 0) {
+             output.write(x, y, text, { transformers: newTransformers });
+         }
+         return;
+diff --git a/build/squash-text-nodes.js b/build/squash-text-nodes.js
+index 7c86abb1b2efade62e261ffa6f237e5a45a94f78..e39de68d260d4aa7f48b8425d7c006706b6cfa62 100644
+--- a/build/squash-text-nodes.js
++++ b/build/squash-text-nodes.js
+@@ -1,5 +1,27 @@
+ import wrapAnsi from 'wrap-ansi';
+ import sanitizeAnsi from './sanitize-ansi.js';
++import cachedTransform from './transform-cache.js';
++// cedia: the cleanup of a squashed text, by the text; emptied past LIMIT entries.
++const LIMIT = 5_000;
++const cleaned = new Map();
++const clean = (node, text) => {
++    const key = (node.nodeName === 'ink-text' ? 't' : 'v') + text;
++    let result = cleaned.get(key);
++    if (result === undefined) {
++        result = sanitizeAnsi(text.replaceAll('\r\n', '\n'));
++        // Measurement and styling dependencies understand the ESC forms of these C1 controls.
++        result = result.replaceAll('\u009B', '\u001B[').replaceAll('\u009D', '\u001B]').replaceAll('\u009C', '\u001B\\');
++        // Expand tabs after combining nested text so measurement and rendering use the same columns.
++        if (node.nodeName === 'ink-text' && result.includes('\t')) {
++            result = wrapAnsi(result, Infinity, { trim: false });
++        }
++        if (cleaned.size > LIMIT) {
++            cleaned.clear();
++        }
++        cleaned.set(key, result);
++    }
++    return result;
++};
+ // Squashing text nodes allows to combine multiple text nodes into one and write
+ // to `Output` instance only once. For example, <Text>hello{' '}world</Text>
+ // is actually 3 text nodes, which would result 3 writes to `Output`.
+@@ -28,20 +50,13 @@ const squashTextNodes = (node) => {
+                 const transform = childNode.internal_transform;
+                 nodeText = nodeText
+                     .split('\n')
+-                    .map((line, lineIndex) => transform(line, lineIndex))
++                    .map((line, lineIndex) => cachedTransform(transform, line, lineIndex))
+                     .join('\n');
+             }
+         }
+         text += nodeText;
+     }
+-    text = sanitizeAnsi(text.replaceAll('\r\n', '\n'));
+-    // Measurement and styling dependencies understand the ESC forms of these C1 controls.
+-    text = text.replaceAll('', '[').replaceAll('', ']').replaceAll('', '\\');
+-    // Expand tabs after combining nested text so measurement and rendering use the same columns.
+-    if (node.nodeName === 'ink-text' && text.includes('\t')) {
+-        text = wrapAnsi(text, Infinity, { trim: false });
+-    }
+-    return text;
++    return clean(node, text);
+ };
+ export default squashTextNodes;
+ //# sourceMappingURL=squash-text-nodes.js.map
+\ No newline at end of file
+diff --git a/build/transform-cache.js b/build/transform-cache.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..ec8ef390bde5b2d95780561aafe5ef011d769603
+--- /dev/null
++++ b/build/transform-cache.js
+@@ -0,0 +1,21 @@
++// cedia: a transform is a pure function of its line and index, so its result is kept per function. Text memoizes
++// its transform on its styles, so a Text drawn again with the same styles and text costs a lookup.
++const LIMIT = 2_000;
++const results = new WeakMap();
++export default function cachedTransform(transform, line, index) {
++    let byLine = results.get(transform);
++    if (byLine === undefined) {
++        byLine = new Map();
++        results.set(transform, byLine);
++    }
++    const key = `${index}\u{0}${line}`;
++    let result = byLine.get(key);
++    if (result === undefined) {
++        result = transform(line, index);
++        if (byLine.size > LIMIT) {
++            byLine.clear();
++        }
++        byLine.set(key, result);
++    }
++    return result;
++}
