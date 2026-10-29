@@ -577,4 +577,30 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       h.stop();
     }
   }, 30000);
+
+  test('scrolled up, a long reply above the others fills the top of the screen with its last lines', async () => {
+    const reply = Array.from({ length: 60 }, (_, i) => `row ${i}`).join('\n\n');
+    const h = start({ rows: 30, script: [{ blocks: [{ type: 'text', text: reply }] }] });
+    try {
+      for (const p of ['one', 'two', 'three']) {
+        h.write(p);
+        await Bun.sleep(80);
+        h.write('\r');
+        await Bun.sleep(900);
+      }
+      // Up past the last reply: the second one is above the messages that fit, partly on screen.
+      h.drain();
+      h.write('\x1b[<64;10;10M');
+      await Bun.sleep(400);
+      const f = h.frame();
+      const screen = f.slice(f.lastIndexOf('◆ cedia ·')).split('\n');
+      expect(screen[1]).toMatch(/more above/);
+      // The rows under it are the end of that reply, with no blank band where its start would be.
+      const firstRow = screen.slice(2).find((l) => l.trim());
+      expect(screen.slice(2).findIndex((l) => l.trim())).toBeLessThanOrEqual(1);
+      expect(firstRow).toMatch(/row (5\d)/);
+    } finally {
+      h.stop();
+    }
+  }, 30000);
 });

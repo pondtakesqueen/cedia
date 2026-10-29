@@ -185,8 +185,10 @@ export function spanProps(style: MdStyle, T: ThemeTokens): { color?: string; bol
   }
 }
 
-export default function Markdown({ children, T, plain }: { children: string; T: ThemeTokens; plain?: boolean }): React.ReactElement {
-  const lines = React.useMemo(() => mdLines(children ?? ''), [children]);
+// `tail` keeps only the last lines, for a reply mostly above the screen: each line is at least one row.
+export default function Markdown({ children, T, plain, tail }: { children: string; T: ThemeTokens; plain?: boolean; tail?: number }): React.ReactElement {
+  const all = React.useMemo(() => mdLines(children ?? ''), [children]);
+  const lines = tail !== undefined && all.length > tail ? all.slice(-tail) : all;
   if (plain) return <Text wrap="wrap">{lines.map((l) => l.map((s) => s.text).join('')).join('\n')}</Text>;
   return (
     <Box flexDirection="column">

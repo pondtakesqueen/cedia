@@ -58,7 +58,7 @@ import { forkThread } from '../../core/project/fork.ts';
 import { ThreadStore, threadsDir } from '../../core/project/threads.ts';
 import { projectKey } from '../../core/session/log.ts';
 import { join } from 'node:path';
-import { readFileSync as fsRead, writeFileSync as fsWrite, existsSync as fsExists, readdirSync as fsReaddir, statSync as fsStat, unlinkSync as fsUnlink } from 'node:fs';
+import { readFileSync as fsRead, writeFileSync as fsWrite, existsSync as fsExists, readdirSync as fsReaddir, statSync as fsStat, unlinkSync as fsUnlink, mkdirSync as fsMkdir } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { loadProjectUsage } from './usage-summary.ts';
 import type { VimMode } from './vim-input.tsx';
@@ -163,6 +163,8 @@ export function fitPath(path: string, width: number): string {
 const themedColorFor = (T: ThemeTokens, role: Msg['role']): string | undefined =>
   role === 'user' ? undefined : role === 'assistant' ? T.text : T.textMuted;
 
+// Rows the message above the screen keeps beyond the room left, for when the height estimates run short.
+const TAIL_SLACK = 4;
 const bandColor = (band: RowBand, T: ThemeTokens): string =>
   band === 'add' ? T.diffAddedBg : band === 'del' ? T.diffRemovedBg : band === 'addWord' ? T.diffAddedWordBg : T.diffRemovedWordBg;
 const rowMsg = (lines: RowLine[], extra: Partial<Msg> = {}): Msg => ({ role: 'tool', text: rowText(lines), lines, ...extra });
@@ -359,7 +361,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const screenReaderRef = useRef(false);
   const selectionRef = useRef<InkSelection | null>(null);
   const selectingRef = useRef(false);
-  const store = new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd)));
+  // Opened once: finding the project runs git, which every render (each scroll step) would pay again.
+  const store = React.useMemo(() => new ThreadStore(threadsDir(cediaHome(), projectKey(args.cwd))), [args.cwd]);
 
   const push = (m: Msg) => setMessages((prev) => [...prev, m]);
   const thinkingStartRef = useRef<number | undefined>(undefined);
@@ -903,20 +906,23 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       case 'color':
       case 'theme': {
         const t = rest[0];
-        if (t && t !== 'dark' && t !== 'light') { say(`unknown theme: ${t} (dark | light)`); return; }
+        if (t && t !== 'dark' && t !== 'light' && t !== 'auto') { say(`unknown theme: ${t} (dark | light | auto)`); return; }
         if (t) {
+          // auto leaves the choice to the terminal's background; settings.json is made when there is none yet.
+          const pp = join(cediaHome(), 'settings.json');
           try {
-            const pp = join(cediaHome(), 'settings.json');
-            const raw = JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown>;
-            raw.theme = t;
+            const raw = fsExists(pp) ? JSON.parse(fsRead(pp, 'utf8')) as Record<string, unknown> : {};
+            if (t === 'auto') delete raw.theme;
+            else raw.theme = t;
+            fsMkdir(cediaHome(), { recursive: true });
             fsWrite(pp, JSON.stringify(raw, null, 2) + '\n');
-          } catch { /* ignore */ }
+          } catch (e) { say(`could not save the theme: ${(e as Error).message}`, 'red'); return; }
           setThemeTick((n) => n + 1);
           syncOnboardingRef.current();
           say(`theme: ${t}`);
           return;
         }
-        say(`theme: ${themeName} (dark | light)`);
+        say(`theme: ${themeName} (dark | light | auto)`);
         return;
       }
       case 'notify': {
@@ -1469,13 +1475,19 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     // A reply shows as rendered markdown: count the rows of what paints, not of the source.
     return heightCacheRef.current.lines(key, () => estimateLines(truncateLongText(msg?.role === 'assistant' ? mdPlain(raw) : raw), width));
   };
-  const { start: renderStart, end: renderEnd } = visibleWindow({
+  const { start: fullStart, end: renderEnd, used: fullRows } = visibleWindow({
     count: displayMessages.length,
     scrollOffset,
     budget: heightBudget,
-    overscan: 3,
+    overscan: 0,
     heightAt,
   });
+  // The message above the ones that fit shows only its last rows, as many as the screen has left (and a few
+  // more, since heights are estimates): drawing all of a long reply above the screen took most of each scroll
+  // step's time, in Ink's layout and paint.
+  const topRoom = heightBudget - fullRows;
+  const renderStart = fullStart > 0 && topRoom > 0 ? fullStart - 1 : fullStart;
+  const tailAt = (index: number): number | undefined => (index < fullStart ? topRoom + TAIL_SLACK : undefined);
 
   const recycleSlots = assignRecycleSlots(
     renderStart,
@@ -1503,7 +1515,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       bands.push({
         kind: 'message',
         index: i,
-        rows: rowsAt(i),
+        rows: Math.min(rowsAt(i), tailAt(i) ?? Infinity),
       });
       if (padAt(i)) bands.push({ kind: 'chrome', rows: 1 });
     }
@@ -2075,14 +2087,17 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
             const queryHit = q.length > 0 && capped.toLowerCase().includes(q.toLowerCase());
             const bounds = selection ? selectionBounds(selection, globalIdx, capped.length) : undefined;
             const hasSel = !!bounds && bounds.end > bounds.start;
+            // Selection and search count characters from the message's start, so they keep all of it.
+            const tail = hasSel || queryHit ? undefined : tailAt(globalIdx);
+            const keep = <X,>(xs: X[]): X[] => (tail !== undefined && xs.length > tail ? xs.slice(-tail) : xs);
             const fullySelected = messageFullySelected(selection, globalIdx, capped.length);
             const isUserRow = m.role === 'user' && !hasSel && !queryHit;
             const isToolError = m.role === 'tool' && m.status === 'error';
             const contentWidth = paintedWidth(m.role, columns, screenReader);
             const userLines = isUserRow && !screenReader
-              ? capped.split('\n').map((ln) => ln.padEnd(Math.max(ln.length, contentWidth)))
+              ? keep(capped.split('\n')).map((ln) => ln.padEnd(Math.max(ln.length, contentWidth)))
               : null;
-            const full = capped;
+            const full = hasSel || queryHit ? capped : keep(capped.split('\n')).join('\n');
             if (screenReader) {
               return (
                 <Box key={`slot-${slot.slot}`} flexDirection="column" flexShrink={0}>
@@ -2106,10 +2121,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                   ))}
                 </Text>
               ) : m.role === 'assistant' ? (
-                <Markdown T={T}>{m.text}</Markdown>
+                <Markdown T={T} tail={tail}>{m.text}</Markdown>
               ) : m.lines ? (
                 <Box flexDirection="column">
-                  {m.lines.map((ln, li) => {
+                  {keep(m.lines).map((ln, li) => {
                     const used = ln.spans.reduce((n, sp) => n + sp.text.length, 0);
                     return (
                       <Text key={li} wrap="truncate" color={T.text} backgroundColor={ln.band ? bandColor(ln.band, T) : undefined}>

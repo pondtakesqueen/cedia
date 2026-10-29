@@ -163,14 +163,48 @@ export function resolveThemeName(raw: unknown): ThemeName {
   return raw === 'light' ? 'light' : 'dark';
 }
 
-export function inkTheme(home: string): { name: ThemeName; tokens: ThemeTokens } {
+/** The theme the person chose in settings.json, if they chose one. */
+export function themeSetting(home: string): ThemeName | undefined {
   try {
     const p = join(home, 'settings.json');
-    if (existsSync(p)) {
-      const raw = JSON.parse(readFileSync(p, 'utf8')) as { theme?: unknown };
-      const name = resolveThemeName(raw.theme);
-      return { name, tokens: tokensFor(name) };
-    }
-  } catch {}
-  return { name: 'dark', tokens: tokensFor('dark') };
+    if (!existsSync(p)) return undefined;
+    const raw = (JSON.parse(readFileSync(p, 'utf8')) as { theme?: unknown }).theme;
+    return raw === 'light' || raw === 'dark' ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// The terminal's own background, when the TUI could read it as it opened (terminal-theme.ts): the theme for a
+// person who never chose one, so a light terminal does not get dark panels.
+let terminalTheme: ThemeName | undefined;
+export function setTerminalTheme(name: ThemeName | undefined): void {
+  terminalTheme = name;
+}
+
+/** Light or dark for a background color, each channel 0 to 1: light past half of full luminance. */
+export function themeForBackground(r: number, g: number, b: number): ThemeName {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 ? 'light' : 'dark';
+}
+
+/** The theme a terminal's reply to OSC 11 (`ESC ] 11 ; rgb:RRRR/GGGG/BBBB`) gives, or undefined. */
+export function themeFromOsc11(reply: string): ThemeName | undefined {
+  const m = /\]11;rgba?:([0-9a-f]{1,4})\/([0-9a-f]{1,4})\/([0-9a-f]{1,4})/i.exec(reply);
+  if (!m) return undefined;
+  const c = (h: string) => parseInt(h, 16) / (16 ** h.length - 1);
+  return themeForBackground(c(m[1]!), c(m[2]!), c(m[3]!));
+}
+
+/** COLORFGBG ("fg;bg", set by rxvt, Konsole, iTerm2 and others): a background of 7 or 9 to 15 is light. */
+export function themeFromColorfgbg(env: NodeJS.ProcessEnv = process.env): ThemeName | undefined {
+  const bg = Number((env.COLORFGBG ?? '').split(';').pop());
+  if (!env.COLORFGBG || !Number.isInteger(bg)) return undefined;
+  return bg === 7 || (bg >= 9 && bg <= 15) ? 'light' : 'dark';
+}
+
+// The theme: the person's choice, else the terminal's background as read when the TUI opened, else COLORFGBG,
+// else dark.
+export function inkTheme(home: string, env: NodeJS.ProcessEnv = process.env): { name: ThemeName; tokens: ThemeTokens } {
+  const name = themeSetting(home) ?? terminalTheme ?? themeFromColorfgbg(env) ?? 'dark';
+  return { name, tokens: tokensFor(name, env) };
 }

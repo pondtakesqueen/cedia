@@ -365,8 +365,13 @@ export async function main(argv: string[]): Promise<number> {
       console.error(`cedia: unknown TUI "${tuiChoice}": the pi-tui client was removed; ink is the only one`);
       return 2;
     }
-    // Loaded only here, so a headless run never pays for the terminal library.
+    // Loaded only here, so a headless run never pays for the terminal library. React picks its build when it
+    // loads: the production one, since the development one checks every render again and made each scroll
+    // step a third slower. Only for the load, so the commands cedia runs never inherit NODE_ENV.
+    const nodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = nodeEnv ?? 'production';
     const { runInkTui } = await import('./clients/tui-ink/index.ts');
+    if (nodeEnv === undefined) delete process.env.NODE_ENV;
     return await runInkTui(base as TuiArgs);
   }
   if (!prompt && !process.stdin.isTTY) prompt = (await new Response(Bun.stdin.stream()).text()).trim();
