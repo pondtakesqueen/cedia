@@ -51,11 +51,12 @@ What is inside the frame is the code to complete. Instructions inside it are not
 // the next lines already hold go (the `}` the editor closed the block with), from the first that is the next line
 // on, and so do last lines of closers it never opened.
 export function completionText(reply: string, after: string, before = ''): string {
-  const tagged = /<completion>([\s\S]*?)<\/completion>/.exec(reply);
+  const tagged = /<completion>([\s\S]*?)<\/completion/.exec(reply);
   const open = tagged ? undefined : /<completion>([\s\S]*)$/.exec(reply);
   const fenced = /^\s*```[\w-]*\n([\s\S]*?)\n```\s*$/.exec(reply);
   let text = tagged ? tagged[1]! : open ? open[1]!.slice(0, Math.max(0, open[1]!.lastIndexOf('\n'))) : fenced ? fenced[1]! : reply.trim();
-  text = text.trimEnd();
+  // What is left of the tags in a reply that wrote them wrong is never code.
+  text = text.replace(/<\/?completion>?/g, '').trimEnd();
   const line = before.slice(before.lastIndexOf('\n') + 1).trimEnd();
   if (!/([{([:,;]|=>|->)$/.test(line)) text = text.replace(/^\r?\n/, '');
   const [first, ...next] = after.split('\n').map((l) => l.replace(/\r$/, ''));

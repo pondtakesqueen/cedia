@@ -60,6 +60,9 @@ describe('tab completion', () => {
     // Cut off by the token cap: the whole lines only.
     expect(completionText('<completion>a();\nb();\nc(1, ', '')).toBe('a();\nb();');
     expect(completionText('<completion>a(1, ', '')).toBe('');
+    // A tag the model wrote wrong is not offered as text.
+    expect(completionText('<completion', '')).toBe('');
+    expect(completionText('<completion>length;</completion', '\n}', '  xs.')).toBe('length;');
     // With text after the cursor, a line break would strand it: the first line only, less the repeated `;`.
     expect(completionText('<completion>xs.length;\n}</completion>', ';\n}')).toBe('xs.length');
     expect(completionText('<completion>a, b)</completion>', ');')).toBe('a, b');
