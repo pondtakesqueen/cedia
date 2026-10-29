@@ -5,7 +5,7 @@
 // deny rule (or a built-in guard) stopped is skipped, since deny always wins. Suggestions go to the USER
 // settings: a repository's settings can only tighten, never grant.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import { checkSettings } from '../config.ts';
 import type { SessionInput } from '../session/usage.ts';
 import { rulePatternMatches } from '../safety/policy.ts';
@@ -101,4 +101,41 @@ export function applyAllowRules(home: string, rules: string[]): { added: string[
   writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n');
   renameSync(tmp, path);
   return { added };
+}
+
+// The rule the owner may add from a denial notice, so the same kind of call runs from the next message on. The
+// owner is the one deciding here, so a command that may write can be proposed too, where `suggest` above, which
+// nobody reviews call by call, proposes only read-only ones. Only a call that nothing but the missing rule
+// stopped gets one: the read-only mode, the classifier, or a path outside the working directory. A deny rule, a
+// guard, a protected path or a secret stays stopped, since an allow rule could never lift it.
+const LIFTABLE = new Set(['mode:read-only', 'classifier', 'outside-workspace']);
+
+export function allowRuleFor(tool: string, input: JsonObject, rule: string, cwd: string): string | undefined {
+  if (!LIFTABLE.has(rule)) return undefined;
+  if (tool === 'mcp_call') return typeof input.tool === 'string' ? mcpRule(input.tool)?.rule : undefined;
+  if (tool.startsWith('mcp__')) return mcpRule(tool)?.rule;
+  if (tool === 'bash') return commandRule(String(input.command ?? ''));
+  if (tool === 'edit' || tool === 'write') {
+    const path = typeof input.path === 'string' ? input.path : '';
+    if (!path || path.includes('*') || path.includes(')')) return undefined;
+    const full = resolve(cwd, path);
+    const rel = relative(cwd, full);
+    return `${tool}(${rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : full})`;
+  }
+  return undefined;
+}
+
+// The command and its subcommand (`bun test*`, `git commit*`; `rm *` when what follows is not a word) of the one simple command in the line that may
+// write; the rest must only read, which an allow rule lets through anyway. A line that writes through `>`, has
+// several commands that may write, or cannot be read gets none: no one rule would cover it.
+function commandRule(command: string): string | undefined {
+  if (/[<>]/.test(command.replace(/\d?>&\d|\d?>\s*\/dev\/null/g, ''))) return undefined;
+  const commands = simpleCommands(command);
+  if (!commands?.length) return undefined;
+  const writing = commands.filter((argv) => !checkReadOnly(argv.join(' ')).ok);
+  if (writing.length !== 1) return undefined;
+  const [first, second] = writing[0]!;
+  if (!first || first === 'cd' || !/^[A-Za-z0-9_][A-Za-z0-9_.+/-]*$/.test(first)) return undefined;
+  if (second === undefined) return `bash(${first})`;
+  return /^[a-z][a-z0-9_:-]*$/.test(second) ? `bash(${first} ${second}*)` : `bash(${first} *)`;
 }
