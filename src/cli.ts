@@ -28,7 +28,8 @@ import { commandList, loadSkills } from './core/skills/skills.ts';
 import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
 import { rewindThread, rewoundText, runLines, type RewindResult } from './core/project/rewind.ts';
 import { addMcp, checkMcp, listMcp, removeMcp } from './core/mcp/manage.ts';
-import { commitFiles, currentBranch, headCommit, prPlan, pushAndOpenPr, threadChanges, type CommitDraft, type Committed, type PrOpened } from './core/project/commit.ts';
+import { codeReview, type CodeReview } from './core/project/code-review.ts';
+import { commitFiles, commitPatch, currentBranch, headCommit, prPlan, pushAndOpenPr, threadChanges, type CommitDraft, type Committed, type PrOpened } from './core/project/commit.ts';
 import { draftCommitMessage } from './core/project/draft.ts';
 import { deleteThread } from './core/project/delete.ts';
 import { type ForkResult, forkThread } from './core/project/fork.ts';
@@ -202,6 +203,8 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                             draft a message for the files the thread changed; commits nothing
        cedia commit --thread <id> --message <m> [--file <f>]... [--json]
                                             commit those files (all of them without --file), nothing else
+       cedia review --thread <id> [--cwd <dir>] [--model <ref>] [--json]
+                                            review what the thread changed, read-only; findings by file and line
        cedia pr [--check] [--cwd <dir>] [--json]
                                             push the branch and open its pull request through gh (never the
                                             default branch); --check only says where it would go
@@ -243,6 +246,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'models') return await models(argv.slice(1));
   if (argv[0] === 'mcp') return mcp(argv.slice(1));
   if (argv[0] === 'commit') return commit(argv.slice(1));
+  if (argv[0] === 'review') return reviewCmd(argv.slice(1));
   if (argv[0] === 'inline-edit') return inlineEditCmd(argv.slice(1));
   if (argv[0] === 'pr') return pr(argv.slice(1));
   if (argv[0] === 'usage') return usage(argv.slice(1));
@@ -774,6 +778,47 @@ async function commit(argv: string[]): Promise<number> {
   } catch (e) {
     return fail((e as Error).message);
   }
+}
+
+// `cedia review`: the desktop's /code-review card. A read-only review of what the thread changed (against HEAD),
+// by the review role when it runs on cedia, else the thread's writer model, else the code role's; --model wins.
+// Its findings come back with their file and line (CodeReview). Nothing is written.
+async function reviewCmd(argv: string[]): Promise<number> {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { thread: { type: 'string' }, cwd: { type: 'string' }, model: { type: 'string' }, json: { type: 'boolean' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const { values } = parsed;
+  if (!values.thread) {
+    console.error('usage: cedia review --thread <id> [--cwd <dir>] [--model <ref>] [--json]');
+    return 2;
+  }
+  const fail = (error: string) => {
+    if (values.json) console.log(JSON.stringify({ error } satisfies CodeReview));
+    else console.error(`cedia: ${error}`);
+    return 1;
+  };
+  const cwd = resolve(values.cwd ?? process.cwd());
+  const store = new ThreadStore(threadsDir(cediaHome(), projectKey(cwd)));
+  if (!store.has(values.thread)) return fail(`no thread ${values.thread} in this project`);
+  const snaps = workspaceSnapshots(cwd, cediaHome());
+  if (!snaps) return fail('no snapshots for this directory, so cedia cannot tell which files the thread changed');
+  const files = threadChanges(store, values.thread, cwd, snaps);
+  const roles = loadRoles({});
+  const writer = store.read(values.thread).sessions.filter((s) => !s.rewound).at(-1)?.model;
+  const model = values.model ?? (roles.review?.via === 'cedia' ? roles.review.model.ref : undefined) ?? writer ?? roles.code.ref;
+  const r = await codeReview({ cwd, files, patch: files.length ? commitPatch(cwd, files) : '', model }).catch((e: Error): CodeReview => ({ error: e.message }));
+  if ('error' in r) return fail(r.error);
+  if (values.json) console.log(JSON.stringify(r));
+  else {
+    if (r.summary) console.log(r.summary, '\n');
+    for (const f of r.findings) console.log(`FINDING: ${f.text}`);
+    console.log(`VERDICT: ${r.verdict}`);
+  }
+  return 0;
 }
 
 // `cedia inline-edit`: the desktop's Cmd+K. The selection's new text and the patch it makes, from one model reply;

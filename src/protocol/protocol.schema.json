@@ -64,6 +64,9 @@
     "InlineEdit": {
       "$ref": "#/definitions/InlineEdit"
     },
+    "CodeReview": {
+      "$ref": "#/definitions/CodeReview"
+    },
     "DesktopLock": {
       "$ref": "#/definitions/DesktopLock"
     },
@@ -265,6 +268,7 @@
         "threads.send-images",
         "video",
         "media-route",
+        "code-review",
         "inline-edit"
       ]
     },
@@ -286,6 +290,102 @@
         "exitCode"
       ],
       "additionalProperties": false
+    },
+    "CodeFinding": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "number"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "CodeReview": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string"
+            },
+            "verdict": {
+              "$ref": "#/definitions/Verdict"
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/CodeFinding"
+              }
+            },
+            "summary": {
+              "type": "string"
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "dropped": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "ref": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "ref",
+                  "reason"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "costUsd": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "model",
+            "verdict",
+            "findings",
+            "summary",
+            "files",
+            "dropped",
+            "costUsd"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "additionalProperties": false
+        }
+      ]
     },
     "Command": {
       "anyOf": [
@@ -3992,6 +4092,14 @@
         "threads"
       ],
       "additionalProperties": false
+    },
+    "Verdict": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "changes",
+        "unclear"
+      ]
     },
     "VersionInfo": {
       "type": "object",
