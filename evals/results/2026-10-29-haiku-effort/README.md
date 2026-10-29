@@ -36,3 +36,17 @@ What it says:
 - The 2026-10-22 choice of low was made on pass rate alone, which cannot see these differences: low kept 48/48 on the gate suite.
 
 Spent: $0.25 Haiku (opencode-go), $0.80 Sonnet (Anthropic API), panels $4.15 at API price on the owner's subscription.
+
+## Against Claude Code (Opus), same 10 tasks
+
+Blind panel (`judge.py`, both orders) against the Claude Code Opus diffs in `../2026-10-24-cc-baseline.jsonl`, run 1 of the 10 tasks in `judge-vs-cc/tasks.txt` (hard-redact-bugs and hard-shell-split changed since that baseline). Tally: `python3 judge-auto/tally.py <dir> <arm>`.
+
+| cedia arm | cedia wins | CC wins | tie / split | tests (cedia / CC) | correctness | cost, 10 tasks | time, 10 tasks |
+|---|---|---|---|---|---|---|---|
+| Haiku medium alone (`judge-vs-cc/`) | 1 | 5 | 4 | 4.6 / 5.75 | 8.45 / 8.8 | $0.06 | 388 s |
+| `-m auto`: Opus@low plan, Haiku medium, Sonnet@high review (`judge-auto/`) | **6** | 2 | 2 | **7.15 / 5.85** | 8.55 / 8.45 | $1.87 at API price ($0.10 Haiku + $0.96 plan + $0.81 review) | 1169 s |
+| Claude Code, Opus | | | | | | $2.16 | 454 s |
+
+- Both auto and CC passed 10/10. Auto won on tests most of all (the review sent 8 of 10 back, mostly for missing tests); CC still won hard-csv-stream and hard-memo-async.
+- Auto costs 13% less than CC at API price, and the plan and review run in Claude Code on a subscription, so only $0.10 is billed per 10 tasks. It is 2.6 times slower: plan and review add about 70 s per task.
+- One run per task, and the CC diffs are five days older than cedia's; the panel sees only diffs.
