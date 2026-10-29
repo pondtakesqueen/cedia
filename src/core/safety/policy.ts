@@ -154,7 +154,8 @@ function matches(rule: string, tool: string, commands: string[][] | null | undef
     // To allow, every simple command (substitutions included) must match or only read. The argv has lost its
     // redirections, so a command that writes through `>` is never covered: `echo x > f` would read as `echo x`.
     if (command !== undefined && redirectsOutput(command)) return false;
-    return commands.length > 0 && commands.every((argv) => re.test(line(argv)) || checkReadOnly(line(argv)).ok);
+    // A `cd` reads nothing, but it would carry an allowed command (`bash(bun test)`) out of the working directory.
+    return commands.length > 0 && commands.every((argv) => re.test(line(argv)) || (argv[0] !== 'cd' && checkReadOnly(line(argv)).ok));
   }
   if (path === undefined) return false;
   const full = resolve(cwd, path);
@@ -253,8 +254,9 @@ export function protectedPath(path: string, cwd: string): boolean {
 
 // The first secret store `path` falls under, if any. A store that holds the working directory is skipped, so
 // a session run inside cedia's own home can still read its files.
-function secretUnder(path: string, secrets: string[], cwd: string): string | undefined {
-  const full = real(resolve(cwd, expandHome(path)));
+// `from` is the directory a relative path is read from: the working directory, or where a `cd` before it went.
+function secretUnder(path: string, secrets: string[], cwd: string, from = cwd): string | undefined {
+  const full = real(resolve(from, expandHome(path)));
   const root = real(cwd);
   return secrets.find((s) => {
     const store = real(s);
@@ -272,12 +274,17 @@ function secretInCommand(command: string, commands: string[][], secrets: string[
     const forms = [s, s.startsWith(home + '/') ? '~' + s.slice(home.length) : s];
     if (forms.some((f) => new RegExp(`${f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w.-])`).test(text))) return s;
   }
-  for (const argv of commands)
+  // A `cd` moves where the words after it are read from: `cd ~ && cat .ssh/id_rsa` names ~/.ssh. A cd in a
+  // subshell does not last, so each word is read from the working directory too.
+  let from = cwd;
+  for (const argv of commands) {
     for (const word of argv.slice(1)) {
       if (word.startsWith('-') || word.includes('$')) continue;
-      const hit = secretUnder(word, secrets, cwd);
+      const hit = secretUnder(word, secrets, cwd) ?? secretUnder(word, secrets, cwd, from);
       if (hit) return hit;
     }
+    if (argv[0] === 'cd') from = resolve(from, expandHome(argv[1] ?? homedir()));
+  }
   return undefined;
 }
 

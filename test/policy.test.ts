@@ -211,11 +211,15 @@ describe('modes and rules', () => {
     expect(bash(p, 'bun test test/a.test.ts').rule).toBe('allow:bash(bun test*)');
     expect(bash(p, 'bun test && cat x | wc -l').rule).toBe('allow:bash(bun test*)');
     expect(bash(p, 'bun test; touch x').rule).toBe('mode:read-only');
+    // A cd only reads, but it would take an allowed command out of the working directory.
+    expect(bash(p, 'cd /elsewhere && bun test').rule).toBe('mode:read-only');
+    expect(bash(p, 'cd src && ls; cat a.ts').rule).toBe('effect:read');
     // The split argv drops redirections, so an allow rule must not cover a command that writes through one.
     expect(bash(p, 'bun test > out.txt').rule).toBe('mode:read-only');
     expect(bash(p, 'echo hacked > g.txt; bun test').rule).toBe('mode:read-only');
     expect(bash(p, 'bun test 2>&1').rule).toBe('allow:bash(bun test*)');
-    expect(bash(RO, 'cat a; ls').reason).toContain('; are not allowed; read-only commands may be run one at a time');
+    expect(bash(RO, 'cat a; ls').rule).toBe('effect:read');
+    expect(bash(RO, 'cat a > b; ls').reason).toContain('redirection and background jobs are not allowed; read-only commands may be run one at a time');
     expect(bash(p, 'echo $(touch x) && bun test').rule).toBe('mode:read-only');
     expect(decide(p, editTool, { path: 'src/a.ts', edits: [] }, cwd).rule).toBe('allow:edit(src/*)');
     expect(decide(p, editTool, { path: 'README.md', edits: [] }, cwd).rule).toBe('mode:read-only');
@@ -257,7 +261,10 @@ describe('guards the user controls', () => {
     expect(read('src/app.ts').decision).toBe('allow');
     for (const command of ['cat ~/.ssh/id_rsa', 'cat $HOME/.netrc', 'base64 < ~/.aws/credentials', `tar czf x.tgz ${homedir()}/.gnupg`, 'grep -r token "${HOME}/.config/gh"'])
       expect([command, bash(SAFE, command).rule]).toEqual([command, 'deny-list:secret-path']);
-    for (const command of ['cat ~/.sshrc', 'ls ~/projects', 'cat .npmrc', 'echo ~/.ssh-notes'])
+    // A cd moves where the paths after it point; the read-only list takes a cd, so this must still hold.
+    for (const command of ['cd ~ && cat .ssh/id_rsa', 'cd && cat .ssh/id_rsa', `cd ${homedir()}/.aws; cat credentials`, '(cd /tmp) && cat ~/.netrc'])
+      for (const p of [SAFE, { ...SAFE, mode: 'read-only' as const }]) expect([command, bash(p, command).rule]).toEqual([command, 'deny-list:secret-path']);
+    for (const command of ['cat ~/.sshrc', 'ls ~/projects', 'cat .npmrc', 'echo ~/.ssh-notes', 'cd ~/projects && cat .ssh/config'])
       expect([command, bash(SAFE, command).decision]).toEqual([command, 'allow']);
     expect(read('~/.ssh/config', { ...SAFE, unlock: ['secret-path'] }).decision).toBe('allow');
     expect(decide({ ...SAFE, allow: ['read'] }, readTool, { path: '~/.ssh/id_rsa' }, cwd).decision).toBe('deny'); // allow rules do not lift it
