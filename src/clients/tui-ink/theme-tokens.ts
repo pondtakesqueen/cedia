@@ -134,8 +134,8 @@ export const INK_THEMES: Record<ThemeName, ThemeTokens> = { dark, light };
 // and #003300 / #330000 / #003333, which the mapping (a linear 0-5 scale per channel) sends to entries 22, 52
 // and 23 (#005f00, #5f0000, #005f5f).
 const BANDS_256: Record<ThemeName, Partial<ThemeTokens>> = {
-  dark: { background: '#1c1c1c', userRowBg: '#262626', selectedBg: '#303030', diffAddedBg: '#003300', diffRemovedBg: '#330000', selectionBg: '#003333' },
-  light: { background: '#ffffff', userRowBg: '#eeeeee', selectedBg: '#dadada', diffAddedBg: '#d7ffd7', diffRemovedBg: '#ffd7d7', selectionBg: '#afd7d7' },
+  dark: { background: '#1c1c1c', backgroundElement: '#262626', userRowBg: '#262626', selectedBg: '#303030', diffAddedBg: '#003300', diffRemovedBg: '#330000', selectionBg: '#003333' },
+  light: { background: '#ffffff', backgroundElement: '#eeeeee', userRowBg: '#eeeeee', selectedBg: '#dadada', diffAddedBg: '#d7ffd7', diffRemovedBg: '#ffd7d7', selectionBg: '#afd7d7' },
 };
 
 /** Whether the terminal shows 24-bit color, by the same signals supports-color reads. */

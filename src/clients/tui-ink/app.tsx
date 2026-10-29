@@ -37,6 +37,7 @@ import { cancelStep, messageFullySelected, offsetForIndex, rowMapFromWalk, selec
 import { createHeightCache, heightCacheKey, visibleWindow } from './visible-window.ts';
 import { assignRecycleSlots, messageSlotKey, type RecycleSlot } from './virtual-list.ts';
 import { onTerminalResume } from './terminal-resume.ts';
+import { showSplash, wordmark } from './splash.ts';
 import { SUBTHREAD_HINT, childThreads, recentCalls, subthreadLines } from './subthreads.ts';
 import { runOwnerShell, shellCommand, shellEnd, shellNote, type ShellRun } from './shell.ts';
 import { FOCUS_OFF, FOCUS_ON, NOTIFY_MODES, channelFor, focusFrom, notifyModeFrom, notifySequence, shouldNotify, turnNotice, type Focus } from './notify.ts';
@@ -157,18 +158,25 @@ export function fitPath(path: string, width: number): string {
   return fitted.length <= width ? fitted : `…${path.slice(-(Math.max(1, width - 1)))}`;
 }
 
+// The prompt panel's only border: a bar down its left side.
+const PANEL_BAR = { topLeft: '', top: '', topRight: '', right: '', bottomRight: '', bottom: '', bottomLeft: '', left: '▌' };
+
 const themedColorFor = (T: ThemeTokens, role: Msg['role']): string | undefined =>
   role === 'user' ? undefined : role === 'assistant' ? T.text : T.textMuted;
 
 const rowMsg = (lines: RowLine[], extra: Partial<Msg> = {}): Msg => ({ role: 'tool', text: rowText(lines), lines, ...extra });
 
+// Every row of the transcript starts two columns in: a prompt behind its bar ("▌ "), the rest in a gutter of the
+// same width, so a reply lines up under the prompt it answers.
 function paintedWidth(role: Msg['role'] | undefined, columns: number, screenReader: boolean): number {
-  const bar = role === 'user' && !screenReader ? 2 : 0;
+  void role;
+  const bar = screenReader ? 0 : 2;
   return Math.max(10, columns - 2 - bar);
 }
 
 function paintedCol(termCol: number, role: Msg['role'] | undefined, screenReader: boolean): number {
-  const bar = role === 'user' && !screenReader ? 2 : 0;
+  void role;
+  const bar = screenReader ? 0 : 2;
   return Math.max(0, termCol - 1 - bar);
 }
 
@@ -1449,7 +1457,9 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   const group = (m: Msg | undefined) => (!m ? '' : m.role === 'assistant' || m.thinking ? 'reply' : m.role === 'user' ? 'user' : 'work');
   const gapBefore = (index: number): number =>
     screenReader || index === 0 || rows < 16 ? 0 : group(displayMessages[index]) !== group(displayMessages[index - 1]) || displayMessages[index]?.role === 'user' ? 1 : 0;
-  const heightAt = (index: number): number => gapBefore(index) + rowsAt(index);
+  // A prompt sits in a panel with a row of padding above and below its text (none on a short terminal).
+  const padAt = (index: number): number => (!screenReader && rows >= 16 && displayMessages[index]?.role === 'user' ? 1 : 0);
+  const heightAt = (index: number): number => gapBefore(index) + 2 * padAt(index) + rowsAt(index);
   const rowsAt = (index: number): number => {
     const msg = displayMessages[index];
     const raw = msg?.text ?? '';
@@ -1488,11 +1498,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     if (displayMessages.length > 0 && (scrollOffset > 0 || aboveHidden > 0)) bands.push({ kind: 'chrome', rows: 1 });
     for (let i = renderStart; i < renderEnd; i++) {
       if (gapBefore(i)) bands.push({ kind: 'chrome', rows: gapBefore(i) });
+      if (padAt(i)) bands.push({ kind: 'chrome', rows: 1 });
       bands.push({
         kind: 'message',
         index: i,
         rows: rowsAt(i),
       });
+      if (padAt(i)) bands.push({ kind: 'chrome', rows: 1 });
     }
     if (thinkingText) bands.push({ kind: 'chrome', rows: 1 });
     rowMapRef.current = rowMapFromWalk(bands);
@@ -1983,10 +1995,16 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // height, the transcript flex-grows between the header and the input, and
   // overflow clips the top (oldest) first. The slice above already keeps the
   // newest content, so clipping only absorbs rounding.
+  // The row above and below a prompt's text, on its band behind its bar; blank while the prompt is selected.
+  const panelPad = (band: boolean, width: number) => (
+    band ? <Text backgroundColor={T.userRowBg}><Text color={T.primary}>▌</Text>{' '.repeat(width + 1)}</Text> : <Text> </Text>
+  );
   const termRows = Math.max(10, rows || 24);
+  const splash = displayMessages.length === 0 && showSplash(termRows, columns, screenReader);
+  const KEY_HINTS = [['/help', 'commands'], ['ctrl+p', 'palette'], ['!', 'shell'], ['esc', 'stop a turn']] as const;
   return (
     <Box flexDirection="column" height={screenReader ? undefined : termRows}>
-      {displayMessages.length === 0 ? (
+      {splash ? null : displayMessages.length === 0 ? (
         <Box flexDirection="column" flexShrink={0} paddingX={1} marginTop={screenReader ? 0 : 1}>
           <Text>
             <Text color={screenReader ? undefined : T.primary} bold={!screenReader}>{screenReader ? 'cedia' : '◆ cedia'}</Text>
@@ -1999,7 +2017,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           <Text color={screenReader ? undefined : T.textMuted}>  {fitPath(shortCwd(args.cwd), Math.max(10, columns - 4))}</Text>
           <Text> </Text>
           <Text wrap="truncate">
-            {([['/help', 'commands'], ['ctrl+p', 'palette'], ['esc', 'stop a turn'], ['alt+t', 'thinking']] as const).map(([k, v], i) => (
+            {KEY_HINTS.map(([k, v], i) => (
               <Text key={k}>
                 <Text color={screenReader ? undefined : T.textMuted}>{i === 0 ? '  ' : '   '}{k}</Text>
                 <Text color={screenReader ? undefined : T.textFaint}> {v}</Text>
@@ -2024,7 +2042,27 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           {scrollOffset > 0 || aboveHidden > 0 ? <Text dimColor={screenReader ? false : true}>{screenReader ? '' : '↑ '}{aboveHidden} more above</Text> : null}
         </Box>
       )}
-      <Box flexDirection="column" flexGrow={1} overflow="hidden" justifyContent="flex-end" paddingX={1}>
+      <Box flexDirection="column" flexGrow={1} overflow="hidden" justifyContent={splash ? 'center' : 'flex-end'} alignItems={splash ? 'center' : undefined} paddingX={1}>
+          {splash ? (
+            <>
+              {wordmark().map((ln, i) => <Text key={i} color={T.primary}>{ln}</Text>)}
+              <Text> </Text>
+              <Text wrap="truncate">
+                <Text color={T.text}>{effModel?.label ?? model ?? 'auto'}</Text>
+                {branch ? <Text color={T.thinking}>{` · ⎇ ${branch}`}</Text> : null}
+              </Text>
+              <Text wrap="truncate" color={T.textMuted}>{fitPath(shortCwd(args.cwd), Math.max(10, columns - 16))}<Text color={T.textFaint}>{`  ${versionInfo().version}`}</Text></Text>
+              <Text> </Text>
+              <Text wrap="truncate">
+                {KEY_HINTS.map(([k, v], i) => (
+                  <Text key={k}>
+                    <Text color={T.textMuted}>{i === 0 ? '' : '   '}{k}</Text>
+                    <Text color={T.textFaint}> {v}</Text>
+                  </Text>
+                ))}
+              </Text>
+            </>
+          ) : null}
           {displayMessages.length === 0 ? null : (
             <>
               {recycleSlots.map((slot) => {
@@ -2052,7 +2090,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
               );
             }
               return (
-            <Box key={`slot-${slot.slot}`} flexDirection="column" flexShrink={0} marginTop={gapBefore(globalIdx)} backgroundColor={fullySelected ? T.selectedBg : isUserRow ? T.userRowBg : undefined}>
+            <Box key={`slot-${slot.slot}`} flexDirection="column" flexShrink={0} marginTop={gapBefore(globalIdx)} paddingLeft={isUserRow ? 0 : 2} backgroundColor={fullySelected ? T.selectedBg : isUserRow ? T.userRowBg : undefined}>
+              {padAt(globalIdx) ? panelPad(isUserRow, contentWidth) : null}
 
               {hasSel || queryHit ? (
                 <Text wrap="wrap">
@@ -2089,13 +2128,14 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
                 </Box>
               ) : isUserRow && !screenReader ? (
                 <>{(userLines ?? [capped]).map((ln, li) => (
-                  <Text key={li} wrap="wrap" backgroundColor={T.userRowBg}>
+                  <Text key={li} wrap="wrap" backgroundColor={T.userRowBg} color={T.text}>
                     <Text color={T.primary}>▌ </Text>{ln}
                   </Text>
                 ))}</>
               ) : (
                 <Text color={screenReader ? undefined : isToolError || m.tone === 'red' ? T.error : m.tone === 'accent' ? T.accent : themedColorFor(T, m.role)} dimColor={screenReader ? false : !!m.dim} wrap="wrap">{full}</Text>
               )}
+              {padAt(globalIdx) ? panelPad(isUserRow, contentWidth) : null}
             </Box>
             );
           })}
@@ -2103,6 +2143,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           )}
           {thinkingText ? (
             <Text wrap="truncate" color={screenReader ? undefined : T.thinking} italic={!screenReader}>
+              {screenReader ? '' : '  '}
               {screenReader ? 'thinking: ' : '∴ '}{thinkingText.trim().split('\n').pop()}
             </Text>
           ) : null}
@@ -2427,11 +2468,13 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           // The box says what the prompt will do: brand while a turn runs, amber for a `!` shell command or in vim
           // normal, violet in plan mode.
           const shellMode = !running && input.trimStart().startsWith('!');
-          const border = running ? T.primary : shellMode || vimMode !== 'insert' ? T.accent : mode === 'plan' ? T.thinking : T.border;
+          const border = running ? T.primary : shellMode || vimMode !== 'insert' ? T.accent : modeColor;
+          // A panel: a bar on its left in the color above, a band behind it and a row of padding over and under.
+          // A short terminal (under 16 rows) keeps the prompt flat: those two rows go to the transcript.
+          const panel = !screenReader && rows >= 16;
           return (
             <>
-              {/* A short terminal (under 16 rows) keeps the prompt flat: the frame's two rows go to the transcript. */}
-              <Box borderStyle={screenReader || rows < 16 ? undefined : 'round'} borderColor={border} paddingX={1} marginX={screenReader || rows < 16 ? 0 : 1}>
+              <Box borderStyle={panel ? PANEL_BAR : undefined} borderTop={false} borderRight={false} borderBottom={false} borderLeftColor={border} backgroundColor={panel ? T.backgroundElement : undefined} paddingX={1} paddingY={panel ? 1 : 0} marginX={panel ? 1 : 0}>
                 {shellMode
                   ? <Text color={screenReader ? undefined : T.accent}>{screenReader ? 'shell command: ' : '$ '}</Text>
                   : <Text color={screenReader ? undefined : modeColor}>{screenReader ? 'prompt: ' : '› '}</Text>}
