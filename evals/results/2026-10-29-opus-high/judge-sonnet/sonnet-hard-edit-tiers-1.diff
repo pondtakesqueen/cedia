@@ -1,0 +1,128 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.rules.test.ts b/edit.rules.test.ts
+--- a/edit.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/edit.rules.test.ts	2026-10-29 17:23:02.212970680 +0000
+@@ -0,0 +1,49 @@
++import { expect, test } from 'bun:test';
++import { applyEdit } from './edit.ts';
++
++test('guards', () => {
++  expect(applyEdit('a', { old_text: '', new_text: '' })).toEqual({ error: expect.stringContaining('use write') });
++  expect(applyEdit('a', { old_text: 'a', new_text: 'a' })).toEqual({ error: expect.stringContaining('same') });
++});
++test('exact ambiguity names count and first line', () => {
++  const r = applyEdit('q\nx\nx\nx\n', { old_text: 'x', new_text: 'y' });
++  expect('error' in r && r.error).toContain('matches 3 places');
++  expect('error' in r && r.error).toContain('line 2');
++});
++test('replace_all agrees with split/join', () => {
++  for (const c of ['ab\n a', 'aab\nb\n', ' a a\n']) {
++    for (const o of ['a', 'ab', 'b\n', ' a']) {
++      if (!c.includes(o)) continue;
++      const r = applyEdit(c, { old_text: o, new_text: 'Z', replace_all: true });
++      if ('error' in r) throw new Error(r.error);
++      expect(r.content).toBe(c.split(o).join('Z'));
++    }
++  }
++});
++test('tier 2 ambiguity does not fall through; tier 3 keeps relative indent', () => {
++  const r = applyEdit('a \nb\na  \nb\n', { old_text: 'a\nb', new_text: 'c' });
++  expect('error' in r && r.error).toContain('1, 3');
++  const r2 = applyEdit('  x\n  y\n', { old_text: 'x\ny', new_text: 'x\n  z\n\ny' });
++  expect('error' in r2).toBe(false);
++  if (!('error' in r2)) expect(r2.content).toBe('  x\n    z\n\n  y\n');
++});
++test('not found lists at most 5 lines', () => {
++  const r = applyEdit('k\n'.repeat(7), { old_text: 'k\nq', new_text: 'x' });
++  expect('error' in r && r.error).toContain('line 1, 2, 3, 4, 5');
++  expect('error' in r && r.error).not.toContain('6');
++});
++test('newline-only old_text is not found, not ambiguous', () => {
++  const r = applyEdit('abc', { old_text: '\n', new_text: 'x' });
++  expect('error' in r && r.error).toContain('not found');
++  expect('error' in r && r.error).not.toContain('matches');
++});
++test('tier 3 ambiguity lists lines', () => {
++  const r = applyEdit('  a\n  b\nx\n    a\n    b\n', { old_text: 'a\nb', new_text: 'c' });
++  expect('error' in r && r.error).toContain('matches 2 places');
++  expect('error' in r && r.error).toContain('1, 4');
++});
++test('exact replace_all reports first..last lines', () => {
++  const r = applyEdit('x\ny\nx\n', { old_text: 'x\n', new_text: 'z\n', replace_all: true });
++  if ('error' in r) throw new Error(r.error);
++  expect(r.applied).toEqual({ from: 1, to: 3, tier: 'exact', count: 2 });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-29 17:20:53.215770259 +0000
++++ b/edit.ts	2026-10-29 17:22:58.574132206 +0000
+@@ -23,5 +23,70 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text: old, new_text: neu } = edit;
++  if (old === '') return { error: 'old_text is empty; use write to create or overwrite a file' };
++  if (old === neu) return { error: 'old_text and new_text are the same; nothing to change' };
++
++  const lineAt = (offset: number) => content.slice(0, offset).split('\n').length;
++  const starts: number[] = [];
++  for (let i = content.indexOf(old); i !== -1; i = content.indexOf(old, i + old.length)) starts.push(i);
++  if (starts.length > 1 && !edit.replace_all) {
++    return { error: `old_text matches ${starts.length} places (first at line ${lineAt(starts[0]!)}); add context or set replace_all` };
++  }
++  if (starts.length > 0) {
++    const first = starts[0]!;
++    const out = edit.replace_all ? content.split(old).join(neu) : content.slice(0, first) + neu + content.slice(first + old.length);
++    const last = starts[starts.length - 1]! + old.length - (old.endsWith('\n') ? 1 : 0);
++    return { content: out, applied: { from: lineAt(first), to: lineAt(last), tier: 'exact', count: starts.length } };
++  }
++
++  const toLines = (t: string) => {
++    const body = t.endsWith('\n') ? t.slice(0, -1) : t;
++    return body === '' ? [] : body.split('\n');
++  };
++  const lines = content.split('\n');
++  const usable = lines.length - (content.endsWith('\n') ? 1 : 0);
++  const oldLines = toLines(old);
++  const newLines = toLines(neu);
++  const indentOf = (ls: string[]) => {
++    const l = ls.find((x) => x.trim() !== '');
++    return l === undefined ? '' : l.slice(0, l.length - l.trimStart().length);
++  };
++  const tiers: [Tier, (s: string) => string][] = [
++    ['trailing-space', (s) => s.trimEnd()],
++    ['indentation', (s) => s.trim()],
++  ];
++  for (const [tier, norm] of oldLines.length ? tiers : []) {
++    const want = oldLines.map(norm);
++    const hits: number[] = [];
++    for (let i = 0; i + want.length <= usable; i++) {
++      if (want.every((w, j) => norm(lines[i + j]!) === w)) hits.push(i);
++    }
++    if (hits.length > 1) {
++      return { error: `old_text matches ${hits.length} places (lines ${hits.map((h) => h + 1).join(', ')}); add context` };
++    }
++    if (hits.length === 1) {
++      const at = hits[0]!;
++      let repl = newLines;
++      if (tier === 'indentation') {
++        const from = indentOf(oldLines);
++        const to = indentOf(lines.slice(at, at + oldLines.length));
++        repl = newLines.map((l) =>
++          l.trim() === '' ? '' : to + (l.startsWith(from) ? l.slice(from.length) : l.trimStart()),
++        );
++      }
++      const out = [...lines.slice(0, at), ...repl, ...lines.slice(at + oldLines.length)].join('\n');
++      return { content: out, applied: { from: at + 1, to: at + oldLines.length, tier, count: 1 } };
++    }
++  }
++
++  const firstLine = oldLines.find((l) => l.trim() !== '')?.trim();
++  const seen: number[] = [];
++  if (firstLine !== undefined) {
++    lines.forEach((l, i) => {
++      if (l.includes(firstLine)) seen.push(i + 1);
++    });
++  }
++  const hint = seen.length ? `; first line appears at line ${seen.slice(0, 5).join(', ')}` : '';
++  return { error: `old_text not found${hint}` };
+ }

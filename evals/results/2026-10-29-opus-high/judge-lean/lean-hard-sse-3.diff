@@ -1,0 +1,117 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse.test.ts b/sse.test.ts
+--- a/sse.test.ts	2026-10-29 16:56:54.743033445 +0000
++++ b/sse.test.ts	2026-10-29 16:58:15.851160915 +0000
+@@ -64,3 +64,50 @@
+   expect((await it.next()).value).toEqual({ data: 'second' });
+   expect((await it.next()).done).toBe(true);
+ });
++
++test('breaking out early cancels the body', async () => {
++  let cancelled = false;
++  const enc = new TextEncoder();
++  const body = new ReadableStream<Uint8Array>({
++    pull(c) {
++      c.enqueue(enc.encode('data: a\n\n'));
++    },
++    cancel() {
++      cancelled = true;
++    },
++  });
++  for await (const m of readSse(body)) {
++    expect(m).toEqual({ data: 'a' });
++    break;
++  }
++  expect(cancelled).toBe(true);
++});
++
++test('a body error reaches the caller and releases the lock', async () => {
++  const enc = new TextEncoder();
++  let pulls = 0;
++  const body = new ReadableStream<Uint8Array>({
++    pull(c) {
++      if (pulls++ === 0) c.enqueue(enc.encode('data: a\n\n'));
++      else c.error(new Error('boom'));
++    },
++  });
++  const it = readSse(body);
++  expect((await it.next()).value).toEqual({ data: 'a' });
++  await expect(it.next()).rejects.toThrow('boom');
++  expect(body.locked).toBe(false);
++});
++
++test('CRLF split between \\r and \\n', async () => {
++  const enc = new TextEncoder();
++  const parts = ['data: a\r', '\n\r', '\ndata: b\r\n\r\n'];
++  const body = new ReadableStream<Uint8Array>({
++    start(c) {
++      for (const p of parts) c.enqueue(enc.encode(p));
++      c.close();
++    },
++  });
++  const out: SseMessage[] = [];
++  for await (const m of readSse(body)) out.push(m);
++  expect(out).toEqual([{ data: 'a' }, { data: 'b' }]);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse.ts b/sse.ts
+--- a/sse.ts	2026-10-29 16:56:54.743002841 +0000
++++ b/sse.ts	2026-10-29 16:58:28.803161685 +0000
+@@ -15,7 +15,58 @@
+ // - When the body ends without a final blank line, data lines still pending (including a last line with no
+ //   newline) are yielded as one last message.
+ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseMessage> {
+-  throw new Error('not implemented');
++  const reader = body.getReader();
++  const decoder = new TextDecoder();
++  let buffer = '';
++  let event: string | undefined;
++  let dataLines: string[] = [];
++
++  // Handles one line (without its \n); returns the message it completes, if any.
++  const takeLine = (line: string): SseMessage | undefined => {
++    if (line.endsWith('\r')) line = line.slice(0, -1);
++    if (line === '') {
++      const data = dataLines.join('\n');
++      const message = dataLines.length > 0 ? (event !== undefined ? { event, data } : { data }) : undefined;
++      event = undefined;
++      dataLines = [];
++      return message;
++    }
++    if (line.startsWith(':')) return undefined;
++    const colon = line.indexOf(':');
++    const field = colon === -1 ? line : line.slice(0, colon);
++    let value = colon === -1 ? '' : line.slice(colon + 1);
++    if (value.startsWith(' ')) value = value.slice(1);
++    if (field === 'event') event = value;
++    else if (field === 'data') dataLines.push(value);
++    return undefined;
++  };
++
++  try {
++    while (true) {
++      const { value, done } = await reader.read();
++      if (done) break;
++      buffer += decoder.decode(value, { stream: true });
++      const lines = buffer.split('\n');
++      buffer = lines.pop()!;
++      for (const line of lines) {
++        const message = takeLine(line);
++        if (message) yield message;
++      }
++    }
++    buffer += decoder.decode();
++    if (buffer !== '') {
++      const message = takeLine(buffer);
++      if (message) yield message;
++    }
++    const message = takeLine('');
++    if (message) yield message;
++  } finally {
++    try {
++      await reader.cancel();
++    } finally {
++      reader.releaseLock();
++    }
++  }
+ }
+ 
+ export function streamFromString(text: string, chunkSize = 7): ReadableStream<Uint8Array> {

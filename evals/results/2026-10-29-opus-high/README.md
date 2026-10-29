@@ -231,3 +231,37 @@ What it says:
   - It is not counted here as caused by this line, but a hung test can still cost a run.
 
 Spent for this section: $0.34 + $0.06 Haiku (Anthropic API). The panel ($4.39) and the plan and review ran at API price on the owner's subscription.
+
+## Two arms that lost: a shorter prompt, and Sonnet as the writer (three runs)
+
+Both start from the shape arm above and change one thing. `steady.py` counts the tasks whose three runs all got the same panel outcome, and the tasks won in all three runs: `python3 steady.py judge-shape:shape judge-lean:lean judge-sonnet:sonnet`.
+
+- **Shorter prompt** (`auto-lean.jsonl`, `judge-lean/`; the patch is `judge-lean/lean-prompts.patch`).
+  - Idea: cut the prompt down to the goal, the rules and how to verify, then add back only what the model misses. This follows Addy Osmani's "You're probably overprompting Claude" (2026-10-29), and Claude Code's team cut over 80% of its system prompt for Opus 5 with no loss.
+  - Change: the plan prompt was cut by about 60% to four bullets, and the writer's probe step to one sentence.
+- **Sonnet as the writer** (`auto-sonnet.jsonl`, `judge-sonnet/`).
+  - Idea: Haiku keeps missing the same multi-step cases, so a stronger writer might win more and vary less.
+  - Change: `--model anthropic/claude-sonnet-5-5 --effort medium`, with the shape arm's prompts.
+
+| 30 runs | pass | wins / losses / tie or split | steady tasks | tasks won 3 of 3 | review sent back | time per task | writer cost per task |
+|---|---|---|---|---|---|---|---|
+| shape (Haiku) | 28/30 | 23 / 3 / 2 | 7 of 10 | 7 | 14 of 30 | 159 s | $0.011 |
+| shorter prompt (Haiku) | 30/30 | 13 / 13 / 4 | 4 of 10 | 1 | 23 of 30 | 138 s | $0.010 |
+| Sonnet writer | 30/30 | 14 / 10 / 6 | 6 of 10 | 3 | 19 of 30 | 123 s | $0.103 |
+
+| | correctness | quality | scope | tests | security |
+|---|---|---|---|---|---|
+| shorter / CC Opus high | 8.43 / 8.28 | 8.05 / 8.17 | 8.90 / 8.80 | 6.80 / 5.58 | 9.07 / 8.97 |
+| Sonnet / CC Opus high | 8.50 / 8.10 | 7.85 / 8.23 | 8.78 / 8.88 | 7.62 / 5.47 | 9.07 / 8.85 |
+
+What it says:
+- **The shorter prompt lost ten wins.**
+  - hard-memo-async, hard-pool and hard-csv-stream lost every run, and the review sent back 23 of 30.
+  - For a Haiku writer, the plan's rule-by-rule lines are what make the result hold and repeat. They are not overprompting.
+  - The article's advice was measured on Opus and Fable, and Anthropic's Haiku 5.5 guide still adds verification lines.
+- **Sonnet won fewer than Haiku and was not steadier.**
+  - It wrote shorter diffs with fewer tests: memo 165 lines against 235, and a tests score of 7.62 against 8.54.
+  - It made the same miss on memo: `fn` called after eviction, so a synchronous throw evicts a live key.
+  - It was faster (123 s, since the fix step took 9 s) and its writer cost nine times as much. The gap to Claude Code on these tasks is in what the plan names, not in the writer model.
+
+Spent for this section: $0.30 Haiku, $3.09 Sonnet (Anthropic API). The panels ($4.21 and $4.41) and the plans and reviews ran at API price on the owner's subscription.

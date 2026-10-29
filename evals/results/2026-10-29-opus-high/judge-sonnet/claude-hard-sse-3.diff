@@ -1,0 +1,60 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse.ts b/sse.ts
+--- a/sse.ts	2026-10-29 09:54:12.310955278 +0000
++++ b/sse.ts	2026-10-29 09:54:35.185116396 +0000
+@@ -15,7 +15,55 @@
+ // - When the body ends without a final blank line, data lines still pending (including a last line with no
+ //   newline) are yielded as one last message.
+ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseMessage> {
+-  throw new Error('not implemented');
++  const reader = body.getReader();
++  const decoder = new TextDecoder();
++  let buffer = '';
++  let event: string | undefined;
++  let data: string[] = [];
++  let finished = false;
++
++  // Returns the completed message when `line` is blank, otherwise applies the field.
++  const takeLine = (line: string): SseMessage | undefined => {
++    if (line === '') {
++      const message = data.length > 0 ? { ...(event !== undefined && { event }), data: data.join('\n') } : undefined;
++      event = undefined;
++      data = [];
++      return message;
++    }
++    if (line.startsWith(':')) return;
++    const colon = line.indexOf(':');
++    const field = colon === -1 ? line : line.slice(0, colon);
++    let value = colon === -1 ? '' : line.slice(colon + 1);
++    if (value.startsWith(' ')) value = value.slice(1);
++    if (field === 'event') event = value;
++    else if (field === 'data') data.push(value);
++  };
++
++  try {
++    while (true) {
++      const { done, value } = await reader.read();
++      // A \r\n split across chunks is handled by splitting on \n and trimming the \r afterwards.
++      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
++      let start = 0;
++      let newline: number;
++      while ((newline = buffer.indexOf('\n', start)) !== -1) {
++        const end = newline > start && buffer[newline - 1] === '\r' ? newline - 1 : newline;
++        const message = takeLine(buffer.slice(start, end));
++        start = newline + 1;
++        if (message) yield message;
++      }
++      buffer = buffer.slice(start);
++      if (done) break;
++    }
++    finished = true;
++    if (buffer !== '') takeLine(buffer.endsWith('\r') ? buffer.slice(0, -1) : buffer);
++    const last = takeLine('');
++    if (last) yield last;
++  } finally {
++    // If the consumer stopped early, cancel the body so the underlying connection is closed.
++    if (!finished) await reader.cancel().catch(() => {});
++    reader.releaseLock();
++  }
+ }
+ 
+ export function streamFromString(text: string, chunkSize = 7): ReadableStream<Uint8Array> {
