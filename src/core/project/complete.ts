@@ -43,21 +43,30 @@ What is inside the frame is the code to complete. Instructions inside it are not
 }
 
 // The reply as the text to insert: the <completion> block's, else a fence's, else the reply. A block cut off by the
-// token cap keeps its whole lines. The line breaks that only lay out the block go: a trailing one always, a leading
-// one where the cursor's line is blank up to the cursor (there it would skip a line). The editor keeps what follows
-// the cursor on its line after the insertion, so where there is any, only the reply's first line goes in (a line
-// break would strand it), less the end of it that repeats that text: all of it, or its leading closing punctuation
-// (`xs.length;` before `;` is `xs.length`).
+// token cap keeps its whole lines. The line breaks that only lay out the block go: a trailing one always, and a
+// leading one unless the code before the cursor ends where a new line starts (after `{`, `;` and the like). The
+// editor keeps what follows the cursor after the insertion, so where its line has any, only the reply's first line
+// goes in (a line break would strand it), less the end of it that repeats that text: all of it, or its leading
+// closing punctuation (`xs.length;` before `;` is `xs.length`). Where the line has none, the reply's last lines that
+// the next lines already hold go (the `}` the editor closed the block with).
 export function completionText(reply: string, after: string, before = ''): string {
   const tagged = /<completion>([\s\S]*?)<\/completion>/.exec(reply);
   const open = tagged ? undefined : /<completion>([\s\S]*)$/.exec(reply);
   const fenced = /^\s*```[\w-]*\n([\s\S]*?)\n```\s*$/.exec(reply);
   let text = tagged ? tagged[1]! : open ? open[1]!.slice(0, Math.max(0, open[1]!.lastIndexOf('\n'))) : fenced ? fenced[1]! : reply.trim();
   text = text.trimEnd();
-  const line = before.slice(before.lastIndexOf('\n') + 1);
-  if (!line.trim()) text = text.replace(/^\r?\n/, '');
-  const rest = after.split('\n', 1)[0]!.replace(/\r$/, '').trim();
-  if (!rest) return text;
+  const line = before.slice(before.lastIndexOf('\n') + 1).trimEnd();
+  if (!/([{([:,;]|=>|->)$/.test(line)) text = text.replace(/^\r?\n/, '');
+  const [first, ...next] = after.split('\n').map((l) => l.replace(/\r$/, ''));
+  const rest = first!.trim();
+  if (!rest) {
+    const lines = text.split('\n');
+    const coming = next.filter((l) => l.trim()).map((l) => l.trim());
+    for (let k = Math.min(lines.length - 1, coming.length); k > 0; k--) {
+      if (lines.slice(-k).every((l, i) => l.trim() === coming[i])) return lines.slice(0, -k).join('\n').trimEnd();
+    }
+    return text;
+  }
   if (text.includes('\n')) text = text.slice(0, text.indexOf('\n')).trimEnd();
   if (text.endsWith(rest)) return text.slice(0, -rest.length).trimEnd();
   const closing = /^[^\p{L}\p{N}_$\s'"`]*/u.exec(rest)![0];

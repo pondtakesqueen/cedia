@@ -42,9 +42,14 @@ describe('tab completion', () => {
     expect(completionText('```js\na + b;\n```', '')).toBe('a + b;');
     // The editor keeps `);` after the cursor, so a reply that writes it again would show it twice.
     expect(completionText('<completion>a, b);</completion>', ');\nnext()')).toBe('a, b');
-    // The block's own line breaks go; a leading one stays where the cursor ends a line with code on it.
+    // The block's own line breaks go; a leading one stays where the code before the cursor ends a line.
     expect(completionText('<completion>\n  x();\n</completion>', '', '  ')).toBe('  x();');
+    expect(completionText('<completion>\nis_empty()</completion>', '', 'if !notes.')).toBe('is_empty()');
     expect(completionText('<completion>\n  x();\n</completion>', '', 'if (a) {')).toBe('\n  x();');
+    // The `}` the editor already closed the block with is not offered again.
+    expect(completionText('<completion>length;\n}</completion>', '\n}\n', '  return xs.')).toBe('length;');
+    expect(completionText('<completion>xs[i];\n  }\n}</completion>', '\n  }\n}\n', '  return ')).toBe('xs[i];');
+    expect(completionText('<completion>}</completion>', '\n}', '  ')).toBe('}');
     // Cut off by the token cap: the whole lines only.
     expect(completionText('<completion>a();\nb();\nc(1, ', '')).toBe('a();\nb();');
     expect(completionText('<completion>a(1, ', '')).toBe('');
