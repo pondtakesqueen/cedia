@@ -1044,6 +1044,33 @@
       ],
       "additionalProperties": false
     },
+    "Failure": {
+      "type": "object",
+      "properties": {
+        "cause": {
+          "$ref": "#/definitions/FailureCause"
+        },
+        "code": {
+          "$ref": "#/definitions/AttemptErrorCode"
+        },
+        "status": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "cause"
+      ],
+      "additionalProperties": false
+    },
+    "FailureCause": {
+      "type": "string",
+      "enum": [
+        "api_error",
+        "privacy",
+        "refusal",
+        "empty_reply"
+      ]
+    },
     "ForkOf": {
       "type": "object",
       "properties": {
@@ -1107,6 +1134,15 @@
         },
         "cacheHitRatio": {
           "type": "number"
+        },
+        "modelUsage": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/ModelUsage"
+          }
+        },
+        "failure": {
+          "$ref": "#/definitions/Failure"
         },
         "inputRepairs": {
           "type": "object",
@@ -1806,6 +1842,44 @@
         "modes"
       ],
       "additionalProperties": false
+    },
+    "ModelUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "costUsd": {
+          "type": "number"
+        },
+        "requests": {
+          "type": "number"
+        },
+        "uncached": {
+          "type": "number"
+        },
+        "cacheRead": {
+          "type": "number"
+        },
+        "cacheWrite": {
+          "type": "number"
+        },
+        "cacheWrite1h": {
+          "type": "number"
+        },
+        "output": {
+          "type": "number"
+        },
+        "reasoning": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "cacheRead",
+        "cacheWrite",
+        "costUsd",
+        "output",
+        "requests",
+        "uncached"
+      ]
     },
     "PermissionEntry": {
       "type": "object",

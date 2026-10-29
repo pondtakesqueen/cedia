@@ -152,6 +152,10 @@ describe('cedia -p (offline, faux)', () => {
     const ok = cedia([call('c1', 'echo good > f.txt'), quota, call('c2', 'grep -q good f.txt'), reply('done')], args);
     const result = JSON.parse(ok.out);
     expect(result).toMatchObject({ subtype: 'success', numTurns: 4, evidence: { changed: ['f.txt'], unverified: [] } });
+    // Usage by model adds up across the two sessions to the run's totals.
+    expect(Object.keys(result.modelUsage).sort()).toEqual(['faux/fallback', 'faux/scripted']);
+    expect(result.modelUsage['faux/scripted'].requests + result.modelUsage['faux/fallback'].requests).toBe(4);
+    expect(result.modelUsage['faux/scripted'].output + result.modelUsage['faux/fallback'].output).toBe(result.usage.output);
     const logs = sessions(ok.home);
     expect(logs).toHaveLength(2);
     const second = logs.find((l) => head(l.events).parentSession)!;
@@ -547,7 +551,7 @@ describe('cedia -p (offline, faux)', () => {
   test('the DeepSeek API fallback is refused in a repo not marked public', () => {
     const r = cedia([{ error: { code: 'quota', status: 429, message: 'usage limit reached' } }], ['-p', 'x', '--output-format', 'json', '--fallback', 'deepseek-api']);
     expect(r.code).toBe(1);
-    expect(JSON.parse(r.out).result).toContain('deepseek/deepseek-v4.1-flash trains on prompts');
+    expect(JSON.parse(r.out)).toMatchObject({ result: expect.stringContaining('deepseek/deepseek-v4.1-flash trains on prompts'), failure: { cause: 'privacy' } });
   });
 
   test('a missing key is a note, since a proxy may add credentials; the alternate name counts', () => {

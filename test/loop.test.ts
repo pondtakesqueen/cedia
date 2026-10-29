@@ -216,6 +216,9 @@ describe('loop', () => {
     ]);
     const res = await runPrompt(opts, 'hi');
     expect(res.subtype).toBe('success');
+    expect(res.failure).toBeUndefined();
+    // One session on one model: its usage by model is the whole of it.
+    expect(res.modelUsage).toEqual({ [FAUX_MODEL.ref]: { ...res.usage, costUsd: res.costUsd, requests: 1 } });
     expect(sleeps).toEqual([1234, 2000]);
     expect(of(log.events, 'attempt').map((a) => [a.n, a.error?.code])).toEqual([[1, 'rate_limit'], [2, 'overloaded'], [3, undefined]]);
     expect(of(log.events, 'request')).toHaveLength(1);
@@ -255,7 +258,7 @@ describe('loop', () => {
     expect(twice.sleeps).toEqual([5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN, 5 * MIN]);
     // A spent balance says no time: waiting will not bring it back.
     const balance = setup([{ error: { code: 'quota', status: 402, message: 'Insufficient Balance' } }, { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN });
-    expect((await runPrompt(balance.opts, 'hi')).subtype).toBe('error_during_execution');
+    expect(await runPrompt(balance.opts, 'hi')).toMatchObject({ subtype: 'error_during_execution', failure: { cause: 'api_error', code: 'quota', status: 402 } });
     expect(balance.sleeps).toEqual([]);
   });
 
@@ -264,6 +267,7 @@ describe('loop', () => {
     const { log, opts } = setup([err, err, err, err, err, err]);
     const res = await runPrompt(opts, 'hi');
     expect(res.subtype).toBe('error_during_execution');
+    expect(res.failure).toEqual({ cause: 'api_error', code: 'server', status: 500 });
     expect(of(log.events, 'attempt')).toHaveLength(5);
   });
 
@@ -272,6 +276,7 @@ describe('loop', () => {
       const { log, opts } = setup([{ error: { code, message: code } }, { blocks: [text('unreachable')] }]);
       const res = await runPrompt(opts, 'hi');
       expect(res.subtype).toBe('error_during_execution');
+      expect(res.failure).toEqual({ cause: 'api_error', code });
       expect(of(log.events, 'attempt')).toHaveLength(1);
     }
   });
@@ -601,13 +606,14 @@ describe('malformed turns', () => {
     const failed = await runPrompt(empty.opts, 'go');
     expect(failed.subtype).toBe('error_during_execution');
     expect(failed.result).toContain('without a reply');
+    expect(failed.failure).toEqual({ cause: 'empty_reply' });
     expect(of(empty.log.events, 'turn_end')[0]!.reason).toBe('error');
     expectPaired(empty.log.events);
   });
 
   test('a refusal is not a success', async () => {
     const { opts } = setup([{ blocks: [text('I will not do that.')], stop: 'refusal' }]);
-    expect(await runPrompt(opts, 'go')).toMatchObject({ subtype: 'error_during_execution', result: 'I will not do that.' });
+    expect(await runPrompt(opts, 'go')).toMatchObject({ subtype: 'error_during_execution', result: 'I will not do that.', failure: { cause: 'refusal' } });
     const silent = setup([{ blocks: [], stop: 'refusal' }]);
     expect((await runPrompt(silent.opts, 'go')).result).toContain('declined');
   });

@@ -52,7 +52,7 @@ import { callText, CLASSIFIER_SYSTEM, classifyPrompt, MAX_INPUT, namedFiles, ver
 import { changedLines, fixPrompt, parseVerdict, reviewPrompt, SMALL_CHANGE_LINES, verifyFindings, type ReviewOutcome } from '../../core/trust/review.ts';
 import { existingTests, leavesTestsAlone, PROTECTED_TEST_REASON } from '../../core/trust/tests.ts';
 import { goalContinuePrompt, goalPlanPrompt, goalPrompt, judgeWithPlan, MAX_GOAL_ROUNDS, parseCriteria, parseGoal, strategistPrompt, withCriteria, type GoalRound } from '../../core/trust/goal.ts';
-import { addUsage, hitRatio, ZERO_USAGE, type Effort, type JsonObject, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
+import { addUsage, hitRatio, ZERO_USAGE, type Effort, type JsonObject, type Spawned, type EventOf, type Evidence, type HeadlessResult, type ModelSpec, type ModelUsage, type Provider, type SessionEvent, type Step, type Timing } from '../../core/types.ts';
 import { startClaudeCode, type WarmClaudeCode } from './claude-code.ts';
 import { encode } from '../../protocol/index.ts';
 import { inert } from '../../core/trust/frame.ts';
@@ -202,6 +202,12 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
   const inputRepairs: Record<string, number> = {};
   for (const r of parts) for (const [k, v] of Object.entries(r.inputRepairs ?? {})) inputRepairs[k] = (inputRepairs[k] ?? 0) + v;
   const cacheMisses = parts.flatMap((r) => r.cacheMisses ?? []);
+  const modelUsage: Record<string, ModelUsage> = {};
+  for (const r of parts)
+    for (const [ref, m] of Object.entries(r.modelUsage ?? {})) {
+      const had = modelUsage[ref];
+      modelUsage[ref] = had ? { ...addUsage(had, m), costUsd: had.costUsd + m.costUsd, requests: had.requests + m.requests } : { ...m };
+    }
   return {
     ...rest,
     ...(peakContext ? { peakContext } : {}),
@@ -213,6 +219,7 @@ function combine(parts: HeadlessResult[], last: HeadlessResult, children: Set<He
     ...(Object.keys(inputRepairs).length ? { inputRepairs } : {}),
     ...(cacheMisses.length ? { cacheMisses } : {}),
     ...(evidence ? { evidence } : {}),
+    ...(Object.keys(modelUsage).length ? { modelUsage } : {}),
   };
 }
 
