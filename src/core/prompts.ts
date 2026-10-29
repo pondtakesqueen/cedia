@@ -14,7 +14,7 @@ const STOP_THOROUGH =
 // (evals/results/2026-10-29-haiku-effort/auto.jsonl). With it, auto is about even with Claude Code Opus high over three
 // runs (13-15, correctness 8.52 / 8.42; evals/results/2026-10-29-opus-high/).
 const PROBE_THOROUGH =
-  "\n- Before the report, probe your own change as a reviewer would: list the inputs the task and the code's doc comments imply that no visible test checks (empty, boundary, malformed or very large input, a throw or early stop midway, an alias or abbreviation a guard must still catch), run the risky ones against your code in one short script or test, fix what breaks, and add a test for each behaviour you changed or fixed.";
+  "\n- Before the report, probe your own change as a reviewer would: list the inputs the task and the code's doc comments imply that no visible test checks (empty, boundary, malformed or very large input, a throw or early stop midway, an alias or abbreviation a guard must still catch), run the risky ones against your code in one short script or test, fix what breaks, and add a test for each behaviour you changed or fixed. Keep each test fast: sizes that run in seconds, and no real waits.";
 
 // cedia's own base prompt. Stable across sessions: no paths, dates or per-process values (cache rule 1).
 const baseSystem = (thorough: boolean) => `You are cedia, a coding agent working in the user's repository through tools.
