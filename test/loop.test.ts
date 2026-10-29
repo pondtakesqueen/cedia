@@ -747,6 +747,30 @@ describe('plan overlap', () => {
     expectPaired(log.events);
   });
 
+  test('a turn that reads and writes before the plan: the read runs, the write comes back not started, then the plan', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cedia-overlap-'));
+    writeFileSync(join(dir, 'a.txt'), 'alpha\n');
+    const p = later();
+    const { log, opts } = setup(
+      [
+        { blocks: [toolUse('c1', 'read', { path: 'a.txt' }), toolUse('c2', 'bash', { command: 'echo x > b.txt' })] },
+        { blocks: [text('done')] },
+      ],
+      { cwd: dir, permission: ws, plan: { text: p.text, reminder } },
+    );
+    const run = runPrompt(opts, 'task');
+    setTimeout(() => p.settle('read a.txt first'), 20);
+    expect((await run).subtype).toBe('success');
+    const results = of(log.events, 'tool_result');
+    expect(results.find((e) => e.callId === 'c1')).toMatchObject({ status: 'completed' });
+    expect(results.find((e) => e.callId === 'c1')!.output.text).toContain('alpha');
+    expect(results.find((e) => e.callId === 'c2')).toMatchObject({ status: 'not_started', output: { text: PLAN_FIRST, isError: true } });
+    expect(existsSync(join(dir, 'b.txt'))).toBe(false);
+    const at = log.events.findIndex((e) => e.kind === 'reminder' && e.text === '<plan>read a.txt first</plan>');
+    expect(at).toBeGreaterThan(Math.max(...results.map((r) => log.events.indexOf(r))));
+    expectPaired(log.events);
+  });
+
   test('a turn that ends before the plan waits for it, and the session goes on with it', async () => {
     const p = later();
     let delivered = 0;
