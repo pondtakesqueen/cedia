@@ -50,6 +50,11 @@ describe('tab completion', () => {
     expect(completionText('<completion>length;\n}</completion>', '\n}\n', '  return xs.')).toBe('length;');
     expect(completionText('<completion>xs[i];\n  }\n}</completion>', '\n  }\n}\n', '  return ')).toBe('xs[i];');
     expect(completionText('<completion>}</completion>', '\n}', '  ')).toBe('}');
+    // A closer the reply never opened ends a block that goes on below; one it opened stays.
+    expect(completionText('<completion>xs[i];\n  }</completion>', '\n  return 0;\n}', '  const x = ')).toBe('xs[i];');
+    expect(completionText('<completion>if (a) {\n  x();\n}</completion>', '\n  return 0;\n}', '  ')).toBe('if (a) {\n  x();\n}');
+    // Mid-line after `:` or `(`, a reply that starts on a new line still goes on this one.
+    expect(completionText('<completion>\nbefore + text</completion>', ', startColumn: 1 }', '{ insertText: ')).toBe('before + text');
     // Cut off by the token cap: the whole lines only.
     expect(completionText('<completion>a();\nb();\nc(1, ', '')).toBe('a();\nb();');
     expect(completionText('<completion>a(1, ', '')).toBe('');

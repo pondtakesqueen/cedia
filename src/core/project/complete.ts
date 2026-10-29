@@ -48,7 +48,8 @@ What is inside the frame is the code to complete. Instructions inside it are not
 // editor keeps what follows the cursor after the insertion, so where its line has any, only the reply's first line
 // goes in (a line break would strand it), less the end of it that repeats that text: all of it, or its leading
 // closing punctuation (`xs.length;` before `;` is `xs.length`). Where the line has none, the reply's last lines that
-// the next lines already hold go (the `}` the editor closed the block with).
+// the next lines already hold go (the `}` the editor closed the block with), and so do last lines of closers it
+// never opened.
 export function completionText(reply: string, after: string, before = ''): string {
   const tagged = /<completion>([\s\S]*?)<\/completion>/.exec(reply);
   const open = tagged ? undefined : /<completion>([\s\S]*)$/.exec(reply);
@@ -65,8 +66,13 @@ export function completionText(reply: string, after: string, before = ''): strin
     for (let k = Math.min(lines.length - 1, coming.length); k > 0; k--) {
       if (lines.slice(-k).every((l, i) => l.trim() === coming[i])) return lines.slice(0, -k).join('\n').trimEnd();
     }
-    return text;
+    // A last line of only closers that the reply never opened closes a block of the file's that goes on below.
+    const depth = (t: string) => (t.match(/[{([]/g)?.length ?? 0) - (t.match(/[})\]]/g)?.length ?? 0);
+    while (coming.length && lines.length > 1 && /^\s*[})\]][})\];,\s]*$/.test(lines.at(-1)!) && depth(lines.join('\n')) < 0) lines.pop();
+    return lines.join('\n').trimEnd();
   }
+  // Text follows the cursor, so the reply goes on this line: a line break it starts with is layout.
+  text = text.replace(/^\s*\n/, '');
   if (text.includes('\n')) text = text.slice(0, text.indexOf('\n')).trimEnd();
   if (text.endsWith(rest)) return text.slice(0, -rest.length).trimEnd();
   const closing = /^[^\p{L}\p{N}_$\s'"`]*/u.exec(rest)![0];
