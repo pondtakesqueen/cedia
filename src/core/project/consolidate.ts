@@ -4,7 +4,7 @@ import { cediaHome } from '../config.ts';
 import { loadPrivacy } from '../config.ts';
 import { loadRoles } from '../config.ts';
 import { projectKey } from '../session/log.ts';
-import { SessionLog } from '../session/log.ts';
+import { SessionLog, sessionPath } from '../session/log.ts';
 import { resolveModel } from '../providers/catalog.ts';
 import { providerFor } from '../providers/index.ts';
 import { runPrompt } from '../loop/run.ts';
@@ -57,14 +57,16 @@ export function shouldConsolidate(home: string, slug: string, now = new Date(), 
   return now.getTime() - last >= minIntervalMs;
 }
 
-// Gather the project's session transcripts into one text block for the model to read.
+// Gather the project's session transcripts into one text block for the model to read: the newest writer sessions
+// that fit in the cap, oldest of them first. A session another role wrote (triage, plan, a tab completion, a memory
+// pass like this one) is not the owner's work and is left out, so a consolidation never reads its own sessions.
 export function scanTranscripts(home: string, slug: string, cap = 40_000): { text: string; count: number } {
   const dir = join(home, 'sessions', slug);
   if (!existsSync(dir)) return { text: '', count: 0 };
   const files = readdirSync(dir)
     .filter((f) => f.endsWith('.jsonl'))
     .map((f) => ({ f, mtime: statSync(join(dir, f)).mtimeMs }))
-    .sort((a, b) => a.mtime - b.mtime)
+    .sort((a, b) => b.mtime - a.mtime)
     .map((x) => x.f);
   const chunks: string[] = [];
   let used = 0;
@@ -75,9 +77,14 @@ export function scanTranscripts(home: string, slug: string, cap = 40_000): { tex
       const raw = readFileSync(join(dir, f), 'utf8');
       const lines = raw.split('\n').filter(Boolean);
       const parts: string[] = [];
+      let side = false;
       for (const line of lines) {
         try {
-          const e = JSON.parse(line) as { kind?: string; text?: string; blocks?: { type: string; text?: string }[] };
+          const e = JSON.parse(line) as { kind?: string; role?: string; text?: string; blocks?: { type: string; text?: string }[] };
+          if (e.kind === 'session' && e.role !== undefined && e.role !== 'code') {
+            side = true;
+            break;
+          }
           if (e.kind === 'user' && typeof e.text === 'string') parts.push(`User: ${e.text}`);
           if (e.kind === 'assistant' && Array.isArray(e.blocks)) {
             const t = e.blocks.flatMap((b) => (b.type === 'text' && typeof b.text === 'string' ? [b.text] : [])).join(' ');
@@ -87,6 +94,7 @@ export function scanTranscripts(home: string, slug: string, cap = 40_000): { tex
           // skip bad line
         }
       }
+      if (side) continue;
       body = parts.join('\n');
     } catch {
       continue;
@@ -103,7 +111,7 @@ export function scanTranscripts(home: string, slug: string, cap = 40_000): { tex
     used += head.length;
     count++;
   }
-  return { text: chunks.join('\n'), count };
+  return { text: chunks.reverse().join('\n'), count };
 }
 
 const SYSTEM = `You are consolidating a project's memory. Read the session transcripts and keep durable facts as memory notes for later sessions: a command that works, a decision and its reason, where something lives, a trap you hit. Not progress on a task and not anything the code or git history already says. Each note at most ${MAX_NOTE} characters, one fact per call. Call the remember tool once per fact you decide to keep; call it no more than 10 times. If nothing durable is worth keeping, call nothing.`;
@@ -149,7 +157,8 @@ export async function consolidateMemory(opts: {
   const fauxScript = process.env.CEDIA_FAUX_SCRIPT ? JSON.parse(readFileSync(process.env.CEDIA_FAUX_SCRIPT, 'utf8')) : undefined;
   const provider = providerFor(model, { fauxScript });
   const id = crypto.randomUUID();
-  const log = SessionLog.create({ id, path: null });
+  // Logged like any session, so `cedia usage` counts what it cost; scanTranscripts leaves its role out.
+  const log = SessionLog.create({ id, path: sessionPath(opts.cwd, id, home) });
   const privacy = loadPrivacy(opts.cwd, undefined);
 
   const prompt = `Consolidate memory for this project. Here are the recent session transcripts:\n\n${scan.text}\n\nKeep the durable facts with the remember tool.`;
