@@ -45,6 +45,17 @@ describe('review', () => {
     expect(fixPrompt('anthropic/claude-sonnet-5-5', 'a.ts:3')).toContain('<review>\na.ts:3\n</review>');
   });
 
+  test('a review that may probe is asked to run the inputs no test checks; one that may not, to write them as test cases', () => {
+    const probe = reviewPrompt('t', undefined, '+x', { probe: true });
+    expect(probe).toContain("Probe the change before you judge it: run the inputs the task and the doc comments imply that no test checks against the changed code with `bun -e '<code>'`");
+    expect(probe).toContain('Commands other than reads, the declared checks and bun -e are denied.');
+    expect(probe).not.toContain('may be denied');
+    const plain = reviewPrompt('t', undefined, '+x');
+    expect(plain).toContain('Commands other than reads and the declared checks may be denied');
+    expect(plain).not.toContain('bun -e');
+    expect(reviewPrompt('t', undefined, '+x', { probe: false })).toBe(plain);
+  });
+
   test('a review the user asks for: a long PR diff is cut, not left out; untracked names are quoted and inert', () => {
     const long = '+x\n'.repeat(MAX_REVIEW_DIFF);
     const pr = askedReviewPrompt({ kind: 'pr', number: '3', title: 'T', body: '' }, long);

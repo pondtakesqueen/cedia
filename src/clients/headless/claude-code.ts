@@ -1,3 +1,5 @@
+import { realpathSync } from 'node:fs';
+
 // Runs one role step through the user's own Claude Code CLI, so the plan and review roles can use their Claude
 // subscription the way Anthropic allows: by running Claude Code itself. cedia never reads or sends its
 // credentials. The step is read-only by Claude Code's own rules: only the listed tools exist, and dontAsk denies
@@ -6,11 +8,15 @@
 // no MCP server (.mcp.json) and loads no custom commands; its file tools stay in the working directory. The login
 // is untouched (unlike --bare, which reads no keychain).
 //
+// A step with `sandbox` may run commands (the review's probes) only inside Claude Code's own OS sandbox: no network,
+// no writes to the working directory, no retry outside it, and an exit at start when the sandbox cannot run, which
+// by default would run the commands unsandboxed. Each command must still match an allow rule.
+//
 // The prompt goes in on stdin (stream-json), so a step can start before its prompt is known: Claude Code takes
 // seconds to start (4.7 s from spawn to its first request on 2026-10-28, against 0.16 s from the prompt to the
 // request once started), and the run spends them while the triage or the writer works instead of after.
 
-export type ClaudeCodeStep = { prompt: string; model: string; effort?: string; cwd: string; allowed: string[]; signal?: AbortSignal; gitStatus?: boolean };
+export type ClaudeCodeStep = { prompt: string; model: string; effort?: string; cwd: string; allowed: string[]; signal?: AbortSignal; gitStatus?: boolean; sandbox?: boolean };
 export type ClaudeCodeResult = { ok: boolean; text: string; sessionId: string; costUsd?: number; turns?: number; apiMs?: number; error?: string };
 // A step started ahead of its prompt: run it once, or cancel it before any request is sent.
 export type WarmClaudeCode = { run(prompt: string): Promise<ClaudeCodeResult>; cancel(): void };
@@ -18,9 +24,21 @@ export type WarmClaudeCode = { run(prompt: string): Promise<ClaudeCodeResult>; c
 // Keys that would switch Claude Code from the subscription to API billing, and cedia's own settings.
 const STRIPPED = /^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CEDIA_.*|OPENCODE_API_KEY|DEEPSEEK_API_KEY)$/;
 
+// Claude Code's sandbox settings for a step that runs commands (--settings applies under --restricted).
+export const sandboxSettings = (cwd: string) => ({
+  sandbox: { enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: false, network: { allowedDomains: [] }, filesystem: { denyWrite: [realCwd(cwd)] } },
+});
+const realCwd = (cwd: string) => {
+  try {
+    return realpathSync(cwd);
+  } catch {
+    return cwd;
+  }
+};
+
 export function claudeCodeArgs(step: Omit<ClaudeCodeStep, 'prompt'>): string[] {
   const tools = [...new Set(step.allowed.map((a) => a.replace(/\(.*$/, '')))];
-  return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--model', step.model, ...(step.effort ? ['--effort', step.effort] : []), '--tools', tools.join(','), '--permission-mode', 'dontAsk', '--no-session-persistence', '--restricted', '--strict-mcp-config', '--disable-slash-commands', '--allowedTools', ...step.allowed];
+  return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--model', step.model, ...(step.effort ? ['--effort', step.effort] : []), '--tools', tools.join(','), '--permission-mode', 'dontAsk', '--no-session-persistence', '--restricted', '--strict-mcp-config', '--disable-slash-commands', ...(step.sandbox ? ['--settings', JSON.stringify(sandboxSettings(step.cwd))] : []), '--allowedTools', ...step.allowed];
 }
 
 export function claudeCodeEnv(step: Pick<ClaudeCodeStep, 'gitStatus'>, from: Record<string, string | undefined> = process.env): Record<string, string> {

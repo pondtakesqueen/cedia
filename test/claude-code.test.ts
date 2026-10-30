@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { claudeCodeEnv, runClaudeCode, startClaudeCode } from '../src/clients/headless/claude-code.ts';
+import { claudeCodeArgs, claudeCodeEnv, runClaudeCode, sandboxSettings, startClaudeCode } from '../src/clients/headless/claude-code.ts';
 
 const fake = (body: string) => {
   const dir = mkdtempSync(join(tmpdir(), 'cedia-cc-'));
@@ -56,4 +56,16 @@ test('the review goes without the git status Claude Code takes at start; keys th
   const from = { PATH: '/bin', ANTHROPIC_API_KEY: 'k', CEDIA_HOME: '/h' };
   expect(claudeCodeEnv({}, from)).toEqual({ PATH: '/bin' });
   expect(claudeCodeEnv({ gitStatus: false }, from)).toEqual({ PATH: '/bin', CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: '1' });
+});
+
+test('a step with sandbox runs its commands only in Claude Code\'s sandbox, which must start and may not write the tree', () => {
+  expect(claudeCodeArgs(step)).not.toContain('--settings');
+  const args = claudeCodeArgs({ ...step, sandbox: true, allowed: ['Read', 'Bash(bun -e:*)'] });
+  const settings = JSON.parse(args[args.indexOf('--settings') + 1]!);
+  expect(settings).toEqual(sandboxSettings(step.cwd));
+  expect(settings.sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false, autoAllowBashIfSandboxed: false, network: { allowedDomains: [] } });
+  expect(settings.sandbox.filesystem.denyWrite).toEqual([realpathSync(step.cwd)]);
+  // Still restricted, and still only what the allow rules name.
+  expect(args).toContain('--restricted');
+  expect(args.slice(args.indexOf('--allowedTools') + 1)).toEqual(['Read', 'Bash(bun -e:*)']);
 });
