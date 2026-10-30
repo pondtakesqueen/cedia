@@ -1,0 +1,285 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.rules.test.ts b/shell.rules.test.ts
+--- a/shell.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/shell.rules.test.ts	2026-10-30 02:07:19.595233900 +0000
+@@ -0,0 +1,97 @@
++import { expect, test } from 'bun:test';
++import { simpleCommands } from './shell.ts';
++
++test('separators split commands, including nested ones', () => {
++  expect(simpleCommands('a;b&c|d&&e||f\ng')).toEqual([['a'], ['b'], ['c'], ['d'], ['e'], ['f'], ['g']]);
++  expect(simpleCommands('a $(b $(c) d) e')).toEqual([['a', 'e'], ['b', 'd'], ['c']]);
++  expect(simpleCommands('a;')).toEqual([['a']]);
++});
++
++test('substitutions in double quotes run, single quotes do not', () => {
++  expect(simpleCommands('echo "x $(rm y)"')).toEqual([['echo', 'x '], ['rm', 'y']]);
++  expect(simpleCommands(`echo '$(rm y)'`)).toEqual([['echo', '$(rm y)']]);
++  expect(simpleCommands(`echo 'a;b' "c|d"`)).toEqual([['echo', 'a;b', 'c|d']]);
++});
++
++test('redirections: operator words, glued targets and quoted operators', () => {
++  expect(simpleCommands('a 2>&1 b')).toEqual([['a', 'b']]);
++  expect(simpleCommands('a >&2')).toEqual([['a']]);
++  expect(simpleCommands('a > f b')).toEqual([['a', 'b']]);
++  expect(simpleCommands('a 2> f b')).toEqual([['a', 'b']]);
++  expect(simpleCommands('a >> f b')).toEqual([['a', 'b']]);
++  expect(simpleCommands('a < f b')).toEqual([['a', 'b']]);
++  expect(simpleCommands('a &> f b')).toEqual([['a', 'b']]);
++  expect(simpleCommands('a >f 2>/dev/null b')).toEqual([['a', 'b']]);
++  expect(simpleCommands('a >"f g" b')).toEqual([['a', 'b']]);
++  expect(simpleCommands('echo ">" x')).toEqual([['echo', '>', 'x']]);
++});
++
++test('words: escapes, empty words and quotes', () => {
++  expect(simpleCommands(`a "" ''`)).toEqual([['a', '', '']]);
++  expect(simpleCommands('a\\ b c')).toEqual([['a b', 'c']]);
++  expect(simpleCommands('echo "a\\$b"')).toEqual([['echo', 'a$b']]);
++});
++
++test('assignments, keywords and wrappers are skipped only where they lead', () => {
++  expect(simpleCommands('A=1 B=2 x')).toEqual([['x']]);
++  expect(simpleCommands('while true; do x; done')).toEqual([['true'], ['x']]);
++  expect(simpleCommands('! x')).toEqual([['x']]);
++  expect(simpleCommands('echo A=1 if')).toEqual([['echo', 'A=1', 'if']]);
++  expect(simpleCommands('"A=1" x')).toEqual([['A=1', 'x']]);
++  expect(simpleCommands('env -u X A=1 x')).toEqual([['x']]);
++  expect(simpleCommands('nice -n5 x')).toEqual([['x']]);
++  expect(simpleCommands('sudo -- x')).toEqual([['x']]);
++  expect(simpleCommands('timeout 5 x')).toEqual([['x']]);
++  expect(simpleCommands('xargs -I{} x')).toEqual([['x']]);
++  expect(simpleCommands('stdbuf -o L x')).toEqual([['x']]);
++});
++
++test('shell -c and eval', () => {
++  expect(simpleCommands(`bash -e -c "rm -rf x"`)).toEqual([['rm', '-rf', 'x']]);
++  expect(simpleCommands(`sudo sh -c "eval rm x"`)).toEqual([['rm', 'x']]);
++  expect(simpleCommands('bash -c')).toEqual([['bash', '-c']]);
++  expect(simpleCommands('bash script.sh')).toEqual([['bash', 'script.sh']]);
++  expect(simpleCommands('eval')).toEqual([]);
++});
++
++test('empty commands and unbalanced input', () => {
++  expect(simpleCommands('A=1')).toEqual([]);
++  expect(simpleCommands('}')).toEqual([]);
++  expect(simpleCommands('( )')).toEqual([]);
++  expect(simpleCommands('$()')).toEqual([]);
++  expect(simpleCommands('sudo')).toEqual([['sudo']]);
++  expect(simpleCommands('env A=1')).toEqual([['env', 'A=1']]);
++  expect(simpleCommands('a )')).toBeNull();
++  expect(simpleCommands('$(x')).toBeNull();
++  expect(simpleCommands('`x')).toBeNull();
++  expect(simpleCommands('(x')).toBeNull();
++  expect(simpleCommands(`bash -c "'"`)).toBeNull();
++  expect(simpleCommands('a "$(x')).toBeNull();
++});
++
++test('a line equals its parts joined by a separator', () => {
++  const lines = ['ls -la', 'echo "hi there" $(date)', 'FOO=1 git push -f', '(cd y && make)', 'if true; then rm -r x; fi'];
++  for (const a of lines) {
++    for (const b of lines) {
++      for (const sep of [' ; ', ' && ', ' | ', '\n']) {
++        expect(simpleCommands(a + sep + b)).toEqual([...simpleCommands(a)!, ...simpleCommands(b)!]);
++      }
++    }
++  }
++});
++
++test('bash -c and eval give the same commands as the line itself', () => {
++  for (const a of ['ls -la', 'echo "hi there"', 'sudo git push -f', '(cd y && make)', 'FOO=1 rm x; ls']) {
++    expect(simpleCommands(`bash -c '${a}'`)).toEqual(simpleCommands(a));
++  }
++  for (const a of ['ls -la', 'sudo git push -f', '(cd y && make)', 'FOO=1 rm x; ls']) {
++    expect(simpleCommands(`eval ${a}`)).toEqual(simpleCommands(a));
++  }
++});
++
++test('a redirection after the command name changes nothing', () => {
++  for (const op of [' 2>/dev/null', ' >&2', ' &>log']) {
++    expect(simpleCommands(`ls${op} -la`)).toEqual([['ls', '-la']]);
++    expect(simpleCommands(`echo${op} "a b" c`)).toEqual([['echo', 'a b', 'c']]);
++  }
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.ts b/shell.ts
+--- a/shell.ts	2026-10-30 02:02:05.014490012 +0000
++++ b/shell.ts	2026-10-30 02:07:19.582961832 +0000
+@@ -37,5 +37,179 @@
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  return scan(command, 0, null)?.commands ?? null;
++}
++
++// A word as it is read: its text, the unquoted prefix `bare` (what an operator test sees), and whether it had quotes.
++type Word = { text: string; bare: string; quoted: boolean };
++
++const ASSIGNMENT = /^[A-Za-z_]\w*=/;
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
++// A redirection operator alone (`>`, `2>>`, `&>`, `>&`), and a word that starts with one (`>out`, `2>&1`).
++const OPERATOR = /^(\d*(>>?|<)|&>>?|>&)$/;
++const STARTS_WITH_OPERATOR = /^(\d*(>>?|<)|&>>?|>&)/;
++// Unquoted characters that need no special handling, taken in one step.
++const PLAIN = /[^ \t\r\n;&|()`$'"\\]+/y;
++
++// Scans src from `from` up to the `close` character (')' or '`'), or to the end when close is null. Returns the argv
++// of every command it reads, in order, and the index it stopped at; null when the input is unbalanced.
++function scan(src: string, from: number, close: string | null): { commands: string[][]; pos: number } | null {
++  const commands: string[][] = [];
++  let slot = 0; // index in commands of the command being read; its argv replaces this placeholder when it ends
++  let argv: Word[] = [];
++  let word: Word | null = null;
++  let skipNext = false; // the last word was a redirection operator, so the next word is its target
++
++  const begin = () => {
++    slot = commands.length;
++    commands.push([]);
++  };
++  const startWord = (): Word => (word ??= { text: '', bare: '', quoted: false });
++  const addText = (text: string) => {
++    const w = startWord();
++    w.text += text;
++    if (!w.quoted) w.bare += text;
++  };
++  const addQuoted = (text: string) => {
++    const w = startWord();
++    w.quoted = true;
++    w.text += text;
++  };
++  const markQuoted = () => {
++    if (word) word.quoted = true;
++  };
++  const endWord = () => {
++    const w = word;
++    word = null;
++    if (!w) return;
++    if (skipNext) skipNext = false;
++    else if (!w.quoted && OPERATOR.test(w.text)) skipNext = true;
++    else if (!STARTS_WITH_OPERATOR.test(w.bare)) argv.push(w);
++  };
++  const endCommand = (): boolean => {
++    endWord();
++    const done = finish(argv);
++    if (!done) return false;
++    commands.splice(slot, 1, ...done);
++    argv = [];
++    skipNext = false;
++    return true;
++  };
++  // Scans a $( ) or backtick command starting at `at`, adds its commands after the current one, and returns the index after it.
++  const nested = (at: number, end: string): number | null => {
++    const sub = scan(src, at, end);
++    if (!sub) return null;
++    commands.push(...sub.commands);
++    return sub.pos + 1;
++  };
++
++  begin();
++  let i = from;
++  while (i < src.length) {
++    const c = src[i];
++    PLAIN.lastIndex = i;
++    const run = PLAIN.exec(src);
++    if (run) {
++      addText(run[0]);
++      i += run[0].length;
++    } else if (c === ' ' || c === '\t' || c === '\r') {
++      endWord();
++      i++;
++    } else if (c === '&' && (src[i - 1] === '>' || src[i + 1] === '>')) {
++      addText(c);
++      i++;
++    } else if (c === ';' || c === '&' || c === '|' || c === '\n') {
++      if (!endCommand()) return null;
++      begin();
++      i++;
++    } else if (c === '(') {
++      if (!endCommand()) return null;
++      const sub = scan(src, i + 1, ')');
++      if (!sub) return null;
++      commands.push(...sub.commands);
++      begin();
++      i = sub.pos + 1;
++    } else if (c === close) {
++      return endCommand() ? { commands, pos: i } : null;
++    } else if (c === ')') {
++      return null;
++    } else if (c === '`' || (c === '$' && src[i + 1] === '(')) {
++      const next = c === '`' ? nested(i + 1, '`') : nested(i + 2, ')');
++      if (next === null) return null;
++      markQuoted();
++      i = next;
++    } else if (c === "'") {
++      const end = src.indexOf("'", i + 1);
++      if (end < 0) return null;
++      addQuoted(src.slice(i + 1, end));
++      i = end + 1;
++    } else if (c === '"') {
++      addQuoted('');
++      for (i++; src[i] !== '"'; ) {
++        if (i >= src.length) return null;
++        if (src[i] === '\\' && i + 1 < src.length) {
++          addQuoted(src[i + 1]);
++          i += 2;
++        } else if (src[i] === '$' && src[i + 1] === '(') {
++          const next = nested(i + 2, ')');
++          if (next === null) return null;
++          i = next;
++        } else if (src[i] === '`') {
++          const next = nested(i + 1, '`');
++          if (next === null) return null;
++          i = next;
++        } else {
++          addQuoted(src[i]);
++          i++;
++        }
++      }
++      i++;
++    } else if (c === '\\') {
++      addQuoted(src[i + 1] ?? '\\');
++      i += 2;
++    } else {
++      addText(c);
++      i++;
++    }
++  }
++  if (close !== null) return null;
++  return endCommand() ? { commands, pos: i } : null;
++}
++
++// Turns the words of one command into its argv. Leading unquoted assignments and keywords, and wrappers, are skipped;
++// a shell's `-c` script and `eval` are replaced by their own commands. Null when such a script is unbalanced.
++function finish(words: Word[]): string[][] | null {
++  let i = 0;
++  let wrapperAt = -1; // the first wrapper: it is the command when nothing runs after the wrappers
++  for (;;) {
++    const w = words[i];
++    const wrapper = w && WRAPPERS.get(w.text);
++    if (w && !w.quoted && (ASSIGNMENT.test(w.text) || KEYWORDS.has(w.text))) i++;
++    else if (wrapper) {
++      if (wrapperAt < 0) wrapperAt = i;
++      i = unwrap(words, i + 1, wrapper);
++    } else break;
++  }
++  const argv = words.slice(i).map((w) => w.text);
++  if (argv.length === 0) return wrapperAt < 0 ? [] : [words.slice(wrapperAt).map((w) => w.text)];
++  const [name, ...args] = argv;
++  if (name === 'eval') return simpleCommands(args.join(' '));
++  if (SHELLS.has(name)) {
++    for (let j = 0; j < args.length && args[j].startsWith('-'); j++) {
++      if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(args[j])) return j + 1 < args.length ? simpleCommands(args[j + 1]) : [argv];
++    }
++  }
++  return [argv];
++}
++
++// Skips a wrapper's flags from index i (a flag in `value` also takes the next word; `--` ends the flags), then its
++// positional words. Returns the index of the wrapped command.
++function unwrap(words: Word[], i: number, { value = [], positional = 0 }: Wrapper): number {
++  while (i < words.length && words[i].text.startsWith('-')) {
++    const flag = words[i++].text;
++    if (flag === '--') break;
++    if (value.includes(flag)) i++;
++  }
++  return i + positional;
+ }

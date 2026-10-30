@@ -1,0 +1,440 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/cli.ts b/src/cli.ts
+--- a/src/cli.ts	2026-10-30 02:15:42.041068805 +0000
++++ b/src/cli.ts	2026-10-30 02:20:17.694071345 +0000
+@@ -33,6 +33,7 @@
+       --thread <id>            go on with a thread of this project instead of opening a new one
+       --handoff-at <n|off>     hand off to a new session of the thread once the context reaches n tokens
+                                (default: settings, then half the window, at most 150k)
++      --on-quota <fallback|wait:<minutes>>  on a spent quota that says when it returns, wait up to that long over the run (default: settings, fallback)
+       --check <command>        declared check for the done gate, e.g. 'bun test'; repeatable
+       --sandbox <s>            auto | on | off: OS sandbox for bash (default: $CEDIA_SANDBOX, settings, auto)
+       --allow-domain <host>    let sandboxed commands reach this host; repeatable
+@@ -70,6 +71,7 @@
+       spawn: { type: 'string' },
+       swarm: { type: 'string' },
+       'handoff-at': { type: 'string' },
++      'on-quota': { type: 'string' },
+       review: { type: 'string' },
+       plan: { type: 'string' },
+       check: { type: 'string', multiple: true },
+@@ -114,6 +116,7 @@
+       ...(values.spawn ? { spawn: values.spawn } : {}),
+       ...(values.swarm ? { swarm: values.swarm } : {}),
+       ...(values['handoff-at'] ? { handoffAt: values['handoff-at'] } : {}),
++      ...(values['on-quota'] ? { onQuota: values['on-quota'] } : {}),
+       ...(values.review ? { review: values.review } : {}),
+       ...(values.plan ? { plan: values.plan } : {}),
+       ...(values.check ? { checks: values.check } : {}),
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/clients/headless/main.ts b/src/clients/headless/main.ts
+--- a/src/clients/headless/main.ts	2026-10-30 02:15:42.041162638 +0000
++++ b/src/clients/headless/main.ts	2026-10-30 02:20:24.701017664 +0000
+@@ -7,7 +7,7 @@
+ import { missingKeyNote } from '../../core/providers/http.ts';
+ import { providerFor } from '../../core/providers/index.ts';
+ import { projectKey, projectSlug, SessionLog, sessionExists, sessionPath } from '../../core/session/log.ts';
+-import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoffAt, loadPolicy, loadPrivacy, loadRoles, loadSandbox, loadSpawn, type RoleChoice } from '../../core/config.ts';
++import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadHandoffAt, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, type RoleChoice } from '../../core/config.ts';
+ import { defaultHandoffAt, handoffNote, MAX_HANDOFFS } from '../../core/project/handoff.ts';
+ import { inboxReminder, MAX_RESULT, threadsDir, ThreadStore, type SessionWhy, type Thread } from '../../core/project/threads.ts';
+ import { spawnNudgeAt, spawnTool, subtaskPrompt, type SpawnKind, type Spawner } from '../../core/tools/spawn.ts';
+@@ -43,6 +43,8 @@
+   thread?: string;
+   // Tokens of context at which a writer session hands off to a new one, or "off".
+   handoffAt?: string;
++  // What a spent quota that says when it returns does: "fallback" (default) or "wait:<minutes>".
++  onQuota?: string;
+   // The model explore sub-threads run on, and whether writer sessions may spawn sub-threads at all.
+   swarm?: string;
+   spawn?: string;
+@@ -68,11 +70,21 @@
+ 
+ const quotaSpent = (events: SessionEvent[]) => events.findLast((e) => e.kind === 'attempt')?.error?.code === 'quota';
+ 
++// The provider refused the history: its last attempt is a bad request or an over-long context, after an accepted one.
++const historyRefused = (events: SessionEvent[]) => {
++  const attempts = events.filter((e): e is EventOf<'attempt'> => e.kind === 'attempt');
++  const code = attempts.at(-1)?.error?.code;
++  return (code === 'bad_request' || code === 'context_length') && attempts.some((a) => !a.error);
++};
++
+ export const continueNote = (from: ModelSpec, sessionId: string) =>
+   `A session on ${from.ref} (${sessionId}) stopped partway through this task when its quota ran out. The working tree may already hold part of the work: look at what changed before you go on.`;
+ 
+ // A resumed thread on a model its last session did not use: the new session starts from the thread's latest
+ // handoff note or result, and can search the earlier logs.
++export const refusedNote = (from: ModelSpec, sessionId: string) =>
++  `A session on ${from.ref} (${sessionId}) stopped partway through this task when the provider refused its history. The working tree may already hold part of the work: look at what changed before you go on.`;
++
+ export const resumeNote = (t: Thread) => {
+   const last = t.sessions.at(-1)?.sessionId ?? '';
+   const body = t.handoff && t.handoff.sessionId === last ? `<handoff session="${last}">\n${inert(t.handoff.note)}\n</handoff>` : t.result ? `<result session="${last}">\n${inert(t.result)}\n</result>` : '';
+@@ -119,6 +131,7 @@
+ export async function runHeadless(args: HeadlessArgs, out: (s: string) => void = (s) => process.stdout.write(s)): Promise<HeadlessResult> {
+   const roles = loadRoles({ ...(args.model ? { code: args.model } : {}), ...(args.plan ? { plan: args.plan } : {}), ...(args.review ? { review: args.review } : {}), ...(args.swarm ? { swarm: args.swarm } : {}) });
+   const spawnOn = loadSpawn(args.spawn);
++  const quotaWait = loadQuotaWait(args.onQuota);
+   const model = roles.code;
+   const declared = loadChecks(args.cwd, args.checks);
+   const checks = declared.length ? declared : detectChecks(args.cwd);
+@@ -198,6 +211,7 @@
+   const parts: HeadlessResult[] = [];
+   const spent = () => ({ turns: parts.reduce((n, r) => n + r.numTurns, 0), costUsd: parts.reduce((c, r) => c + r.costUsd, 0) });
+   let handoffs = 0;
++  let quotaWaited = 0;
+   // child: a sub-thread's session, which gets the core tools only (no spawn, recall, threads, inbox or handoff).
+   type RunOpts = { continues?: { sessionId: string; changed: string[] }; note?: string; role?: 'plan' | 'review' | 'explore'; child?: { thread?: string } };
+   const run = async (m: ModelSpec, log: SessionLog, prompt: string, opts: RunOpts = {}) => {
+@@ -230,6 +244,15 @@
+         ...(sandbox.on ? { wrap: sandbox.wrap } : {}),
+         ...(snapshots && !reviewer ? { snapshots } : {}),
+         ...(continues ? { continues } : {}),
++        ...(quotaWait !== undefined
++          ? {
++              quotaWaitMs: quotaWait - quotaWaited,
++              onQuotaWait: (ms: number) => {
++                quotaWaited += ms;
++                process.stderr.write(`cedia: ${m.ref} is out of quota; waiting ${Math.ceil(ms / 60_000)} min for it to come back\n`);
++              },
++            }
++          : {}),
+         ...(opts.role ? { role: opts.role } : {}),
+         ...(child ? (child.thread ? { thread: child.thread } : {}) : threadId ? { thread: threadId } : {}),
+         ...(writing && handoffAt !== undefined && handoffs < MAX_HANDOFFS ? { handoffAt } : {}),
+@@ -344,16 +367,26 @@
+     // otherwise in a new session that starts from where the thread stopped.
+     const last = resumed?.sessions.findLast((s) => s.role === 'code');
+     let result: HeadlessResult;
+-    if (resumed && last?.model === model.ref && last.path && sessionExists(last.path)) {
+-      const log = SessionLog.load(last.path);
+-      if (args.outputFormat === 'stream-json') log.listeners.push((event) => out(encode({ type: 'event', event })));
+-      record(log, model, 'resume');
+-      result = await write(model, log, task);
++    const prior = resumed && last?.model === model.ref && last.path && sessionExists(last.path) ? SessionLog.load(last.path) : undefined;
++    if (prior && !historyRefused(prior.events)) {
++      if (args.outputFormat === 'stream-json') prior.listeners.push((event) => out(encode({ type: 'event', event })));
++      record(prior, model, 'resume');
++      result = await write(model, prior, task);
+     } else {
+       const log = openLog();
+       record(log, model, resumed ? 'resume' : 'start');
+       result = await write(model, log, task, resumed ? { note: resumeNote(resumed) } : {});
+     }
++    // A history the provider refuses goes on once in a new session on the same model, as a spent quota does.
++    if (result.subtype === 'error_during_execution' && historyRefused(writer.log.events)) {
++      const err = writer.log.events.findLast((e): e is EventOf<'attempt'> => e.kind === 'attempt')!.error!;
++      process.stderr.write(`cedia: ${writer.model.ref} refused this session's history (${err.code}: ${err.message}); continuing on ${writer.model.ref} in a new session\n`);
++      const changed = result.evidence?.changed ?? [];
++      const from = writer;
++      const log = openLog();
++      record(log, from.model, 'rejected');
++      result = await write(from.model, log, task, { continues: { sessionId: from.log.id, changed }, note: refusedNote(from.model, from.log.id) });
++    }
+     // A spent quota does not end the task: a new session on the fallback model picks it up (a session never
+     // switches model, so its cache stays valid).
+     if (fallback && result.subtype === 'error_during_execution' && quotaSpent(writer.log.events)) {
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/core/config.ts b/src/core/config.ts
+--- a/src/core/config.ts	2026-10-30 02:15:42.041162638 +0000
++++ b/src/core/config.ts	2026-10-30 02:20:15.687911845 +0000
+@@ -24,6 +24,8 @@
+   spawn?: boolean;
+   // Tokens of context at which a session hands off to a new one, or "off". User settings only.
+   handoffAt?: number | 'off';
++  // On a spent quota that says when it returns: "fallback" (default) or "wait:<minutes>". User settings only.
++  onQuota?: string;
+   // The desktop app's own settings (cedian: theme, keymap, layout and the like). cedia never reads them and checks
+   // only that they are an object, so the desktop can keep them in this file without cedia knowing their shape.
+   desktop?: Record<string, unknown>;
+@@ -41,6 +43,7 @@
+   roles: ['plan', 'code', 'review', 'swarm'],
+   spawn: 'any',
+   handoffAt: 'any',
++  onQuota: 'any',
+   desktop: 'any',
+ };
+ 
+@@ -146,6 +149,16 @@
+   return n;
+ }
+ 
++// On a spent quota that says when it returns: flag > user settings > fallback. Returns how many ms the run may wait
++// over all its sessions, or undefined to fall back at once.
++export function loadQuotaWait(flag?: string): number | undefined {
++  const raw = flag ?? readSettings(join(cediaHome(), 'settings.json')).onQuota ?? 'fallback';
++  if (raw === 'fallback') return undefined;
++  const m = /^wait:(\d+)$/.exec(raw);
++  if (!m || Number(m[1]) < 1) throw new Error(`on-quota must be fallback or wait:<minutes>: ${raw}`);
++  return Number(m[1]) * 60_000;
++}
++
+ // Roles: flags > CEDIA_MODEL (code only) > user settings > defaults (code: deepseek; plan and review: off).
+ // `claude-code` alone means opus for plan and sonnet for review. The writer always runs in cedia, where its
+ // writes go through the policy, the sandbox and the done gate.
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/core/loop/run.ts b/src/core/loop/run.ts
+--- a/src/core/loop/run.ts	2026-10-30 02:15:42.041260531 +0000
++++ b/src/core/loop/run.ts	2026-10-30 02:23:09.738940100 +0000
+@@ -78,10 +78,14 @@
+   signal?: AbortSignal;
+   onStream?: (e: StreamEvent) => void;
+   retry?: { max?: number; baseMs?: number; capMs?: number; sleep?: (ms: number) => Promise<void> };
++  // The most a run may wait for spent quotas that say when they return, over all its retries. Absent means never.
++  quotaWaitMs?: number;
++  onQuotaWait?: (ms: number) => void;
+   now?: () => Date;
+ };
+ 
+ export const CONTINUE_AFTER_LIMIT = 'Your previous reply was cut off by the output limit. Continue exactly where it stopped.';
++export const EMPTY_REPLY = 'Your last reply had no text and no tool call. Answer the user, or call a tool.';
+ 
+ export const unverifiedReminder = (checks: string[]) =>
+   `cedia has no record of a declared check passing since your last change, so the task is not done yet. A check counts only when the whole bash command is ${checks.map((c) => `\`${c}\``).join(' or ')} (a leading \`cd\` to the working directory is fine; pipes, \`;\` or other commands are not). Run it that way now, fix what fails, then report.`;
+@@ -147,6 +151,8 @@
+ }
+ 
+ const callIdOf = (b: Extract<AssistantBlock, { type: 'tool_use' }>) => b.callId ?? b.id;
++// One call per id: a repeated id gets no second run or result (the model is told in the result).
++const uniqueCalls = (calls: Extract<AssistantBlock, { type: 'tool_use' }>[]) => [...new Map(calls.map((c) => [callIdOf(c), c])).values()];
+ 
+ export async function runPrompt(opts: RunOptions, prompt: string): Promise<HeadlessResult> {
+   const { log, provider, model, tools } = opts;
+@@ -180,6 +186,9 @@
+   let cost = 0;
+   let turns = 0;
+   let lastText = '';
++  let quotaWaited = 0;
++  let quotaWaits = 0;
++  let emptyNudged = false;
+ 
+   const checks = opts.checks ?? [];
+   let runStart = log.events.length;
+@@ -292,10 +301,20 @@
+       }
+       log.append({ kind: 'attempt', requestId: request.id, n, error: got.error, ...t });
+       timing.modelMs += t.ms ?? 0;
+-      if (!isRetryable(got.error) || n >= retryMax) return finish('error_during_execution', 'error', got.error.message);
++      const { retryAfterMs } = got.error;
++      if (got.error.code === 'quota' && retryAfterMs !== undefined && retryAfterMs > 0 && opts.quotaWaitMs !== undefined && quotaWaited + retryAfterMs <= opts.quotaWaitMs) {
++        opts.onQuotaWait?.(retryAfterMs);
++        await sleep(retryAfterMs);
++        quotaWaited += retryAfterMs;
++        quotaWaits++;
++        timing.retryMs += retryAfterMs;
++        if (signal.aborted) return finish('interrupted', 'aborted');
++        continue;
++      }
++      if (!isRetryable(got.error) || n - quotaWaits >= retryMax) return finish('error_during_execution', 'error', got.error.message);
+       const base = opts.retry?.baseMs ?? 1000;
+       const cap = opts.retry?.capMs ?? 30_000;
+-      const wait = got.error.retryAfterMs ?? Math.min(cap, base * 2 ** (n - 1));
++      const wait = retryAfterMs ?? Math.min(cap, base * 2 ** (n - quotaWaits - 1));
+       await sleep(wait);
+       timing.retryMs += wait;
+       if (signal.aborted) return finish('interrupted', 'aborted');
+@@ -311,10 +330,15 @@
+ 
+     const calls = got.blocks.filter((b): b is Extract<AssistantBlock, { type: 'tool_use' }> => b.type === 'tool_use');
+     const overBudget = opts.maxBudgetUsd !== undefined && cost >= opts.maxBudgetUsd;
++    if (got.stop === 'refusal') {
++      for (const c of uniqueCalls(calls))
++        log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: 'not run: the session stopped', isError: true } });
++      return finish('error_during_execution', 'error', text.trim() || `${model.ref} declined to answer`);
++    }
+ 
+     if (handoff === 1 || handoff === 2) {
+       if (!calls.length && text.trim()) return finish('handoff', 'handoff', text.trim());
+-      for (const c of calls) log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: HANDOFF_NO_TOOLS, isError: true } });
++      for (const c of uniqueCalls(calls)) log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: HANDOFF_NO_TOOLS, isError: true } });
+       if (handoff === 1 && !overBudget) {
+         handoff = 2;
+         continue;
+@@ -325,7 +349,7 @@
+     }
+     if (calls.length) {
+       if (overBudget || signal.aborted) {
+-        for (const c of calls)
++        for (const c of uniqueCalls(calls))
+           log.append({ kind: 'tool_result', callId: callIdOf(c), status: 'not_started', output: { text: 'not run: the session stopped', isError: true } });
+         return overBudget ? finish('error_max_budget_usd', 'budget') : finish('interrupted', 'aborted');
+       }
+@@ -357,6 +381,13 @@
+       log.append({ kind: 'reminder', as: 'user', text: CONTINUE_AFTER_LIMIT });
+       continue;
+     }
++    // A reply with no text and no call (thinking only, or nothing) gets one reminder, then the run fails.
++    if (!text.trim()) {
++      if (emptyNudged) return finish('error_during_execution', 'error', `${model.ref} ended its turn without a reply`);
++      emptyNudged = true;
++      log.append({ kind: 'reminder', as: 'user', text: EMPTY_REPLY });
++      continue;
++    }
+     // Slop guard: one reminder naming what looks like a shortcut; the model fixes it or explains it.
+     if (!slopNudged) {
+       const found = slop();
+@@ -399,11 +430,19 @@
+   type Job = { callId: string; spec: ToolSpec; input: Record<string, unknown>; parallel: boolean };
+   const results = new Map<string, EventOf<'tool_result'>['output'] & { status: EventOf<'tool_result'>['status'] }>();
+   const jobs: Job[] = [];
++  // A repeated id is not run; the first call with it stands for all of them.
++  const repeats = new Map<string, number>();
++  const seen = new Set<string>();
+   for (const c of calls) {
+     const callId = callIdOf(c);
++    if (seen.has(callId)) {
++      repeats.set(callId, (repeats.get(callId) ?? 0) + 1);
++      continue;
++    }
++    seen.add(callId);
+     const spec = byName.get(c.name);
+     if (c.inputError) results.set(callId, { status: 'not_started', text: `not run: ${c.inputError}`, isError: true });
+-    else if (!spec) results.set(callId, { status: 'not_started', text: `not run: unknown tool "${c.name}"`, isError: true });
++    else if (!spec) results.set(callId, { status: 'not_started', text: `not run: unknown tool "${c.name.slice(0, 64)}"`, isError: true });
+     else {
+       const d = decide(opts.permission ?? READ_ONLY_POLICY, spec, c.input, opts.cwd);
+       log.append({ kind: 'permission', callId, tool: c.name, ...d });
+@@ -419,9 +458,10 @@
+   const run = async (j: Job) => {
+     try {
+       const out = await j.spec.run(j.input, { cwd: opts.cwd, signal, ...(opts.wrap ? { wrap: opts.wrap } : {}) });
+-      results.set(j.callId, { ...out, status: signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed' });
++      if (out?.text === undefined) results.set(j.callId, { status: 'failed', text: 'tool returned no output', isError: true });
++      else results.set(j.callId, { ...out, text: typeof out.text === 'string' ? out.text : (JSON.stringify(out.text) ?? String(out.text)), status: signal.aborted ? 'interrupted_safe' : out.isError ? 'failed' : 'completed' });
+     } catch (e) {
+-      results.set(j.callId, { status: 'failed', text: `tool crashed: ${(e as Error).message}`, isError: true });
++      results.set(j.callId, { status: 'failed', text: `tool crashed: ${e instanceof Error ? e.message : String(e)}`, isError: true });
+     }
+   };
+   // A writing call runs between two snapshots, so the log names every file it changed.
+@@ -455,9 +495,11 @@
+   await bounded(pool, MAX_PARALLEL_TOOLS, run);
+   // Secrets are replaced before the result is logged, so neither the log nor the provider ever holds them.
+   const redact = !opts.permission?.unlock?.includes('secret-redaction');
+-  for (const c of calls) {
++  for (const c of uniqueCalls(calls)) {
+     const callId = callIdOf(c);
+     const { status, ...output } = results.get(callId)!;
++    const more = repeats.get(callId);
++    if (more) output.text += `\n\n(${more} more call(s) in this turn shared this id and were not run; give each call its own id)`;
+     const r = redact ? redactSecrets(output.text) : { text: output.text, count: 0 };
+     log.append({ kind: 'tool_result', callId, status, output: r.count ? { ...output, text: r.text, redacted: r.count } : output });
+   }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/core/project/threads.ts b/src/core/project/threads.ts
+--- a/src/core/project/threads.ts	2026-10-30 02:15:42.041393837 +0000
++++ b/src/core/project/threads.ts	2026-10-30 02:20:15.688323843 +0000
+@@ -7,7 +7,7 @@
+ // append-only JSONL file, so two cedia processes can write to one without locking: a line is one small append.
+ 
+ export type ThreadState = 'working' | 'done' | 'failed' | 'stopped';
+-export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota';
++export type SessionWhy = 'start' | 'resume' | 'handoff' | 'quota' | 'rejected';
+ 
+ type ThreadBody =
+   // parent: the thread that spawned this one as a sub-thread.
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/protocol/protocol.schema.json b/src/protocol/protocol.schema.json
+--- a/src/protocol/protocol.schema.json	2026-10-30 02:15:42.042734164 +0000
++++ b/src/protocol/protocol.schema.json	2026-10-30 02:20:54.718943188 +0000
+@@ -991,7 +991,8 @@
+         "start",
+         "resume",
+         "handoff",
+-        "quota"
++        "quota",
++        "rejected"
+       ]
+     },
+     "Step": {
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/test/recovery.test.ts b/test/recovery.test.ts
+--- a/test/recovery.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/test/recovery.test.ts	2026-10-30 02:23:05.613243046 +0000
+@@ -0,0 +1,93 @@
++import { describe, expect, test } from 'bun:test';
++import { mkdtempSync, writeFileSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { loadQuotaWait } from '../src/core/config.ts';
++import { runPrompt, type RunOptions } from '../src/core/loop/run.ts';
++import { FAUX_MODEL } from '../src/core/providers/catalog.ts';
++import { fauxProvider, text, toolUse, type FauxStep } from '../src/core/providers/faux.ts';
++import { lintSession } from '../src/core/session/lint.ts';
++import { SessionLog } from '../src/core/session/log.ts';
++import { bashTool } from '../src/core/tools/bash.ts';
++import { readTool } from '../src/core/tools/read.ts';
++import type { EventOf, SessionEvent } from '../src/core/types.ts';
++
++const cwd = mkdtempSync(join(tmpdir(), 'cedia-recovery-'));
++writeFileSync(join(cwd, 'a.txt'), 'alpha\n');
++const MIN = 60_000;
++
++function setup(steps: FauxStep[], extra: Partial<RunOptions> = {}) {
++  const log = SessionLog.create();
++  const opts: RunOptions = {
++    log,
++    provider: fauxProvider(steps),
++    model: FAUX_MODEL,
++    tools: [readTool, bashTool],
++    system: 'sys',
++    cwd,
++    retry: { sleep: async () => {} },
++    ...extra,
++  };
++  return { log, opts };
++}
++
++const of = <K extends SessionEvent['kind']>(events: SessionEvent[], k: K) => events.filter((e): e is EventOf<K> => e.kind === k);
++const spent = (retryAfterMs: number): FauxStep => ({ error: { code: 'quota', status: 429, retryAfterMs, message: 'usage limit reached' } });
++
++describe('recovery', () => {
++  test('abort during a quota wait ends at once with interrupted', async () => {
++    const ac = new AbortController();
++    const { opts } = setup([spent(10 * MIN), { blocks: [text('unreachable')] }], { signal: ac.signal, retry: {}, quotaWaitMs: 30 * MIN });
++    const p = runPrompt(opts, 'wait');
++    setTimeout(() => ac.abort(), 10);
++    const start = Date.now();
++    expect((await p).subtype).toBe('interrupted');
++    expect(Date.now() - start).toBeLessThan(1000);
++  });
++
++  test('quota waits do not count against retry.max', async () => {
++    const { opts } = setup([spent(MIN), spent(MIN), { blocks: [text('ok')] }], { quotaWaitMs: 30 * MIN, retry: { max: 2, sleep: async () => {} } });
++    expect(await runPrompt(opts, 'hi')).toMatchObject({ subtype: 'success', result: 'ok' });
++  });
++
++  test('two calls that share an id on the over-budget path give one not_started result', async () => {
++    const { log, opts } = setup([{ blocks: [toolUse('dup', 'read', { path: 'a.txt' }), toolUse('dup', 'read', { path: 'a.txt' })] }], { maxBudgetUsd: 0 });
++    expect((await runPrompt(opts, 'go')).subtype).toBe('error_max_budget_usd');
++    const results = of(log.events, 'tool_result');
++    expect(results.map((r) => [r.callId, r.status])).toEqual([['dup', 'not_started']]);
++    expect(lintSession(log.events)).toEqual([]);
++  });
++
++  test('a refusal with a tool call in the same reply keeps the log paired', async () => {
++    const { log, opts } = setup([{ blocks: [toolUse('c1', 'read', { path: 'a.txt' }), text('no')], stop: 'refusal' }]);
++    expect(await runPrompt(opts, 'go')).toMatchObject({ subtype: 'error_during_execution', result: 'no' });
++    expect(of(log.events, 'tool_result').map((r) => [r.callId, r.status])).toEqual([['c1', 'not_started']]);
++    expect(lintSession(log.events)).toEqual([]);
++  });
++
++  test('on-quota wait:<minutes> is 1 to 50 whole minutes, and anything else is refused', () => {
++    for (let n = 1; n <= 50; n++) expect(loadQuotaWait(`wait:${n}`)).toBe(n * MIN);
++    for (const bad of ['wait', 'wait:0', 'wait:-1', 'wait:1.5', 'later', 'Wait:5'])
++      expect(() => loadQuotaWait(bad)).toThrow('fallback or wait:<minutes>');
++  });
++
++  test('a quota error that says to retry now is not waited out, so the run cannot loop', async () => {
++    const { log, opts } = setup([spent(0), spent(0), spent(0), { blocks: [text('unreachable')] }], { quotaWaitMs: 30 * MIN });
++    expect((await runPrompt(opts, 'hi')).subtype).toBe('error_during_execution');
++    expect(of(log.events, 'attempt')).toHaveLength(1);
++  });
++
++  test('quota waits add up over the run, and the wait that would pass the ceiling ends it', async () => {
++    const waits: number[] = [];
++    const { log, opts } = setup([spent(10 * MIN), spent(10 * MIN), spent(10 * MIN), spent(10 * MIN), { blocks: [text('unreachable')] }], { quotaWaitMs: 30 * MIN, onQuotaWait: (ms) => void waits.push(ms) });
++    expect((await runPrompt(opts, 'hi')).subtype).toBe('error_during_execution');
++    expect(waits).toEqual([10 * MIN, 10 * MIN, 10 * MIN]);
++    expect(of(log.events, 'attempt')).toHaveLength(4);
++  });
++
++  test('an unknown tool name is cut to 64 characters in its result', async () => {
++    const { log, opts } = setup([{ blocks: [toolUse('c1', 'y'.repeat(300), {})] }, { blocks: [text('ok')] }]);
++    expect((await runPrompt(opts, 'go')).subtype).toBe('success');
++    expect(of(log.events, 'tool_result')[0]!.output.text).toBe(`not run: unknown tool "${'y'.repeat(64)}"`);
++  });
++});

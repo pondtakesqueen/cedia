@@ -1,0 +1,167 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/money/round.ts b/src/money/round.ts
+--- a/src/money/round.ts	2026-10-30 01:42:04.415070184 +0000
++++ b/src/money/round.ts	2026-10-30 01:43:26.274448669 +0000
+@@ -5,7 +5,8 @@
+   return Math.floor(x + 0.5);
+ }
+ 
+-// Applies a rate (0.2 for 20%) to an amount and rounds once.
++// Applies a rate (0.2 for 20%) to an amount and rounds half up once, in whole basis points so .5 is exact.
+ export function percentOf(amount: Cents, rate: number): Cents {
+-  return roundHalfUp(amount * rate);
++  const bp = Math.round(rate * 10000);
++  return Math.floor((amount * bp + 5000) / 10000);
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/order/total.ts b/src/order/total.ts
+--- a/src/order/total.ts	2026-10-30 01:42:04.415272065 +0000
++++ b/src/order/total.ts	2026-10-30 01:43:26.283264331 +0000
+@@ -1,4 +1,5 @@
+ import type { Cart } from '../cart/cart.ts';
++import { mergeLines } from '../cart/merge.ts';
+ import { sum, type Cents } from '../money/cents.ts';
+ import { couponDiscount } from '../pricing/discounts/coupons.ts';
+ import { priceLine, type PricedLine } from '../pricing/lines.ts';
+@@ -10,11 +11,11 @@
+ 
+ export function totals(c: Cart): Totals {
+   const r = region(c.region);
+-  const lines = c.lines.map(priceLine);
++  const lines = mergeLines(c).lines.map(priceLine);
+   const subtotal = sum(lines.map((l) => l.total));
+   const coupon = couponDiscount(c.coupon, subtotal);
+   const discounted = subtotal - coupon;
+-  const shipping = shippingFor(r, subtotal);
++  const shipping = shippingFor(r, discounted);
+   const tax = taxFor(r, discounted + shipping);
+   return { lines, subtotal, coupon, shipping, tax, total: discounted + shipping + tax };
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/pricing/discounts/bulk.ts b/src/pricing/discounts/bulk.ts
+--- a/src/pricing/discounts/bulk.ts	2026-10-30 01:42:04.415568277 +0000
++++ b/src/pricing/discounts/bulk.ts	2026-10-30 01:43:26.264976703 +0000
+@@ -8,6 +8,6 @@
+ ];
+ 
+ export function bulkDiscount(quantity: number, subtotal: Cents): Cents {
+-  const tier = TIERS.find((t) => quantity > t.min);
++  const tier = TIERS.find((t) => quantity >= t.min);
+   return tier ? percentOf(subtotal, tier.rate) : 0;
+ }
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/src/pricing/regions.ts b/src/pricing/regions.ts
+--- a/src/pricing/regions.ts	2026-10-30 01:42:04.415568277 +0000
++++ b/src/pricing/regions.ts	2026-10-30 01:43:26.254994616 +0000
+@@ -5,7 +5,7 @@
+ export const REGIONS: Record<string, Region> = {
+   US: { code: 'US', taxRate: 0.07, shipping: 800, freeShippingFrom: 5000 },
+   EU: { code: 'EU', taxRate: 0.2, shipping: 900, freeShippingFrom: 6000 },
+-  UK: { code: 'UK', taxRate: 0.2, shipping: 700, freeShippingFrom: 4500 },
++  UK: { code: 'UK', taxRate: 0.2, shipping: 700, freeShippingFrom: 4000 },
+ };
+ 
+ export function region(code: string): Region {
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/test/pricing-rules.test.ts b/test/pricing-rules.test.ts
+--- a/test/pricing-rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/test/pricing-rules.test.ts	2026-10-30 01:43:44.514994198 +0000
+@@ -0,0 +1,103 @@
++import { describe, expect, test } from 'bun:test';
++import { cart } from '../src/cart/cart.ts';
++import { bulkDiscount } from '../src/pricing/discounts/bulk.ts';
++import { priceLine } from '../src/pricing/lines.ts';
++import { REGIONS, region } from '../src/pricing/regions.ts';
++import { shippingFor } from '../src/pricing/shipping.ts';
++import { totals } from '../src/order/total.ts';
++import { percentOf } from '../src/money/round.ts';
++
++// Each test names the README rule it checks.
++describe('pricing rules from README.md', () => {
++  test('rule 1: a line is unit price times quantity', () => {
++    expect(priceLine({ sku: 'CAP', quantity: 3, unitPrice: 1200 }).subtotal).toBe(3600);
++  });
++
++  test('rule 2: bulk tiers start at 10 and 50 units, and only the highest applies', () => {
++    expect(bulkDiscount(9, 1080)).toBe(0);
++    expect(bulkDiscount(10, 1200)).toBe(60);
++    expect(bulkDiscount(49, 4900)).toBe(245);
++    expect(bulkDiscount(50, 6000)).toBe(600);
++  });
++
++  test('rule 2: lines of the same SKU are merged before tiers apply', () => {
++    const c = cart('US', [['PEN', 5], ['PEN', 5]]);
++    const t = totals(c);
++    expect(t.lines).toEqual([{ sku: 'PEN', quantity: 10, unitPrice: 120, subtotal: 1200, discount: 60, total: 1140 }]);
++    expect(c.lines).toEqual([{ sku: 'PEN', quantity: 5, unitPrice: 120 }, { sku: 'PEN', quantity: 5, unitPrice: 120 }]);
++  });
++
++  test('rule 2: a split cart prices the same as one line with the same quantity', () => {
++    for (const code of Object.keys(REGIONS)) {
++      for (let n = 1; n <= 60; n++) {
++        const whole = totals(cart(code, [['PEN', n]]));
++        for (let a = 1; a < n; a++) {
++          expect(totals(cart(code, [['PEN', a], ['PEN', n - a]]))).toEqual(whole);
++        }
++      }
++    }
++  });
++
++  test('rule 3: coupons apply after bulk discounts', () => {
++    expect(totals(cart('US', [['PEN', 10]], 'SAVE10'))).toMatchObject({ subtotal: 1140, coupon: 114 });
++  });
++
++  test('rule 3: FLAT5 takes 500 cents off and never goes below zero', () => {
++    // 1 pen = 120, so the coupon takes all of it and shipping is charged on zero.
++    expect(totals(cart('US', [['PEN', 1]], 'FLAT5'))).toMatchObject({ coupon: 120, shipping: 800 });
++    expect(totals(cart('US', [['TEE', 1]], 'FLAT5')).coupon).toBe(500);
++  });
++
++  test('rule 3: an unknown coupon gives no discount', () => {
++    expect(totals(cart('US', [['MUG', 2]], 'NOPE')).coupon).toBe(0);
++  });
++
++  test('rule 4: shipping is decided by the discounted subtotal', () => {
++    // 2 bags = 4400; SAVE10 takes 440, leaving 3960, which is under UK's 4000 threshold.
++    expect(totals(cart('UK', [['BAG', 2]], 'SAVE10'))).toMatchObject({ coupon: 440, shipping: 700 });
++    expect(totals(cart('UK', [['BAG', 2]]))).toMatchObject({ shipping: 0 });
++  });
++
++  test('rule 4: free shipping starts exactly at the threshold', () => {
++    for (const code of Object.keys(REGIONS)) {
++      const r = region(code);
++      expect(shippingFor(r, r.freeShippingFrom)).toBe(0);
++      expect(shippingFor(r, r.freeShippingFrom - 1)).toBe(r.shipping);
++    }
++  });
++
++  test('region table matches README.md', () => {
++    expect(REGIONS).toEqual({
++      US: { code: 'US', taxRate: 0.07, shipping: 800, freeShippingFrom: 5000 },
++      EU: { code: 'EU', taxRate: 0.2, shipping: 900, freeShippingFrom: 6000 },
++      UK: { code: 'UK', taxRate: 0.2, shipping: 700, freeShippingFrom: 4000 },
++    });
++  });
++
++  test('rule 5: tax rounds half up to the cent', () => {
++    expect(percentOf(150, 0.07)).toBe(11);
++    expect(percentOf(250, 0.2)).toBe(50);
++  });
++
++  test('rule 5: percentOf matches an exact half-up reference', () => {
++    for (const rate of [0.05, 0.1, 0.07, 0.2]) {
++      const bp = Math.round(rate * 10000);
++      for (let a = 0; a <= 20000; a++) {
++        const exact = Number((BigInt(a) * BigInt(bp) * 2n + 10000n) / 20000n);
++        expect(percentOf(a, rate)).toBe(exact);
++      }
++    }
++  });
++
++  test('rules 5 and 6: tax on discounted subtotal plus shipping, total adds them up', () => {
++    // 2 T-shirts = 3000; shipping 900; tax 20% of 3900 = 780; total 4680
++    expect(totals(cart('EU', [['TEE', 2]]))).toMatchObject({ subtotal: 3000, shipping: 900, tax: 780, total: 4680 });
++    for (const t of [
++      totals(cart('US', [['PEN', 10]], 'SAVE10')),
++      totals(cart('EU', [['MUG', 60]], 'FLAT5')),
++      totals(cart('UK', [['BAG', 1], ['CAP', 4]])),
++    ]) {
++      expect(t.total).toBe(t.subtotal - t.coupon + t.shipping + t.tax);
++    }
++  });
++});

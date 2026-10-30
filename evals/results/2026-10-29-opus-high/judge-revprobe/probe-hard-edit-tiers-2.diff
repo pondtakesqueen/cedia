@@ -1,0 +1,140 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.extra.test.ts b/edit.extra.test.ts
+--- a/edit.extra.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/edit.extra.test.ts	2026-10-30 01:27:06.223017031 +0000
+@@ -0,0 +1,53 @@
++import { describe, expect, test } from 'bun:test';
++import { applyEdit } from './edit.ts';
++
++describe('replace_all', () => {
++  test('matches split/join for exact occurrences', () => {
++    const tokens = ['x', 'xx', 'y'];
++    for (let n = 1; n <= 6; n++) {
++      const content = Array.from({ length: n }, (_, i) => tokens[i % 3]).join('\n') + '\n';
++      const r = applyEdit(content, { old_text: 'x', new_text: 'z', replace_all: true });
++      if ('error' in r) throw new Error(r.error);
++      expect(r.content).toBe(content.split('x').join('z'));
++      expect(r.applied.count).toBe(content.split('x').length - 1);
++    }
++  });
++  test('stays an error in the line tiers when several windows match', () => {
++    const r = applyEdit('a \nb\na  \nb\n', { old_text: 'a\nb', new_text: 'c', replace_all: true });
++    expect('error' in r && r.error).toContain('matches 2 places');
++  });
++});
++
++describe('edge cases', () => {
++  test('exact match ending in a newline reports its line span', () => {
++    const r = applyEdit('a\nb\nc\n', { old_text: 'b\n', new_text: 'B\n' });
++    if ('error' in r) throw new Error(r.error);
++    expect(r.applied).toEqual({ from: 2, to: 2, tier: 'exact', count: 1 });
++    expect(r.content).toBe('a\nB\nc\n');
++  });
++  test('all-blank old_text does not pick up an indentation pointer', () => {
++    const r = applyEdit('a\nb\n', { old_text: '   ', new_text: 'x' });
++    expect('error' in r && r.error).toContain('not found');
++    expect('error' in r && r.error).not.toContain('appears');
++  });
++  test('pointer lists at most five lines', () => {
++    const content = 'hit\n'.repeat(7);
++    const r = applyEdit(content, { old_text: 'hit\nmiss', new_text: 'x' });
++    expect('error' in r && r.error).toContain('first line appears at line 1, 2, 3, 4, 5');
++    expect('error' in r && r.error).not.toContain('6');
++  });
++  test('when exact matches once, line tiers give the same result as replace', () => {
++    const lines = ['alpha', 'beta', 'gamma', 'delta'];
++    let checked = 0;
++    for (let mask = 0; mask < 1 << lines.length && checked < 50; mask++) {
++      const content = lines.filter((_, i) => mask & (1 << i)).concat(['end']).join('\n') + '\n';
++      const old = 'beta\ngamma';
++      if (content.split(old).length !== 2) continue;
++      const r = applyEdit(content, { old_text: old, new_text: 'G\nH' });
++      if ('error' in r) throw new Error(r.error);
++      expect(r.content).toBe(content.replace(old, 'G\nH'));
++      checked++;
++    }
++    expect(checked).toBeGreaterThan(0);
++  });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-30 01:25:59.786986821 +0000
++++ b/edit.ts	2026-10-30 01:27:12.511016888 +0000
+@@ -23,5 +23,78 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text: old, new_text: next, replace_all } = edit;
++  if (old === '') return { error: 'old_text is empty; use write to replace the whole file' };
++  if (old === next) return { error: 'old_text and new_text are the same' };
++
++  // Tier 1: exact. Hits are start offsets, found without overlap.
++  const hits: number[] = [];
++  for (let i = content.indexOf(old); i !== -1; i = content.indexOf(old, i + old.length)) hits.push(i);
++  if (hits.length > 0) {
++    const lineOf = (idx: number) => content.slice(0, idx).split('\n').length;
++    const from = lineOf(hits[0]);
++    const to = from + stripNewline(old).split('\n').length - 1;
++    if (hits.length > 1 && !replace_all) {
++      return { error: `old_text matches ${hits.length} places (first at line ${from}); add context or set replace_all` };
++    }
++    const out = replace_all
++      ? content.split(old).join(next)
++      : content.slice(0, hits[0]) + next + content.slice(hits[0] + old.length);
++    return { content: out, applied: { from, to, tier: 'exact', count: hits.length } };
++  }
++
++  const oldLines = stripNewline(old).split('\n');
++  const newBody = stripNewline(next);
++  const newLines = newBody === '' ? [] : newBody.split('\n');
++  const lines = content.split('\n');
++  // A trailing newline leaves an empty entry after the last line; it is not a line to match.
++  const lineCount = content.endsWith('\n') ? lines.length - 1 : lines.length;
++  const firstNonBlank = (ls: string[]) => ls.find(l => l.trim() !== '') ?? '';
++  const indentOf = (s: string) => s.match(/^\s*/)![0];
++
++  // Tries one line-based tier. Returns undefined when no window matches, so the next tier is tried;
++  // returns an error when several windows match.
++  const applyTier = (
++    tier: 'trailing-space' | 'indentation',
++    norm: (s: string) => string,
++    reindent: (window: string[]) => string[],
++  ): { content: string; applied: Applied } | { error: string } | undefined => {
++    const found: number[] = [];
++    for (let i = 0; i + oldLines.length <= lineCount; i++) {
++      if (oldLines.every((l, k) => norm(lines[i + k]) === norm(l))) found.push(i);
++    }
++    if (found.length === 0) return undefined;
++    if (found.length > 1) {
++      return { error: `old_text matches ${found.length} places (lines ${found.map(i => i + 1).join(', ')}); add context` };
++    }
++    const i = found[0];
++    const repl = reindent(lines.slice(i, i + oldLines.length));
++    const out = [...lines.slice(0, i), ...repl, ...lines.slice(i + oldLines.length)].join('\n');
++    return { content: out, applied: { from: i + 1, to: i + oldLines.length, tier, count: 1 } };
++  };
++
++  // Tier 2: whole lines, trailing whitespace ignored.
++  const t2 = applyTier('trailing-space', s => s.trimEnd(), () => newLines);
++  if (t2) return t2;
++
++  // Tier 3: whole lines, indentation ignored; new_text is re-indented to the window.
++  const oldIndent = indentOf(firstNonBlank(oldLines));
++  const t3 = applyTier('indentation', s => s.trim(), win => {
++    const fileIndent = indentOf(firstNonBlank(win));
++    return newLines.map(l => {
++      if (l.trim() === '') return '';
++      return l.startsWith(oldIndent) ? fileIndent + l.slice(oldIndent.length) : fileIndent + l;
++    });
++  });
++  if (t3) return t3;
++
++  const first = firstNonBlank(oldLines).trim();
++  const appears = first === '' ? [] : lines.flatMap((l, i) => (l.includes(first) ? [i + 1] : [])).slice(0, 5);
++  return {
++    error: `old_text not found${appears.length > 0 ? `; first line appears at line ${appears.join(', ')}` : ''}`,
++  };
++}
++
++function stripNewline(s: string): string {
++  return s.endsWith('\n') ? s.slice(0, -1) : s;
+ }

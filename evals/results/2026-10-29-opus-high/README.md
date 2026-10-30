@@ -320,3 +320,33 @@ What it says:
 - The review at high effort is where much of auto's lead comes from, so it stays.
 
 Spent for this section: $0.33 Haiku (Anthropic API). The panel ($4.71) and the plan and review ran at API price on the owner's subscription.
+
+## A review at medium that probes (three runs on the tuning tasks, two held out)
+
+The review at medium caught less because it could only read. This arm lets it run code: the review step in Claude Code also gets `Bash(bun -e:*)`, and its prompt asks it to run the inputs the task and the doc comments imply that no test checks against the changed code, and to put each probe that shows a defect in its finding as a test case. Everything else is the shape arm with `--review claude-code:sonnet@medium`. The experiment ran on a hack of main (`CEDIA_REVIEW_PROBE`); the review's probes were not sandboxed, so this is what made cedia give probes only to a review in an OS sandbox (`sandboxSettings` in `src/clients/headless/claude-code.ts`).
+
+Files: `auto-revprobe.*` and `judge-revprobe/` (`claude-*` diffs are Claude Code Opus high); held out, `held-out/auto-revprobe.*` and `held-out/judge-revprobe/`. Tally: `python3 judge-revprobe/tally.py judge-revprobe probe`.
+
+| tuning, 30 runs | pass | wins / losses / tie or split | steady tasks | tasks won 3 of 3 | review sent back | time per task (plan, review, fix) |
+|---|---|---|---|---|---|---|
+| shape, review at high | 28/30 | 23 / 3 / 2 | 7 of 10 | 7 | 14 of 30 | 159 s (38, 45, 14) |
+| review at medium | 30/30 | 16 / 9 / 5 | 6 of 10 | 4 | 11 of 30 | 125 s (38, 21, 9) |
+| review at medium that probes | 30/30 | 22 / 6 / 2 | 6 of 10 | 6 | 7 of 30 | 112 s (38, 20, 3) |
+
+| held out, 16 runs | pass | wins / losses / tie or split | correctness | quality | tests | security |
+|---|---|---|---|---|---|---|
+| review at high (main after #190) | 16/16 | 9 / 3 / 4 | 8.19 / 7.91 | 7.69 / 7.59 | 7.91 / 5.16 | 8.81 / 7.94 |
+| review at medium that probes | 15/16 | 7 / 2 / 6 | 8.17 / 7.90 | 7.83 / 7.50 | 7.27 / 4.83 | 8.60 / 8.17 |
+
+Scores are this arm / Claude Code Opus high. On the tuning tasks: correctness 8.68 / 8.22, quality 8.12 / 8.20, scope 8.65 / 8.85, tests 8.47 / 5.03, security 9.33 / 9.18.
+
+What it says:
+- Probing wins back the wins medium lost: 22 to 6 against 16 to 9, close to high's 23 to 3, and it passed every run.
+- It is the fastest arm: 112 s a task against 159 s at high, 30% less. The review takes 20 s, and fixes take 3 s because it sends back half as many changes (7 of 30 against 14).
+- hard-memo-async still loses two of three and hard-pool two of three, as at high.
+- On held-out tasks it beats Claude Code 7 to 2. The one failed run, hard-window run 2, stopped at the 300 s limit having spent $0.003, before the writer did anything, so it says nothing about the review. Held-out times are not comparable: the high arm ran beside Claude Code.
+- Whether a review ran a probe is not known: Claude Code keeps no log of a `-p` run without session persistence.
+
+So `-m auto` reviews at medium with probes when the review can run in Claude Code's sandbox, and at high otherwise.
+
+Spent for this section: $0.28 + $0.34 Haiku (Anthropic API). The panels and the plan and review ran on the owner's subscription.

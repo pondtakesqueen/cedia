@@ -1,0 +1,976 @@
+[
+ {
+  "task": "hard-redact-bugs",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 6,
+    "security": 7
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 5,
+    "scope": 6,
+    "tests": 1,
+    "security": 5
+   },
+   "winner": "A",
+   "why": "A fixes all failing cases with small targeted edits and adds tests; B's regex rewrite stops redacting plural and all-caps secret names (SECRETS, passwords) and adds no tests.",
+   "defects_A": [
+    "redact.ts:40 a purely numeric dotenv value (DB_PASSWORD=12345678) is no longer redacted",
+    "redact.review.test.ts has no cases for the private-key, sk- or URL-@ fixes"
+   ],
+   "defects_B": [
+    "redact.ts:38 ASSIGNMENT now misses plural and all-caps names (passwords=, SECRETS=, SECRETKEY=), so those secrets leak",
+    "redact.ts:38 dense regex using (?-i:) and lookbehind is hard to read and depends on runtime support",
+    "no tests added for any of the fixes"
+   ]
+  },
+  "cost": 0.070925
+ },
+ {
+  "task": "hard-redact-bugs",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 5,
+    "quality": 5,
+    "scope": 8,
+    "tests": 2,
+    "security": 4
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 7,
+    "scope": 8,
+    "tests": 6,
+    "security": 6
+   },
+   "winner": "B",
+   "why": "B is a smaller, clearer fix with tests; A's name-boundary regex stops redacting plural and lowercase names like passwords/tokens, which is a regression.",
+   "defects_A": [
+    "redact.ts:38 ASSIGNMENT boundary lookarounds stop redacting plural/joined names (passwords=, tokens:, api_keys=, secretkey=), a regression that leaks secrets",
+    "redact.ts:38 regex is hard to read and relies on (?-i:) modifiers",
+    "no tests added for any of the fixes"
+   ],
+   "defects_B": [
+    "redact.ts:48 dotenv all-digit values are never redacted (DB_PASSWORD=12345678), contradicting the 'any value' comment",
+    "redact.ts:48 the digit check is on the value, not the name, so tokenizer=abc12345xyz is still a false positive",
+    "added tests do not cover the private-key, sk- or URL-password fixes; file name redact.review.test.ts is odd"
+   ]
+  },
+  "cost": 0.07272519999999999
+ },
+ {
+  "task": "hard-redact-bugs",
+  "run": 2,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 5,
+    "quality": 6,
+    "scope": 9,
+    "tests": 1,
+    "security": 4
+   },
+   "winner": "A",
+   "why": "A targets max/min/total/prompt/completion token names; B's (?![a-z]) lookahead lets plural and camelCase secret names (MY_TOKENS, API_KEYS, secretKey) through unredacted, and B adds no tests.",
+   "defects_A": [
+    "redact.ts:38 \u2013 the lookbehind skips max_token/total_token assignments even when the value is a real secret, which is narrow and intended"
+   ],
+   "defects_B": [
+    "redact.ts:38 \u2013 (?![a-z]) with the i flag stops names like MY_TOKENS, API_KEYS, SECRETS and secretKey from matching, so their values leak",
+    "no tests added for the changed behaviour (private key lazy match, sk- digit rule, URL @, token names)",
+    "redact.ts:38 \u2013 the MAX_TOKENS fix works by accident (any trailing letter blocks the match) rather than by naming the limit-style names"
+   ]
+  },
+  "cost": 0.0625529
+ },
+ {
+  "task": "hard-redact-bugs",
+  "run": 2,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 5,
+    "quality": 6,
+    "scope": 8,
+    "tests": 1,
+    "security": 4
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 8,
+    "tests": 7,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "B fixes MAX_TOKENS narrowly and keeps detecting secretKey and plural token names, while A's (?![a-z]) guard stops redacting many real secret names and A adds no tests.",
+   "defects_A": [
+    "redact.ts:38 (?![a-z]) after the keyword stops redacting secretKey=, tokenValue=, passwordConfirm=, credentialsFile= and plural names like API_TOKENS=",
+    "no tests added for any of the fixed bugs"
+   ],
+   "defects_B": [
+    "redact.ts:39 the lookbehind prefix list (max, min, total, prompt, completion) is a heuristic, so other limit-style names such as NUM_TOKENS= would still be redacted",
+    "tests added in a new file redact-tokens.test.ts instead of the existing redact.test.ts, and they only cover the token-name fix, not the private-key, sk- or URL fixes"
+   ]
+  },
+  "cost": 0.0628042
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 5,
+    "quality": 7,
+    "scope": 8,
+    "tests": 7,
+    "security": 3
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 6,
+    "scope": 6,
+    "tests": 1,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "B skips quoted assignments and path-qualified shells correctly; A exposes the wrong command for `FOO=\"a b\" git push` (the command is hidden), which is a policy bypass.",
+   "defects_A": [
+    "shell.ts:258 assignment skipped only if !w.quoted, so FOO=\"a b\" cmd / FOO=$(x) cmd / env FOO=\"x\" cmd hide the real command",
+    "shell.ts:268 SHELLS.has(name) misses /bin/sh -c and /bin/bash -c, so scripts are not unpacked",
+    "shell.ts:192 `>|file` splits on the pipe, so the target becomes a command",
+    "shell.rules.test.ts has no test for quoted assignment values"
+   ],
+   "defects_B": [
+    "No tests added",
+    "shell.ts: extra unrequested features ($'..', arithmetic, # comments, process substitution) widen scope",
+    "shell.ts: \\r is not treated as whitespace",
+    "shell.ts: single large closure with dense state flags (word.plain/lead/touched/exists)"
+   ]
+  },
+  "cost": 0.1334061
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 6,
+    "scope": 9,
+    "tests": 2,
+    "security": 8
+   },
+   "B": {
+    "correctness": 5,
+    "quality": 8,
+    "scope": 8,
+    "tests": 7,
+    "security": 4
+   },
+   "winner": "A",
+   "why": "A unwraps shells by path and skips -o option values before -c; B misses both, so commands can be hidden from the policy, though B has far better tests.",
+   "defects_A": [
+    "shell.ts: no tests added for the new behaviour",
+    "shell.ts:13-155: one large closure-based list() function, dense and hard to follow"
+   ],
+   "defects_B": [
+    "shell.ts:268: SHELLS.has(name) uses the full word, so /bin/sh -c 'rm -rf /' is not unpacked and the inner command is hidden",
+    "shell.ts:269: the flag scan stops at the first non-dash word, so `bash -o pipefail -c 'rm x'` is not unpacked and the inner command is hidden",
+    "shell.ts:157-159: a substitution used as a redirect target creates no word, so `> $(f) b` drops the real argument b",
+    "shell.ts: no # comment handling, so commands inside a comment are reported (over-report)"
+   ]
+  },
+  "cost": 0.1204538
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 2,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 5,
+    "quality": 6,
+    "scope": 9,
+    "tests": 2,
+    "security": 5
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 8,
+    "tests": 8,
+    "security": 8
+   },
+   "winner": "B",
+   "why": "A splits a command at unquoted $( ) so trailing words become separate commands and can hide e.g. `git push --force`; B keeps the command whole and adds thorough tests.",
+   "defects_A": [
+    "shell.ts:128-137 unquoted $( and ) end the current command, so words after a substitution become their own command (`git $(x) push --force` hides `git push --force`)",
+    "shell.ts:174 bare wrapper (`sudo`, `sudo -u`) returned as a command instead of being dropped",
+    "no tests added for the new parser"
+   ],
+   "defects_B": [
+    "shell.ts:277 keywords matched on unquoted-or-quoted text, so quoted \"if\" is skipped",
+    "shell.ts:208 backslash-newline not treated as a line continuation",
+    "shell.ts:216-224 escaped nested backticks (\\`) inside backticks are not handled",
+    "shell.ts:293 bare wrapper (`sudo`) yields no command"
+   ]
+  },
+  "cost": 0.115282
+ },
+ {
+  "task": "hard-shell-split",
+  "run": 2,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 8,
+    "tests": 8,
+    "security": 6
+   },
+   "B": {
+    "correctness": 5,
+    "quality": 7,
+    "scope": 9,
+    "tests": 1,
+    "security": 4
+   },
+   "winner": "A",
+   "why": "B splits a command's argv around $( ) and backtick substitutions, which creates a policy bypass (rm $(x) -rf /) and spurious commands; A keeps argv intact and adds thorough tests.",
+   "defects_A": [
+    "shell.ts splitArgv: a wrapper with nothing to run (sudo -i, sudo, exec >log) returns [] and hides the command from the policy",
+    "shell.ts parse: `>|` splits at the `|`, so the redirect target shows up as a separate command",
+    "shell.ts splitArgv: `<<` heredoc operator is not dropped with its target",
+    "shell.ts splitArgv: quoted \"if\" or \"A=1\" is treated as a keyword or assignment because it checks unquoted text",
+    "shell.ts parse: nested backticks (\\` inside backticks) are not handled"
+   ],
+   "defects_B": [
+    "shell.ts tokenize: an unquoted $( ) or backtick ends the current command, so `rm $(true) -rf /` becomes [rm] and [-rf /] and a policy rule for rm -rf is missed",
+    "shell.ts tokenize: words after a substitution become spurious commands (`echo $(a) b` gives [echo],[a],[b])",
+    "shell.ts tokenize: backslash-newline is treated as a line continuation, which differs from the doc comment's escape rule",
+    "No tests added for any behaviour"
+   ]
+  },
+  "cost": 0.128156
+ },
+ {
+  "task": "hard-window",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 9,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B also preserves the original's sparse-array behaviour (TypeError with real events, holes for all-hole input) and tests it; A throws for all-hole arrays.",
+   "defects_A": [
+    "window.ts:110 sparse arrays: an all-holes input throws TypeError where the original returned an array of holes",
+    "no test for sparse arrays or -0/extreme values"
+   ],
+   "defects_B": [
+    "window.ts:150 hard-coded engine-specific TypeError message string copied from Bun/JSC",
+    "window.ts:146-150 extra sparse-array handling adds complexity and a separate pass"
+   ]
+  },
+  "cost": 0.0640133
+ },
+ {
+  "task": "hard-window",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A preserves the original sparse-array behaviour, including returning holes for an all-holes array, and tests more edge cases. B throws on an all-holes array.",
+   "defects_A": [
+    "window.ts:150 hard-codes an engine-specific error message string to mimic the original sparse-array failure",
+    "window.ts:147-150 extra sparse-array handling adds complexity beyond the core task"
+   ],
+   "defects_B": [
+    "window.ts:110-116 an all-holes sparse array throws a TypeError instead of returning holes as the original does",
+    "window.slow.test.ts is an oddly named new test file, and it has no sparse-array or -0 coverage"
+   ]
+  },
+  "cost": 0.0613305
+ },
+ {
+  "task": "frontier-cron",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 9,
+    "tests": 9,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Both look correct and well tested; B is more compact, with regex validation and cleaner 7-as-Sunday handling.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.0999109
+ },
+ {
+  "task": "frontier-cron",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both are correct; B has a principled 400-year search bound and month skipping, while A's tests are somewhat stronger but its 8-year bound is more of a magic number.",
+   "defects_A": [
+    "cron.ts: 8-year search window (8*366+1 days) is a magic number tied to the 2096-2104 gap"
+   ],
+   "defects_B": [
+    "cron.ts: `as Set<number>[]` cast combined with leftover `!` assertions is untidy"
+   ]
+  },
+  "cost": 0.09691179999999999
+ },
+ {
+  "task": "frontier-cron",
+  "run": 2,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 8,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both implement every rule correctly; A's separate test file adds a seeded brute-force cross-check, while B's tests are targeted only and edit the existing test file.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.089793
+ },
+ {
+  "task": "frontier-cron",
+  "run": 2,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "Both are correct; B's code is tighter and its tests add a seeded brute-force oracle that catches rule-combination regressions.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.0872836
+ },
+ {
+  "task": "frontier-semver",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 9,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "Both implement the doc well; A rejects malformed partials like `1.x.3` and `1.2+b` that B quietly accepts, and its tests cover more unreadable-range cases.",
+   "defects_A": [
+    "semver.ts parseSet: `toks[++i]` index mutation inside the operator handling is slightly hard to follow",
+    "semver.ts:~190 shared mutable ANY array returned from comparators (harmless since it is spread)"
+   ],
+   "defects_B": [
+    "semver.ts partial(): `1.x.3` is accepted and read as `1.x` instead of being unreadable",
+    "semver.ts PARTIAL regex allows build metadata on partial versions (`1.2+b`)",
+    "semver.ts: unrelated blank-line removal at the top",
+    "tests do not cover the malformed partial cases (`1.x.3`, `1.2-beta`)"
+   ]
+  },
+  "cost": 0.1506702
+ },
+ {
+  "task": "frontier-semver",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 9,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Both implement the contract correctly; A's grid-based sugar-vs-expansion tests are stronger regression coverage.",
+   "defects_A": [
+    "semver.ts partial(): accepts `1.x.3` and `x.2` as wildcards, so a malformed range may be read instead of rejected"
+   ],
+   "defects_B": [
+    "semver.ts:167: type alias `Partial` shadows the built-in `Partial<T>`",
+    "semver.ts:179: stale comment 'Missing parts count as 0.' left above `floor`"
+   ]
+  },
+  "cost": 0.1333219
+ },
+ {
+  "task": "frontier-semver",
+  "run": 2,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 7,
+    "scope": 9,
+    "tests": 9,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A compares large numeric prerelease identifiers exactly; B converts them to Numbers and mis-orders them past 2^53.",
+   "defects_A": [
+    "semver.ts parseSet: a hyphen range only works as the entire set, so `1.2.3 - 2.3.4 <1.5.0` matches nothing"
+   ],
+   "defects_B": [
+    "semver.ts ids(): `+id` loses precision for numeric prerelease identifiers above 2^53, so compare() can return 0 for different versions",
+    "semver.contract.test.ts: no test covers large numeric prerelease identifiers"
+   ]
+  },
+  "cost": 0.123184
+ },
+ {
+  "task": "frontier-semver",
+  "run": 2,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 7,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 8,
+    "tests": 8,
+    "security": 9
+   },
+   "winner": "B",
+   "why": "B compares large numeric prerelease ids exactly as the doc requires, while A loses precision above 2^53; B's only gap is that hyphen ranges can't combine with other comparators.",
+   "defects_A": [
+    "semver.ts ids(): `+id` converts numeric prerelease identifiers to Number, so identifiers above 2^53 compare equal (e.g. 9007199254740993 vs 9007199254740992)",
+    "semver.ts parse(): prerelease numeric identifiers now returned as numbers, a change in the output shape that wasn't asked for"
+   ],
+   "defects_B": [
+    "semver.ts parseSet(): the hyphen regex `^(\\S+)\\s+-\\s+(\\S+)$` needs the whole set to be `A - B`, so `1.2.3 - 2.3.4 <1.5.0` is unreadable and matches nothing",
+    "semver.ts parse(): the whole version regex is inlined on one very long line, which is hard to read"
+   ]
+  },
+  "cost": 0.1376491
+ },
+ {
+  "task": "wide-deprecate",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 10,
+    "quality": 9,
+    "scope": 9,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 8,
+    "scope": 9,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "Both do the same complete migration; A collapses the awkward multi-line calls and drops the stale compat.ts comment, giving slightly cleaner code.",
+   "defects_A": [],
+   "defects_B": [
+    "src/billing/invoice.ts:4: awkward leftover multi-line log.info( call",
+    "src/compat.ts:1: stale comment about old entry points left in place"
+   ]
+  },
+  "cost": 0.0780913
+ },
+ {
+  "task": "wide-deprecate",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 10,
+    "quality": 7,
+    "scope": 9,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 9,
+    "scope": 9,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Both fully migrate and remove oldLog; B also drops the now-stale compat.ts comment and tidies the awkward multi-line calls.",
+   "defects_A": [
+    "src/compat.ts:1 stale comment 'Old entry points kept for modules that have not moved yet' left with nothing to describe",
+    "src/billing/invoice.ts, src/http/routes.ts, src/users/delete.ts: awkward multi-line log calls left after the rewrite"
+   ],
+   "defects_B": []
+  },
+  "cost": 0.0790346
+ },
+ {
+  "task": "wide-deprecate",
+  "run": 2,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 7,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 7,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "The two diffs are identical apart from timestamps, and both migrate every call site and remove oldLog fully.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.07278470000000001
+ },
+ {
+  "task": "wide-deprecate",
+  "run": 2,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 10,
+    "quality": 9,
+    "scope": 10,
+    "tests": 7,
+    "security": 10
+   },
+   "B": {
+    "correctness": 10,
+    "quality": 9,
+    "scope": 10,
+    "tests": 7,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "The two diffs are identical apart from timestamps.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.07240479999999999
+ },
+ {
+  "task": "long-migrate",
+  "run": 1,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 8,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "Behaviourally identical migrations; B only additionally removes already-unused imports, which is tidier but marginally beyond scope.",
+   "defects_A": [
+    "unused HttpError import left in src/handlers/orders/listOrders.ts:2",
+    "unused Row/HttpError imports left in src/handlers/reports/summary.ts:1-2",
+    "unused Row import left in src/handlers/users/deactivateUser.ts:1"
+   ],
+   "defects_B": [
+    "removes pre-existing unused imports (listOrders, summary, deactivateUser), slightly beyond the migration"
+   ]
+  },
+  "cost": 0.08623990000000001
+ },
+ {
+  "task": "long-migrate",
+  "run": 1,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 9,
+    "tests": 5,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 5,
+    "security": 10
+   },
+   "winner": "tie",
+   "why": "Logic is identical in both; A only also removes already-unused imports, which is harmless and neither clearly better.",
+   "defects_A": [],
+   "defects_B": []
+  },
+  "cost": 0.07852319999999999
+ },
+ {
+  "task": "long-migrate",
+  "run": 2,
+  "order": 1,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 9,
+    "tests": 7,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 3,
+    "security": 10
+   },
+   "winner": "A",
+   "why": "The handler migrations are identical; A also adds meaningful tests for ordering and no-partial-write behaviour, while B adds none and trims unused imports.",
+   "defects_A": [
+    "Unused HttpError/Row imports left in listOrders.ts and summary.ts (already unused before the change)"
+   ],
+   "defects_B": [
+    "No tests added for the migration or its ordering and no-partial-write behaviour",
+    "Removes unused imports in listOrders.ts, summary.ts and deactivateUser.ts, which the task did not ask for"
+   ]
+  },
+  "cost": 0.0908379
+ },
+ {
+  "task": "long-migrate",
+  "run": 2,
+  "order": 2,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 9,
+    "quality": 9,
+    "scope": 8,
+    "tests": 3,
+    "security": 10
+   },
+   "B": {
+    "correctness": 9,
+    "quality": 8,
+    "scope": 8,
+    "tests": 8,
+    "security": 10
+   },
+   "winner": "B",
+   "why": "Handler code is identical; B adds useful regression tests for ordering and no-write-on-failure behaviour, while A adds none.",
+   "defects_A": [
+    "no tests added for the migrated ordering/no-write behaviours",
+    "removes pre-existing unused imports (HttpError in listOrders.ts and summary.ts), beyond the migration"
+   ],
+   "defects_B": [
+    "leaves unused imports (HttpError in listOrders.ts and summary.ts)"
+   ]
+  },
+  "cost": 0.0933202
+ },
+ {
+  "task": "real-three-changes",
+  "run": 1,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 8,
+    "scope": 8,
+    "tests": 3,
+    "security": 9
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 6,
+    "scope": 8,
+    "tests": 7,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A records resumed refused sessions as 'rejected', names non-Error throws, and keeps quota waits off the retry budget; B misses those but adds useful tests.",
+   "defects_A": [
+    "No tests added for the new behaviours (whole diff)",
+    "loadQuotaWait accepts fractional minutes, beyond the wait:<minutes> spec (config.ts)"
+   ],
+   "defects_B": [
+    "Resumed thread whose last session was refused is recorded as 'resume', not 'rejected' (main.ts:374)",
+    "Quota waits consume the retry counter n, so later retryable errors can exhaust the budget early (run.ts:301-321)",
+    "Non-Error throw is formatted with String(e), so an object shows as [object Object] and isn't named (run.ts:309)",
+    "Duplicate-id tool_use blocks are removed from the logged assistant message (run.ts:229-231)",
+    "Refused-history handling is a single if, not a loop alongside quota fallback (main.ts:387-401)",
+    "AGENTS.md and the roadmap are not updated for the new flag and behaviours"
+   ]
+  },
+  "cost": 0.15749860000000002
+ },
+ {
+  "task": "real-three-changes",
+  "run": 1,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 8,
+    "tests": 7,
+    "security": 9
+   },
+   "B": {
+    "correctness": 6,
+    "quality": 8,
+    "scope": 8,
+    "tests": 2,
+    "security": 9
+   },
+   "winner": "A",
+   "why": "A dedupes duplicate tool ids in the logged assistant blocks and adds loop tests; B still sends duplicate ids to the provider and adds no tests, though B records 'rejected' on thread resume where A doesn't.",
+   "defects_A": [
+    "src/clients/headless/main.ts:~374: a resumed thread whose last session was refused is recorded as 'resume', not 'rejected'",
+    "src/core/loop/run.ts:~221: a quota wait still counts toward the retry-attempt limit n",
+    "no tests for the headless --on-quota or refused-history paths"
+   ],
+   "defects_B": [
+    "src/core/loop/run.ts:~349: the assistant event still logs duplicate-id tool_use blocks, so duplicate ids are sent to the provider on the next request",
+    "no tests added for any of the three changes"
+   ]
+  },
+  "cost": 0.15891339999999998
+ },
+ {
+  "task": "real-three-changes",
+  "run": 2,
+  "order": 1,
+  "a": "claude",
+  "verdict": {
+   "A": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 8,
+    "tests": 3,
+    "security": 6
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 7,
+    "scope": 8,
+    "tests": 7,
+    "security": 8
+   },
+   "winner": "A",
+   "why": "A is the more complete implementation (resume-after-refusal records 'rejected' and carries parentSession, plus docs), but it can loop forever on retryAfterMs 0 and adds no tests.",
+   "defects_A": [
+    "src/core/loop/run.ts:~346 quota wait has no retryAfterMs>0 guard, so a quota error with retryAfterMs 0 loops forever",
+    "no tests added for the new behaviour",
+    "src/core/loop/run.ts:~540 shared-id count threaded through runTools adds plumbing"
+   ],
+   "defects_B": [
+    "src/clients/headless/main.ts:~376 resumed thread with a refused last session is recorded as 'resume', with no continues/parentSession or refused note",
+    "src/clients/headless/main.ts:~66 refusedNote is inserted between the resumeNote comment and its function",
+    "src/clients/headless/main.ts:~125 stderr prints the full provider error message",
+    "no SPEC/AGENTS/docs update for the new flag and behaviours",
+    "src/core/loop/run.ts:~461 text:null is serialised as the string 'null' instead of failing"
+   ]
+  },
+  "cost": 0.17473149999999998
+ },
+ {
+  "task": "real-three-changes",
+  "run": 2,
+  "order": 2,
+  "a": "cedia",
+  "verdict": {
+   "A": {
+    "correctness": 8,
+    "quality": 7,
+    "scope": 9,
+    "tests": 8,
+    "security": 9
+   },
+   "B": {
+    "correctness": 7,
+    "quality": 8,
+    "scope": 8,
+    "tests": 3,
+    "security": 7
+   },
+   "winner": "A",
+   "why": "A guards retry-after 0 so quota waiting cannot loop forever and adds tests for its edge cases; B is better documented and handles the refused-resume case more fully, but has the unbounded loop and no tests.",
+   "defects_A": [
+    "main.ts: a resumed thread whose last session was refused is recorded as why 'resume' with no continues/parentSession or refusal note",
+    "main.ts:~65: refusedNote inserted between the resumeNote comment and its function, orphaning the comment",
+    "no SPEC.md or AGENTS.md update for --on-quota and the new behaviours",
+    "test/recovery.test.ts: test title claims a 1-50 minute range that loadQuotaWait does not enforce"
+   ],
+   "defects_B": [
+    "run.ts:~368: quota error with retryAfterMs 0 is waited out forever because quotaWaited never grows, an unbounded request loop",
+    "no tests added for the unbounded-wait edge, abort during a wait, or duplicate ids on other paths",
+    "run.ts:~440: unknown tool name gets a '...' suffix, going beyond the plain cut to 64 characters",
+    "main.ts: the refused message is written to stderr unredacted (sliced to 200 characters)"
+   ]
+  },
+  "cost": 0.1751073
+ }
+]
