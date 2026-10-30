@@ -89,6 +89,9 @@ describe('plugins (offline)', () => {
     expect((await tool.run({ name: 'demo:greet', file: '../.mcp.json' }, ctx)).text).not.toContain('mcpServers');
     expect(skillsBlock(skills)).toContain("demo:greet (a plugin's): Greet someone");
     expect(skillCommand('/demo:greet Ada', skills)).toContain('(/demo:greet is the demo:greet skill');
+    // The bare name, as a plugin's own text calls its skills, names the one plugin skill that ends with it.
+    expect((await tool.run({ name: 'tidy' }, ctx)).text).toContain('Read the module first.');
+    expect(skillCommand('/greet Ada', skills)).toContain('(/greet is the demo:greet skill');
   });
 
   test('a plugin MCP server starts only after cedia plugin mcp, with the plugin folder filled in, and leaves with it', () => {

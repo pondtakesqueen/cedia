@@ -20,6 +20,11 @@ import type { ToolSpec } from '../tools/registry.ts';
 // An enabled plugin's skills (skills/<name>/SKILL.md) and commands (commands/<name>.md, a Claude Code slash command:
 // front matter, then the prompt) are listed as `<plugin>:<name>`, after the repository's. They are a third party's
 // text, so they are treated as a repository's are: read only inside the plugin's folder, redacted and made inert.
+//
+// A skill whose front matter says `disable-model-invocation: true` (Claude Code's key; pstack sets it on nearly every
+// skill) is the person's to pick: it is a `/` command but stays out of the first turn's list, so a plugin with dozens
+// of them costs the session nothing until one is asked for. The skill tool still loads it by name, for the `/` line
+// and for a loaded skill that names it.
 
 export type Skill = {
   name: string;
@@ -31,6 +36,8 @@ export type Skill = {
   plugin?: string;
   // A command's own file in `dir`, which holds its instructions in place of SKILL.md; a command has no other files.
   file?: string;
+  // Only the person picks it, with `/`: `disable-model-invocation: true`. Left out of the first turn's list.
+  manual?: true;
 };
 
 // `cedia commands --json`: what a client offers when the person types `/`. Each skill is a command; `/<name> <text>`
@@ -44,6 +51,8 @@ const NAME = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const COMMAND_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const MAX_DESCRIPTION = 1024;
 const MAX_SKILLS = 50;
+// The `/`-only skills are counted apart: they cost the first turn nothing, and a plugin like pstack ships 57.
+const MAX_MANUAL = 200;
 // The most the list may take of the first turn.
 export const MAX_SKILLS_BLOCK = 8_000;
 const MAX_FILE_BYTES = 256 * 1024;
@@ -105,6 +114,7 @@ function readSkill(dir: string, source: Skill['source'], plugin?: { name: string
       ...(hint ? { argumentHint: hint } : {}),
       ...(plugin ? { plugin: plugin.name } : {}),
       ...(plugin?.command ? { file } : {}),
+      ...(/^true$/i.test(fm.fields['disable-model-invocation'] ?? '') ? { manual: true as const } : {}),
     };
   } catch {
     return undefined;
@@ -173,11 +183,14 @@ export function loadSkills(cwd: string, home: string): Skill[] {
   }
   found.push(...pluginSkills(home));
   const seen = new Set<string>();
-  return found.filter((s) => !seen.has(s.name) && seen.add(s.name)).slice(0, MAX_SKILLS);
+  let listed = 0;
+  let manual = 0;
+  return found.filter((s) => !seen.has(s.name) && seen.add(s.name) && (s.manual ? ++manual <= MAX_MANUAL : ++listed <= MAX_SKILLS));
 }
 
 // How the list reaches the model: one frame, a line a skill, cut at the cap.
-export function skillsBlock(skills: Skill[], max = MAX_SKILLS_BLOCK): string {
+export function skillsBlock(all: Skill[], max = MAX_SKILLS_BLOCK): string {
+  const skills = all.filter((s) => !s.manual);
   if (!skills.length) return '';
   const lines: string[] = [];
   let used = 0;
@@ -231,8 +244,16 @@ function skillFile(skill: Skill, file: string): { text: string } | { error: stri
   }
 }
 
+// A skill by name. A plugin's skill is listed as `<plugin>:<name>`, but its text calls itself and its siblings by the
+// bare name (pstack's say `/statechart`), so a bare name that one plugin's skill alone ends with names that skill.
+export function findSkill(skills: Skill[], name: string): Skill | undefined {
+  const exact = skills.find((s) => s.name === name);
+  if (exact || name.includes(':')) return exact;
+  const bare = skills.filter((s) => s.plugin && s.name === `${s.plugin}:${name}`);
+  return bare.length === 1 ? bare[0] : undefined;
+}
+
 export function skillTool(skills: Skill[]): ToolSpec {
-  const byName = new Map(skills.map((s) => [s.name, s]));
   return {
     name: 'skill',
     description:
@@ -246,8 +267,8 @@ export function skillTool(skills: Skill[]): ToolSpec {
     effect: 'read',
     replay: 'safe',
     async run(input) {
-      const skill = byName.get(String(input.name ?? ''));
-      if (!skill) return { text: `no skill ${String(input.name ?? '')}; the skills are: ${[...byName.keys()].join(', ')}`, isError: true };
+      const skill = findSkill(skills, String(input.name ?? ''));
+      if (!skill) return { text: `no skill ${String(input.name ?? '')}; the skills are: ${skills.filter((s) => !s.manual).map((s) => s.name).join(', ')}`, isError: true };
       if (typeof input.file === 'string' && input.file && !skill.file) {
         const f = skillFile(skill, input.file);
         return 'error' in f ? { text: f.error, isError: true } : { text: inert(f.text), isError: false };
@@ -279,8 +300,8 @@ export const commandList = (skills: Skill[]): CommandList => ({
 // typed, with a line asking the writer to load the skill first; any other prompt, `/` or not, is left alone.
 export function skillCommand(prompt: string, skills: Skill[]): string | undefined {
   const m = /^\/((?:[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9_-]+)|[a-z0-9-]+)(?:\s|$)/.exec(prompt);
-  const skill = m && skills.find((s) => s.name === m[1]);
-  if (!skill) return undefined;
+  const skill = m && findSkill(skills, m[1]!);
+  if (!m || !skill) return undefined;
   const rest = prompt.slice(m[0].length).trim();
-  return `${prompt.trimEnd()}\n\n(/${skill.name} is the ${skill.name} skill: load it with the skill tool first, then do what it says${rest ? ', for the text after the command' : ''}.)`;
+  return `${prompt.trimEnd()}\n\n(/${m[1]} is the ${skill.name} skill: load it with the skill tool first, then do what it says${rest ? ', for the text after the command' : ''}.)`;
 }
