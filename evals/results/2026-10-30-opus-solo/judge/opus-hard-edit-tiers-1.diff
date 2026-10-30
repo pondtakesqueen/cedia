@@ -1,0 +1,112 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.edge.test.ts b/edit.edge.test.ts
+--- a/edit.edge.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/edit.edge.test.ts	2026-10-30 17:19:30.637749645 +0000
+@@ -0,0 +1,34 @@
++import { expect, test } from 'bun:test';
++import { applyEdit } from './edit.ts';
++
++test('deleting the last line of a file without a trailing newline', () => {
++  expect(applyEdit('a\nb  ', { old_text: 'b\n', new_text: '' })).toEqual({
++    content: 'a',
++    applied: { from: 2, to: 2, tier: 'trailing-space', count: 1 },
++  });
++});
++
++test('indentation tier swaps tabs in old_text for the file indentation', () => {
++  expect(applyEdit('x\n  b\n', { old_text: '\tb', new_text: '\tc\n\td' })).toEqual({
++    content: 'x\n  c\n  d\n',
++    applied: { from: 2, to: 2, tier: 'indentation', count: 1 },
++  });
++});
++
++test('replace_all with no exact match still reports not found', () => {
++  const r = applyEdit('a\nb\na\n', { old_text: 'q', new_text: 'z', replace_all: true });
++  expect('error' in r && r.error).toContain('not found');
++});
++
++test('first-line pointer lists at most 5 lines', () => {
++  const r = applyEdit('a b\n'.repeat(6), { old_text: 'a b\nzz', new_text: 'z' });
++  expect('error' in r && r.error).toContain('first line appears at line 1, 2, 3, 4, 5');
++  expect('error' in r && r.error).not.toContain('5, 6');
++});
++
++test('replace_all reports the span from the first to the last match', () => {
++  expect(applyEdit('x\ny\nx\n', { old_text: 'x', new_text: 'z', replace_all: true })).toEqual({
++    content: 'z\ny\nz\n',
++    applied: { from: 1, to: 3, tier: 'exact', count: 2 },
++  });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-30 17:18:38.826517261 +0000
++++ b/edit.ts	2026-10-30 17:19:15.701634584 +0000
+@@ -23,5 +23,69 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text, new_text } = edit;
++  if (old_text === '') return { error: 'old_text is empty; to create or overwrite a file, use write' };
++  if (old_text === new_text) return { error: 'old_text and new_text are the same; nothing to change' };
++
++  const lineAt = (index: number) => content.slice(0, index).split('\n').length;
++
++  // Tier 1: exact.
++  const starts: number[] = [];
++  for (let i = content.indexOf(old_text); i !== -1; i = content.indexOf(old_text, i + old_text.length)) starts.push(i);
++  if (starts.length > 1 && !edit.replace_all) {
++    return { error: `old_text matches ${starts.length} places (first at line ${lineAt(starts[0])}); add surrounding lines to make it unique, or set replace_all` };
++  }
++  if (starts.length > 0) {
++    const from = lineAt(starts[0]);
++    const to = lineAt(starts[starts.length - 1] + old_text.length - 1);
++    const result = edit.replace_all ? content.split(old_text).join(new_text) : content.slice(0, starts[0]) + new_text + content.slice(starts[0] + old_text.length);
++    return { content: result, applied: { from, to, tier: 'exact', count: starts.length } };
++  }
++
++  // Tiers 2 and 3: whole lines.
++  const toLines = (text: string) => (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n');
++  const lines = content.split('\n');
++  const searchable = content.endsWith('\n') ? lines.length - 1 : lines.length;
++  const oldLines = toLines(old_text);
++  const newLines = new_text === '' || new_text === '\n' ? [] : toLines(new_text);
++  const indentOf = (line: string) => line.slice(0, line.length - line.trimStart().length);
++  const firstNonBlank = (ls: string[]) => ls.find((l) => l.trim() !== '');
++
++  const tiers: { tier: Tier; norm: (line: string) => string; label: string }[] = [
++    { tier: 'trailing-space', norm: (l) => l.trimEnd(), label: 'ignoring trailing whitespace' },
++    { tier: 'indentation', norm: (l) => l.trim(), label: 'ignoring indentation' },
++  ];
++  for (const { tier, norm, label } of tiers) {
++    const want = oldLines.map(norm);
++    const matches: number[] = [];
++    for (let i = 0; i + want.length <= searchable; i++) {
++      if (want.every((w, j) => norm(lines[i + j]) === w)) matches.push(i);
++    }
++    if (matches.length > 1) {
++      return { error: `old_text matches ${matches.length} places ${label} (lines ${matches.map((m) => m + 1).join(', ')}); add surrounding lines to make it unique` };
++    }
++    if (matches.length === 1) {
++      const at = matches[0];
++      let replacement = newLines;
++      if (tier === 'indentation') {
++        const oldIndent = indentOf(firstNonBlank(oldLines) ?? '');
++        const fileIndent = indentOf(firstNonBlank(lines.slice(at, at + oldLines.length)) ?? '');
++        replacement = newLines.map((l) => {
++          if (l.trim() === '') return l;
++          return l.startsWith(oldIndent) ? fileIndent + l.slice(oldIndent.length) : l;
++        });
++      }
++      const result = [...lines.slice(0, at), ...replacement, ...lines.slice(at + oldLines.length)].join('\n');
++      return { content: result, applied: { from: at + 1, to: at + oldLines.length, tier, count: 1 } };
++    }
++  }
++
++  let message = 'old_text not found in the file (also tried ignoring trailing whitespace and indentation)';
++  const first = firstNonBlank(oldLines)?.trim();
++  if (first) {
++    const seen: number[] = [];
++    for (let i = 0; i < lines.length && seen.length < 5; i++) if (lines[i].includes(first)) seen.push(i + 1);
++    if (seen.length > 0) message += `; its first line appears at line ${seen.join(', ')}`;
++  }
++  return { error: message };
+ }

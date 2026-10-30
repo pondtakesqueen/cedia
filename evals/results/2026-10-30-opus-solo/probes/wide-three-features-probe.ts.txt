@@ -1,0 +1,11 @@
+const d = process.argv[2];
+const { parseDuration, formatDuration } = await import(d + "/src/duration.ts");
+const { slugify } = await import(d + "/src/slug.ts");
+const t = (f: () => unknown) => { try { return JSON.stringify(f()); } catch (e: any) { return "ERR"; } };
+const o = [
+  `0.5005s=${t(() => parseDuration("0.5005s"))}`, `1.0005s=${t(() => parseDuration("1.0005s"))}`, `2.5ms=${t(() => parseDuration("2.5ms"))}`,
+  `tab=${t(() => parseDuration("\t5s"))}`, `inf=${t(() => parseDuration("Infinitys"))}`, `1e3s=${t(() => parseDuration("1e3s"))}`, `.5s=${t(() => parseDuration(".5s"))}`, `5.s=${t(() => parseDuration("5.s"))}`,
+  `fmtFrac=${t(() => formatDuration(1.5))}`, `fmtInf=${t(() => formatDuration(Infinity))}`, `fmtNaN=${t(() => formatDuration(NaN))}`,
+  `ǿ=${t(() => slugify("ǿx"))}`, `Ø=${t(() => slugify("Øre"))}`, `ẞ=${t(() => slugify("Straẞe"))}`, `max0=${t(() => slugify("ab-cd", 0))}`, `maxNeg=${t(() => slugify("ab-cd", -1))}`,
+];
+console.log(d.split("/").pop(), o.join(" "));

@@ -1,0 +1,10 @@
+const dir = process.argv[2];
+const { CsvStream, parseCsv } = await import(dir + "/csv.ts");
+// interleave two streams char by char (shared module regex in cedia runs)
+const a = 'aa,bb\r\ncc,"d""d"\n' .repeat(50), b = 'x,"y\n,y",z\r\n'.repeat(50);
+const sa = new CsvStream(), sb = new CsvStream(); const ra: string[][] = [], rb: string[][] = [];
+for (let i = 0; i < Math.max(a.length, b.length); i++) { if (i < a.length) ra.push(...sa.push(a[i])); if (i < b.length) rb.push(...sb.push(b.slice(i, i + 1))); }
+ra.push(...sa.end()); rb.push(...sb.end());
+const inter = JSON.stringify(ra) === JSON.stringify(parseCsv(a)) && JSON.stringify(rb) === JSON.stringify(parseCsv(b));
+const after = (f: (s: any) => void) => { const s = new CsvStream(); try { f(s) } catch {} try { s.push("x"); return "push ok" } catch (e: any) { return e.constructor.name + ": " + e.message } };
+console.log(dir.split("/").pop(), "interleave ok:", inter, "| after SyntaxError:", after(s => s.push('a"')), "| after end:", after(s => { s.push("a"); s.end() }));

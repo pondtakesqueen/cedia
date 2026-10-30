@@ -1,0 +1,15 @@
+const dir = process.argv[2];
+const { CsvStream } = await import(dir + "/csv.ts");
+function time(label: string, text: string, size: number) {
+  const s = new CsvStream(); const t0 = performance.now(); let n = 0;
+  for (let i = 0; i < text.length; i += size) n += s.push(text.slice(i, i + size)).length;
+  n += s.end().length; return `${label}=${(performance.now() - t0).toFixed(0)}ms(${n})`;
+}
+const mixed = (n: number) => 'ab,"c""d\r\ne",x\r\n'.repeat(n);
+const bigQuoted = (n: number) => '"' + 'a""b,\r\n'.repeat(n) + '"\n';
+const bigPlain = (n: number) => 'abcdefgh'.repeat(n) + "\r\n";
+const out = [dir.split("/").pop()];
+out.push(time("mixed1M/1ch", mixed(60000), 1), time("mixed4M/1ch", mixed(240000), 1));
+out.push(time("bigQuoted4M/1ch", bigQuoted(500000), 1), time("bigPlain4M/1ch", bigPlain(500000), 1));
+out.push(time("mixed64M/64k", mixed(3800000), 65536), time("bigQ/3ch", bigQuoted(500000), 3));
+console.log(out.join(" "));

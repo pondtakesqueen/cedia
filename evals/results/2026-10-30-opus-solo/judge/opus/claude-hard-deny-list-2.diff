@@ -1,0 +1,82 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.ts b/deny.ts
+--- a/deny.ts	2026-10-30 03:48:50.837802265 +0000
++++ b/deny.ts	2026-10-30 03:50:18.750128098 +0000
+@@ -1,5 +1,5 @@
+ import { homedir } from 'node:os';
+-import { isAbsolute, relative, resolve } from 'node:path';
++import { basename, isAbsolute, relative, resolve } from 'node:path';
+ 
+ export type Hit = { name: 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside'; reason: string };
+ 
+@@ -36,5 +36,70 @@
+ //
+ // Anything else: undefined.
+ export function denyListed(argv: string[], cwd: string): Hit | undefined {
+-  throw new Error('not implemented');
++  const [cmd, ...args] = argv;
++  if (cmd === undefined) return;
++  switch (basename(cmd)) {
++    case 'git':
++      return gitHit(args);
++    case 'rm':
++      return rmHit(args, cwd);
++    case 'find':
++      return findHit(args, cwd);
++  }
++}
++
++// `$VAR`, `$(...)`, `~bob`, `~+`, `~-`: the shell decides what these mean, so we can't check them.
++const unresolvable = (p: string) => p.includes('$') || (p.startsWith('~') && p !== '~' && !p.startsWith('~/'));
++
++// A single-dash flag group such as -fu, tested for any of `letters`.
++const shortGroup = (word: string, letters: RegExp) => /^-[^-]/.test(word) && letters.test(word.slice(1));
++
++// `--name` alone or as `--name=value`.
++const longFlag = (word: string, ...names: string[]) => names.some((n) => word === n || word.startsWith(n + '='));
++
++const gitValueOptions = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
++
++function gitHit(args: string[]): Hit | undefined {
++  let i = 0;
++  while (i < args.length && args[i].startsWith('-')) i += gitValueOptions.has(args[i]) ? 2 : 1;
++  const [sub, ...rest] = args.slice(i);
++
++  if (sub === 'push') {
++    const word = rest.find(
++      (w) =>
++        longFlag(w, '--force', '--force-with-lease', '--mirror', '--delete', '--prune') ||
++        shortGroup(w, /[fd]/) ||
++        w.startsWith('+') ||
++        w.startsWith(':'),
++    );
++    if (word) return { name: 'force-push', reason: `git push ${word} can overwrite or delete remote refs` };
++  }
++  if (sub === 'reset' && rest.includes('--hard'))
++    return { name: 'reset-hard', reason: 'git reset --hard discards uncommitted changes' };
++  if (
++    sub === 'clean' &&
++    rest.some((w) => w === '--force' || shortGroup(w, /f/)) &&
++    !rest.some((w) => w === '-n' || w === '--dry-run')
++  )
++    return { name: 'clean-force', reason: 'git clean --force deletes untracked files' };
++}
++
++function rmHit(args: string[], cwd: string): Hit | undefined {
++  const end = args.indexOf('--');
++  const before = end < 0 ? args : args.slice(0, end);
++  const flags = before.filter((w) => w.startsWith('-'));
++  const targets = [...before.filter((w) => !w.startsWith('-')), ...(end < 0 ? [] : args.slice(end + 1))];
++
++  if (!flags.some((w) => w === '--recursive' || shortGroup(w, /[rR]/))) return;
++  if (targets.length === 0) return { name: 'rm-outside', reason: 'recursive rm with no targets (e.g. fed by xargs)' };
++  const bad = targets.find((t) => unresolvable(t) || !insideWorkspace(t, cwd) || sameDir(t, cwd));
++  if (bad) return { name: 'rm-outside', reason: `rm -r ${bad} is not strictly inside ${cwd}` };
++}
++
++function findHit(args: string[], cwd: string): Hit | undefined {
++  if (!args.some((w) => w === '-delete' || w === '-exec' || w === '-execdir')) return;
++  // No start paths means `.`, which is always fine.
++  const starts = args.slice(0, args.findIndex((w) => w.startsWith('-')));
++  const bad = starts.find((p) => unresolvable(p) || !insideWorkspace(p, cwd));
++  if (bad) return { name: 'rm-outside', reason: `find ${bad} deletes or runs commands outside ${cwd}` };
+ }

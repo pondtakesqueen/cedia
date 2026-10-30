@@ -1,0 +1,17 @@
+Running 10 tasks x 1 runs on cedia (anthropic/claude-opus-5-5), 2 at a time...
+  PASS hard-csv-stream#1 (82.6s $0.2295, peak 15k)
+  PASS hard-deny-list#1 (83.0s $0.2269, peak 16k)
+  PASS hard-injection#1 (10.7s $0.0321, peak 7k)
+  PASS hard-ledger#1 (46.1s $0.1516, peak 15k)
+  PASS hard-edit-tiers#1 (65.3s $0.1833, peak 15k)
+  PASS hard-memo-async#1 (46.9s $0.1298, peak 12k)
+budget $0.9 reached after $0.9532; stopping
+  PASS hard-pool#1 (58.2s $0.1777, peak 13k)
+
+Results written to evals/results/2026-10-30-opus-solo/cedia-opus-med-r2.jsonl
+cedia (anthropic/claude-opus-5-5): 7 tasks, 7 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 56.1s per run, 65207 input / 5494 output tokens per run, cache hit 87.7%
+  peak context 13k mean, 16k max, 0 of 7 runs past 100k; 0 handoffs, 0 sub-threads
+  speed 130.6 output tok/s, 1.89s to first token per call; model 99.4% of time, cedia 0.0%
+  cost $1.1309 total, $0.1616 per passed run

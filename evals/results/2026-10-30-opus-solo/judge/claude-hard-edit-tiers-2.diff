@@ -1,0 +1,113 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-30 03:52:56.463197485 +0000
++++ b/edit.ts	2026-10-30 03:54:54.668061008 +0000
+@@ -23,5 +23,108 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text, new_text } = edit;
++  if (old_text === '') return { error: 'old_text is empty; to create a file or replace all of it, use write' };
++  if (old_text === new_text) return { error: 'old_text and new_text are the same; nothing to change' };
++
++  const exact = applyExact(content, old_text, new_text, edit.replace_all ?? false);
++  if (exact) return exact;
++
++  const lines = splitLines(content);
++  const oldLines = splitLines(old_text);
++  const newLines = splitLines(new_text);
++  const tiers = [
++    { tier: 'trailing-space', ignoring: 'trailing whitespace', norm: (s: string) => s.trimEnd() },
++    { tier: 'indentation', ignoring: 'indentation', norm: (s: string) => s.trim() },
++  ] as const;
++  for (const { tier, ignoring, norm } of tiers) {
++    const starts = findWindows(lines, oldLines, norm);
++    if (starts.length > 1) {
++      const at = starts.map((i) => i + 1).join(', ');
++      return { error: `old_text matches ${starts.length} places ignoring ${ignoring}, at lines ${at}; add surrounding lines to make it unique` };
++    }
++    if (starts.length === 1) {
++      const from = starts[0];
++      const to = from + oldLines.length;
++      const replacement = tier === 'indentation' ? reindent(newLines, oldLines, lines.slice(from, to)) : newLines;
++      const out = [...lines.slice(0, from), ...replacement, ...lines.slice(to)];
++      return { content: joinLines(out, content.endsWith('\n')), applied: { from: from + 1, to, tier, count: 1 } };
++    }
++  }
++  return { error: notFound(lines, oldLines) };
++}
++
++function applyExact(content: string, oldText: string, newText: string, replaceAll: boolean): ReturnType<typeof applyEdit> | null {
++  // Overlapping occurrences count, so an ambiguous match is never silently resolved to the first one.
++  const starts: number[] = [];
++  for (let i = content.indexOf(oldText); i !== -1; i = content.indexOf(oldText, i + 1)) starts.push(i);
++  if (starts.length === 0) return null;
++  if (starts.length > 1 && !replaceAll) {
++    return {
++      error: `old_text matches ${starts.length} places (first at line ${lineAt(content, starts[0])}); add surrounding lines to make it unique, or set replace_all to replace every one`,
++    };
++  }
++  // replace_all takes non-overlapping occurrences left to right, like String.replaceAll.
++  const taken: number[] = [];
++  for (const i of starts) if (taken.length === 0 || i >= taken[taken.length - 1] + oldText.length) taken.push(i);
++  let out = '';
++  let prev = 0;
++  for (const i of taken) {
++    out += content.slice(prev, i) + newText;
++    prev = i + oldText.length;
++  }
++  out += content.slice(prev);
++  const last = taken[taken.length - 1];
++  return {
++    content: out,
++    applied: { from: lineAt(content, taken[0]), to: lineAt(content, last + oldText.length - 1), tier: 'exact', count: taken.length },
++  };
++}
++
++// 1-based line of the character at `index`.
++function lineAt(content: string, index: number): number {
++  return content.slice(0, index).split('\n').length;
++}
++
++// A final newline ends the last line rather than starting an empty one, so '' has no lines.
++function splitLines(text: string): string[] {
++  const lines = text.split('\n');
++  if (lines[lines.length - 1] === '') lines.pop();
++  return lines;
++}
++
++function joinLines(lines: string[], trailingNewline: boolean): string {
++  return lines.length === 0 ? '' : lines.join('\n') + (trailingNewline ? '\n' : '');
++}
++
++// 0-based starts of every window of `lines` equal to `oldLines` under `norm`.
++function findWindows(lines: string[], oldLines: string[], norm: (s: string) => string): number[] {
++  const want = oldLines.map(norm);
++  const have = lines.map(norm);
++  const starts: number[] = [];
++  for (let i = 0; i + want.length <= have.length; i++) if (want.every((w, k) => have[i + k] === w)) starts.push(i);
++  return starts;
++}
++
++const firstNonBlank = (lines: string[]) => lines.find((l) => l.trim() !== '');
++const indentOf = (line: string | undefined) => line?.match(/^\s*/)![0] ?? '';
++
++function reindent(newLines: string[], oldLines: string[], matched: string[]): string[] {
++  const oldIndent = indentOf(firstNonBlank(oldLines));
++  const fileIndent = indentOf(firstNonBlank(matched));
++  // A line shallower than old_text's first line (a closing brace, say) can't have oldIndent swapped out; when the
++  // file's indentation is oldIndent plus a prefix, adding that prefix keeps it at the same depth relative to the rest.
++  const extra = fileIndent.endsWith(oldIndent) ? fileIndent.slice(0, fileIndent.length - oldIndent.length) : '';
++  return newLines.map((l) => (l.trim() === '' ? l : l.startsWith(oldIndent) ? fileIndent + l.slice(oldIndent.length) : extra + l));
++}
++
++function notFound(lines: string[], oldLines: string[]): string {
++  const first = firstNonBlank(oldLines)?.trim();
++  const at = first ? lines.flatMap((l, i) => (l.includes(first) ? [i + 1] : [])) : [];
++  let message = 'old_text not found, even ignoring trailing whitespace and indentation';
++  if (at.length > 0) {
++    const more = at.length > 5 ? ` (and ${at.length - 5} more)` : '';
++    message += `; its first line appears at line ${at.slice(0, 5).join(', ')}${more}, so compare the lines after it with the file`;
++  }
++  return message;
+ }

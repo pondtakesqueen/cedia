@@ -1,0 +1,85 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/edit.ts b/edit.ts
+--- a/edit.ts	2026-10-30 03:53:23.187554201 +0000
++++ b/edit.ts	2026-10-30 03:55:08.022121482 +0000
+@@ -23,5 +23,80 @@
+ // - nothing matched: message contains "not found", and when the first non-blank line of old_text (trimmed) occurs
+ //   in some lines of content, "first line appears at line L1, L2" (at most 5 lines).
+ export function applyEdit(content: string, edit: TextEdit): { content: string; applied: Applied } | { error: string } {
+-  throw new Error('not implemented');
++  const { old_text: oldText, new_text: newText } = edit;
++  if (oldText === '') return { error: 'old_text is empty; use write to create or overwrite a whole file' };
++  if (oldText === newText) return { error: 'old_text and new_text are the same; there is nothing to change' };
++
++  // Without replace_all, step by 1 so that overlapping occurrences still count as ambiguous.
++  const starts: number[] = [];
++  const step = edit.replace_all ? oldText.length : 1;
++  for (let i = content.indexOf(oldText); i !== -1; i = content.indexOf(oldText, i + step)) starts.push(i);
++  if (starts.length > 1 && !edit.replace_all) {
++    return {
++      error: `old_text matches ${starts.length} places (first at line ${lineAt(content, starts[0])}); include more surrounding lines to make it unique, or set replace_all`,
++    };
++  }
++  if (starts.length > 0) {
++    const last = starts[starts.length - 1];
++    return {
++      // split/join rather than replaceAll, which would expand `$&` and friends in new_text.
++      content: content.split(oldText).join(newText),
++      applied: { from: lineAt(content, starts[0]), to: lineAt(content, last + oldText.length - 1), tier: 'exact', count: starts.length },
++    };
++  }
++
++  const fileLines = content.split('\n');
++  // A trailing newline leaves an empty last element that is not a line of the file.
++  const lineCount = content === '' ? 0 : content.endsWith('\n') ? fileLines.length - 1 : fileLines.length;
++  const oldLines = textLines(oldText);
++  const newLines = textLines(newText);
++  const tiers: [Tier, (line: string) => string][] = [
++    ['trailing-space', (line) => line.trimEnd()],
++    ['indentation', (line) => line.trim()],
++  ];
++  for (const [tier, normalize] of tiers) {
++    const wanted = oldLines.map(normalize);
++    const found: number[] = [];
++    for (let i = 0; i + wanted.length <= lineCount; i++) {
++      if (wanted.every((line, j) => normalize(fileLines[i + j]) === line)) found.push(i);
++    }
++    if (found.length > 1) {
++      return {
++        error: `old_text matches ${found.length} places (lines ${found.map((i) => i + 1).join(', ')}); include more surrounding lines to make it unique`,
++      };
++    }
++    if (found.length === 1) {
++      const at = found[0];
++      const matched = fileLines.slice(at, at + oldLines.length);
++      fileLines.splice(at, oldLines.length, ...(tier === 'indentation' ? reindent(newLines, oldLines, matched) : newLines));
++      return { content: fileLines.join('\n'), applied: { from: at + 1, to: at + oldLines.length, tier, count: 1 } };
++    }
++  }
++
++  const firstLine = firstNonBlank(oldLines).trim();
++  const appears =
++    firstLine === '' ? [] : fileLines.slice(0, lineCount).flatMap((line, i) => (line.includes(firstLine) ? [i + 1] : [])).slice(0, 5);
++  return {
++    error:
++      appears.length > 0
++        ? `old_text not found; its first line appears at line ${appears.join(', ')}, so re-read the file there and copy the lines exactly`
++        : 'old_text not found; re-read the file and copy the lines to replace exactly',
++  };
++}
++
++// 1-based line of the character at `index`.
++const lineAt = (content: string, index: number) => content.slice(0, index).split('\n').length;
++
++// A single trailing newline is ignored, and empty text has no lines (so an empty new_text deletes).
++const textLines = (text: string) => (text === '' ? [] : (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n'));
++
++const firstNonBlank = (lines: string[]) => lines.find((line) => line.trim() !== '') ?? '';
++const indentOf = (line: string) => line.match(/^\s*/)![0];
++
++// Swaps the indentation of old_text's first non-blank line for that of the matched window's, on every non-blank line
++// of new_text. Lines indented less than old_text's first line can't be mapped and are kept as given.
++function reindent(newLines: string[], oldLines: string[], matched: string[]): string[] {
++  const from = indentOf(firstNonBlank(oldLines));
++  const to = indentOf(firstNonBlank(matched));
++  return newLines.map((line) => (line.trim() !== '' && line.startsWith(from) ? to + line.slice(from.length) : line));
+ }
