@@ -281,6 +281,40 @@ describe('ink TUI interaction (fake terminal, faux model)', () => {
       h.stop();
     }
   }, 60000);
+  test('/model lists auto and oplan, and /model auto keeps the writer and names the mode', async () => {
+    const h = start();
+    try {
+      await Bun.sleep(500);
+      h.write('/model');
+      await Bun.sleep(400);
+      h.write('\x1b');
+      await Bun.sleep(300);
+      h.write('\r');
+      await Bun.sleep(600);
+      expect(h.frame()).toContain('auto  Auto: plans and reviews');
+      expect(h.frame()).toContain('oplan  Oplan:');
+      h.write('\x1b');
+      await Bun.sleep(400);
+      h.write('/model auto');
+      await Bun.sleep(400);
+      h.write('\x1b');
+      await Bun.sleep(300);
+      h.write('\r');
+      await Bun.sleep(600);
+      expect(h.frame()).toMatch(/the next turn runs in auto mode on \S+/);
+      expect(h.frame()).toContain('· auto');
+      // oplan needs roles.plan, and none is set here: it says so instead of failing the next turn.
+      h.write('/model oplan');
+      await Bun.sleep(400);
+      h.write('\x1b');
+      await Bun.sleep(300);
+      h.write('\r');
+      await Bun.sleep(600);
+      expect(h.frame()).toContain('oplan plans with roles.plan');
+    } finally {
+      h.stop();
+    }
+  }, 60000);
   test('scrolling reveals older and newer messages', async () => {
     // NOTE: headless re-reads CEDIA_FAUX_SCRIPT on every turn, so every turn
     // returns the same first step. Turns are serialized with fixed sleeps:
