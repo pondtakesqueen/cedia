@@ -171,6 +171,9 @@
         },
         {
           "$ref": "#/definitions/CompactionBlock"
+        },
+        {
+          "$ref": "#/definitions/FallbackBlock"
         }
       ]
     },
@@ -1125,6 +1128,9 @@
         },
         "status": {
           "type": "number"
+        },
+        "category": {
+          "type": "string"
         }
       },
       "required": [
@@ -1140,6 +1146,34 @@
         "refusal",
         "empty_reply"
       ]
+    },
+    "FallbackBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "fallback"
+        },
+        "to": {
+          "type": "string"
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "raw": {
+          "$ref": "#/definitions/JsonObject"
+        }
+      },
+      "required": [
+        "type",
+        "to",
+        "category",
+        "raw"
+      ],
+      "additionalProperties": false
     },
     "ForkOf": {
       "type": "object",
@@ -2136,6 +2170,24 @@
       ],
       "additionalProperties": false
     },
+    "Refusal": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "explanation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "category"
+      ],
+      "additionalProperties": false
+    },
     "Restored": {
       "type": "object",
       "properties": {
@@ -2718,6 +2770,12 @@
             },
             "costUsd": {
               "type": "number"
+            },
+            "refusal": {
+              "$ref": "#/definitions/Refusal"
+            },
+            "servedBy": {
+              "type": "string"
             },
             "id": {
               "$ref": "#/definitions/EventId"
@@ -3701,6 +3759,12 @@
             },
             "usage": {
               "$ref": "#/definitions/Usage"
+            },
+            "refusal": {
+              "$ref": "#/definitions/Refusal"
+            },
+            "served": {
+              "type": "string"
             }
           },
           "required": [

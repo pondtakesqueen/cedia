@@ -19,6 +19,9 @@ export const ZERO_USAGE: Usage = { uncached: 0, cacheRead: 0, cacheWrite: 0, out
 
 // 'compaction': the reply to a compaction request, which holds the summary block and nothing else.
 export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'aborted' | 'error' | 'compaction';
+// Why a provider's classifier declined a turn, as its stop_details name it (Anthropic: cyber, bio, frontier_llm,
+// reasoning_extraction, general_harms, or null). The explanation is for showing, not for parsing: its text changes.
+export type Refusal = { category: string | null; explanation?: string };
 
 // Opaque fields carry each wire's reasoning payload so it replays byte for byte to the same wire.
 export type AssistantBlock =
@@ -26,11 +29,16 @@ export type AssistantBlock =
   // ms: how long the model spent on it, from its first delta to its end, for a client to show.
   | { type: 'thinking'; text: string; opaque?: string; redacted?: boolean; ms?: number }
   | { type: 'tool_use'; id: string; callId?: string; name: string; input: JsonObject; inputError?: string }
-  | CompactionBlock;
+  | CompactionBlock
+  | FallbackBlock;
 
 // A summary the provider wrote of a session's earlier messages (Anthropic on-demand compaction): its text and the
 // signature that lets it stand in for those messages. Replayed byte for byte, first in the session it starts.
 export type CompactionBlock = { type: 'compaction'; text: string; opaque: string };
+
+// Where a provider's classifier declined the turn and another model took it over (Anthropic server-side fallback):
+// the model that took over and the category that fired. `raw` goes back as it came, in the same place, every turn.
+export type FallbackBlock = { type: 'fallback'; to: string; category: string | null; raw: JsonObject };
 
 export type EffectStatus = 'completed' | 'failed' | 'denied' | 'not_started' | 'interrupted_safe' | 'interrupted_unknown';
 // `redacted` counts secrets cedia replaced before the output was logged and sent.
@@ -72,7 +80,7 @@ type EventBody =
   // waits do not count against it. Nothing reaches the model.
   | { kind: 'retry'; requestId: EventId; n: number; waitMs: number; code: AttemptErrorCode; status?: number; of?: number }
   // costUsd: what this reply cost at the model's price when it ran, so a client can show a run's spend as it grows.
-  | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; costUsd?: number }
+  | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; costUsd?: number; refusal?: Refusal; servedBy?: string }
   // The request's body sent again with no output while a tool runs long, so its cached prefix does not expire
   // (core/loop/run.ts). Nothing reaches the model's context; it is logged for its cost.
   | { kind: 'keepalive'; requestId: EventId; usage?: Usage; error?: AttemptError; ms: number }
@@ -164,6 +172,9 @@ export type ModelSpec = {
   speed?: 'fast';
   // Takes on-demand compaction requests (Anthropic beta compact-2026-09-04), so a handoff can be a summary.
   compaction?: boolean;
+  // Anthropic server-side fallback: a turn a safety classifier declines is retried on the model Anthropic
+  // recommends for its category (Opus 5.5: cyber on Opus 4.8, bio and frontier LLM work on Opus 5).
+  fallbacks?: 'default';
   caps: ModelCapabilities;
 };
 
@@ -193,7 +204,8 @@ export type StreamEvent =
   | { type: 'toolcall_start'; index: number; id: string; name: string }
   | { type: 'toolcall_delta'; index: number; delta: string }
   | { type: 'toolcall_end'; index: number }
-  | { type: 'done'; blocks: AssistantBlock[]; stop: StopReason; usage: Usage }
+  // served: the model the provider says produced the reply, when it names one.
+  | { type: 'done'; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; refusal?: Refusal; served?: string }
   | { type: 'error'; error: AttemptError };
 
 export type Provider = {
@@ -288,7 +300,7 @@ export type ModelUsage = Usage & { costUsd: number; requests: number };
 // model may not see this repository (its data policy); refusal: the model declined the task; empty_reply: it
 // ended its turn twice with nothing.
 export type FailureCause = 'api_error' | 'privacy' | 'refusal' | 'empty_reply';
-export type Failure = { cause: FailureCause; code?: AttemptErrorCode; status?: number };
+export type Failure = { cause: FailureCause; code?: AttemptErrorCode; status?: number; category?: string };
 
 // Why a request read less from the prompt cache than the request before it had sent. Causes come from what the
 // log proves (hashes, model, time since the last reply), most specific first; 'provider' means the prefix did

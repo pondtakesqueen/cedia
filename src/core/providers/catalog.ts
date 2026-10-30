@@ -127,7 +127,9 @@ const haikuPrice = { ...p(0.1, 0.5, 0.01, 0.125), above: { tokens: 100_000, pric
 
 export const CATALOG: ModelSpec[] = [
   claude('claude-fable-5-1', p(10, 50, 0.25, 12.5)),
-  claude('claude-opus-5-5', p(4, 20, 0.2, 5), { prompt: OPUS_PROMPT, thorough: true }),
+  // A classifier refusal (cyber, bio, frontier LLM work) is retried on the model Anthropic recommends instead of
+  // failing the run. Not on fast mode or Haiku 5.5, which have no server-side fallback documented.
+  claude('claude-opus-5-5', p(4, 20, 0.2, 5), { prompt: OPUS_PROMPT, thorough: true, fallbacks: 'default' }),
   // Fast mode (research preview, Claude API only): up to 2.5x output tokens per second at 2x the price.
   claude('claude-opus-5-5', p(8, 40, 0.4, 10), { ref: 'anthropic/claude-opus-5-5-fast', speed: 'fast', prompt: OPUS_PROMPT, thorough: true, headers: { 'anthropic-beta': 'fast-mode-2026-02-01' } }),
   claude('claude-sonnet-5-5', p(2, 10, 0.1, 2.5), { defaultEffort: 'high' }),

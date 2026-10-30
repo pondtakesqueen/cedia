@@ -6,7 +6,7 @@ export type OutputStyle = { name: string; description: string; promptModifier: s
 
 const BUILTIN: OutputStyle[] = [
   { name: 'default', description: 'Default coding assistant', promptModifier: '' },
-  { name: 'explanatory', description: 'Explain reasoning and tradeoffs', promptModifier: 'Explain your reasoning and the tradeoffs behind each change.' },
+  { name: 'explanatory', description: 'Explain choices and tradeoffs', promptModifier: 'For each change, say briefly why you made it and what tradeoffs it carries.' },
   { name: 'learning', description: 'Teach as you go', promptModifier: 'Teach the concepts as you make changes; highlight why.' },
   {
     name: 'terse',

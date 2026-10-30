@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Assembler } from '../src/core/providers/assemble.ts';
-import { anthropicBody, anthropicProvider, EFFORT_BETA, parseAnthropic } from '../src/core/providers/anthropic.ts';
+import { anthropicBody, anthropicProvider, EFFORT_BETA, FALLBACK_BETA, parseAnthropic } from '../src/core/providers/anthropic.ts';
 import { costUsd, deepseekOffPeak, FALLBACKS, resolveModel } from '../src/core/providers/catalog.ts';
 import { chatBody, chatProvider, chatUsage, parseChat } from '../src/core/providers/chat.ts';
 import { classifyStatus, isRetryable, post, USER_AGENT } from '../src/core/providers/http.ts';
@@ -192,6 +192,69 @@ describe('request bodies', () => {
     expect(five).toBeCloseTo(opus.price.cacheWrite);
   });
 
+  test('anthropic: a refusal keeps the category and explanation its stop_details name', async () => {
+    const sse = [
+      { type: 'message_start', message: { usage: { input_tokens: 3, output_tokens: 0 } } },
+      { type: 'message_delta', delta: { stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber', explanation: 'flagged as offensive security' } }, usage: { output_tokens: 0 } },
+      { type: 'message_stop' },
+    ].map((d) => `event: ${d.type}\ndata: ${JSON.stringify(d)}\n\n`).join('');
+    const d = done(await all(parseAnthropic(streamFromString(sse, 50))))!;
+    expect(d.stop).toBe('refusal');
+    expect(d.refusal).toEqual({ category: 'cyber', explanation: 'flagged as offensive security' });
+    // stop_details can be null, and its category too: a refusal is still a refusal.
+    const bare = sse.replace(/,"stop_details":\{[^}]*\}/, ',"stop_details":null');
+    expect(done(await all(parseAnthropic(streamFromString(bare, 50))))!).toMatchObject({ stop: 'refusal', refusal: { category: null } });
+  });
+
+  test('anthropic: Opus 5.5 asks for the recommended fallback; other models and gateways do not', () => {
+    const p = anthropicProvider();
+    expect((anthropicBody(req('opus')) as any).fallbacks).toBe('default');
+    expect(p.headers(req('opus'))['anthropic-beta']).toBe(FALLBACK_BETA);
+    // Haiku 5.5 has no server-side fallback; Go and OpenRouter are not Anthropic's API.
+    for (const ref of ['anthropic/claude-haiku-5-5', 'opencode-go/claude-haiku-5-5', 'sonnet']) {
+      expect((anthropicBody(req(ref)) as any).fallbacks).toBeUndefined();
+      expect(p.headers(req(ref))['anthropic-beta'] ?? '').not.toContain('server-side-fallback');
+    }
+  });
+
+  test('anthropic: a fallback keeps its block in place and drops the declined thinking and tool calls before it', async () => {
+    const fb = { type: 'fallback', from: { model: 'claude-opus-5-5' }, to: { model: 'claude-opus-4-8' }, trigger: { type: 'refusal', category: 'cyber' } };
+    const sse = [
+      { type: 'message_start', message: { model: 'claude-opus-5-5', usage: { input_tokens: 3, output_tokens: 0 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: 'sig' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Looking. ' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 't1', name: 'read', input: {} } },
+      { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{}' } },
+      { type: 'content_block_stop', index: 2 },
+      { type: 'content_block_start', index: 3, content_block: fb },
+      { type: 'content_block_stop', index: 3 },
+      { type: 'content_block_start', index: 4, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 4, delta: { type: 'text_delta', text: 'answer' } },
+      { type: 'content_block_stop', index: 4 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 9 } },
+      { type: 'message_stop' },
+    ].map((d) => `event: ${d.type}\ndata: ${JSON.stringify(d)}\n\n`).join('');
+    const d = done(await all(parseAnthropic(streamFromString(sse, 50))))!;
+    expect(d.served).toBe('claude-opus-4-8');
+    expect(d.blocks).toEqual([
+      { type: 'text', text: 'Looking. ' },
+      { type: 'fallback', to: 'claude-opus-4-8', category: 'cyber', raw: fb },
+      { type: 'text', text: 'answer' },
+    ]);
+    // Sent back as it came, where it came; other wires never see it.
+    const turn: Message[] = [...history, { role: 'assistant', wire: 'anthropic-messages', blocks: d.blocks }];
+    expect((anthropicBody(req('opus', turn)) as any).messages.at(-1).content.map((c: any) => c.type)).toEqual(['text', 'fallback', 'text']);
+    expect((anthropicBody(req('opus', turn)) as any).messages.at(-1).content[1]).toEqual(fb);
+    expect(JSON.stringify(chatBody(req('deepseek', turn)))).not.toContain('fallback');
+    // A sticky turn has no block: the model message_start names is the one that served it.
+    const sticky = sse.replace('"model":"claude-opus-5-5"', '"model":"claude-opus-4-8"').replace(/event: content_block_start\ndata: \{"type":"content_block_start","index":3[^\n]*\n\n/, '');
+    expect(done(await all(parseAnthropic(streamFromString(sticky, 50))))!.served).toBe('claude-opus-4-8');
+  });
+
   test('anthropic: a per-message effort change is an empty system message, sent with its beta header', () => {
     const raised: Message[] = [...history, { role: 'effort', effort: 'high' }];
     const b = anthropicBody(req('opus', raised)) as any;
@@ -200,8 +263,8 @@ describe('request bodies', () => {
     expect(b.messages.at(-1)).toEqual({ role: 'system', content: [], output_config: { effort: 'high' } });
     expect(b.output_config).toEqual({ effort: 'medium' });
     const p = anthropicProvider();
-    expect(p.headers(req('opus'))['anthropic-beta']).toBeUndefined();
-    expect(p.headers(req('opus', raised))['anthropic-beta']).toBe(EFFORT_BETA);
+    expect(p.headers(req('opus'))['anthropic-beta']).toBe(FALLBACK_BETA);
+    expect(p.headers(req('opus', raised))['anthropic-beta']).toBe(`${FALLBACK_BETA},${EFFORT_BETA}`);
     expect(p.headers(req('opus-fast', raised))['anthropic-beta']).toBe(`fast-mode-2026-02-01,${EFFORT_BETA}`);
     // Other wires have no such message and drop it.
     expect((chatBody(req('deepseek', raised)) as any).messages).toEqual((chatBody(req('deepseek')) as any).messages);
@@ -392,7 +455,11 @@ describe('gateway beta fallback', () => {
     const gw = { ...req('opus', raised), model: { ...req('opus').model, headers: { 'x-gw': '1' } } };
     expect(anthropicProvider().headers(stripGatewayBetas(gw)!)['x-gw']).toBe('1');
     // Nothing beta-gated, and compaction (which needs its beta), stay as they are.
-    expect(stripGatewayBetas(req('opus'))).toBeUndefined();
+    expect(stripGatewayBetas(req('anthropic/claude-haiku-5-5'))).toBeUndefined();
+    // Fallback is beta-gated too: the resend does without it, unless a fallback block is already in the history.
+    expect((anthropicBody(stripGatewayBetas(req('opus'))!) as any).fallbacks).toBeUndefined();
+    const fell: Message[] = [...history, { role: 'assistant', wire: 'anthropic-messages', blocks: [{ type: 'fallback', to: 'claude-opus-4-8', category: 'cyber', raw: { type: 'fallback' } }] }];
+    expect(stripGatewayBetas(req('opus', fell))).toBeUndefined();
     expect(stripGatewayBetas({ ...req('opus', raised), compaction: { instructions: 'x' } })).toBeUndefined();
   });
 });

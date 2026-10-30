@@ -1,5 +1,5 @@
 import { stableJson } from '../hash.ts';
-import type { AssistantBlock, AttemptError, JsonObject, Provider, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
+import type { AssistantBlock, AttemptError, JsonObject, Provider, Refusal, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
 
 // Offline provider for tests. A script is a list of steps; each step is a reply or a function of the request.
 // A reply with `when` is kept for the first request whose first message contains that text, so sessions that run at once
@@ -7,7 +7,7 @@ import type { AssistantBlock, AttemptError, JsonObject, Provider, StopReason, St
 // Usage is computed from the prefix actually sent, so cacheRead is nonzero exactly when the prefix repeats.
 // Shape modeled on pi's faux provider (MIT); no code copied.
 
-export type FauxReply = ({ blocks: AssistantBlock[]; stop?: StopReason } | { error: AttemptError } | { hang: true }) & { when?: string };
+export type FauxReply = ({ blocks: AssistantBlock[]; stop?: StopReason; refusal?: Refusal; served?: string } | { error: AttemptError } | { hang: true }) & { when?: string };
 export type FauxStep = FauxReply | ((req: WireRequest, state: FauxState) => FauxReply);
 export type FauxState = { callCount: number; prompts: string[]; bodies: JsonObject[] };
 
@@ -55,7 +55,7 @@ export function fauxProvider(script: FauxStep[] | ((req: WireRequest, state: Fau
           return;
         }
         // A compaction block arrives whole, as on the Anthropic wire.
-        if (b.type === 'compaction') continue;
+        if (b.type === 'compaction' || b.type === 'fallback') continue;
         const text = b.type === 'tool_use' ? JSON.stringify(b.input) : b.text;
         out += Math.ceil(text.length / 4);
         if (b.type === 'tool_use') yield { type: 'toolcall_start', index, id: b.id, name: b.name };
@@ -70,7 +70,7 @@ export function fauxProvider(script: FauxStep[] | ((req: WireRequest, state: Fau
         yield { type: b.type === 'tool_use' ? 'toolcall_end' : b.type === 'text' ? 'text_end' : 'thinking_end', index };
       }
       const stop = reply.stop ?? (reply.blocks.some((b) => b.type === 'tool_use') ? 'tool_use' : 'end_turn');
-      yield { type: 'done', blocks: reply.blocks, stop, usage: { ...usage, output: out } };
+      yield { type: 'done', blocks: reply.blocks, stop, usage: { ...usage, output: out }, ...(reply.refusal ? { refusal: reply.refusal } : {}), ...(reply.served ? { served: reply.served } : {}) };
     },
   };
   return p;
