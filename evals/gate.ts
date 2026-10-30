@@ -81,7 +81,6 @@ export const baselinePath = (model: string, dir = BASELINE_DIR) => join(dir, `${
 
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-// A path is the file it names. Directory order, JSON key order, `./`, and `\` are spellings of that path.
 function canonicalPath(path: string): string {
   return path.replaceAll("\\", "/").replace(/\/+/g, "/").replace(/^(?:\.\/)+/, "");
 }
@@ -96,7 +95,6 @@ function canonicalFiles(files: Record<string, string> | undefined): Record<strin
 }
 
 // What decides a task's result: change any of it and the old numbers stop applying.
-// The hash is of the files, so two machines that read a directory in different orders still agree.
 export function taskHash(t: Task): string {
   const { id, prompt, setup, verify, expectedExitCode, hidden, executable, timeoutSec, budgetUsd } = t;
   return createHash("sha256")

@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
-// The help text is the contract a person reads. The defaults live in loadRoles and loadHandoff.
 describe('cedia -h defaults', () => {
   test('the code, review, and handoff lines match the code', () => {
     const env = { ...process.env };
