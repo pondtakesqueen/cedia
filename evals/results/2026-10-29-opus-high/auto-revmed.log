@@ -1,0 +1,40 @@
+Running 10 tasks x 3 runs on cedia (anthropic/claude-haiku-5-5), 2 at a time...
+  PASS hard-csv-stream#1 (158.8s $0.0096, plan 48s, review approve 27s, peak 23k)
+  PASS hard-csv-stream#2 (202.3s $0.0171, plan 63s, review approve 23s, peak 35k)
+  PASS hard-deny-list#1 (103.1s $0.0079, plan 42s, review approve 27s, peak 21k)
+  PASS hard-csv-stream#3 (154.5s $0.0154, plan 52s, review approve 21s, peak 32k)
+  PASS hard-deny-list#2 (105.8s $0.0105, plan 31s, review changes 26s, fix 10s, peak 24k)
+  PASS hard-deny-list#3 (103.7s $0.0093, plan 28s, review approve 28s, peak 23k)
+  PASS hard-edit-tiers#1 (151.0s $0.0164, plan 39s, review changes 28s, fix 17s, peak 33k)
+  PASS hard-edit-tiers#2 (163.8s $0.0160, plan 42s, review changes 32s, fix 31s, peak 35k)
+  PASS hard-injection#1 (64.5s $0.0043, plan 16s, review changes 27s, fix 12s, peak 14k)
+  PASS hard-injection#2 (37.5s $0.0022, plan 16s, review approve 14s, peak 9k)
+  PASS hard-edit-tiers#3 (134.3s $0.0132, plan 37s, review approve 32s, peak 29k)
+  PASS hard-injection#3 (44.0s $0.0023, plan 15s, review approve 20s, peak 10k)
+  PASS hard-ledger#1 (124.2s $0.0116, plan 45s, review changes 26s, fix 12s, peak 28k)
+  PASS hard-ledger#2 (133.0s $0.0148, plan 44s, review changes 23s, fix 11s, peak 33k)
+  PASS hard-memo-async#1 (94.7s $0.0057, plan 30s, review approve 13s, peak 17k)
+  PASS hard-ledger#3 (150.3s $0.0181, plan 46s, review changes 20s, fix 17s, peak 38k)
+  PASS hard-memo-async#2 (60.2s $0.0033, plan 33s, review approve 13s, peak 13k)
+  PASS hard-memo-async#3 (85.9s $0.0066, plan 32s, review approve 13s, peak 18k)
+  PASS hard-pool#1 (117.9s $0.0126, plan 34s, review approve 18s, peak 28k)
+  PASS hard-pool#2 (189.6s $0.0125, plan 35s, review approve 14s, peak 27k)
+  PASS hard-pool#3 (132.1s $0.0088, plan 35s, review approve 15s, peak 21k)
+  PASS hard-sse#2 (152.3s $0.0193, plan 35s, review changes 16s, fix 60s, peak 36k)
+  PASS hard-sse#1 (215.6s $0.0146, plan 29s, review changes 14s, fix 63s, peak 29k)
+  PASS hard-sse#3 (102.1s $0.0110, plan 24s, review changes 15s, fix 42s, peak 25k)
+  PASS wide-bug-hunt#1 (127.4s $0.0101, plan 53s, review approve 24s, peak 26k)
+  PASS wide-bug-hunt#2 (98.2s $0.0073, plan 44s, review approve 19s, peak 23k)
+  PASS wide-bug-hunt#3 (108.9s $0.0072, plan 56s, review approve 14s, peak 22k)
+  PASS wide-three-features#1 (150.0s $0.0148, plan 50s, review approve 29s, peak 32k)
+  PASS wide-three-features#2 (130.8s $0.0120, plan 43s, review approve 27s, peak 27k)
+  PASS wide-three-features#3 (151.7s $0.0161, plan 56s, review changes 22s, fix 8s, peak 35k)
+
+Results written to /tmp/claude-0/-home-user-cedia-code/7d5651d6-a6a7-5456-a496-4c6a46e5cb23/scratchpad/revmed/auto-revmed.jsonl
+cedia (anthropic/claude-haiku-5-5): 10 tasks, 30 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 124.9s per run, 185688 input / 13502 output tokens per run, cache hit 88.7%
+  peak context 25k mean, 38k max, 0 of 30 runs past 100k; 0 handoffs, 0 sub-threads
+  repaired inputs: 35 edit: broken edits string, 11 edit: top-level old_text/new_text
+  speed 261.6 output tok/s, 0.81s to first token per call; model 87.8% of time, cedia 0.0%
+  cost $0.3306 total, $0.0110 per passed run

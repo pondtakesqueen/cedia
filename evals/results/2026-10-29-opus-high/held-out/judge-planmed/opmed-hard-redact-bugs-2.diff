@@ -1,0 +1,92 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/redact.rules.test.ts b/redact.rules.test.ts
+--- a/redact.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/redact.rules.test.ts	2026-10-30 03:18:32.746171693 +0000
+@@ -0,0 +1,58 @@
++import { expect, test } from 'bun:test';
++import { REDACTED, redactSecrets } from './redact.ts';
++
++const r = (s: string) => redactSecrets(s).text;
++
++test('a private key without an END line is redacted to the end of the output', () => {
++  expect(redactSecrets('x\n-----BEGIN PRIVATE KEY-----\nabc')).toEqual({ text: `x\n${REDACTED}`, count: 1 });
++});
++
++test('generic sk- keys need a digit', () => {
++  expect(redactSecrets('sk-abcdefghij-klmnopqrst').count).toBe(0);
++  expect(redactSecrets('sk-abcdefghij-klmnopqr1')).toEqual({ text: REDACTED, count: 1 });
++});
++
++test('a URL password keeps the host after the @', () => {
++  expect(redactSecrets('x://u:abc123@h')).toEqual({ text: `x://u:${REDACTED}@h`, count: 1 });
++});
++
++test('dotenv values are secrets whatever they look like, but counts and references are not', () => {
++  expect(r('DB_PASSWORD=a')).toBe(`DB_PASSWORD=${REDACTED}`);
++  expect(r('MAX_TOKENS=4096')).toBe('MAX_TOKENS=4096');
++  expect(r('NUM_TOKENS=abc12345')).toBe(`NUM_TOKENS=${REDACTED}`);
++  expect(redactSecrets('AUTH_TOKENS=abc12345xyz')).toEqual({ text: `AUTH_TOKENS=${REDACTED}`, count: 1 });
++  expect(redactSecrets('tokens=abc12345')).toEqual({ text: `tokens=${REDACTED}`, count: 1 });
++  expect(r('max_tokens: 1000')).toBe('max_tokens: 1000');
++  expect(redactSecrets('export TOKEN=$X').count).toBe(0);
++  expect(redactSecrets('TOKEN=process.env.X').count).toBe(0);
++});
++
++test('quoted secrets need 4+ characters, quoted api keys 8+ with a letter and a digit', () => {
++  expect(r('secret = "abc"')).toBe('secret = "abc"');
++  expect(r('secret = "abcd"')).toBe(`secret = "${REDACTED}"`);
++  expect(r('api_key = "abcdefg"')).toBe('api_key = "abcdefg"');
++  expect(r('api_key = "abcdefg1"')).toBe(`api_key = "${REDACTED}"`);
++});
++
++const samples = [
++  'sk-ant-api03-' + 'x1'.repeat(20),
++  'ghp_' + 'a1'.repeat(18),
++  'DB_PASSWORD=a',
++  'secret = "abcd"',
++  'x://u:abc123@h',
++  '-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----',
++  'OPENAI_API_KEY=' + REDACTED,
++  'MAX_TOKENS=4096',
++  'sk-learn-and-more-words',
++];
++
++test('redacting twice changes nothing, alone or joined', () => {
++  for (const a of samples) {
++    const once = r(a);
++    expect(redactSecrets(once)).toEqual({ text: once, count: 0 });
++    for (const b of samples) {
++      const joined = r(`${a}\n${b}`);
++      expect(redactSecrets(joined)).toEqual({ text: joined, count: 0 });
++    }
++  }
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/redact.ts b/redact.ts
+--- a/redact.ts	2026-10-30 03:16:03.552827403 +0000
++++ b/redact.ts	2026-10-30 03:18:27.626171810 +0000
+@@ -15,9 +15,9 @@
+ 
+ // Token formats with a fixed prefix. The generic ones need a digit so prose and identifiers do not match.
+ const TOKENS: RegExp[] = [
+-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
++  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
+   /\bsk-ant-[A-Za-z0-9_-]{20,}/g, // Anthropic
+-  /\bsk-[A-Za-z0-9_-]{20,}/g, // OpenAI, DeepSeek and other sk- keys
++  /\bsk-(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}/g, // OpenAI, DeepSeek and other sk- keys
+   /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}/g, // Stripe
+   /\bgh[pousr]_[A-Za-z0-9]{30,}/g, // GitHub
+   /\bgithub_pat_[A-Za-z0-9_]{30,}/g,
+@@ -61,12 +61,12 @@
+   out = out.replace(URL_PASSWORD, (_m, head: string, password: string) => {
+     if (password === REDACTED) return _m;
+     count++;
+-    return `${head}${REDACTED}`;
++    return `${head}${REDACTED}@`;
+   });
+   out = out.replace(ASSIGNMENT, (match, name: string, kind: string, sep: string, quote: string, value: string, offset: number, all: string) => {
+     if (value.includes(REDACTED)) return match;
+     const lineStart = all.lastIndexOf('\n', offset - 1) + 1;
+-    const dotenv = sep === '=' && /^[ \t]*(export[ \t]+)?$/.test(all.slice(lineStart, offset)) && /^[A-Z0-9_]+$/.test(name);
++    const dotenv = sep === '=' && /^[ \t]*(export[ \t]+)?$/.test(all.slice(lineStart, offset)) && /^[A-Z0-9_]+$/.test(name) && !(/TOKENS$/.test(name) && /^\d+$/.test(value));
+     if (!secretValue(kind, quote, value, dotenv)) return match;
+     count++;
+     return `${name}${sep}${quote}${REDACTED}${quote}`;

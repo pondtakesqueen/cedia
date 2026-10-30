@@ -1,0 +1,199 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse.rules.test.ts b/sse.rules.test.ts
+--- a/sse.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/sse.rules.test.ts	2026-10-30 01:39:55.322999440 +0000
+@@ -0,0 +1,136 @@
++import { expect, test } from 'bun:test';
++import { readSse, streamFromString, type SseMessage } from './sse.ts';
++
++async function all(text: string, chunk = 7): Promise<SseMessage[]> {
++  const out: SseMessage[] = [];
++  for await (const m of readSse(streamFromString(text, chunk))) out.push(m);
++  return out;
++}
++
++// Whole-string reference parser applying the same rules to the full text at once.
++function reference(text: string): SseMessage[] {
++  const out: SseMessage[] = [];
++  let event: string | undefined;
++  let data: string[] = [];
++  const lines = text.split(/\r?\n/);
++  const tail = lines.pop() ?? '';
++  const handle = (line: string) => {
++    if (line === '') {
++      if (data.length) out.push(event === undefined ? { data: data.join('\n') } : { event, data: data.join('\n') });
++      event = undefined;
++      data = [];
++      return;
++    }
++    if (line[0] === ':') return;
++    const colon = line.indexOf(':');
++    const name = colon === -1 ? line : line.slice(0, colon);
++    let value = colon === -1 ? '' : line.slice(colon + 1);
++    if (value[0] === ' ') value = value.slice(1);
++    if (name === 'event') event = value;
++    else if (name === 'data') data.push(value);
++  };
++  lines.forEach(handle);
++  if (tail) handle(tail);
++  if (data.length) out.push(event === undefined ? { data: data.join('\n') } : { event, data: data.join('\n') });
++  return out;
++}
++
++test('LF and CRLF give the same messages at small chunk sizes', async () => {
++  const lf = 'event: x\ndata: 1\n\ndata: 2\n\n';
++  const crlf = lf.replace(/\n/g, '\r\n');
++  for (let chunk = 1; chunk <= 8; chunk++) expect(await all(crlf, chunk)).toEqual(await all(lf, chunk));
++});
++
++test('comment lines that look like fields are ignored', async () => {
++  expect(await all(':data: x\n\n')).toEqual([]);
++});
++
++test('split on the first colon only; empty value after a bare colon', async () => {
++  expect(await all('data: \n\ndata:a:b\n\n')).toEqual([{ data: '' }, { data: 'a:b' }]);
++});
++
++test('data lines joined with newline, including empty ones', async () => {
++  expect(await all('data\ndata\n\n')).toEqual([{ data: '\n' }]);
++});
++
++test('unknown fields with no colon produce nothing', async () => {
++  expect(await all('id: 1\nfoo\n\n')).toEqual([]);
++});
++
++test('event does not leak into the next message; no event key when unset', async () => {
++  expect(await all('event: a\n\nevent: b\ndata: x\n\n')).toEqual([{ event: 'b', data: 'x' }]);
++  const [m] = await all('data: x\n\n');
++  expect('event' in m).toBe(false);
++});
++
++test('pending data at end without newline is yielded; event alone is dropped', async () => {
++  expect(await all('event: e\ndata: x')).toEqual([{ event: 'e', data: 'x' }]);
++  expect(await all('event: e')).toEqual([]);
++  expect(await all('data: x\r')).toEqual([{ data: 'x' }]);
++});
++
++test('matches the reference parser on generated inputs at several chunk sizes', async () => {
++  const pieces = ['data: ', 'event: ', ': c', 'id: 1', '', 'data', 'data:a:b', 'สวัสดี 🙂', 'x', ' '];
++  let seed = 12345;
++  const rand = (n: number) => {
++    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
++    return seed % n;
++  };
++  for (let t = 0; t < 200; t++) {
++    let text = '';
++    const count = 1 + rand(12);
++    for (let i = 0; i < count; i++) {
++      text += pieces[rand(pieces.length)];
++      if (rand(3) === 0) text += pieces[rand(pieces.length)];
++      text += rand(2) === 0 ? '\n' : '\r\n';
++    }
++    if (rand(2) === 0) text = text.slice(0, -1 - rand(2));
++    const expected = reference(text);
++    for (const chunk of [1, 2, 3, 5, 13]) expect(await all(text, chunk)).toEqual(expected);
++  }
++});
++
++test('a body error rejects next() with the same error after earlier messages', async () => {
++  const err = new Error('boom');
++  let pulls = 0;
++  const body = new ReadableStream<Uint8Array>({
++    pull(c) {
++      if (pulls++ === 0) c.enqueue(new TextEncoder().encode('data: a\n\n'));
++      else c.error(err);
++    },
++  });
++  const it = readSse(body);
++  expect((await it.next()).value).toEqual({ data: 'a' });
++  let caught: unknown;
++  try {
++    await it.next();
++  } catch (e) {
++    caught = e;
++  }
++  expect(caught).toBe(err);
++});
++
++test('breaking early cancels the source', async () => {
++  let cancelled = false;
++  const enc = new TextEncoder();
++  const body = new ReadableStream<Uint8Array>({
++    pull(c) {
++      c.enqueue(enc.encode('data: 1\n\ndata: 2\n\n'));
++    },
++    cancel() {
++      cancelled = true;
++    },
++  });
++  for await (const m of readSse(body)) {
++    expect(m).toEqual({ data: '1' });
++    break;
++  }
++  expect(cancelled).toBe(true);
++});
++
++test('next() after the end keeps returning done', async () => {
++  const it = readSse(streamFromString('data: a\n\n'));
++  expect((await it.next()).value).toEqual({ data: 'a' });
++  expect((await it.next()).done).toBe(true);
++  expect((await it.next()).done).toBe(true);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/sse.ts b/sse.ts
+--- a/sse.ts	2026-10-30 01:39:03.183671882 +0000
++++ b/sse.ts	2026-10-30 01:40:05.914999198 +0000
+@@ -15,7 +15,54 @@
+ // - When the body ends without a final blank line, data lines still pending (including a last line with no
+ //   newline) are yielded as one last message.
+ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseMessage> {
+-  throw new Error('not implemented');
++  const reader = body.getReader();
++  const decoder = new TextDecoder();
++  // buffer: text after the last newline seen; event: the current message's event, undefined if none;
++  // data: the current message's data lines. A stream error rejects out of next() unchanged.
++  let buffer = '';
++  let event: string | undefined;
++  let data: string[] = [];
++  const message = (): SseMessage => (event === undefined ? { data: data.join('\n') } : { event, data: data.join('\n') });
++  const handleLine = (line: string) => {
++    if (line[0] === ':') return;
++    const colon = line.indexOf(':');
++    const name = colon === -1 ? line : line.slice(0, colon);
++    let value = colon === -1 ? '' : line.slice(colon + 1);
++    if (value[0] === ' ') value = value.slice(1);
++    if (name === 'event') event = value;
++    else if (name === 'data') data.push(value);
++  };
++  // closed: the body has ended or errored, so there is nothing to cancel.
++  let closed = false;
++  try {
++    for (;;) {
++      let chunk: ReadableStreamReadResult<Uint8Array>;
++      try {
++        chunk = await reader.read();
++      } catch (e) {
++        closed = true;
++        throw e;
++      }
++      const { value, done } = chunk;
++      if (done) closed = true;
++      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
++      let nl: number;
++      while ((nl = buffer.indexOf('\n')) !== -1) {
++        const line = buffer.slice(0, nl).replace(/\r$/, '');
++        buffer = buffer.slice(nl + 1);
++        if (line === '') {
++          if (data.length) yield message();
++          event = undefined;
++          data = [];
++        } else handleLine(line);
++      }
++      if (done) break;
++    }
++    if (buffer) handleLine(buffer.replace(/\r$/, ''));
++    if (data.length) yield message();
++  } finally {
++    if (!closed) await reader.cancel();
++  }
+ }
+ 
+ export function streamFromString(text: string, chunkSize = 7): ReadableStream<Uint8Array> {

@@ -1,0 +1,380 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.rules.test.ts b/shell.rules.test.ts
+--- a/shell.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/shell.rules.test.ts	2026-10-30 03:24:06.482164059 +0000
+@@ -0,0 +1,144 @@
++import { expect, test } from 'bun:test';
++import { simpleCommands } from './shell.ts';
++
++test('separators split, including parentheses', () => {
++  expect(simpleCommands('a;b&c|d&&e||f\ng')).toHaveLength(7);
++  expect(simpleCommands('(a)b')).toEqual([['a'], ['b']]);
++});
++
++test('substitutions are commands after their command, in source order', () => {
++  expect(simpleCommands('x $(a) `b` $(c $(d))')).toEqual([['x'], ['a'], ['b'], ['c'], ['d']]);
++  expect(simpleCommands('a$(b)c')).toEqual([['ac'], ['b']]);
++});
++
++test('separators inside quotes do not split', () => {
++  expect(simpleCommands(`echo "a;b|c" 'd&e' "(f)"`)).toEqual([['echo', 'a;b|c', 'd&e', '(f)']]);
++});
++
++test('fd redirections are not background jobs', () => {
++  expect(simpleCommands('a 2>&1 b >&2 c &>f d')).toEqual([['a', 'b', 'c', 'd']]);
++  expect(simpleCommands('a <&0 b')).toEqual([['a', 'b']]);
++});
++
++test('single quotes are literal', () => {
++  expect(simpleCommands(`echo 'a\\b "c" $(d)'`)).toEqual([['echo', 'a\\b "c" $(d)']]);
++});
++
++test('backslash escapes, and backslash-newline continues', () => {
++  expect(simpleCommands('a \\; b "x\\$y"')).toEqual([['a', ';', 'b', 'x$y']]);
++  expect(simpleCommands('a \\\nb')).toEqual([['a', 'b']]);
++  expect(simpleCommands('a\\\nb')).toEqual([['ab']]);
++});
++
++test('empty quoted strings are words', () => {
++  expect(simpleCommands(`'' ; a ""`)).toEqual([[''], ['a', '']]);
++});
++
++test('operator-only words drop themselves and their target', () => {
++  for (const op of ['>', '>>', '<', '2>', '&>', '>&']) {
++    expect(simpleCommands(`c ${op} t arg`)).toEqual([['c', 'arg']]);
++  }
++});
++
++test('operator-prefixed words drop only themselves; quoted operators are arguments', () => {
++  expect(simpleCommands('c >o 2>>e <i 2>&1 arg')).toEqual([['c', 'arg']]);
++  expect(simpleCommands(`echo ">" '<'`)).toEqual([['echo', '>', '<']]);
++});
++
++test('an operator against a word still splits it', () => {
++  expect(simpleCommands('rm>x -rf /')).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands('a2>x')).toEqual([['a2']]);
++});
++
++test('leading assignments and keywords are skipped only at the start', () => {
++  expect(simpleCommands('! A=1 if B=2 x')).toEqual([['x']]);
++  expect(simpleCommands('while a; do b; done')).toEqual([['a'], ['b']]);
++  expect(simpleCommands('echo fi A=1')).toEqual([['echo', 'fi', 'A=1']]);
++});
++
++test('wrapper flags, value flags, -- and positionals', () => {
++  expect(simpleCommands('nice -n 5 make')).toEqual([['make']]);
++  expect(simpleCommands('sudo --user=root ls')).toEqual([['ls']]);
++  expect(simpleCommands('sudo -- -x')).toEqual([['-x']]);
++  expect(simpleCommands('timeout 5 make')).toEqual([['make']]);
++  expect(simpleCommands('env -u X A=1 nice ls')).toEqual([['ls']]);
++});
++
++test('wrapper and shell names match by basename', () => {
++  expect(simpleCommands('/usr/bin/sudo /bin/rm x')).toEqual([['/bin/rm', 'x']]);
++  expect(simpleCommands(`/bin/sh -c 'id'`)).toEqual([['id']]);
++});
++
++test('shell -c with clustered flags, other flags, and $0', () => {
++  expect(simpleCommands(`bash -e -c 'a; b' x y`)).toEqual([['a'], ['b']]);
++  expect(simpleCommands(`sh -lc 'a'`)).toEqual([['a']]);
++  expect(simpleCommands(`bash -o pipefail -c 'a'`)).toEqual([['a']]);
++  expect(simpleCommands('bash -O extglob -c "rm x"')).toEqual([['rm', 'x']]);
++  expect(simpleCommands('bash +O extglob -c "rm x"')).toEqual([['rm', 'x']]);
++  expect(simpleCommands('bash +e -c "rm x"')).toEqual([['rm', 'x']]);
++  expect(simpleCommands('bash --rcfile f -c "rm x"')).toEqual([['rm', 'x']]);
++  expect(simpleCommands('bash --init-file f -c "rm x"')).toEqual([['rm', 'x']]);
++  expect(simpleCommands('bash --norc -c "rm x"')).toEqual([['rm', 'x']]);
++  expect(simpleCommands('bash +o noclobber -c "rm x"')).toEqual([['rm', 'x']]);
++  expect(simpleCommands('bash script.sh')).toEqual([['bash', 'script.sh']]);
++  expect(simpleCommands(`bash -c "echo 'x"`)).toBeNull();
++});
++
++test('eval joins its words and parses them', () => {
++  expect(simpleCommands('eval "a; b"')).toEqual([['a'], ['b']]);
++});
++
++test('empty commands are left out', () => {
++  expect(simpleCommands('> f; A=1; { ; }')).toEqual([]);
++  expect(simpleCommands('A=$(rm x)')).toEqual([['rm', 'x']]);
++});
++
++test('a wrapper, eval or bash -c with nothing left keeps its own argv', () => {
++  expect(simpleCommands('sudo -l')).toEqual([['sudo', '-l']]);
++  expect(simpleCommands('env')).toEqual([['env']]);
++  expect(simpleCommands('eval')).toEqual([['eval']]);
++  expect(simpleCommands(`sudo bash -c ''`)).toEqual([['sudo', 'bash', '-c', '']]);
++});
++
++test('unbalanced input returns null', () => {
++  for (const src of ['"a', "'a", '$(a', '(a', '`a', 'a)', 'echo "$(a']) {
++    expect(simpleCommands(src)).toBeNull();
++  }
++});
++
++test('substitutions inside double quotes are still commands', () => {
++  expect(simpleCommands('echo "$(rm x)" "`id`"')).toEqual([['echo', '', ''], ['rm', 'x'], ['id']]);
++});
++
++test('agreement with composed lines (seeded, deterministic)', () => {
++  const pool: [string, string[][]][] = [
++    ['ls -l', [['ls', '-l']]],
++    ['grep "a b" x', [['grep', 'a b', 'x']]],
++    ["echo 'c;d'", [['echo', 'c;d']]],
++    ['FOO=1 make', [['make']]],
++    ['sudo -u root git push', [['git', 'push']]],
++    ['cmd 2>/dev/null arg', [['cmd', 'arg']]],
++    ['a | b', [['a'], ['b']]],
++  ];
++  const seps = [';', ' && ', ' || ', ' | ', '\n', ' & '];
++  let seed = 12345;
++  const rnd = (n: number) => {
++    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
++    return seed % n;
++  };
++  for (let iter = 0; iter < 300; iter++) {
++    const count = 1 + rnd(5);
++    let line = '';
++    let expected: string[][] = [];
++    for (let k = 0; k < count; k++) {
++      const [src, argv] = pool[rnd(pool.length)];
++      const sep = k === 0 ? '' : seps[rnd(seps.length)];
++      const space = ' \t'.repeat(1 + rnd(2));
++      line += (k === 0 ? '' : space) + sep + space + src;
++      expected = expected.concat(argv);
++    }
++    expect(simpleCommands(line)).toEqual(expected);
++    expect(simpleCommands(`(${line})`)).toEqual(expected);
++    expect(simpleCommands(`echo $(${line})`)).toEqual([['echo'], ...expected]);
++  }
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.ts b/shell.ts
+--- a/shell.ts	2026-10-30 03:18:36.387059406 +0000
++++ b/shell.ts	2026-10-30 03:24:06.470888544 +0000
+@@ -17,6 +17,221 @@
+   ['xargs', { value: ['-a', '-d', '-E', '-e', '-I', '-i', '-L', '-l', '-n', '-P', '-s', '--arg-file', '--delimiter', '--eof', '--replace', '--max-lines', '--max-args', '--max-procs', '--max-chars', '--process-slot-var'] }],
+ ]);
+ 
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
++// Shell options whose next word is their value; `-c` is looked for after them.
++const SHELL_VALUE_FLAGS = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']);
++const ASSIGN = /^[A-Za-z_]\w*=/;
++const REDIRECT_OP = /^(\d*(>>?|<<?<?|>&|<&)|&>>?)$/;
++const PLAIN = /[^\s;&|()<>`'"\\$]+/y;
++const DQ_PLAIN = /[^"\\`$]+/y;
++const base = (s: string) => s.slice(s.lastIndexOf('/') + 1);
++
++// A word of one command. `redirect` is set when the word began with an unquoted redirection operator.
++type Word = { text: string; redirect: boolean };
++
++// Reads from `start` up to the matching `close`, or to the end of input when `close` is null. Returns the
++// commands in the order they start and the index just past the closer, or null when the input is unbalanced.
++// Keeps no state between calls.
++function scan(src: string, start: number, close: ')' | '`' | null): { commands: string[][]; end: number } | null {
++  const out: string[][] = [];
++  let pending: string[][] = []; // substitutions found in the current command, run after it
++  let words: Word[] = [];
++  let word = '';
++  let inWord = false;
++  let redirect = false;
++  let i = start;
++
++  const endWord = () => {
++    if (inWord) words.push({ text: word, redirect });
++    word = '';
++    inWord = false;
++    redirect = false;
++  };
++  const endCommand = (): boolean => {
++    endWord();
++    const argv = finish(words);
++    if (argv === null) return false;
++    out.push(...argv, ...pending);
++    words = [];
++    pending = [];
++    return true;
++  };
++
++  while (i < src.length) {
++    PLAIN.lastIndex = i;
++    const run = PLAIN.exec(src);
++    if (run) {
++      word += run[0];
++      inWord = true;
++      i += run[0].length;
++      continue;
++    }
++    const c = src[i];
++    if (/\s/.test(c)) {
++      endWord();
++      if (c === '\n' && !endCommand()) return null;
++      i++;
++    } else if (c === ';' || c === '|') {
++      if (!endCommand()) return null;
++      i++;
++    } else if (c === '&') {
++      if (redirect && /[<>]$/.test(word)) {
++        word += c;
++      } else if (src[i + 1] === '>') {
++        endWord();
++        word = '&';
++        inWord = true;
++        redirect = true;
++      } else if (!endCommand()) {
++        return null;
++      }
++      i++;
++    } else if (c === '>' || c === '<') {
++      if (inWord && !redirect && !/^\d+$/.test(word)) endWord();
++      word += c;
++      inWord = true;
++      redirect = true;
++      i++;
++    } else if (c === '(') {
++      if (!endCommand()) return null;
++      const sub = scan(src, i + 1, ')');
++      if (sub === null) return null;
++      out.push(...sub.commands);
++      i = sub.end;
++    } else if (c === ')') {
++      if (close !== ')' || !endCommand()) return null;
++      return { commands: out, end: i + 1 };
++    } else if (c === '`') {
++      if (close === '`') {
++        if (!endCommand()) return null;
++        return { commands: out, end: i + 1 };
++      }
++      const sub = scan(src, i + 1, '`');
++      if (sub === null) return null;
++      pending.push(...sub.commands);
++      i = sub.end;
++    } else if (c === '$') {
++      if (src[i + 1] === '(') {
++        const sub = scan(src, i + 2, ')');
++        if (sub === null) return null;
++        pending.push(...sub.commands);
++        i = sub.end;
++      } else {
++        word += c;
++        inWord = true;
++        i++;
++      }
++    } else if (c === "'") {
++      const end = src.indexOf("'", i + 1);
++      if (end === -1) return null;
++      word += src.slice(i + 1, end);
++      inWord = true;
++      i = end + 1;
++    } else if (c === '"') {
++      inWord = true;
++      i++;
++      for (;;) {
++        if (i >= src.length) return null;
++        DQ_PLAIN.lastIndex = i;
++        const dq = DQ_PLAIN.exec(src);
++        if (dq) {
++          word += dq[0];
++          i += dq[0].length;
++          continue;
++        }
++        const d = src[i];
++        if (d === '"') {
++          i++;
++          break;
++        } else if (d === '\\') {
++          const next = src[i + 1];
++          if (next !== '\n') word += next ?? '';
++          i += 2;
++        } else if (d === '$' && src[i + 1] === '(') {
++          const sub = scan(src, i + 2, ')');
++          if (sub === null) return null;
++          pending.push(...sub.commands);
++          i = sub.end;
++        } else if (d === '`') {
++          const sub = scan(src, i + 1, '`');
++          if (sub === null) return null;
++          pending.push(...sub.commands);
++          i = sub.end;
++        } else {
++          word += d;
++          i++;
++        }
++      }
++    } else {
++      // An unquoted backslash.
++      const next = src[i + 1];
++      if (next === undefined) {
++        word += c;
++        inWord = true;
++        i++;
++      } else if (next === '\n') {
++        i += 2;
++      } else {
++        word += next;
++        inWord = true;
++        i += 2;
++      }
++    }
++  }
++  if (close !== null) return null;
++  if (!endCommand()) return null;
++  return { commands: out, end: i };
++}
++
++// Turns one command's words into argv: drops redirections, leading assignments and keywords, and unwraps
++// wrappers and shell scripts. Returns zero or more argv; null only when a nested script is unbalanced.
++function finish(words: Word[]): string[][] | null {
++  const argv: string[] = [];
++  for (let w = 0; w < words.length; w++) {
++    const { text, redirect } = words[w];
++    if (!redirect) argv.push(text);
++    else if (REDIRECT_OP.test(text)) w++;
++  }
++
++  let i = 0;
++  let wrapperAt = -1;
++  while (i < argv.length) {
++    const wrapper = WRAPPERS.get(base(argv[i]));
++    if (ASSIGN.test(argv[i]) || KEYWORDS.has(argv[i])) {
++      i++;
++    } else if (wrapper) {
++      wrapperAt = i++;
++      while (i < argv.length && argv[i].startsWith('-')) {
++        const flag = argv[i++];
++        if (flag === '--') break;
++        if (wrapper.value?.includes(flag)) i++;
++      }
++      i += wrapper.positional ?? 0;
++    } else {
++      break;
++    }
++  }
++
++  const rest = argv.slice(i);
++  if (rest.length === 0) return wrapperAt < 0 ? [] : [argv.slice(wrapperAt)];
++  const name = base(rest[0]);
++  let script: string | undefined;
++  if (name === 'eval') {
++    script = rest.slice(1).join(' ');
++  } else if (SHELLS.has(name)) {
++    for (let k = 1; k < rest.length && /^[-+]/.test(rest[k]); k += SHELL_VALUE_FLAGS.has(rest[k]) ? 2 : 1) {
++      if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(rest[k])) {
++        script = rest[k + 1];
++        break;
++      }
++    }
++  }
++  if (script === undefined) return [rest];
++  const inner = simpleCommands(script);
++  if (inner === null) return null;
++  return inner.length > 0 ? inner : [argv.slice(wrapperAt < 0 ? i : wrapperAt)];
++}
+ 
+ // Splits a shell command line into the argv of each simple command, so a permission policy can check every
+ // command a line would run. It is not a full shell parser; it must never hide a command from the policy.
+@@ -37,5 +252,5 @@
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  return scan(command, 0, null)?.commands ?? null;
+ }

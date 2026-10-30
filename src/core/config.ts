@@ -448,16 +448,20 @@ export const MODES: { name: Mode; label: string }[] = [
 ];
 export const isMode = (ref: string | undefined): ref is Mode => ref === 'auto' || ref === 'oplan';
 
-// The flags a mode adds under the run's own: the run's flags still win.
-export function modeFlags(mode: Mode, flags: { plan?: string; review?: string; planWhen?: string }): { plan?: string; review?: string; planWhen: string } {
+// The flags a mode adds under the run's own: the run's flags still win. `reviewProbe` is auto's review when the
+// sandbox lets it probe: medium with probes matched high on 30 runs at a third less review time
+// (evals/results/2026-10-29-opus-high/, "A review at medium that probes"); without probes medium lost seven wins.
+// The plan runs at medium: with the probing review it went 22-2 and 24-3 against Claude Code Opus high under two
+// judges, where low went 18-5 and 18-11, and it stopped losing the async tasks ("The plan at medium effort").
+export function modeFlags(mode: Mode, flags: { plan?: string; review?: string; planWhen?: string }): { plan?: string; review?: string; reviewProbe?: string; planWhen: string } {
   const set = loadRoles({});
   if (mode === 'oplan') {
     if (!flags.plan && !set.plan) throw new Error('oplan plans with roles.plan from ~/.cedia/settings.json, and none is set');
     return { planWhen: flags.planWhen ?? 'always' };
   }
   return {
-    ...(!flags.plan && !set.plan ? { plan: 'claude-code:opus@low' } : {}),
-    ...(!flags.review && !set.review ? { review: 'claude-code:sonnet@high' } : {}),
+    ...(!flags.plan && !set.plan ? { plan: 'claude-code:opus@medium' } : {}),
+    ...(!flags.review && !set.review ? { review: 'claude-code:sonnet@high', reviewProbe: 'claude-code:sonnet@medium' } : {}),
     planWhen: flags.planWhen ?? 'auto',
   };
 }

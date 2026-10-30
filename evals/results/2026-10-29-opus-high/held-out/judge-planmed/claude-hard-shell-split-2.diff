@@ -1,0 +1,211 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.ts b/shell.ts
+--- a/shell.ts	2026-10-29 19:00:34.324873616 +0000
++++ b/shell.ts	2026-10-29 19:04:07.351595556 +0000
+@@ -37,5 +37,206 @@
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  let commands: Word[][];
++  try {
++    commands = tokenize(command, 0, false).commands;
++  } catch (e) {
++    if (e instanceof Unbalanced) return null;
++    throw e;
++  }
++  const out: string[][] = [];
++  for (const words of commands) {
++    const unwrapped = unwrap(words);
++    if (!unwrapped) return null;
++    out.push(...unwrapped);
++  }
++  return out;
++}
++
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
++
++// `plain` is the length of the word's leading text that came from unquoted, unescaped characters, so `">"` is not a
++// redirection, `"if"` is not a keyword and `A="x y"` is still an assignment.
++type Word = { text: string; plain: number };
++class Unbalanced extends Error {}
++
++// Splits src into the words of each command, starting at `start`. When `nested` (the inside of a `$(` in double
++// quotes) it stops after the matching `)` and returns the position after it.
++function tokenize(src: string, start: number, nested: boolean): { commands: Word[][]; end: number } {
++  const commands: Word[][] = [];
++  let pending: Word[][] = []; // commands substituted inside double quotes, emitted after the current command
++  let cmd: Word[] = [];
++  let word: Word | null = null;
++  let target = false; // the next word is a redirection target
++  let depth = 0;
++  let i = start;
++
++  const append = (s: string, quoted: boolean) => {
++    word ??= { text: '', plain: 0 };
++    if (!quoted && word.plain === word.text.length) word.plain += s.length;
++    word.text += s;
++  };
++  const endWord = () => {
++    if (word && target) target = false;
++    else if (word) cmd.push(word);
++    word = null;
++  };
++  const endCommand = () => {
++    endWord();
++    target = false;
++    if (cmd.length) commands.push(cmd);
++    commands.push(...pending);
++    cmd = [];
++    pending = [];
++  };
++  // A redirection's file descriptor (the 2 in 2>) belongs to the operator, not argv.
++  const dropFd = () => {
++    if (word && word.plain === word.text.length && /^\d+$/.test(word.text)) word = null;
++  };
++  // Reads a backtick substitution starting at src[i] and returns its commands. Inside backticks a backslash only
++  // escapes \ ` and $, which is how backticks nest.
++  const backticks = (): Word[][] => {
++    let script = '';
++    for (i++; i < src.length && src[i] !== '`'; i++) {
++      if (src[i] === '\\' && i + 1 < src.length) {
++        i++;
++        if (!'\\`$'.includes(src[i])) script += '\\';
++      }
++      script += src[i];
++    }
++    if (i >= src.length) throw new Unbalanced();
++    i++;
++    return tokenize(script, 0, false).commands;
++  };
++  // Substitutions still run inside double quotes: their commands are reported and their source kept in the word.
++  const doubleQuoted = () => {
++    append('', true);
++    for (i++; src[i] !== '"'; ) {
++      if (i >= src.length) throw new Unbalanced();
++      const from = i;
++      if (src[i] === '\\') {
++        if (i + 1 >= src.length) throw new Unbalanced();
++        append(src[i + 1], true);
++        i += 2;
++      } else if (src[i] === '$' && src[i + 1] === '(') {
++        const inner = tokenize(src, i + 2, true);
++        pending.push(...inner.commands);
++        i = inner.end;
++        append(src.slice(from, i), true);
++      } else if (src[i] === '`') {
++        pending.push(...backticks());
++        append(src.slice(from, i), true);
++      } else {
++        append(src[i++], true);
++      }
++    }
++    i++;
++  };
++
++  while (i < src.length) {
++    const c = src[i];
++    const next = src[i + 1];
++    if (c === ' ' || c === '\t') {
++      endWord();
++      i++;
++    } else if (c === '\n' || c === ';' || c === '|' || (c === '&' && next !== '>')) {
++      endCommand();
++      i++;
++    } else if (c === '\\') {
++      if (next !== '\n') append(next ?? '\\', true); // backslash-newline is a line continuation
++      i += 2;
++    } else if (c === "'") {
++      const end = src.indexOf("'", i + 1);
++      if (end < 0) throw new Unbalanced();
++      append(src.slice(i + 1, end), true);
++      i = end + 1;
++    } else if (c === '"') {
++      doubleQuoted();
++    } else if (c === '`') {
++      endCommand();
++      commands.push(...backticks());
++    } else if (c === '(' || ('$<>'.includes(c) && next === '(')) {
++      // Subshells, $( ) and the process substitutions <( ) and >( )
++      endCommand();
++      depth++;
++      i += c === '(' ? 1 : 2;
++    } else if (c === ')') {
++      endCommand();
++      i++;
++      if (depth > 0) depth--;
++      else if (nested) return { commands, end: i };
++    } else if (c === '<' || c === '>' || c === '&') {
++      // Redirection operators: < > >> << <<< <> >& <& >| &> &>>
++      if (c !== '&') dropFd();
++      endWord();
++      i += c === '&' ? 2 : 1;
++      while (src[i] === '<' || src[i] === '>') i++;
++      if (src[i] === '&' || (src[i] === '|' && src[i - 1] === '>')) i++;
++      target = true;
++    } else {
++      append(c, false);
++      i++;
++    }
++  }
++  if (nested) throw new Unbalanced();
++  endCommand();
++  return { commands, end: i };
++}
++
++// Turns one command's words into argv, skipping assignments and keywords and replacing wrappers, `eval` and
++// `bash -c` with the commands they run. Returns null when an unpacked script has unbalanced quotes.
++function unwrap(words: Word[]): string[][] | null {
++  let i = 0;
++  for (;;) {
++    while (i < words.length && (isAssignment(words[i]) || isKeyword(words[i]))) i++;
++    if (i >= words.length) return [];
++    const name = basename(words[i].text);
++    const wrapper = WRAPPERS.get(name);
++    if (wrapper) {
++      let j = i + 1;
++      while (j < words.length && words[j].text.startsWith('-')) {
++        const flag = words[j++].text;
++        if (flag === '--') break;
++        if (wrapper.value?.includes(flag)) j++;
++      }
++      j += wrapper.positional ?? 0;
++      // A wrapper with nothing to run (`sudo -i`, `exec >log`) is still a command.
++      if (j >= words.length) return [words.slice(i).map((w) => w.text)];
++      i = j;
++      continue;
++    }
++    if (name === 'eval') return simpleCommands(words.slice(i + 1).map((w) => w.text).join(' '));
++    if (SHELLS.has(name)) {
++      const script = shellScript(words.slice(i + 1).map((w) => w.text));
++      if (script !== undefined) return simpleCommands(script);
++    }
++    return [words.slice(i).map((w) => w.text)];
++  }
++}
++
++// The script of `bash [options] -c <script>`, or undefined when the shell is not given one with -c.
++function shellScript(args: string[]): string | undefined {
++  let hasC = false;
++  for (let j = 0; j < args.length; j++) {
++    const arg = args[j];
++    if (arg === '--') return hasC ? args[j + 1] : undefined;
++    if (!/^[-+]/.test(arg)) return hasC ? arg : undefined;
++    if (['-o', '+o', '-O', '+O', '--rcfile', '--init-file'].includes(arg)) j++;
++    else if (/^-[A-Za-z]*c/.test(arg)) hasC = true;
++  }
++  return undefined;
++}
++
++function isAssignment(word: Word): boolean {
++  const name = /^[A-Za-z_][A-Za-z0-9_]*\+?=/.exec(word.text);
++  return name !== null && name[0].length <= word.plain;
++}
++
++function isKeyword(word: Word): boolean {
++  return word.plain === word.text.length && KEYWORDS.has(word.text);
++}
++
++function basename(path: string): string {
++  return path.slice(path.lastIndexOf('/') + 1);
+ }

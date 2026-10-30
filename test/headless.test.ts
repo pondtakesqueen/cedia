@@ -489,6 +489,10 @@ describe('cedia -p (offline, faux)', () => {
       expect(planArgs).toContain('--tools\nRead,Grep,Glob,Bash\n');
       expect(planArgs).toContain('--model\nopus\n--effort\nmedium\n');
       expect(readFileSync(join(dir, 'args2'), 'utf8')).toContain('Bash(git diff:*)\nBash(git log:*)\nBash(git show:*)\nBash(git status:*)\nBash(test -s f.txt)');
+      // With the sandbox off the review may not probe: no bun -e, no Claude Code sandbox, and the prompt says so.
+      expect(readFileSync(join(dir, 'args2'), 'utf8')).not.toContain('bun -e');
+      expect(readFileSync(join(dir, 'args2'), 'utf8')).not.toContain('--settings');
+      expect(JSON.parse(readFileSync(join(dir, 'prompt2'), 'utf8')).message.content).toContain('may be denied');
       expect(readFileSync(join(dir, 'env1'), 'utf8')).not.toContain('ANTHROPIC_API_KEY');
       expect(readFileSync(join(dir, 'env1'), 'utf8')).not.toContain('CEDIA_');
       // The prompt goes in on stdin, so each step can start before it is known.
@@ -500,6 +504,22 @@ describe('cedia -p (offline, faux)', () => {
       expect(readFileSync(join(dir, 'env2'), 'utf8')).toContain('CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1');
       const writer = sessionsOf(r.home).find((l) => (l[0] as { role: string }).role === 'code')!;
       expect(userTexts(writer)).toEqual([expect.stringContaining('<plan by="claude-code:opus@medium">'), expect.stringContaining('<review>\nf.txt:1 needs a period.\n</review>')]);
+    });
+
+    test.skipIf(!process.env.CEDIA_REQUIRE_SANDBOX && !Bun.which('bwrap') && process.platform !== 'darwin')('inside the sandbox a Claude Code review probes with bun -e in its own sandbox', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'cedia-probe-claude-'));
+      const bin = join(dir, 'claude');
+      const result = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'FINDINGS: none\nVERDICT: approve', session_id: 'cc-1', total_cost_usd: 0.5, num_turns: 3, duration_api_ms: 1200 });
+      writeFileSync(join(dir, 'review'), result);
+      writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$@" > ${dir}/args\ncat > ${dir}/prompt\ncat ${dir}/review\n`, { mode: 0o755 });
+      const probing = [...base.filter((a, i) => a !== '--sandbox' && base[i - 1] !== '--sandbox'), '--sandbox', 'on'];
+      // -m auto puts reviewProbe (medium) in place of its high review the same way (policy.test.ts, modeFlags).
+      const r = cedia(writes, [...probing, '--review', 'claude-code:sonnet@high'], undefined, { CEDIA_CLAUDE_BIN: bin });
+      expect(JSON.parse(r.out)).toMatchObject({ subtype: 'success', review: { model: 'claude-code:sonnet@high', verdict: 'approve' } });
+      const args = readFileSync(join(dir, 'args'), 'utf8').split('\n');
+      expect(args).toContain('Bash(bun -e:*)');
+      expect(JSON.parse(args[args.indexOf('--settings') + 1]!).sandbox).toMatchObject({ enabled: true, failIfUnavailable: true, allowUnsandboxedCommands: false });
+      expect(JSON.parse(readFileSync(join(dir, 'prompt'), 'utf8')).message.content).toContain('Probe the change before you judge it');
     });
 
     test('by default the writer reads while Claude Code plans, and the plan follows into its session', () => {

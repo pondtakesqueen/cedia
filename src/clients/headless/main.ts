@@ -131,6 +131,8 @@ export type HeadlessArgs = {
   planOverlap?: string;
   // The model that says whether a message needs the planner (default: the code model).
   triage?: string;
+  // The review role in place of `review` when the sandbox lets a Claude Code review probe (set by -m auto).
+  reviewProbe?: string;
   sandbox?: string;
   allowDomains?: string[];
   // For a client that owns the terminal (the TUI): where cedia's own notes go instead of stderr, and a stop.
@@ -158,6 +160,8 @@ const REVIEW_TOOLS = CORE_TOOLS.filter((t) => t.effect !== 'write_workspace');
 
 // Read-only git for a reviewer in Claude Code, in its permission-rule syntax.
 const GIT_READS = ['Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git status:*)'];
+// What a review in Claude Code's sandbox may run beyond reads, to try inputs no test checks.
+const PROBES = ['Bash(bun -e:*)'];
 
 const quotaSpent = (events: SessionEvent[]) => events.findLast((e) => e.kind === 'attempt')?.error?.code === 'quota';
 
@@ -302,6 +306,10 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
   const sandboxSettings = loadSandbox({ ...(args.sandbox ? { mode: args.sandbox } : {}), allowDomains: args.allowDomains ?? [] });
   const { sandbox, note: sandboxNote } = await openSandbox(args.cwd, sandboxSettings.mode, { allowedDomains: sandboxSettings.allowedDomains, cediaHome: cediaHome() });
   if (sandboxNote) say(sandboxNote + '\n');
+  // A Claude Code review probes the change with `bun -e` only where an OS sandbox can hold it, which cedia's own
+  // opening shows; auto's review then runs at medium (core/config.ts, modeFlags).
+  const reviewProbe = sandbox.on && roles.review?.via === 'claude-code';
+  if (reviewProbe && args.reviewProbe) roles.review = loadRoles({ review: args.reviewProbe }).review;
   const policyFlags = { ...(args.permission ? { mode: args.permission } : {}), allow: args.allow ?? [], deny: args.deny ?? [], unlock: args.unlock ?? [] };
   let policy;
   try {
@@ -663,9 +671,9 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // is capped centrally in runPrompt (writer, spawn children, plan/review steps, escalation).
     effort: capEffort(choice.effort, loadMaxEffort()),
     cwd: args.cwd,
-    allowed: ['Read', 'Grep', 'Glob', ...(role === 'review' ? GIT_READS : []), ...checks.map((c) => `Bash(${c})`)],
+    allowed: ['Read', 'Grep', 'Glob', ...(role === 'review' ? [...GIT_READS, ...(reviewProbe ? PROBES : [])] : []), ...checks.map((c) => `Bash(${c})`)],
     signal: ac.signal,
-    ...(role === 'review' ? { gitStatus: false } : {}),
+    ...(role === 'review' ? { gitStatus: false, ...(reviewProbe ? { sandbox: true } : {}) } : {}),
   });
   // Claude Code steps started before their prompt is ready (the plan while the triage reads the message, the review
   // while the writer works), so its start-up is spent then; each is run once or cancelled before it sends anything.
@@ -1177,7 +1185,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     if (small) say(`cedia: a small change to a message the triage sent straight to the writer; no review\n`);
     if (!(roles.review && result.subtype === 'success' && result.evidence?.changed.length && !small)) unwarm('review');
     if (roles.review && result.subtype === 'success' && result.evidence?.changed.length && !small) {
-      const r = await side('review', roles.review, reviewPrompt(args.prompt, result.evidence, patch));
+      const r = await side('review', roles.review, reviewPrompt(args.prompt, result.evidence, patch, { probe: reviewProbe }));
       // A review cut off by a stop said nothing about the change: it was interrupted, not without a verdict.
       const { verdict, findings, overruled } = r.ok ? parseVerdict(r.text) : { verdict: ac.signal.aborted ? ('interrupted' as const) : ('unclear' as const), findings: '', overruled: undefined };
       // Findings outside the diff were not reviewed: drop them with names, so the fix chases only placed ones.

@@ -297,3 +297,84 @@ What it says:
 - So part of the 18-7 → 23-3 gain on the tuning tasks is specific to those tasks. The merged prompts are not worse anywhere measured, but the next prompt change should be scored on held-out tasks too, not only on the ones that suggested it.
 
 Spent for this section: $0.38 + $0.69 Haiku (Anthropic API). Claude Code ($8.58) and the panels ($4.68, $3.32 and $3.20) ran at API price on the owner's subscription.
+
+## A faster review: Sonnet at medium effort (three runs, not adopted)
+
+Plan and review are most of a task's time, and Claude Code finishes in one pass at about 70 s. This arm keeps the merged prompts and changes only the review to `--review claude-code:sonnet@medium`. Starting Claude Code itself is not the cost: a one-line `claude -p` took 5.1 s, 2.4 s of it the API, and cedia starts the plan and review processes ahead of their prompts.
+
+| 30 runs | pass | wins / losses / tie or split | steady tasks | tasks won 3 of 3 | review sent back | time per task (plan, review, fix) |
+|---|---|---|---|---|---|---|
+| shape, review at high | 28/30 | 23 / 3 / 2 | 7 of 10 | 7 | 14 of 30 | 159 s (38, 45, 14) |
+| review at medium | 30/30 | 16 / 9 / 5 | 6 of 10 | 4 | 11 of 30 | 125 s (38, 21, 9) |
+
+| | correctness | quality | scope | tests | security |
+|---|---|---|---|---|---|
+| review at medium / CC Opus high | 8.53 / 8.32 | 8.03 / 8.10 | 8.65 / 8.93 | 8.25 / 5.10 | 9.07 / 8.87 |
+
+What it says:
+- The review at medium takes half the time (21 s against 45 s) and the task 21% less (125 s against 159 s).
+- It catches less, and that costs seven wins:
+  - hard-memo-async lost all three runs again;
+  - hard-pool lost two runs and wide-three-features lost one;
+  - correctness fell from 8.86 to 8.53.
+- The review at high effort is where much of auto's lead comes from, so it stays.
+
+Spent for this section: $0.33 Haiku (Anthropic API). The panel ($4.71) and the plan and review ran at API price on the owner's subscription.
+
+## A review at medium that probes (three runs on the tuning tasks, two held out)
+
+The review at medium caught less because it could only read. This arm lets it run code: the review step in Claude Code also gets `Bash(bun -e:*)`, and its prompt asks it to run the inputs the task and the doc comments imply that no test checks against the changed code, and to put each probe that shows a defect in its finding as a test case. Everything else is the shape arm with `--review claude-code:sonnet@medium`. The experiment ran on a hack of main (`CEDIA_REVIEW_PROBE`); the review's probes were not sandboxed, so this is what made cedia give probes only to a review in an OS sandbox (`sandboxSettings` in `src/clients/headless/claude-code.ts`).
+
+Files: `auto-revprobe.*` and `judge-revprobe/` (`claude-*` diffs are Claude Code Opus high); held out, `held-out/auto-revprobe.*` and `held-out/judge-revprobe/`. Tally: `python3 judge-revprobe/tally.py judge-revprobe probe`.
+
+| tuning, 30 runs | pass | wins / losses / tie or split | steady tasks | tasks won 3 of 3 | review sent back | time per task (plan, review, fix) |
+|---|---|---|---|---|---|---|
+| shape, review at high | 28/30 | 23 / 3 / 2 | 7 of 10 | 7 | 14 of 30 | 159 s (38, 45, 14) |
+| review at medium | 30/30 | 16 / 9 / 5 | 6 of 10 | 4 | 11 of 30 | 125 s (38, 21, 9) |
+| review at medium that probes | 30/30 | 22 / 6 / 2 | 6 of 10 | 6 | 7 of 30 | 112 s (38, 20, 3) |
+
+| held out, 16 runs | pass | wins / losses / tie or split | correctness | quality | tests | security |
+|---|---|---|---|---|---|---|
+| review at high (main after #190) | 16/16 | 9 / 3 / 4 | 8.19 / 7.91 | 7.69 / 7.59 | 7.91 / 5.16 | 8.81 / 7.94 |
+| review at medium that probes | 15/16 | 7 / 2 / 6 | 8.17 / 7.90 | 7.83 / 7.50 | 7.27 / 4.83 | 8.60 / 8.17 |
+
+Scores are this arm / Claude Code Opus high. On the tuning tasks: correctness 8.68 / 8.22, quality 8.12 / 8.20, scope 8.65 / 8.85, tests 8.47 / 5.03, security 9.33 / 9.18.
+
+What it says:
+- Probing wins back the wins medium lost: 22 to 6 against 16 to 9, close to high's 23 to 3, and it passed every run.
+- It is the fastest arm: 112 s a task against 159 s at high, 30% less. The review takes 20 s, and fixes take 3 s because it sends back half as many changes (7 of 30 against 14).
+- hard-memo-async still loses two of three and hard-pool two of three, as at high.
+- On held-out tasks it beats Claude Code 7 to 2. The one failed run, hard-window run 2, stopped at the 300 s limit having spent $0.003, before the writer did anything, so it says nothing about the review. Held-out times are not comparable: the high arm ran beside Claude Code.
+- Whether a review ran a probe is not known: Claude Code keeps no log of a `-p` run without session persistence.
+
+So `-m auto` reviews at medium with probes when the review can run in Claude Code's sandbox, and at high otherwise.
+
+Spent for this section: $0.28 + $0.34 Haiku (Anthropic API). The panels and the plan and review ran on the owner's subscription.
+
+## The probing review in a real sandbox, the plan at medium effort, and a second judge
+
+The probe arm above ran its probes unsandboxed. These arms run the code this README now describes (`--sandbox on`; bubblewrap and socat installed in the eval container), so each review's `bun -e` runs in Claude Code's sandbox: a probe that writes the tree gets EROFS and one that fetches gets a denied proxy, checked by hand with a real `claude`. Every arm reviews with `claude-code:sonnet@medium` and probes.
+- sandbox: the plan at `claude-code:opus@low`. Files: `auto-revprobe-sandbox.*`, `judge-revprobe-sandbox/`.
+- plan at medium: the plan at `claude-code:opus@medium`. Files: `auto-planmed.*`, `judge-planmed/`; held out, `held-out/auto-planmed.*`, `held-out/judge-planmed/`.
+
+The three arms ran at the same time, so their times are not comparable with the sections above (the plan at medium took 68 s, at low 38 s, under that load).
+
+The panel so far was one judge, Sonnet. Opus judged the same pairs again, blind and in both orders: `judge-opus/` (tally: `python3 judge-opus/tally.py judge-opus/planmed opmed`).
+
+| against CC Opus high | runs | pass | Sonnet judge | Opus judge |
+|---|---|---|---|---|
+| tuning: shape, review at high, plan at low | 30 | 28/30 | 23 / 3 / 2 | 21 / 4 / 3 |
+| tuning: sandbox, plan at low | 30 | 30/30 | 18 / 5 / 7 | 18 / 11 / 1 |
+| tuning: plan at medium | 30 | 30/30 | 22 / 2 / 6 | 24 / 3 / 3 |
+| held out: probing review, plan at low (unsandboxed) | 16 | 15/16 | 7 / 2 / 6 | 5 / 4 / 6 |
+| held out: plan at medium | 16 | 16/16 | 9 / 4 / 3 | 10 / 3 / 3 |
+
+Plan at medium, scores against CC Opus high under the Opus judge: correctness 8.92 / 8.53, tests 8.90 / 4.83, security 9.45 / 9.32 on the tuning tasks; correctness 8.44 / 8.22, tests 8.53 / 5.00 held out.
+
+What it says:
+- The two judges agree on most pairs (22 to 26 of 30 on the tuning arms, 9 and 10 of 15-16 held out) and named opposite winners on 1 pair of 119; where they differ, one says split or tie.
+- Opus is stricter on the probing review with the plan at low: 18 to 11 against high review's 21 to 4. Under Sonnet the gap looked like noise; under Opus it is not.
+- The plan at medium is the best arm under both judges, on both task sets. The two tasks auto kept losing come back: hard-memo-async (2 wins, 1 split under Sonnet) and hard-pool (1 win, 2 splits), with no loss on either. Its correctness is the highest of any arm.
+- So `-m auto` plans at medium. Its plan costs more of the subscription and time; that time has to be measured on a quiet run before it is quoted.
+
+Spent for this section: $0.34 + $0.36 + $0.33 Haiku (Anthropic API). The plan, review and panels ran on the owner's subscription, which hit its five-hour limit once; the judge resumes the pairs that failed.
