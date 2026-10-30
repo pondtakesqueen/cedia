@@ -24,6 +24,34 @@ describe('test failure summaries', () => {
     expect(summarizeTestFailures('go test ./...', goout.repeat(400))).toContain('FAIL: TestParse');
   });
 
+  test('a long bun run test keeps the failure lines', async () => {
+    expect(isTestCommand('bun run test')).toBe(true);
+    expect(isTestCommand('bun run test -- test/a.test.ts')).toBe(true);
+    expect(isTestCommand('bun run test -- --bail')).toBe(true);
+    const fail = 'FAILED test_login - AssertionError: expected home, got login';
+    const text = `${'ok line\n'.repeat(2500)}${fail}\n${'ok tail\n'.repeat(400)}`;
+    expect(text.length).toBeGreaterThan(8_000);
+    expect(text.indexOf(fail)).toBeGreaterThan(4_000);
+    expect(text.length - (text.indexOf(fail) + fail.length)).toBeGreaterThan(4_000);
+    const s = summarizeTestFailures('bun run test', text)!;
+    expect(s).toContain(fail);
+    expect(s).toContain('lines not shown');
+    expect((s.match(/ok line/g) ?? []).length).toBeLessThan(10);
+
+    const cwd = mkdtempSync(join(tmpdir(), 'cedia-testfail-'));
+    let spilled = '';
+    const spill = (full: string) => {
+      spilled = join(cwd, 'spill.txt');
+      writeFileSync(spilled, full);
+      return spilled;
+    };
+    const command = `bun run test; python3 -c "print('ok line\\n' * 2500); print('${fail}'); print('ok tail\\n' * 400)"`;
+    const r = await bashTool.run({ command }, { cwd, signal: AbortSignal.timeout(30_000), spill });
+    expect(r.text).toContain(fail);
+    expect(r.text).toContain(spilled);
+    expect((r.text.match(/ok line/g) ?? []).length).toBeLessThan(10);
+  });
+
   test('short output, passing runs and other commands fall back to undefined', () => {
     expect(summarizeTestFailures('pytest -q', 'short')).toBeUndefined();
     expect(summarizeTestFailures('ls', 'x'.repeat(20_000))).toBeUndefined();
