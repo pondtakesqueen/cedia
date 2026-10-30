@@ -37,6 +37,9 @@
     "AwayRecap": {
       "$ref": "#/definitions/AwayRecap"
     },
+    "ThreadSearch": {
+      "$ref": "#/definitions/ThreadSearch"
+    },
     "Restored": {
       "$ref": "#/definitions/Restored"
     },
@@ -4130,6 +4133,89 @@
           ]
         }
       ]
+    },
+    "ThreadSearch": {
+      "type": "object",
+      "properties": {
+        "terms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "editedPath": {
+          "type": "string"
+        },
+        "threads": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ThreadSearchMatch"
+          }
+        }
+      },
+      "required": [
+        "terms",
+        "threads"
+      ],
+      "additionalProperties": false
+    },
+    "ThreadSearchHit": {
+      "type": "object",
+      "properties": {
+        "where": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "where",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "ThreadSearchMatch": {
+      "type": "object",
+      "properties": {
+        "thread": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/ThreadState"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "hits": {
+          "type": "number"
+        },
+        "snippets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ThreadSearchHit"
+          }
+        },
+        "edited": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "thread",
+        "title",
+        "state",
+        "updatedAt",
+        "hits",
+        "snippets",
+        "edited"
+      ],
+      "additionalProperties": false
     },
     "ThreadState": {
       "type": "string",

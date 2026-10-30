@@ -43,6 +43,7 @@ import { formatUsage, isUsageEvent, readEventsLenient, sinceOf, usageReport, typ
 import { selectSessions } from './core/session/select.ts';
 import { contextBreakdown, formatContext, writerSessionOf } from './core/context/breakdown.ts';
 import { awayRecap, formatRecap, lastRunStart, recapSince } from './core/project/recap.ts';
+import { searchText, searchThreads } from './core/project/search.ts';
 import { EFFORTS, type Effort } from './core/types.ts';
 import { doctorReport } from './core/doctor.ts';
 import { versionInfo } from './protocol/version.ts';
@@ -170,6 +171,9 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia threads delete <id> [--force] [--json]
                                             delete a thread for good: its file, its sub-threads and their session
                                             logs (refused while it runs unless --force; worktrees are kept)
+       cedia threads search <term>... [--edited-path <glob>] [--limit <n>] [--all] [--json]
+                                            find threads by what they said or did (every term must match; a|b takes
+                                            either) or by the files they edited, from their logs, no model call
        cedia threads diff <id>              what changed since the thread's last turn that changed files started
        cedia threads undo|redo <id> [--force] [--json]
                                             put the files that turn changed back (or forward again), from cedia's
@@ -542,7 +546,7 @@ function threads(argv: string[]): number {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' }, side: { type: 'boolean' }, json: { type: 'boolean' }, image: { type: 'string', multiple: true }, since: { type: 'string' } },
+    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' }, side: { type: 'boolean' }, json: { type: 'boolean' }, image: { type: 'string', multiple: true }, since: { type: 'string' }, 'edited-path': { type: 'string' }, limit: { type: 'string' } },
   });
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(values.cwd ?? process.cwd())));
   const [cmd = 'list', id, ...rest] = positionals;
@@ -565,6 +569,13 @@ function threads(argv: string[]): number {
       if (t.question) lines.push('', `question from ${t.question.sessionId}:`, t.question.question, ...(t.question.options ?? []).map((o, i) => `  ${i + 1}. ${o}`), `answer with: cedia -p "<answer>" --thread ${t.id}`);
       for (const r of t.ratings) lines.push('', `rated ${r.rating} at ${r.at}${r.sessionId ? ` (session ${r.sessionId})` : ''}${r.note ? `: ${r.note}` : ''}`);
       console.log(lines.join('\n'));
+      return 0;
+    }
+    if (cmd === 'search' && (id || values['edited-path'])) {
+      const limit = values.limit ? Number(values.limit) : undefined;
+      if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) throw new Error(`--limit takes a positive whole number: ${values.limit}`);
+      const r = searchThreads(store, { terms: [...(id ? [id] : []), ...rest], ...(values['edited-path'] ? { editedPath: values['edited-path'] } : {}), all: values.all ?? false, ...(limit ? { limit } : {}) });
+      console.log(values.json ? JSON.stringify(r) : searchText(r));
       return 0;
     }
     if (cmd === 'recap' && id) {
@@ -672,7 +683,7 @@ function threads(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia threads [list [--all] | show <id> | recap <id> [--since <time|span>] [--json] | send <id> <text> [--image <file>]... | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run|end> [--side] [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id> | rename <id> <title> | delete <id> [--force] [--json]] [--cwd <dir>]');
+  console.error('usage: cedia threads [list [--all] | show <id> | search <term>... [--edited-path <glob>] [--limit <n>] [--all] [--json] | recap <id> [--since <time|span>] [--json] | send <id> <text> [--image <file>]... | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run|end> [--side] [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id> | rename <id> <title> | delete <id> [--force] [--json]] [--cwd <dir>]');
   return 2;
 }
 
