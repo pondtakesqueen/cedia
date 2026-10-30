@@ -67,6 +67,10 @@ type EventBody =
     }
   // ttftMs: until the provider starts streaming; ms: the whole attempt.
   | { kind: 'attempt'; requestId: EventId; n: number; error?: AttemptError; ttftMs?: number; ms?: number }
+  // A failed attempt n is followed by this wait before the next one, so a client can say why the run is quiet
+  // ("overloaded, retrying in 8s, 2 of 5"). of: the most attempts the run makes; absent for a spent quota, whose
+  // waits do not count against it. Nothing reaches the model.
+  | { kind: 'retry'; requestId: EventId; n: number; waitMs: number; code: AttemptErrorCode; status?: number; of?: number }
   // costUsd: what this reply cost at the model's price when it ran, so a client can show a run's spend as it grows.
   | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; costUsd?: number }
   // The request's body sent again with no output while a tool runs long, so its cached prefix does not expire
@@ -231,6 +235,12 @@ export type HeadlessResult = {
   usage: Usage;
   costUsd: number;
   cacheHitRatio: number;
+  // Usage and spend by model ref, across every cedia session of the run (writer, fallback, plan, review, advisor,
+  // classifier, sub-threads): the parts costUsd and usage add up to. requests: the model's replies. A Claude Code
+  // step (Step via 'claude-code') is not in it, as it is not in costUsd.
+  modelUsage?: Record<string, ModelUsage>;
+  // Why an error_during_execution run ended (absent on every other subtype, which already says why).
+  failure?: Failure;
   // Calls whose input was repaired, keyed `<tool>: <kind of repair>` (absent when none was). A call the policy then
   // denied counts too: the count is of what the model sent.
   inputRepairs?: Record<string, number>;
@@ -272,6 +282,13 @@ export type HeadlessResult = {
   // An 'asked' run's question for the owner (core/tools/ask.ts).
   question?: Question;
 };
+
+export type ModelUsage = Usage & { costUsd: number; requests: number };
+// api_error: the provider's last answer, after the retries it was worth (code and status say which); privacy: the
+// model may not see this repository (its data policy); refusal: the model declined the task; empty_reply: it
+// ended its turn twice with nothing.
+export type FailureCause = 'api_error' | 'privacy' | 'refusal' | 'empty_reply';
+export type Failure = { cause: FailureCause; code?: AttemptErrorCode; status?: number };
 
 // Why a request read less from the prompt cache than the request before it had sent. Causes come from what the
 // log proves (hashes, model, time since the last reply), most specific first; 'provider' means the prefix did

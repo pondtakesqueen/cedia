@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { cediaHome, checkMcpServer, checkSettings } from '../config.ts';
-import { McpClient } from './client.ts';
+import { McpClient, type McpToolRule } from './client.ts';
 
 // `cedia mcp`: the user's MCP servers (`mcpServers` in ~/.cedia/settings.json) for a client's settings page, which
 // lists them, checks one by starting it, and adds or removes one. cedia stays the only writer of the keys it reads:
@@ -18,15 +18,22 @@ export type McpEntry = {
   env?: string[];
   headers?: string[];
   readOnly?: boolean;
+  // The user's rule for each tool named, by the server's name for it.
+  tools?: Record<string, McpToolRule>;
   timeoutSec?: number;
   // Why cedia would refuse this entry; a run fails on it until it is fixed or removed.
   error?: string;
 };
 export type McpList = { servers: McpEntry[] };
-// What starting a server found: its tools, or why it did not start.
-export type McpCheck = { name: string; ok: true; tools: { name: string; description?: string }[] } | { name: string; ok: false; error: string };
+// What starting a server found: its tools, or why it did not start. readOnlyHint and destructiveHint are the
+// server's own hints, for a client to suggest a rule from; rule is the one the user set (absent: the server's
+// readOnly decides).
+export type McpCheckTool = { name: string; description?: string; readOnlyHint?: boolean; destructiveHint?: boolean; rule?: McpToolRule };
+export type McpCheck = { name: string; ok: true; tools: McpCheckTool[] } | { name: string; ok: false; error: string };
 // What `cedia mcp add` takes: one server, as mcpServers holds it.
-export type McpAdd = { command: string; args?: string[]; env?: Record<string, string>; cwd?: string; readOnly?: boolean; timeoutSec?: number } | { url: string; headers?: Record<string, string>; readOnly?: boolean; timeoutSec?: number };
+export type McpAdd =
+  | { command: string; args?: string[]; env?: Record<string, string>; cwd?: string; readOnly?: boolean; tools?: Record<string, McpToolRule>; timeoutSec?: number }
+  | { url: string; headers?: Record<string, string>; readOnly?: boolean; tools?: Record<string, McpToolRule>; timeoutSec?: number };
 
 const settingsPath = () => join(cediaHome(), 'settings.json');
 
@@ -65,6 +72,7 @@ export function listMcp(): McpList {
           ...(raw.env && typeof raw.env === 'object' ? { env: Object.keys(raw.env) } : {}),
           ...(raw.headers && typeof raw.headers === 'object' ? { headers: Object.keys(raw.headers) } : {}),
           ...(typeof raw.readOnly === 'boolean' ? { readOnly: raw.readOnly } : {}),
+          ...(raw.tools && typeof raw.tools === 'object' && !Array.isArray(raw.tools) ? { tools: raw.tools as Record<string, McpToolRule> } : {}),
           ...(typeof raw.timeoutSec === 'number' ? { timeoutSec: raw.timeoutSec } : {}),
         };
         try {
@@ -83,10 +91,22 @@ export async function checkMcp(name: string): Promise<McpCheck> {
   if (v === undefined) return { name, ok: false, error: `no MCP server ${name} in ${settingsPath()}` };
   let client: McpClient | undefined;
   try {
-    client = new McpClient(name, checkMcpServer(name, v));
+    const config = checkMcpServer(name, v);
+    client = new McpClient(name, config);
     await client.connect();
     const tools = (await client.tools()).sort((a, b) => a.name.localeCompare(b.name));
-    return { name, ok: true, tools: tools.map((t) => ({ name: t.name, ...(t.description ? { description: t.description.trim().split('\n')[0]! } : {}) })) };
+    const hint = (x: unknown, key: 'readOnlyHint' | 'destructiveHint') => (typeof x === 'boolean' ? { [key]: x } : {});
+    return {
+      name,
+      ok: true,
+      tools: tools.map((t) => ({
+        name: t.name,
+        ...(t.description ? { description: t.description.trim().split('\n')[0]! } : {}),
+        ...hint(t.annotations?.readOnlyHint, 'readOnlyHint'),
+        ...hint(t.annotations?.destructiveHint, 'destructiveHint'),
+        ...(config.tools?.[t.name] ? { rule: config.tools[t.name] } : {}),
+      })),
+    };
   } catch (e) {
     return { name, ok: false, error: (e as Error).message };
   } finally {

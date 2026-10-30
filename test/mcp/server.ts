@@ -1,11 +1,11 @@
 // A fake MCP server for tests, over stdio: one JSON-RPC message a line.
 const tools = [
-  { name: 'echo', description: 'Echo the text back', inputSchema: { $schema: 'http://json-schema.org/draft-07/schema#', type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
+  { name: 'echo', description: 'Echo the text back', inputSchema: { $schema: 'http://json-schema.org/draft-07/schema#', type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, annotations: { readOnlyHint: true } },
   { name: 'fail', description: 'Always fails', inputSchema: { type: 'object', properties: {} } },
   { name: 'picture', description: 'Returns an image', inputSchema: { type: 'object' } },
   { name: 'slow', description: 'Answers after a while', inputSchema: { type: 'object', properties: { ms: { type: 'number' } } } },
   { name: 'env', description: 'Says which variables it sees', inputSchema: { type: 'object', properties: {} } },
-  { name: 'crash', description: 'Exits', inputSchema: { type: 'object', properties: {} } },
+  { name: 'crash', description: 'Exits', inputSchema: { type: 'object', properties: {} }, annotations: { destructiveHint: true } },
 ];
 const send = (m: unknown) => process.stdout.write(`${JSON.stringify(m)}\n`);
 // Noise a careless server prints to stdout.

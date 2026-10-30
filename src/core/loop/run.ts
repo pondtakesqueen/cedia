@@ -35,6 +35,7 @@ import {
   type EventOf,
   type HeadlessResult,
   type JsonObject,
+  type Failure,
   type ModelSpec,
   type Question,
   type PrivacyLevel,
@@ -163,6 +164,8 @@ export const KEEP_ALIVE_1H_MS = 55 * 60_000;
 export const QUOTA_RECHECK_MS = 5 * 60_000;
 // A non-quota retry wait this long or more is announced through onWait first.
 export const WAIT_SAY_MS = 30_000;
+
+const apiFailure = (e: AttemptError): Failure => ({ cause: 'api_error', code: e.code, ...(e.status !== undefined ? { status: e.status } : {}) });
 
 // Refreshes the request's cached prefix while tools run, from `sentAt` + `every` and every `every` after, until
 // stop() (which waits for one in flight, so its event lands before the next request). A provider without
@@ -472,8 +475,10 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       timing: summarizeTiming(performance.now() - wallStart, timing, usage.output),
       ...(peakContext ? { peakContext } : {}),
       ...(compacted ? { compaction: compacted } : {}),
+      ...(turns || cost ? { modelUsage: { [model.ref]: { ...usage, costUsd: cost, requests: turns } } } : {}),
     };
   };
+  const fail = (failure: Failure, result: string): HeadlessResult => ({ ...finish('error_during_execution', 'error', result), failure });
 
   // Asks the provider for a summary of the messages request `of` sent, without waiting for it. The compaction
   // request is logged before it is sent and its outcome when it arrives; its cost counts like a turn's.
@@ -507,10 +512,10 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
   };
 
   if (model.dataPolicy === 'trains' && !isPublicRepo(opts.cwd)) {
-    return finish('error_during_execution', 'error', `${model.ref} trains on prompts; it runs only in repos marked public with a .cedia/public file`);
+    return fail({ cause: 'privacy' }, `${model.ref} trains on prompts; it runs only in repos marked public with a .cedia/public file`);
   }
   if (opts.privacy === 'zdr' && model.dataPolicy !== 'zdr') {
-    return finish('error_during_execution', 'error', `${model.ref} keeps prompts (${model.dataPolicy}); privacy is set to zdr, so only zero-data-retention models may see this repo`);
+    return fail({ cause: 'privacy' }, `${model.ref} keeps prompts (${model.dataPolicy}); privacy is set to zdr, so only zero-data-retention models may see this repo`);
   }
 
   if (opts.preamble && !log.events.some((e) => e.kind === 'user')) log.append({ kind: 'reminder', as: 'user', text: opts.preamble });
@@ -608,7 +613,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
           continue;
         }
       }
-      if ((!isRetryable(got.error) && quotaWait === undefined) || (quotaWait === undefined && n >= retryMax)) return finish('error_during_execution', 'error', got.error.message);
+      if ((!isRetryable(got.error) && quotaWait === undefined) || (quotaWait === undefined && n >= retryMax)) return fail(apiFailure(got.error), got.error.message);
       const base = opts.retry?.baseMs ?? 1000;
       const cap = opts.retry?.capMs ?? 30_000;
       const wait = after ?? Math.min(cap, base * 2 ** (n - 1));
@@ -617,7 +622,8 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
         // a new retry-after, and the ceiling bounds the total (the last slice is cut short at it). Quota cycles
         // never consume retries.
         const step = Math.min(quotaWait, recheckMs, (opts.quotaWaitMs ?? 0) - quotaWaited);
-        if (step <= 0) return finish('error_during_execution', 'error', got.error.message);
+        if (step <= 0) return fail(apiFailure(got.error), got.error.message);
+        log.append({ kind: 'retry', requestId: request.id, n, waitMs: step, code: got.error.code, ...(got.error.status !== undefined ? { status: got.error.status } : {}) });
         await sleep(step);
         timing.retryMs += step;
         if (signal.aborted) return finish('interrupted', 'aborted');
@@ -626,6 +632,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
         continue;
       } else {
         if (wait >= WAIT_SAY_MS) opts.onWait?.(wait);
+        log.append({ kind: 'retry', requestId: request.id, n, waitMs: wait, code: got.error.code, ...(got.error.status !== undefined ? { status: got.error.status } : {}), of: retryMax });
         await sleep(wait);
         timing.retryMs += wait;
         if (signal.aborted) return finish('interrupted', 'aborted');
@@ -782,9 +789,9 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       continue;
     }
     // A refusal ends the run as a failure, whatever the ledger holds.
-    if (got.stop === 'refusal') return finish('error_during_execution', 'error', text || `${model.ref} declined to go on with this task`);
+    if (got.stop === 'refusal') return fail({ cause: 'refusal' }, text || `${model.ref} declined to go on with this task`);
     if (!text.trim()) {
-      if (emptyNudged) return finish('error_during_execution', 'error', `${model.ref} ended its turn twice without a reply`);
+      if (emptyNudged) return fail({ cause: 'empty_reply' }, `${model.ref} ended its turn twice without a reply`);
       emptyNudged = true;
       log.append({ kind: 'reminder', as: 'user', text: EMPTY_REPLY });
       continue;

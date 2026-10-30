@@ -9,8 +9,10 @@ import { McpClient, type McpCallResult, type McpServerConfig, type McpTool } fro
 //
 // cedia cannot know what a server's tool does, so each counts as `exec`: allowed in workspace mode, denied in a
 // read-only session unless an allow rule names it (`--allow mcp__github__search`), and left out of read-only
-// sub-threads and reviewers. A server the user marks `readOnly: true` counts as `read`. A server's own claims
-// (its descriptions, annotations, results) are its words: results are tool output like any other.
+// sub-threads and reviewers. A server the user marks `readOnly: true` counts as `read`, and the user's rule for one
+// tool (`tools: {"<tool>": "read" | "exec" | "deny"}`) wins over the server's: `deny` leaves the tool out of the
+// list. A server's own claims (its descriptions, annotations, results) are its words: results are tool output like
+// any other.
 
 const MAX_DESCRIPTION = 2_000;
 const MAX_NAME = 64;
@@ -51,11 +53,12 @@ function schemaOf(t: McpTool): JsonObject {
 }
 
 export function mcpToolSpec(client: McpClient, t: McpTool, name: string): ToolSpec {
+  const rule = client.config.tools?.[t.name];
   return {
     name,
     description: `${(t.description ?? '').trim().slice(0, MAX_DESCRIPTION) || t.name} (MCP server ${client.name})`,
     schema: schemaOf(t),
-    effect: client.config.readOnly ? 'read' : 'exec',
+    effect: rule === 'read' || (rule === undefined && client.config.readOnly) ? 'read' : 'exec',
     replay: 'unsafe',
     async run(input, ctx) {
       try {
@@ -187,7 +190,11 @@ export async function startMcp(servers: Record<string, McpServerConfig>, sleep: 
   const taken = new Set<string>();
   for (const s of started) {
     if (!s) continue;
+    const rules = s.client.config.tools ?? {};
+    const missing = Object.keys(rules).filter((n) => !s.tools.some((t) => t.name === n));
+    if (missing.length) notes.push(`cedia: mcpServers.${s.client.name}.tools names ${missing.join(', ')}, which the server does not list`);
     for (const t of s.tools) {
+      if (rules[t.name] === 'deny') continue;
       let name = `mcp__${part(s.client.name)}__${part(t.name)}`.slice(0, MAX_NAME);
       for (let i = 2; taken.has(name); i++) name = `${name.slice(0, MAX_NAME - String(i).length - 1)}_${i}`;
       taken.add(name);

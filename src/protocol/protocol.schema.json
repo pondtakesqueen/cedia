@@ -1044,6 +1044,33 @@
       ],
       "additionalProperties": false
     },
+    "Failure": {
+      "type": "object",
+      "properties": {
+        "cause": {
+          "$ref": "#/definitions/FailureCause"
+        },
+        "code": {
+          "$ref": "#/definitions/AttemptErrorCode"
+        },
+        "status": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "cause"
+      ],
+      "additionalProperties": false
+    },
+    "FailureCause": {
+      "type": "string",
+      "enum": [
+        "api_error",
+        "privacy",
+        "refusal",
+        "empty_reply"
+      ]
+    },
     "ForkOf": {
       "type": "object",
       "properties": {
@@ -1107,6 +1134,15 @@
         },
         "cacheHitRatio": {
           "type": "number"
+        },
+        "modelUsage": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/ModelUsage"
+          }
+        },
+        "failure": {
+          "$ref": "#/definitions/Failure"
         },
         "inputRepairs": {
           "type": "object",
@@ -1586,19 +1622,7 @@
             "tools": {
               "type": "array",
               "items": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string"
-                  },
-                  "description": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "name"
-                ],
-                "additionalProperties": false
+                "$ref": "#/definitions/McpCheckTool"
               }
             }
           },
@@ -1631,6 +1655,30 @@
           "additionalProperties": false
         }
       ]
+    },
+    "McpCheckTool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "readOnlyHint": {
+          "type": "boolean"
+        },
+        "destructiveHint": {
+          "type": "boolean"
+        },
+        "rule": {
+          "$ref": "#/definitions/McpToolRule"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
     },
     "McpEntry": {
       "type": "object",
@@ -1668,6 +1716,12 @@
         "readOnly": {
           "type": "boolean"
         },
+        "tools": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/McpToolRule"
+          }
+        },
         "timeoutSec": {
           "type": "number"
         },
@@ -1694,6 +1748,14 @@
         "servers"
       ],
       "additionalProperties": false
+    },
+    "McpToolRule": {
+      "type": "string",
+      "enum": [
+        "read",
+        "exec",
+        "deny"
+      ]
     },
     "ModelEntry": {
       "type": "object",
@@ -1780,6 +1842,44 @@
         "modes"
       ],
       "additionalProperties": false
+    },
+    "ModelUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "costUsd": {
+          "type": "number"
+        },
+        "requests": {
+          "type": "number"
+        },
+        "uncached": {
+          "type": "number"
+        },
+        "cacheRead": {
+          "type": "number"
+        },
+        "cacheWrite": {
+          "type": "number"
+        },
+        "cacheWrite1h": {
+          "type": "number"
+        },
+        "output": {
+          "type": "number"
+        },
+        "reasoning": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "cacheRead",
+        "cacheWrite",
+        "costUsd",
+        "output",
+        "requests",
+        "uncached"
+      ]
     },
     "PermissionEntry": {
       "type": "object",
@@ -2446,6 +2546,60 @@
             "n",
             "parentId",
             "requestId"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "retry"
+            },
+            "requestId": {
+              "$ref": "#/definitions/EventId"
+            },
+            "n": {
+              "type": "number"
+            },
+            "waitMs": {
+              "type": "number"
+            },
+            "code": {
+              "$ref": "#/definitions/AttemptErrorCode"
+            },
+            "status": {
+              "type": "number"
+            },
+            "of": {
+              "type": "number"
+            },
+            "id": {
+              "$ref": "#/definitions/EventId"
+            },
+            "parentId": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "at",
+            "code",
+            "id",
+            "kind",
+            "n",
+            "parentId",
+            "requestId",
+            "waitMs"
           ]
         },
         {
