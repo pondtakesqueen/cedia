@@ -1,5 +1,5 @@
 import { imageBase64 } from '../images.ts';
-import type { AssistantBlock, CompactionBlock, ImageRef, JsonObject, Message, Provider, Refusal, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
+import type { AssistantBlock, CompactionBlock, FallbackBlock, ImageRef, JsonObject, Message, Provider, Refusal, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
 import { Assembler } from './assemble.ts';
 import { authHeaders, classifyStreamError, post, type Fetcher } from './http.ts';
 import { readSse } from './sse.ts';
@@ -8,6 +8,9 @@ const WIRE = 'anthropic-messages';
 
 // On-demand compaction: the header goes on the compaction request and on every request that carries its block.
 export const COMPACTION_BETA = 'compact-2026-09-04';
+// Server-side fallback: this date takes `fallbacks: "default"` as well as a list of models.
+export const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+
 const carriesCompaction = (req: WireRequest) => !!req.compaction || req.messages.some((m) => m.role === 'assistant' && m.blocks.some((b) => b.type === 'compaction'));
 
 function assistantContent(blocks: AssistantBlock[], sameWire: boolean): JsonObject[] {
@@ -19,6 +22,8 @@ function assistantContent(blocks: AssistantBlock[], sameWire: boolean): JsonObje
       return b.redacted ? [{ type: 'redacted_thinking', data: b.opaque }] : [{ type: 'thinking', thinking: b.text, signature: b.opaque }];
     }
     if (b.type === 'compaction') return sameWire ? [{ type: 'compaction', content: b.text, signature: b.opaque }] : [];
+    // The API rejects a later turn that leaves a fallback block out or moves it.
+    if (b.type === 'fallback') return sameWire ? [b.raw] : [];
     return [{ type: 'tool_use', id: b.id, name: b.name, input: b.input }];
   });
 }
@@ -89,21 +94,24 @@ export function anthropicBody(req: WireRequest): JsonObject {
     ...(req.model.speed ? { speed: req.model.speed } : {}),
     ...(req.compaction ? { compaction: { type: 'summarize', instructions: req.compaction.instructions } } : {}),
     ...(req.contextManagement ? { context_management: req.contextManagement } : {}),
+    ...(req.model.fallbacks ? { fallbacks: req.model.fallbacks } : {}),
     ...(req.model.body ?? {}),
   };
 }
 
 // Without beta-gated wire features, for a gateway that rejects the beta headers: effort messages go
 // (the level falls back to the session's), system reminders go as user text even where the model takes
-// role system, and custom model headers stay. Undefined when there is nothing beta-gated to take out,
-// or when the request carries compaction (a summary needs its beta to be read back).
+// role system, fallback is not asked for, and custom model headers stay. Undefined when there is nothing
+// beta-gated to take out, or when the request carries compaction or a fallback block (each needs its beta
+// to be read back).
 export function stripGatewayBetas(req: WireRequest): WireRequest | undefined {
-  if (carriesCompaction(req)) return undefined;
-  if (!req.messages.some((m) => m.role === 'effort') && !req.model.caps.midConversationSystem) return undefined;
+  if (carriesCompaction(req) || req.messages.some((m) => m.role === 'assistant' && m.blocks.some((b) => b.type === 'fallback'))) return undefined;
+  if (!req.messages.some((m) => m.role === 'effort') && !req.model.caps.midConversationSystem && !req.model.fallbacks) return undefined;
+  const { fallbacks: _, ...model } = req.model;
   return {
     ...req,
     messages: req.messages.filter((m) => m.role !== 'effort'),
-    model: { ...req.model, caps: { ...req.model.caps, midConversationSystem: false } },
+    model: { ...model, caps: { ...req.model.caps, midConversationSystem: false } },
   };
 }
 
@@ -113,6 +121,7 @@ export function stripGatewayBetas(req: WireRequest): WireRequest | undefined {
 function anthropicHeaders(req: WireRequest): Record<string, string> {
   const h: Record<string, string> = { ...(req.model.headers ?? {}) };
   const add = (beta: string) => (h['anthropic-beta'] = h['anthropic-beta'] ? `${h['anthropic-beta']},${beta}` : beta);
+  if (req.model.fallbacks) add(FALLBACK_BETA);
   if (carriesCompaction(req)) add(COMPACTION_BETA);
   if (req.messages.some((m) => m.role === 'effort')) add(EFFORT_BETA);
   return h;
@@ -135,6 +144,7 @@ export async function* parseAnthropic(body: ReadableStream<Uint8Array>): AsyncGe
   const usage: Usage = { uncached: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
   let stop: StopReason = 'end_turn';
   let refusal: Refusal | undefined;
+  let served: string | undefined;
   let started = false;
   let finished = false;
   // A compaction reply arrives as one whole block, with no deltas.
@@ -168,6 +178,7 @@ export async function* parseAnthropic(body: ReadableStream<Uint8Array>): AsyncGe
     switch (d.type) {
       case 'message_start':
         started = true;
+        if (typeof d.message?.model === 'string') served = d.message.model;
         yield { type: 'start' };
         applyUsage(d.message?.usage);
         break;
@@ -181,7 +192,12 @@ export async function* parseAnthropic(body: ReadableStream<Uint8Array>): AsyncGe
           a.thinking(key, '', { redacted: true });
           a.opaque(key, cb.data ?? '', false);
         } else if (cb.type === 'tool_use') a.toolStart(key, cb.id, cb.name);
-        else if (cb.type === 'compaction' && typeof cb.content === 'string') compaction = { type: 'compaction', text: cb.content, opaque: cb.signature ?? '' };
+        else if (cb.type === 'fallback') {
+          // A mid-stream fallback: message_start named the model that declined, the block names the one that took over.
+          const to = typeof cb.to?.model === 'string' ? cb.to.model : '';
+          if (to) served = to;
+          a.whole(key, { type: 'fallback', to, category: typeof cb.trigger?.category === 'string' ? cb.trigger.category : null, raw: cb });
+        } else if (cb.type === 'compaction' && typeof cb.content === 'string') compaction = { type: 'compaction', text: cb.content, opaque: cb.signature ?? '' };
         break;
       }
       case 'content_block_delta': {
@@ -219,8 +235,16 @@ export async function* parseAnthropic(body: ReadableStream<Uint8Array>): AsyncGe
   }
   a.endAll();
   yield* a.drain();
-  const blocks = a.finish(stop === 'max_tokens');
-  yield { type: 'done', blocks: compaction ? [compaction, ...blocks] : blocks, stop, usage, ...(refusal ? { refusal } : {}) };
+  const blocks = afterFallback(a.finish(stop === 'max_tokens'));
+  yield { type: 'done', blocks: compaction ? [compaction, ...blocks] : blocks, stop, usage, ...(refusal ? { refusal } : {}), ...(served ? { served } : {}) };
+}
+
+// Before the last fallback block, only text stays: the declined model's thinking and tool calls are not sent back
+// (Anthropic: refusals and fallback, multi-turn).
+function afterFallback(blocks: AssistantBlock[]): AssistantBlock[] {
+  const last = blocks.findLastIndex((b) => b.type === 'fallback');
+  if (last < 0) return blocks;
+  return blocks.filter((b, i) => i >= last || b.type === 'text');
 }
 
 export function anthropicProvider(fetcher?: Fetcher): Provider {

@@ -256,7 +256,7 @@ export function rebuildRequest(events: SessionEvent[], requestIndex: number, mod
   };
 }
 
-type Collected = { ok: true; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; refusal?: Refusal } | { ok: false; error: AttemptError } | { ok: 'aborted' };
+type Collected = { ok: true; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; refusal?: Refusal; served?: string } | { ok: false; error: AttemptError } | { ok: 'aborted' };
 
 async function collect(provider: Provider, req: WireRequest, signal: AbortSignal, onStream?: (e: StreamEvent) => void, timing: { ttftMs?: number; ms?: number } = {}, onToolCall?: (block: Extract<AssistantBlock, { type: 'tool_use' }>) => void): Promise<Collected> {
   const start = performance.now();
@@ -284,7 +284,7 @@ async function collect(provider: Provider, req: WireRequest, signal: AbortSignal
         }
       }
       if (ev.type === 'error') return { ok: false, error: ev.error };
-      if (ev.type === 'done') return ev.stop === 'aborted' ? { ok: 'aborted' } : { ok: true, blocks: ev.blocks, stop: ev.stop, usage: ev.usage, ...(ev.refusal ? { refusal: ev.refusal } : {}) };
+      if (ev.type === 'done') return ev.stop === 'aborted' ? { ok: 'aborted' } : { ok: true, blocks: ev.blocks, stop: ev.stop, usage: ev.usage, ...(ev.refusal ? { refusal: ev.refusal } : {}), ...(ev.served ? { served: ev.served } : {}) };
       if (signal.aborted) return { ok: 'aborted' };
     }
   } catch (err) {
@@ -648,7 +648,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
     const turnFrom = log.events.length;
     const turnCost = costUsd(model, got.usage, now());
-    log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: got.blocks, stop: got.stop, usage: got.usage, costUsd: turnCost, ...(got.refusal ? { refusal: got.refusal } : {}) });
+    log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: got.blocks, stop: got.stop, usage: got.usage, costUsd: turnCost, ...(got.refusal ? { refusal: got.refusal } : {}), ...(got.served && got.served !== model.id ? { servedBy: got.served } : {}) });
     usage = addUsage(usage, got.usage);
     peakContext = Math.max(peakContext, contextSize(got.usage));
     cost += turnCost;

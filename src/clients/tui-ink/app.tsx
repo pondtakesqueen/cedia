@@ -440,6 +440,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   }, [subView !== null]);
   const [permissionDialog, setPermissionDialog] = useState<{ tool: string; input?: unknown; reason?: string; rule?: string; allow?: string } | null>(null);
   const toolInputByCallRef = useRef<Record<string, unknown>>({});
+  // The model that last answered in place of the chosen one, so a run of fallback turns says so once.
+  const servedByRef = useRef<string | undefined>(undefined);
   const toolStartByCallRef = useRef<Record<string, number>>({});
   const toolNameByCallRef = useRef<Record<string, string>>({});
   const thinkingRef = useRef('');
@@ -485,6 +487,12 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
     if (e.kind === 'assistant') {
       // The reply names every call's input, so a call denied before its intent still shows what it was.
       for (const b of e.blocks) if (b.type === 'tool_use') toolInputByCallRef.current[b.callId ?? b.id] = b.input;
+      // A safety classifier declined the turn and the provider gave it to another model (and keeps doing so for a while).
+      if (e.servedBy !== servedByRef.current) {
+        servedByRef.current = e.servedBy;
+        const fb = e.blocks.find((b) => b.type === 'fallback');
+        if (e.servedBy) push({ role: 'system', text: `answered by ${e.servedBy} (fallback${fb?.type === 'fallback' && fb.category ? `: ${fb.category}` : ''})`, dim: true });
+      }
     } else if (e.kind === 'tool_intent') {
       toolInputByCallRef.current[e.callId] = e.input;
       toolStartByCallRef.current[e.callId] = Date.now();

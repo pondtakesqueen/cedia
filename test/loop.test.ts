@@ -624,6 +624,15 @@ describe('malformed turns', () => {
     expect(of(flagged.log.events, 'assistant')[0]!.refusal).toEqual({ category: 'cyber', explanation: 'flagged as offensive security' });
   });
 
+  test('a turn another model served is logged with that model', async () => {
+    const { opts, log } = setup([{ blocks: [text('done')], served: 'claude-opus-4-8' }]);
+    expect((await runPrompt(opts, 'go')).subtype).toBe('success');
+    expect(of(log.events, 'assistant')[0]!.servedBy).toBe('claude-opus-4-8');
+    const same = setup([{ blocks: [text('done')] }]);
+    await runPrompt(same.opts, 'go');
+    expect(of(same.log.events, 'assistant')[0]!.servedBy).toBeUndefined();
+  });
+
   test('a tool that returns something other than text, or throws a non-Error, still gets a string result', async () => {
     const odd = (name: string, run: () => Promise<unknown>) => ({ name, description: name, schema: { type: 'object' }, effect: 'read' as const, replay: 'safe' as const, run: run as never });
     const tools = [

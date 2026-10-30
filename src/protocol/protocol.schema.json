@@ -171,6 +171,9 @@
         },
         {
           "$ref": "#/definitions/CompactionBlock"
+        },
+        {
+          "$ref": "#/definitions/FallbackBlock"
         }
       ]
     },
@@ -1143,6 +1146,34 @@
         "refusal",
         "empty_reply"
       ]
+    },
+    "FallbackBlock": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "fallback"
+        },
+        "to": {
+          "type": "string"
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "raw": {
+          "$ref": "#/definitions/JsonObject"
+        }
+      },
+      "required": [
+        "type",
+        "to",
+        "category",
+        "raw"
+      ],
+      "additionalProperties": false
     },
     "ForkOf": {
       "type": "object",
@@ -2743,6 +2774,9 @@
             "refusal": {
               "$ref": "#/definitions/Refusal"
             },
+            "servedBy": {
+              "type": "string"
+            },
             "id": {
               "$ref": "#/definitions/EventId"
             },
@@ -3728,6 +3762,9 @@
             },
             "refusal": {
               "$ref": "#/definitions/Refusal"
+            },
+            "served": {
+              "type": "string"
             }
           },
           "required": [

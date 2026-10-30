@@ -1,9 +1,10 @@
-import type { AssistantBlock, JsonObject, StreamEvent } from '../types.ts';
+import type { AssistantBlock, FallbackBlock, JsonObject, StreamEvent } from '../types.ts';
 
 type Open =
   | { type: 'text'; text: string; sig?: string }
   | { type: 'thinking'; text: string; opaque?: string; redacted?: boolean; ms?: number; from?: number }
-  | { type: 'tool_use'; id: string; callId?: string; name: string; args: string };
+  | { type: 'tool_use'; id: string; callId?: string; name: string; args: string }
+  | FallbackBlock;
 
 // Collects wire deltas into AssistantBlocks and the matching StreamEvents.
 // Wires key their blocks differently (index, output_index, tool index); `key` is whatever the wire uses.
@@ -50,6 +51,14 @@ export class Assembler {
     const b = this.blocks[i]!;
     if (b.type === 'thinking') b.opaque = append ? (b.opaque ?? '') + value : value;
     else if (b.type === 'text') b.sig = append ? (b.sig ?? '') + value : value;
+  }
+
+  // A block that arrives whole and streams nothing: it only keeps its place among the others.
+  whole(key: string, block: FallbackBlock) {
+    if (this.byKey.has(key)) return;
+    this.byKey.set(key, this.blocks.length);
+    this.closed.add(this.blocks.length);
+    this.blocks.push(block);
   }
 
   toolStart(key: string, id: string, name: string, callId?: string) {
@@ -103,6 +112,7 @@ export class Assembler {
   finish(truncated = false): AssistantBlock[] {
     return this.blocks.flatMap((b, i): AssistantBlock[] => {
       if (b.type === 'text') return b.text || b.sig ? [b] : [];
+      if (b.type === 'fallback') return [b];
       if (b.type === 'thinking') {
         const { from: _, ...block } = b;
         return [{ ...block, ms: b.ms ?? thought(b) }];
