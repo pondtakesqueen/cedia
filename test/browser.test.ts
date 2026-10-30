@@ -2,11 +2,28 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { browserTool, pageDenied, type BrowserSession } from '../src/core/tools/browser.ts';
+import { browserAccess, browserSites, browserTool, pageDenied, type BrowserSession } from '../src/core/tools/browser.ts';
 import { decide } from '../src/core/safety/policy.ts';
 import { SessionLog } from '../src/core/session/log.ts';
 
 const ctx = () => ({ cwd: '/', signal: new AbortController().signal }) as never;
+
+describe('browserAccess', () => {
+  const web = { anyHost: true, allowedDomains: ['registry.npmjs.org'] };
+  test('rules widen what web_fetch reaches; a site list replaces it, loopback still open', () => {
+    expect(browserAccess(web, ['docs.example.com'])).toEqual({ anyHost: true, allowedDomains: ['registry.npmjs.org', 'docs.example.com'] });
+    expect(browserAccess({ anyHost: false, allowedDomains: [] }, ['*'])).toEqual({ anyHost: true, allowedDomains: [] });
+    const sites = browserAccess(web, ['*'], browserSites('Docs.Example.com, example.org'));
+    expect(sites).toEqual({ anyHost: false, allowedDomains: ['docs.example.com', 'example.org'] });
+    expect(pageDenied('https://docs.example.com/a', sites)).toBeUndefined();
+    expect(pageDenied('https://registry.npmjs.org/', sites)).toContain('not among the hosts');
+    expect(pageDenied('http://localhost:3000/', browserAccess(web, [], browserSites('none')))).toBeUndefined();
+    expect(pageDenied('https://example.org/', browserAccess(web, [], browserSites('none')))).toContain('not among the hosts');
+  });
+  test('a site list takes host names only', () => {
+    expect(() => browserSites('https://x.com/a')).toThrow('host names');
+  });
+});
 
 describe('pageDenied', () => {
   const sandboxed = { anyHost: false, allowedDomains: ['docs.example.com', '10.0.0.5'] };

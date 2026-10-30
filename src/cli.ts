@@ -123,6 +123,8 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --browser <endpoint>     give the writer the browser tool on a Chromium you started, by its DevTools endpoint
                                (http://host:port, or ws://host:port/devtools/page/<id> for one page); it opens the
                                hosts web_fetch may reach and loopback, widened by allow rules browser(<domain>)
+      --browser-sites <hosts>  the only hosts the browser opens besides loopback (a.com,b.org, or none), in place of
+                               the above: a desktop's per-project site allowlist
       --profile <name>         a named set of defaults under these flags: model, permission, tools, instructions
                                (settings profiles; built in: coordinator, which opens threads with open_thread).
                                A thread goes on with the profile it was opened with
@@ -317,6 +319,7 @@ export async function main(argv: string[]): Promise<number> {
       'auto-dream': { type: 'string' },
       'prompt-suggestions': { type: 'string' },
       browser: { type: 'string' },
+      'browser-sites': { type: 'string' },
       'context-management': { type: 'string' },
       'streaming-tools': { type: 'boolean' },
       profile: { type: 'string' },
@@ -384,6 +387,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.ask ? { ask: values.ask } : {}),
     ...(values.todo ? { todo: values.todo } : {}),
     ...(values.browser ? { browser: values.browser } : {}),
+    ...(values['browser-sites'] !== undefined ? { browserSites: values['browser-sites'] } : {}),
     ...(values['context-management'] ? { 'context-management': values['context-management'] } : {}),
     ...(values['streaming-tools'] ? { streamingTools: true } : {}),
     ...(values.profile ? { profile: values.profile } : {}),
