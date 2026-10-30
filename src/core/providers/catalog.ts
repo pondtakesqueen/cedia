@@ -70,6 +70,10 @@ const claude = (id: string, price: Price, extra: Partial<ModelSpec> = {}): Model
   dataPolicy: 'retained',
   // OpenCode Go passes the compaction field on but not its beta header (probed 2026-10-22), so only here.
   compaction: true,
+  // The 5.x models return thinking blocks with empty text unless asked for a summary, and their words between tool
+  // calls go there too, so a client shows nothing while they think. Summaries cost no more output (Haiku 5.5:
+  // 137 against 211 tokens on one question; Fable 5.1: 143 against 144; probed 2026-10-30). Not for Go: untried.
+  body: { thinking: { type: 'adaptive', display: 'summarized' } },
   caps: claudeCaps,
   ...extra,
 });
