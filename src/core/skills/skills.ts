@@ -5,6 +5,7 @@ import { enabledPlugins } from '../plugins/plugins.ts';
 import { redactSecrets } from '../safety/secrets.ts';
 import { inert } from '../trust/frame.ts';
 import type { ToolSpec } from '../tools/registry.ts';
+import type { SessionEvent } from '../types.ts';
 
 // Skills: a folder with a SKILL.md (Agent Skills format: front matter with a name and a description, then the
 // instructions) and any files it uses. Only the names and descriptions go in the session's first turn; the model
@@ -305,3 +306,38 @@ export function skillCommand(prompt: string, skills: Skill[]): string | undefine
   const rest = prompt.slice(m[0].length).trim();
   return `${prompt.trimEnd()}\n\n(/${m[1]} is the ${skill.name} skill: load it with the skill tool first, then do what it says${rest ? ', for the text after the command' : ''}.)`;
 }
+
+// A session that goes on from another (a handoff note, a summary of its older turns, a fallback model) starts without
+// the skills the other loaded: their instructions were tool results it no longer holds, and losing them fails
+// silently (agentskills.io's client guide: "exempt skill content from pruning"). So the new session's first turn names
+// them, and the model loads each again when it needs it. The names come from the skill calls that loaded a skill's
+// instructions (not one of its files) and succeeded, and from the line an earlier carry put in the session's own
+// first turn, so a chain of handoffs keeps them. That line can only come from cedia: a repository's text is made
+// inert, which escapes its tags.
+const CARRIED = /<skills_loaded>([^<]*)<\/skills_loaded>/;
+const LOADED_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,128}$/;
+
+export function loadedSkills(events: SessionEvent[]): string[] {
+  const names: string[] = [];
+  const add = (n: string) => {
+    if (LOADED_NAME.test(n) && !names.includes(n)) names.push(n);
+  };
+  const ok = new Set(events.flatMap((e) => (e.kind === 'tool_result' && e.status === 'completed' && !e.output.isError ? [e.callId] : [])));
+  for (const e of events) {
+    if (e.kind === 'user' || e.kind === 'reminder') for (const n of CARRIED.exec(e.text)?.[1]?.split(',') ?? []) add(n.trim());
+    else if (e.kind === 'tool_intent' && e.tool === 'skill' && !e.input.file && ok.has(e.callId) && typeof e.input.name === 'string') add(e.input.name);
+  }
+  return names;
+}
+
+// The skills to name in the next session: those loaded in what it does not keep word for word (`dropped`), less those
+// loaded again in what it keeps (a summary's kept turns).
+export function carriedSkills(dropped: SessionEvent[], kept: SessionEvent[] = []): string[] {
+  const again = new Set(loadedSkills(kept));
+  return loadedSkills(dropped).filter((n) => !again.has(n));
+}
+
+export const carriedSkillsNote = (names: string[]): string =>
+  names.length
+    ? `<skills_loaded>${names.join(', ')}</skills_loaded>\nThe earlier session had loaded these skills, and their instructions are not in this session. Load each again with the skill tool before the step it covers.`
+    : '';

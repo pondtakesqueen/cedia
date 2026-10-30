@@ -18,7 +18,7 @@ import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../..
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
 import { memoryBlock, memoryPath, MemoryStore, rememberTool } from '../../core/project/memory.ts';
-import { loadSkills, skillCommand, skillsBlock, skillTool } from '../../core/skills/skills.ts';
+import { carriedSkills, carriedSkillsNote, loadSkills, skillCommand, skillsBlock, skillTool } from '../../core/skills/skills.ts';
 import { getStyle, loadOutputStyleSetting } from '../../core/output-styles/styles.ts';
 import { MCP_CALL_TOOL, mcpCallTool, mcpStub, startMcp, type McpServers } from '../../core/mcp/tools.ts';
 import { clearDeferred, registerDeferred } from '../../core/tools/tool-search.ts';
@@ -533,11 +533,15 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     // Starts the session from another one's summary and the turns it kept (core/project/compact.ts).
     seed?: { from: SessionLog; compaction: NonNullable<HeadlessResult['compaction']> };
   };
-  // What the session after a handoff starts from: the summary and kept turns, or the task and the note.
-  const successor = (from: SessionLog, r: HeadlessResult): RunOpts => ({
-    continues: { sessionId: from.id, changed: r.evidence?.changed ?? [] },
-    ...(r.compaction ? { seed: { from, compaction: r.compaction }, note: compactedNote(from.id) } : { note: handoffNote(from.id, r.result) }),
-  });
+  // What the session after a handoff starts from: the summary and kept turns, or the task and the note. Either way
+  // it is told which skills the old session loaded and it no longer holds.
+  const noteSkills = (note: string, carried: string[]) => (carried.length ? `${note}\n\n${carriedSkillsNote(carried)}` : note);
+  const successor = (from: SessionLog, r: HeadlessResult): RunOpts => {
+    const continues = { sessionId: from.id, changed: r.evidence?.changed ?? [] };
+    if (!r.compaction) return { continues, note: noteSkills(handoffNote(from.id, r.result), carriedSkills(from.events)) };
+    const cut = Math.max(0, from.events.findIndex((e) => e.id === r.compaction!.of));
+    return { continues, seed: { from, compaction: r.compaction }, note: noteSkills(compactedNote(from.id), carriedSkills(from.events.slice(0, cut), from.events.slice(cut))) };
+  };
   const handingOff = (r: HeadlessResult, sub: boolean) =>
     say(
       `cedia: ${sub ? "a sub-thread's " : ''}context reached ${handoffAt} tokens; ${r.compaction ? 'going on in a new session from a summary of its older turns' : `handing ${sub ? 'it ' : ''}off to a new session`}\n`,
@@ -1151,13 +1155,13 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         if (note) say(note + '\n');
         const log = openLog();
         record(log, fallback, 'quota');
-        result = await write(fallback, log, task, { continues: { sessionId: from.log.id, changed }, note: continueNote(from.model, from.log.id) });
+        result = await write(fallback, log, task, { continues: { sessionId: from.log.id, changed }, note: noteSkills(continueNote(from.model, from.log.id), carriedSkills(from.log.events)) });
       } else if (!restarted && rejected) {
         restarted = true;
         say(`cedia: ${from.model.ref} refused this session's history (${rejected.code}: ${rejected.message.slice(0, 200)}); continuing in a new session\n`);
         const log = openLog();
         record(log, from.model, 'rejected');
-        result = await write(from.model, log, task, { continues: { sessionId: from.log.id, changed }, note: rejectedNote(from.model, from.log.id) });
+        result = await write(from.model, log, task, { continues: { sessionId: from.log.id, changed }, note: noteSkills(rejectedNote(from.model, from.log.id), carriedSkills(from.log.events)) });
       } else break;
     }
     return result;
