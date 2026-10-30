@@ -26,8 +26,9 @@ import { askedReviewPrompt, fixPrompt, parseVerdict, type ReviewSubject } from '
 import { decode, type CoreMessage } from '../../protocol/index.ts';
 import type { TuiArgs } from './args.ts';
 import type { JsonObject, SessionEvent } from '../../core/types.ts';
-import { cediaHome, loadHandoffAt, loadPromptSuggestions, loadRoles, isMode, loadPolicy, loadPrivacy, readSettings } from '../../core/config.ts';
-import { modelLabel } from '../../core/providers/models.ts';
+import { cediaHome, loadHandoffAt, loadPromptSuggestions, loadRoles, isMode, modeFlags, loadPolicy, loadPrivacy, readSettings } from '../../core/config.ts';
+import { modelLabel, modelList } from '../../core/providers/models.ts';
+import { processKeychain } from '../../core/providers/keychain.ts';
 import { versionInfo } from '../../protocol/version.ts';
 import { runStatusLineCommand } from './statusline.ts';
 import { loadKeybindings, watchKeybindings } from './keybindings/loader.ts';
@@ -143,6 +144,12 @@ const INPUT_PLACEHOLDERS = [
   'Try "/commit this work"',
   'Try "where is the retry logic?"',
 ];
+
+// The writer a turn runs on: the model picked, or under a mode (`auto`, `oplan`) or none the code role, which a
+// mode keeps (core/config.ts). Helpers that need one model (commit messages) take this.
+const writerRef = (model: string | undefined): string => (model && !isMode(model) ? model : loadRoles({}).code.ref);
+// Prompt suggestions run on the model picked (a mode's writer), else their own default (prompt-suggestion.ts).
+const suggestModel = (model: string | undefined): string | undefined => (isMode(model) ? writerRef(model) : model);
 
 const shortCwd = (cwd: string): string => {
   try {
@@ -375,9 +382,10 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
   // Effective model for display (status, receipts): explicit choice, else the code role default.
   const effModel = React.useMemo(() => {
     try {
-      const ref = model && !isMode(model) ? model : loadRoles({}).code.ref;
+      const ref = writerRef(model);
       const m = resolveModel(ref);
-      return { ref, label: modelLabel(m), provider: m.ref.split('/')[0] ?? m.ref, window: m.caps?.contextWindow };
+      // A mode keeps the writer, so the header names both: "Haiku 5.5 · auto".
+      return { ref, label: isMode(model) ? `${modelLabel(m)} · ${model}` : modelLabel(m), provider: m.ref.split('/')[0] ?? m.ref, window: m.caps?.contextWindow };
     } catch { return null; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model]);
@@ -742,7 +750,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
           let message = own;
           if (!message) {
             try {
-              const writerModel = model && !isMode(model) ? model : loadRoles({}).code.ref;
+              const writerModel = writerRef(model);
               const drafted = await draftCommitMessage({ cwd: args.cwd, model: writerModel, files, signal: new AbortController().signal });
               message = drafted.message;
               setSpent((s) => s + drafted.costUsd);
@@ -867,19 +875,31 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       }
       case 'model': {
         if (rest[0]) {
-          if (isMode(rest[0])) { say(`${rest[0]} is a mode, not a model: pick a model ref from /model`, 'red'); return; }
+          if (isMode(rest[0])) {
+            try { modeFlags(rest[0], {}); } catch (e) { say((e as Error).message, 'red'); return; }
+            setModel(rest[0]);
+            say(`the next turn runs in ${rest[0]} mode on ${writerRef(undefined)}`);
+            return;
+          }
           try { resolveModel(rest[0]); } catch { say(`unknown model: ${rest[0]} (see /model for choices)`, 'red'); return; }
           setModel(rest[0]);
           say(`the next turn runs on ${rest[0]}`);
           return;
         }
         try {
-          const { modelList, loadRoles } = require('../../core/providers/models.ts');
           const roles = loadRoles({});
-          const ml = modelList(roles.code.ref, process.env as any, undefined);
-          const items = ml.models.map((m: any) => ({ value: m.ref, label: `${m.available ? ' ' : '-'} ${m.ref}  ${m.label}` }));
+          // The keys a run would find, the Keychain's included (http.ts, authKey), so a model keyed there is not shown as unavailable.
+          const ml = modelList(roles.code.ref, process.env, processKeychain());
+          // The modes first: each keeps the writer and picks the steps around it (core/config.ts, modeFlags).
+          const modes = ml.modes.map((m) => ({ value: m.name, label: `  ${m.name}  ${m.label}` }));
+          const items = [...modes, ...ml.models.map((m) => ({ value: m.ref, label: `${m.available ? ' ' : '-'} ${m.ref}  ${m.label}` }))];
           setPicker({ title: 'models', items, onPick: (v) => {
-            const picked = ml.models.find((m: any) => m.ref === v);
+            if (isMode(v)) {
+              try { modeFlags(v, {}); } catch (e) { push({ role: 'system', text: (e as Error).message }); return; }
+              setModel(v); push({ role: 'system', text: `the next turn runs in ${v} mode on ${roles.code.ref}` }); setInput(''); inputRef.current = '';
+              return;
+            }
+            const picked = ml.models.find((m) => m.ref === v);
             if (picked && !picked.available) { push({ role: "system", text: `${v} is unavailable: ${picked.reason ?? 'no key'}` }); return; }
             setModel(v); push({ role: "system", text: `the next turn runs on ${v}` }); setInput(''); inputRef.current = '';
           } });
@@ -928,7 +948,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         void (async () => {
           try {
             const { generateSuggestion } = await import('../../core/suggestions/prompt-suggestion.ts');
-            const sug = await generateSuggestion({ cwd: args.cwd, model: model ?? args.model, lastResult: 'continue' });
+            const sug = await generateSuggestion({ cwd: args.cwd, model: suggestModel(model ?? args.model), lastResult: 'continue' });
             if (sug) { setSuggestion(sug.text); say(`suggestion: ${sug.text} (Tab to accept)`); }
             else say('no suggestion right now', 'red');
           } catch (e) { say(`suggestion failed: ${(e as Error).message}`, 'red'); }
@@ -1410,7 +1430,7 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
         void (async () => {
           try {
             const { generateSuggestion } = await import('../../core/suggestions/prompt-suggestion.ts');
-            const sug = await generateSuggestion({ cwd: args.cwd, model: model ?? args.model, lastResult: result.result });
+            const sug = await generateSuggestion({ cwd: args.cwd, model: suggestModel(model ?? args.model), lastResult: result.result });
             if (sug) setSuggestion(sug.text);
           } catch {}
         })();
