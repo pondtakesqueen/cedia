@@ -4,6 +4,18 @@ The order the work goes in from here, agreed on 2026-10-21. `SPEC.md` holds the 
 
 The order follows two rules. Measure before changing: the regression gate comes before any change it would judge, so every later step lands with numbers. Trust before features: a harness that can be left alone has to be safe and stable before it gets more to do.
 
+## Goals (agreed with the owner on 2026-10-30)
+
+cedia is a harness whose design is our own and reasoned out, tuned for the models it mainly runs on: Anthropic's for now. Nothing is copied from Claude Code; a change says why it should help, and it holds on the held-out tasks as well as on the tasks it was tuned on (a change that wins only where it was tuned is fitted to them, like the five plan habits of 2026-10-30, `evals/results/2026-10-30-plan-habits/`).
+
+- **One model.** On the same model as Claude Code, cedia is as good or better on correctness, scope and quality, and costs less.
+- **Auto (what sets cedia apart).** `-m auto` is as good as or better than Claude Code on Opus at effort xhigh, at no more than half its cost. Speed is measured and reported, but it is not a goal.
+- **Both hold in real work, not only on the eval tasks.** A goal counts as met when it holds on the eval's small tasks and on real-repository work (the `real-*` tasks, real commits replayed), so cedia can be used day to day with good results.
+
+How it is measured: blind pairwise judges, Sonnet and Opus, each pair judged twice with A and B swapped and counted only when both orders agree, on the tuning tasks, on held-out tasks and on real-repository tasks. Each report gives the tally with the tests score and the tally without it, because a harness that always adds tests wins the first against one that adds them half the time, whatever its code is like. The tally without tests decides.
+
+Where auto stands (2026-10-30, plan on Opus medium): about $0.012 of API spend a task against about $0.52 for Claude Code Opus xhigh; against xhigh on the tuning tasks 19-9 (Sonnet) and 18-10 (Opus) with tests, 4-10 and 4-10 without; 158 s a task against 142 s.
+
 ## 1. Close open work (done)
 
 PRs #15 to #18: real-repository eval tasks, results on Haiku 5.5, DeepSeek V4.1 Flash and Beam, the 429 quota fix, the 200-turn default, and the first fixes from the Claude Code changelog review.

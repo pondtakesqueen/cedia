@@ -1,0 +1,27 @@
+Running 8 tasks x 2 runs on cedia (anthropic/claude-haiku-5-5), 2 at a time...
+  PASS frontier-cron#2 (181.0s $0.0163, plan 82s, review approve 23s, peak 35k)
+  PASS frontier-cron#1 (213.9s $0.0152, plan 101s, review approve 30s, peak 32k)
+  PASS frontier-semver#1 (300.0s $0.0254, plan 129s, review changes 39s, fix 46s, peak 49k)
+  PASS frontier-semver#2 (300.0s $0.0242, plan 124s, review changes 47s, fix 7s, peak 47k)
+  PASS hard-redact-bugs#1 (160.9s $0.0091, plan 83s, review changes 31s, fix 24s, peak 25k)
+  PASS hard-redact-bugs#2 (156.4s $0.0090, plan 84s, review changes 24s, fix 19s, peak 24k)
+  PASS hard-shell-split#1 (450.0s $0.0291, plan 203s, review changes 72s, fix 10s, peak 54k)
+  PASS hard-shell-split#2 (450.5s $0.0384, plan 201s, review interrupted 32s, peak 67k)
+  PASS hard-window#1 (109.9s $0.0074, plan 57s, review approve 20s, peak 20k)
+  PASS hard-window#2 (133.3s $0.0078, plan 61s, review approve 30s, peak 20k)
+  PASS long-migrate#1 (216.3s $0.0183, plan 120s, review approve 19s, peak 41k)
+  PASS long-migrate#2 (174.4s $0.0096, plan 100s, review approve 32s, peak 27k)
+  PASS real-three-changes#1 (437.8s $0.0503, claim refused, plan 209s, 1 handoff, 3 sub-threads (0 work, peak 14k), peak 83k)
+  PASS real-three-changes#2 (503.1s $0.0596, claim refused, plan 276s, 1 handoff, 5 sub-threads (0 work, peak 27k), peak 81k)
+  PASS wide-deprecate#1 (88.3s $0.0082, plan 40s, review approve 19s, peak 23k)
+  PASS wide-deprecate#2 (91.5s $0.0082, plan 41s, review approve 21s, peak 26k)
+
+Results written to /tmp/claude-0/-home-user-cedia-code/7d5651d6-a6a7-5456-a496-4c6a46e5cb23/scratchpad/hpo/auto.jsonl
+cedia (anthropic/claude-haiku-5-5): 8 tasks, 16 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 12.5%
+  avg 248.0s per run, 546959 input / 23478 output tokens per run, cache hit 89.2%
+  peak context 41k mean, 83k max, 0 of 16 runs past 100k; 2 handoffs, 8 sub-threads (0 work, 0 handoffs in them, peak 27k)
+  repaired inputs: 46 edit: broken edits string, 3 edit: top-level old_text/new_text
+  cache misses 36 (36 provider), 257k tokens the cache could have served
+  speed 259.9 output tok/s, 0.82s to first token per call; model 92.8% of time, cedia 0.6%
+  cost $0.3360 total, $0.0210 per passed run
