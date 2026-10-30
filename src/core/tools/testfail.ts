@@ -2,7 +2,7 @@ import { MAX_SHELL_OUTPUT_CHARS } from './registry.ts';
 
 // Failures-only summaries for test-runner output: when a long check fails, the model needs the failures, not
 // the passing middle. The whole output still goes to the spill file; this picks what rides the result.
-const RUNNER = /\b(pytest|go test|bun test|npm (t|test)\b|npx vitest|vitest|jest|deno test|cargo test|tsc(\s|$)|mypy|ruff|golangci-lint)\b/;
+const RUNNER = /\b(pytest|go test|bun\s+run\s+test(?=\s|$)|bun test|npm (t|test)\b|npx vitest|vitest|jest|deno test|cargo test|tsc(\s|$)|mypy|ruff|golangci-lint)\b/;
 
 // A line worth keeping: a failure marker, an assertion diff, or an error with a location.
 const SIGNAL =

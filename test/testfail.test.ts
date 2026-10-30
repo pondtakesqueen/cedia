@@ -39,14 +39,14 @@ describe('test failure summaries', () => {
     expect((s.match(/ok line/g) ?? []).length).toBeLessThan(10);
 
     const cwd = mkdtempSync(join(tmpdir(), 'cedia-testfail-'));
+    writeFileSync(join(cwd, 'package.json'), JSON.stringify({ scripts: { test: `python3 -c "print('ok line\\n' * 2500); print('${fail}'); print('ok tail\\n' * 800)"` } }));
     let spilled = '';
     const spill = (full: string) => {
       spilled = join(cwd, 'spill.txt');
       writeFileSync(spilled, full);
       return spilled;
     };
-    const command = `bun run test; python3 -c "print('ok line\\n' * 2500); print('${fail}'); print('ok tail\\n' * 800)"`;
-    const r = await bashTool.run({ command }, { cwd, signal: AbortSignal.timeout(30_000), spill });
+    const r = await bashTool.run({ command: 'bun run test' }, { cwd, signal: AbortSignal.timeout(30_000), spill });
     expect(r.text).toContain(fail);
     expect(r.text).toContain(spilled);
     expect((r.text.match(/ok line/g) ?? []).length).toBeLessThan(10);
