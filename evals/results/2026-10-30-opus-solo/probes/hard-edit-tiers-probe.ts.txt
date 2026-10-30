@@ -1,0 +1,10 @@
+const d = process.argv[2];
+const { applyEdit } = await import(d + "/edit.ts");
+const r = (c: string, o: string, n: string, all = false) => { const x = applyEdit(c, { old_text: o, new_text: n, replace_all: all }); return "error" in x ? "E:" + x.error.slice(0, 40) : JSON.stringify(x.content) + "/" + x.applied.tier + x.applied.count; };
+const o = [
+  `overlap=${r("aaa", "aa", "b")}`, `overlapAll=${r("aaaa", "aa", "b", true)}`,
+  `crlf=${r("a  \r\nb\r\n", "a\nb", "x\ny")}`, `wsOnly=${r("a\n  \nb", "  ", "z")}`,
+  `indent=${r("  if (x) {\n    y();\n  }\n", "if (x) {\n  y();\n}", "if (z) {\n  w();\n}")}`,
+  `lastLine=${r("a\nb", "b\n", "c\n")}`,
+];
+console.log(d.split("/").pop(), o.join(" "));

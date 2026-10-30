@@ -1,0 +1,21 @@
+const dir = process.argv[2];
+const { memo } = await import(dir + "/memo.ts");
+const out: string[] = [];
+// 1) sync throw from fn: does it surface as rejection, and does it evict a live key?
+{ let t = 0; const m = memo(async (k: string) => k, { ttlMs: 100, max: 2, now: () => t });
+  await m("a"); await m("b");
+  const bad = memo((k: string) => { if (k === "x") throw new Error("sync"); return Promise.resolve(k); }, { ttlMs: 100, max: 2, now: () => t });
+  await bad("a"); await bad("b");
+  let how = "";
+  try { const p = bad("x"); how = p && typeof p.then === "function" ? "promise" : "value"; await p; } catch (e: any) { how += how ? "->rejects" : "throws-sync"; }
+  out.push(`syncThrow=${how} size=${bad.size}`);
+  let calls = 0; const b2 = memo((k: string) => { calls++; if (k === "x") throw new Error("s"); return Promise.resolve(k); }, { ttlMs: 100, max: 2, now: () => t });
+  await b2("a"); await b2("b"); try { await b2("x"); } catch {} calls = 0; await b2("a"); await b2("b");
+  out.push(`liveKeysKeptAfterSyncThrow=${calls === 0}`); }
+// 2) expired entries count toward max?
+{ let t = 0; let calls = 0; const m = memo(async (k: string) => { calls++; return k; }, { ttlMs: 10, max: 2, now: () => t });
+  await m("a"); await m("b"); t = 20; await m("c"); calls = 0; t = 21; await m("c"); out.push(`afterExpiry size=${m.size} cHit=${calls === 0}`); }
+// 3) perf: 20k misses with max=20000
+{ let t = 0; const m = memo(async (k: number) => k, { ttlMs: 1e9, max: 20000, now: () => t });
+  const t0 = performance.now(); for (let i = 0; i < 20000; i++) await m(i); out.push(`20kMisses=${(performance.now() - t0).toFixed(0)}ms`); }
+console.log(dir.split("/").pop(), out.join(" | "));

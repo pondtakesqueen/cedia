@@ -1,0 +1,5 @@
+const d = process.argv[2];
+const { matchCheck } = await import(d + "/ledger.ts");
+const c = ["bun test"]; const cwd = "/w/r";
+const cases = ["cd /w/r && bun test", "cd /w/r&&bun test", "cd '/w/r' && bun test 2>&1", "cd . && bun test", "cd /w/r && bun test | tail", "  bun   test  ", "cd /other && bun test", "cd /w/r/ && bun test"];
+console.log(d.split("/").pop(), cases.map((x) => `${JSON.stringify(x)}:${matchCheck(x, c, cwd) ?? "-"}`).join(" "));

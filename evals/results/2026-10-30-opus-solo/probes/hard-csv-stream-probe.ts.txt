@@ -1,0 +1,34 @@
+const dir = process.argv[2];
+const { CsvStream, parseCsv } = await import(dir + "/csv.ts");
+const { CsvStream: Ref } = await import(import.meta.dir + "/ref/csv.ts");
+const alpha = ["a", ",", '"', "\r", "\n", "﻿"];
+let fails: string[] = [], msgDiff = 0, cases = 0, eagerFail = 0;
+function expected(t: string) { try { return { rows: parseCsv(t) } } catch (e: any) { return { err: e } } }
+function run(Cls: any, chunks: string[]) {
+  const s = new Cls(); const cum: number[] = []; const rows: string[][] = [];
+  try { for (const c of chunks) { rows.push(...s.push(c)); cum.push(rows.length) } rows.push(...s.end()); return { rows, cum } }
+  catch (e: any) { return { err: e, rows, cum } }
+}
+function check(t: string, chunks: string[]) {
+  cases++;
+  const exp = expected(t); const got: any = run(CsvStream, chunks); const ref: any = run(Ref, chunks);
+  if (exp.err) {
+    if (!(got.err instanceof SyntaxError)) { fails.push(JSON.stringify({ t, chunks, got: got.rows, err: String(got.err) })); return }
+    if (got.err.message !== exp.err.message) msgDiff++;
+  } else {
+    if (got.err || JSON.stringify(got.rows) !== JSON.stringify(exp.rows)) { fails.push(JSON.stringify({ t, chunks, got: got.rows, err: String(got.err) })); return }
+    if (JSON.stringify(got.cum) !== JSON.stringify(ref.cum)) { eagerFail++; if (eagerFail < 3) console.log("eager", JSON.stringify({ chunks, got: got.cum, ref: ref.cum })) }
+  }
+}
+function* strings(n: number): Generator<string> { if (n === 0) { yield ""; return } for (const s of strings(n - 1)) for (const a of alpha) yield s + a }
+for (let n = 0; n <= 6; n++) for (const t of strings(n)) {
+  const m = Math.max(0, t.length - 1);
+  for (let mask = 0; mask < (1 << m); mask++) { const chunks: string[] = []; let cur = ""; for (let i = 0; i < t.length; i++) { cur += t[i]; if (i < m && mask & (1 << i)) { chunks.push(cur); cur = "" } } chunks.push(cur); check(t, chunks); }
+  check(t, ["", ...[...t].flatMap(c => [c, ""])]);
+}
+// random longer
+let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+const toks = ["ab", ",", '"', '""', "\r", "\n", "\r\n", '"x,y"', "﻿", "z"];
+for (let k = 0; k < 20000; k++) { let t = ""; const L = 1 + Math.floor(rnd() * 15); for (let j = 0; j < L; j++) t += toks[Math.floor(rnd() * toks.length)]; const chunks: string[] = []; let i = 0; while (i < t.length) { const l = Math.floor(rnd() * 4); chunks.push(t.slice(i, i + l)); i += l } check(t, chunks) }
+console.log(dir.split("/").pop(), "cases", cases, "fails", fails.length, "msgDiff", msgDiff, "eagerFail", eagerFail);
+for (const f of fails.slice(0, 3)) console.log(" ", f);

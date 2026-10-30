@@ -1,0 +1,12 @@
+const d = process.argv[2];
+const { readSse } = await import(d + "/sse.ts");
+const enc = new TextEncoder();
+const body = (parts: string[]) => new ReadableStream<Uint8Array>({ start(c) { for (const p of parts) c.enqueue(enc.encode(p)); c.close(); } });
+const all = async (parts: string[]) => { const o: any[] = []; try { for await (const m of readSse(body(parts))) o.push(m.data); } catch (e: any) { o.push("ERR " + e.message); } return JSON.stringify(o); };
+const o = [`strayCR=${await all(["data: a\r"])}`, `crlfSplit=${await all(["data: a\r", "\n\r\n"])}`, `noNL=${await all(["data: x\n\ndata: y"])}`, `cr-only=${await all(["data: a\r\rdata: b\n\n"])}`];
+// early stop: does return() cancel the body?
+let cancelled = false; const s = new ReadableStream<Uint8Array>({ pull(c) { c.enqueue(enc.encode("data: z\n\n")); }, cancel() { cancelled = true; } });
+for await (const _ of readSse(s)) break; o.push(`cancelOnBreak=${cancelled}`);
+const s2 = new ReadableStream<Uint8Array>({ pull(c) { c.enqueue(enc.encode("data: z\n\n")); }, cancel() { throw new Error("boom"); } });
+try { for await (const _ of readSse(s2)) break; o.push("cancelThrow=swallowed"); } catch { o.push("cancelThrow=propagates"); }
+console.log(d.split("/").pop(), o.join(" "));

@@ -1,0 +1,26 @@
+const dir = process.argv[2];
+const { runPool } = await import(dir + "/pool.ts");
+const tryit = async (name: string, f: () => Promise<unknown>) => {
+  try { const r = await f(); console.log(name, "->", JSON.stringify(r, (k, v) => typeof v === "symbol" ? v.toString() : v)); }
+  catch (e: any) { console.log(name, "-> throws", e?.constructor?.name, String(e?.message).slice(0, 60)); }
+};
+await tryit("symbol limit", () => runPool([() => 1], Symbol("x") as any));
+await tryit("nullproto limit", () => runPool([() => 1], Object.create(null) as any));
+await tryit("symbol retries", () => runPool([() => 1], 1, { retries: Symbol("r") as any }));
+await tryit("retries null", () => runPool([() => 1], 1, { retries: null as any }));
+await tryit("opts null", () => runPool([() => 1], 1, null as any));
+const tasks: any[] = [];
+tasks.push(() => { tasks.push(() => "extra"); return "a"; }, () => "b");
+await tryit("mutating tasks", () => runPool(tasks, 1));
+// abort mid-run: limit 1, task 0 aborts sync
+const ac = new AbortController();
+let calls = 0;
+await tryit("sync abort in task", () => runPool([() => { calls++; ac.abort("stop"); return 1; }, () => { calls++; return 2; }, () => { calls++; return 3; }], 2, { signal: ac.signal }).then(r => ({ r, calls })));
+// retry cancelled by abort
+const ac2 = new AbortController();
+let n = 0;
+await tryit("retry cancelled", () => runPool([async () => { n++; ac2.abort("A"); throw new Error("e"); }], 1, { signal: ac2.signal, retries: 3 }).then(r => ({ r: r.map((x: any) => ({ s: x.status, a: x.attempts, reason: String(x.reason) })), n })));
+// concurrency peak with sync tasks, limit 2, retries
+let cur = 0, peak = 0;
+const mk = (i: number) => async () => { cur++; peak = Math.max(peak, cur); await new Promise(r => setTimeout(r, (i * 7) % 5)); cur--; if (i % 3 === 0) throw i; return i; };
+await tryit("concurrency/order", () => runPool(Array.from({ length: 20 }, (_, i) => mk(i)), 3, { retries: 2 }).then(r => ({ peak, ok: r.every((x: any, i: number) => x.status === "fulfilled" ? x.value === i : x.reason === i && x.attempts === 3) })));

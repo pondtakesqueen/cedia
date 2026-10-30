@@ -1,0 +1,16 @@
+const V = process.argv[2];
+const ref = (await import(`${V}/ref/deny.ts`)).denyListed;
+const sides = ['cedia-1','cedia-2','cedia-3','xhigh-1','xhigh-2','xhigh-3'];
+const impls = Object.fromEntries(await Promise.all(sides.map(async s => [s, (await import(`${V}/${s}/deny.ts`)).denyListed])));
+const cmds = ['git','/usr/bin/git','rm','/bin/rm','find','ls',''];
+const words = ['push','reset','clean','-f','-fu','-d','-n','-fn','--force','--force=x','--force-with-lease','--mirror','--delete','--prune','--dry-run','--hard','+main',':old','origin','-C','-c','--git-dir','x','-r','-R','-rf','--recursive','--','.','..','/','~','~bob','$X','src','*','./*','/work/repo','/work/repo/a','-delete','-exec','-execdir','-name','','-','-1','-f1','-r1','.*','~+','../*','/etc','-o'];
+let seed = 1; const rnd = (n: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+const diffs: Record<string, Map<string,string>> = {}; for (const s of sides) diffs[s] = new Map();
+for (let k = 0; k < 400000; k++) {
+  const argv = [cmds[rnd(cmds.length)]]; const len = rnd(6);
+  for (let j = 0; j < len; j++) argv.push(words[rnd(words.length)]);
+  let r: any; try { r = ref(argv, '/work/repo')?.name; } catch (e) { r = 'THROW'; }
+  for (const s of sides) { let o: any; try { o = impls[s](argv, '/work/repo')?.name; } catch (e) { o = 'THROW'; }
+    if (o !== r && diffs[s].size < 2000) diffs[s].set(JSON.stringify(argv), `ref=${r} got=${o}`); }
+}
+for (const s of sides) { console.log(`== ${s}: ${diffs[s].size} mismatches`); let c=0; for (const [a,b] of diffs[s]) { if (c++ < 8) console.log('  ', a, b); } }
