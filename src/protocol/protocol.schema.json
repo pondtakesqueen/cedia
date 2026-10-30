@@ -397,6 +397,7 @@
         "threads.side",
         "usage",
         "browser",
+        "browser.sites",
         "threads.restore-json",
         "images",
         "cache-ttl",

@@ -31,7 +31,7 @@ import { answerPrompt, askTool } from '../../core/tools/ask.ts';
 import { todoTool } from '../../core/tools/todo.ts';
 import { teamTool } from '../../core/tools/team.ts';
 import { TeamStore } from '../../core/project/teams.ts';
-import { BROWSER_TOOL, browserStub, browserTool } from '../../core/tools/browser.ts';
+import { BROWSER_TOOL, browserAccess as browserAccessOf, browserSites, browserStub, browserTool } from '../../core/tools/browser.ts';
 import { openThreadTool } from '../../core/tools/open.ts';
 import { scheduleTool } from '../../core/tools/schedule.ts';
 import { ScheduleStore, schedulesPath } from '../../core/project/schedules.ts';
@@ -102,6 +102,8 @@ export type HeadlessArgs = {
   // A Chromium's DevTools endpoint (core/tools/browser.ts): the writer gets the browser tool on its page. "off" or
   // none: no browser.
   browser?: string;
+  // The only hosts the browser opens besides loopback ("a.com,b.org", or "none"): a desktop's per-project allowlist.
+  browserSites?: string;
   // Start no MCP server: core tools only, at core-tools cost. Evals use it; runs that need a server leave it off.
   noMcp?: boolean;
   // Execute tools as their tool_use blocks complete during the stream (overlaps with model generation).
@@ -453,7 +455,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const m = /^browser(?:\((.*)\))?$/.exec(r.trim());
     return m ? [m[1]?.trim() || '*'] : [];
   });
-  const browserAccess = { anyHost: webAccess(policy.mode).anyHost || browserRules.includes('*'), allowedDomains: [...webAccess(policy.mode).allowedDomains, ...browserRules.filter((d) => d !== '*')] };
+  const browserAccess = browserAccessOf(webAccess(policy.mode), browserRules, args.browserSites === undefined ? undefined : browserSites(args.browserSites));
   const browser = args.browser && args.browser !== 'off' ? browserTool(args.browser, browserAccess) : undefined;
   // Started inside the run's try below, so they are closed however it ends.
   let mcp: McpServers | undefined;

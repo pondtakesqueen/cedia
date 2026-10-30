@@ -73,6 +73,22 @@ export function pageDenied(raw: string, access: WebAccess): string | undefined {
   return undefined;
 }
 
+// What the browser may open: what web_fetch reaches widened by the browser's allow rules (`browser` for any public
+// host, `browser(<domain>)` for one), or, with `sites` (--browser-sites, the desktop's per-project allowlist), those
+// hosts alone, whatever the sandbox or the rules say. Loopback is always open (pageDenied).
+export function browserAccess(web: WebAccess, rules: string[], sites?: string[]): WebAccess {
+  if (sites) return { anyHost: false, allowedDomains: sites };
+  return { anyHost: web.anyHost || rules.includes('*'), allowedDomains: [...web.allowedDomains, ...rules.filter((d) => d !== '*')] };
+}
+
+// `--browser-sites a.com,b.org` as hosts; `none` is the empty list (loopback only).
+export function browserSites(flag: string): string[] {
+  if (flag.trim() === 'none') return [];
+  const sites = flag.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  for (const site of sites) if (!/^[a-z0-9.*:\[\]-]+$/.test(site)) throw new Error(`--browser-sites takes host names, not ${site}`);
+  return sites;
+}
+
 const shown = (u: string) => (u.length > MAX_URL_SHOWN ? `${u.slice(0, MAX_URL_SHOWN)}…` : u);
 
 // GET or PUT on the endpoint's HTTP side, straight to it (never through a proxy: it is on this machine).
