@@ -31,7 +31,8 @@ describe('test failure summaries', () => {
     expect(text.indexOf(fail)).toBeGreaterThan(4_000);
     expect(text.length - (text.indexOf(fail) + fail.length)).toBeGreaterThan(4_000);
     const s = summarizeTestFailures('bun run test', text);
-    expect(s ?? '').toContain(fail);
+    if (!s) throw new Error('bun run test summary dropped the failure');
+    expect(s).toContain(fail);
     expect(isTestCommand('bun run test')).toBe(true);
     expect(isTestCommand('bun run test -- test/a.test.ts')).toBe(true);
     expect(isTestCommand('bun run test -- --bail')).toBe(true);
