@@ -35,6 +35,7 @@ Leave out:
 - Each line concrete enough to check: "Run \`bun test\` before committing", not "Make sure tests pass"; "API handlers live in src/api/handlers/", not "Keep files organized".
 - No capitals, IMPORTANT or repetition for emphasis. A rule that may never be broken belongs in a test, a CI check or a hook; name the check in the file and suggest adding it.
 - A long reference (every CLI flag, an architecture tour) goes in a file under docs/ that AGENTS.md links to. Do not pull it in with an @import: imported files load into every session too.
+- A rule that holds only in one part of the repository (a package, a service) goes in an AGENTS.md in that directory: it loads only when work reaches there.
 - One person's preferences (their name, reply language, editor) do not go in the shared file; say they belong in the user's own instructions.
 - No two lines may contradict each other or another instruction file the repository keeps.
 
