@@ -16,7 +16,7 @@ import { claimThread } from '../../core/project/busy.ts';
 import { learnSecrets, secretsToKnow } from '../../core/safety/secrets.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
-import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
+import { instructionsBlock, loadInstructions, nestedInstructions, nestedNote } from '../../core/project/instructions.ts';
 import { memoryBlock, memoryPath, MemoryStore, rememberTool } from '../../core/project/memory.ts';
 import { carriedSkills, carriedSkillsNote, loadSkills, skillCommand, skillsBlock, skillTool } from '../../core/skills/skills.ts';
 import { getStyle, loadOutputStyleSetting } from '../../core/output-styles/styles.ts';
@@ -608,6 +608,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
         ...(sandbox.on ? { wrap: place?.wrap ?? sandbox.wrap } : {}),
         // Not in a worktree: the language servers read the parent's working directory.
         ...(diagnoser && !reviewer && !place ? { diagnose: diagnoser.diagnose } : {}),
+        // A folder's own AGENTS.md, after the first file call under it (core/project/instructions.ts).
+        ...(!reviewer ? { instructionsFor: (file: string, shown: Set<string>) => nestedNote(nestedInstructions(place?.cwd ?? args.cwd, file, shown)) } : {}),
         ...(place ? { snapshots: place.snapshots } : snapshots && !reviewer ? { snapshots } : {}),
         ...(continues ? { continues } : {}),
         ...(opts.inherited?.length ? { inherited: opts.inherited } : {}),

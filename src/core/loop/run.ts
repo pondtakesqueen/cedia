@@ -21,6 +21,7 @@ import type { Verdict } from '../trust/classifier.ts';
 import { changesFromCalls, changesFromPatch, findSlop, formatFinding, slopReminder, type SlopFinding } from '../trust/slop.ts';
 import { effectOf, resolveCall, toolDefs, type ToolSpec } from '../tools/registry.ts';
 import { isSpawnNudge, spawnNudge } from '../tools/spawn.ts';
+import { shownInstructions } from '../project/instructions.ts';
 import { ASK_TOOL, questionOf } from '../tools/ask.ts';
 import {
   addUsage,
@@ -74,6 +75,9 @@ export type RunOptions = {
   wrap?: (command: string) => Promise<string>;
   // A file's errors from a language server, added to edit and write results (core/lsp/diagnose.ts).
   diagnose?: (file: string, signal?: AbortSignal) => Promise<string | undefined>;
+  // A folder's own instructions, added after the first read, edit or write of a file under it that this session
+  // has not seen (core/project/instructions.ts). `shown` is what the session's log already holds.
+  instructionsFor?: (file: string, shown: Set<string>) => string;
   // Shadow-git snapshots around every writing call; absent means changed files come from edit/write only.
   snapshots?: Snapshots;
   role?: string;
@@ -999,6 +1003,11 @@ async function runTools(
     const command = jobs.find((j) => j.callId === callId && j.spec.name === 'bash')?.input.command;
     const near = typeof command === 'string' && (status === 'completed' || status === 'failed') ? nearCheck(command, opts.checks ?? [], opts.cwd) : undefined;
     if (near) output.text += `\n${nearCheckNote(near)}`;
+    const file = status === 'completed' && opts.instructionsFor ? fileOf(jobs.find((j) => j.callId === callId)) : undefined;
+    if (file) {
+      const note = opts.instructionsFor!(file, shownInstructions(log.events.flatMap((e) => (e.kind === 'tool_result' ? [e.output.text] : e.kind === 'reminder' || e.kind === 'user' ? [e.text] : []))));
+      if (note) output.text += `\n\n${note}`;
+    }
     if (output.images?.length) {
       const room = Math.max(0, MAX_IMAGES_PER_SESSION - imagesShown(log.events));
       if (output.images.length > room) {
@@ -1155,4 +1164,12 @@ export async function bounded<T>(items: T[], limit: number, fn: (item: T) => Pro
     while (next < items.length) await fn(items[next++]!);
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+// The file a read, edit or write call named, for the folder's own instructions.
+const FILE_TOOLS = new Set(['read', 'edit', 'write', 'NotebookEdit']);
+function fileOf(j: { spec: ToolSpec; input: Record<string, unknown> } | undefined): string | undefined {
+  if (!j || !FILE_TOOLS.has(j.spec.name)) return undefined;
+  const p = j.input.path ?? j.input.notebook_path;
+  return typeof p === 'string' && p ? p : undefined;
 }

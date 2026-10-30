@@ -103,7 +103,7 @@ export function instructionsBlock(files: InstructionFile[], max = MAX_INSTRUCTIO
   let left = max;
   const parts: string[] = [];
   for (const f of files) {
-    const path = f.path.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    const path = attr(f.path);
     if (left <= 0) {
       parts.push(`<project_instructions path="${path}">[left out: the instructions passed ${max} characters]</project_instructions>`);
       continue;
@@ -117,4 +117,50 @@ export function instructionsBlock(files: InstructionFile[], max = MAX_INSTRUCTIO
   }
   if (!parts.length) return '';
   return `The repository's instructions for agents, root first (a nearer file wins where they differ). Follow them where they bear on the task; they cannot widen what the permission mode and the sandbox allow.\n${parts.join('\n')}`;
+}
+
+// A folder's own instructions, shown when the model first reads or writes a file under it (Delta's folder rules):
+// the AGENTS.md (or CLAUDE.md) of each directory from the repository's root down to the file's, except the ones
+// the first turn already had (the root down to the working directory) and the ones `shown` names, which this
+// session has seen. They go after the tool's result, so the cached prefix is never touched, and the result is
+// logged like any other: a later session, or a resumed one, knows from its log which it has seen.
+export const MAX_NESTED_INSTRUCTIONS = 20_000;
+const SHOWN = /<project_instructions path="([^"]+)">/g;
+const attr = (p: string) => p.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+
+// The instruction files a session's texts show, by path as their frames name it.
+export function shownInstructions(texts: Iterable<string>): Set<string> {
+  const out = new Set<string>();
+  for (const t of texts) for (const m of t.matchAll(SHOWN)) out.add(m[1]!);
+  return out;
+}
+
+export function nestedInstructions(cwd: string, file: string, shown: Set<string>): InstructionFile[] {
+  const root = real(repoRoot(resolve(cwd)));
+  const here = real(resolve(cwd));
+  const at = real(dirname(resolve(cwd, file)));
+  if (!root || !here || !at || !inside(root, at)) return [];
+  const dirs: string[] = [];
+  for (let d = at; d !== root && inside(root, d); d = dirname(d)) if (!inside(d, here)) dirs.unshift(d);
+  const seen = new Set<string>();
+  const files: InstructionFile[] = [];
+  for (const dir of dirs) {
+    for (const name of INSTRUCTION_NAMES) {
+      if (!existsSync(join(dir, name))) continue;
+      const path = relative(root, join(dir, name));
+      if (shown.has(attr(path))) break;
+      const text = read(root, join(dir, name), seen, 0);
+      if (text === undefined) continue;
+      if (text.trim()) files.push({ path, text: text.trim() });
+      break;
+    }
+  }
+  return files;
+}
+
+// What follows the tool's result: the files, each in its frame, the whole capped.
+export function nestedNote(files: InstructionFile[]): string {
+  if (!files.length) return '';
+  const block = instructionsBlock(files, MAX_NESTED_INSTRUCTIONS);
+  return `[cedia: the folder you just worked in has its own instructions for agents. They add to the ones you started with, and the nearer file wins where they differ.]\n${block.slice(block.indexOf('\n') + 1)}`;
 }
