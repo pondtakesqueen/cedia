@@ -79,6 +79,9 @@
     "CodeReview": {
       "$ref": "#/definitions/CodeReview"
     },
+    "ChangeGuide": {
+      "$ref": "#/definitions/ChangeGuide"
+    },
     "DesktopLock": {
       "$ref": "#/definitions/DesktopLock"
     },
@@ -412,6 +415,60 @@
         "context",
         "threads.recap",
         "inline-edit"
+      ]
+    },
+    "ChangeGuide": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string"
+            },
+            "base": {
+              "$ref": "#/definitions/DiffBase"
+            },
+            "intent": {
+              "type": "string"
+            },
+            "steps": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/GuideStep"
+              }
+            },
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "costUsd": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "model",
+            "base",
+            "intent",
+            "steps",
+            "files",
+            "costUsd"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "error"
+          ],
+          "additionalProperties": false
+        }
       ]
     },
     "Check": {
@@ -988,6 +1045,14 @@
       ],
       "additionalProperties": false
     },
+    "DiffBase": {
+      "type": "string",
+      "enum": [
+        "turn",
+        "head",
+        "upstream"
+      ]
+    },
     "EffectStatus": {
       "type": "string",
       "enum": [
@@ -1110,6 +1175,24 @@
       },
       "required": [
         "thread"
+      ],
+      "additionalProperties": false
+    },
+    "GuideStep": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "number"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
       ],
       "additionalProperties": false
     },

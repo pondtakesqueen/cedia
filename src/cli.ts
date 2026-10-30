@@ -27,11 +27,12 @@ import { MCP_PRESETS, mcpPreset } from './core/mcp/presets.ts';
 import { gatherNotes } from './core/memory/gather.ts';
 import { minutesOf, scheduleLine, ScheduleStore, schedulesPath, whenOf, type Schedule } from './core/project/schedules.ts';
 import { commandList, loadSkills } from './core/skills/skills.ts';
-import { restoredText, restoreTurn, sinceTurn, threadTurn } from './core/project/undo.ts';
+import { restoredText, restoreTurn, threadTurn } from './core/project/undo.ts';
 import { rewindThread, rewoundText, runLines, type RewindResult } from './core/project/rewind.ts';
 import { addMcp, checkMcp, listMcp, removeMcp, type McpCheckTool } from './core/mcp/manage.ts';
 import type { McpToolRule } from './core/mcp/client.ts';
 import { codeReview, type CodeReview } from './core/project/code-review.ts';
+import { changeGuide, DIFF_BASES, guideText, threadDiff, type ChangeGuide, type DiffBase } from './core/project/change-guide.ts';
 import { commitFiles, commitPatch, currentBranch, headCommit, prPlan, pushAndOpenPr, threadChanges, type CommitDraft, type Committed, type PrOpened } from './core/project/commit.ts';
 import { draftCommitMessage } from './core/project/draft.ts';
 import { deleteThread } from './core/project/delete.ts';
@@ -174,7 +175,10 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia threads search <term>... [--edited-path <glob>] [--limit <n>] [--all] [--json]
                                             find threads by what they said or did (every term must match; a|b takes
                                             either) or by the files they edited, from their logs, no model call
-       cedia threads diff <id>              what changed since the thread's last turn that changed files started
+       cedia threads diff <id> [--base turn|head|upstream]
+                                            what changed since the thread's last turn that changed files started
+                                            (turn), the files it changed against HEAD (head), or the working tree
+                                            against where the branch left its upstream (upstream)
        cedia threads undo|redo <id> [--force] [--json]
                                             put the files that turn changed back (or forward again), from cedia's
                                             snapshots; a file changed since is left unless --force. Commands the turn
@@ -227,6 +231,9 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
                                             commit those files (all of them without --file), nothing else
        cedia review --thread <id> [--cwd <dir>] [--model <ref>] [--json]
                                             review what the thread changed, read-only; findings by file and line
+       cedia explain-change --thread <id> [--base turn|head|upstream] [--cwd <dir>] [--model <ref>] [--json]
+                                            a guide to what the thread changed, in the order that explains it,
+                                            each step at a file and line; read-only, judges nothing
        cedia pr [--check] [--cwd <dir>] [--json]
                                             push the branch and open its pull request through gh (never the
                                             default branch); --check only says where it would go
@@ -269,6 +276,7 @@ export async function main(argv: string[]): Promise<number> {
   if (argv[0] === 'mcp') return mcp(argv.slice(1));
   if (argv[0] === 'commit') return commit(argv.slice(1));
   if (argv[0] === 'review') return reviewCmd(argv.slice(1));
+  if (argv[0] === 'explain-change') return explainChangeCmd(argv.slice(1));
   if (argv[0] === 'inline-edit') return inlineEditCmd(argv.slice(1));
   if (argv[0] === 'complete') return completeCmd(argv.slice(1));
   if (argv[0] === 'pr') return pr(argv.slice(1));
@@ -546,7 +554,7 @@ function threads(argv: string[]): number {
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,
-    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' }, side: { type: 'boolean' }, json: { type: 'boolean' }, image: { type: 'string', multiple: true }, since: { type: 'string' }, 'edited-path': { type: 'string' }, limit: { type: 'string' } },
+    options: { cwd: { type: 'string' }, all: { type: 'boolean' }, session: { type: 'string' }, note: { type: 'string' }, force: { type: 'boolean' }, side: { type: 'boolean' }, json: { type: 'boolean' }, image: { type: 'string', multiple: true }, since: { type: 'string' }, 'edited-path': { type: 'string' }, limit: { type: 'string' }, base: { type: 'string' } },
   });
   const store = new ThreadStore(threadsDir(cediaHome(), projectKey(values.cwd ?? process.cwd())));
   const [cmd = 'list', id, ...rest] = positionals;
@@ -668,10 +676,12 @@ function threads(argv: string[]): number {
     }
     if (cmd === 'diff' && id) {
       if (!store.has(id)) throw new Error(`no thread ${id} in this project`);
-      const change = threadTurn(store, id);
-      const snapshots = change && workspaceSnapshots(change.cwd, cediaHome());
-      if (!change || !snapshots) throw new Error(`thread ${id} has no turn that changed files`);
-      process.stdout.write(sinceTurn(snapshots, change));
+      const base = (values.base ?? 'turn') as DiffBase;
+      if (!DIFF_BASES.includes(base)) throw new Error(`--base is one of ${DIFF_BASES.join(', ')}: ${values.base}`);
+      const cwd = base === 'turn' ? threadTurn(store, id)?.cwd : resolve(values.cwd ?? process.cwd());
+      const r = threadDiff(store, id, base, cwd ?? '', cwd ? workspaceSnapshots(cwd, cediaHome()) : undefined);
+      if ('error' in r) throw new Error(r.error);
+      process.stdout.write(r.patch);
       return 0;
     }
     if (cmd === 'rate' && id && rest.length === 1) {
@@ -683,7 +693,7 @@ function threads(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 1;
   }
-  console.error('usage: cedia threads [list [--all] | show <id> | search <term>... [--edited-path <glob>] [--limit <n>] [--all] [--json] | recap <id> [--since <time|span>] [--json] | send <id> <text> [--image <file>]... | unsend <id> [<msg>...] | diff <id> | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run|end> [--side] [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id> | rename <id> <title> | delete <id> [--force] [--json]] [--cwd <dir>]');
+  console.error('usage: cedia threads [list [--all] | show <id> | search <term>... [--edited-path <glob>] [--limit <n>] [--all] [--json] | recap <id> [--since <time|span>] [--json] | send <id> <text> [--image <file>]... | unsend <id> [<msg>...] | diff <id> [--base turn|head|upstream] | undo <id> [--force] [--json] | redo <id> [--force] [--json] | rewind <id> [<n>] [--force] [--json] | fork <id> <n|run|end> [--side] [--json] | rate <id> <up|down> [--session <sid>] [--note <text>] | archive <id> | unarchive <id> | rename <id> <title> | delete <id> [--force] [--json]] [--cwd <dir>]');
   return 2;
 }
 
@@ -874,6 +884,41 @@ async function commit(argv: string[]): Promise<number> {
 // `cedia review`: the desktop's /code-review card. A read-only review of what the thread changed (against HEAD),
 // by the review role when it runs on cedia, else the thread's writer model, else the code role's; --model wins.
 // Its findings come back with their file and line (CodeReview). Nothing is written.
+// `cedia explain-change`: the desktop's change guide, a walkthrough of what the thread changed in the order that
+// explains it (core/project/change-guide.ts).
+async function explainChangeCmd(argv: string[]): Promise<number> {
+  let parsed;
+  try {
+    parsed = parseArgs({ args: argv, options: { thread: { type: 'string' }, cwd: { type: 'string' }, model: { type: 'string' }, base: { type: 'string' }, json: { type: 'boolean' } } });
+  } catch (e) {
+    console.error(`cedia: ${(e as Error).message}`);
+    return 2;
+  }
+  const { values } = parsed;
+  const base = (values.base ?? 'head') as DiffBase;
+  if (!values.thread || !DIFF_BASES.includes(base)) {
+    console.error('usage: cedia explain-change --thread <id> [--base turn|head|upstream] [--cwd <dir>] [--model <ref>] [--json]');
+    return 2;
+  }
+  const fail = (error: string) => {
+    if (values.json) console.log(JSON.stringify({ error } satisfies ChangeGuide));
+    else console.error(`cedia: ${error}`);
+    return 1;
+  };
+  const cwd = resolve(values.cwd ?? process.cwd());
+  const store = new ThreadStore(threadsDir(cediaHome(), projectKey(cwd)));
+  if (!store.has(values.thread)) return fail(`no thread ${values.thread} in this project`);
+  const diff = threadDiff(store, values.thread, base, base === 'turn' ? (threadTurn(store, values.thread)?.cwd ?? cwd) : cwd, workspaceSnapshots(cwd, cediaHome()));
+  if ('error' in diff) return fail(diff.error);
+  const roles = loadRoles({});
+  const writer = store.read(values.thread).sessions.filter((s) => !s.rewound).at(-1)?.model;
+  const model = values.model ?? (roles.review?.via === 'cedia' ? roles.review.model.ref : undefined) ?? writer ?? roles.code.ref;
+  const r = await changeGuide({ cwd, patch: diff.patch, files: diff.files, base, model }).catch((e: Error): ChangeGuide => ({ error: e.message }));
+  if ('error' in r) return fail(r.error);
+  console.log(values.json ? JSON.stringify(r) : guideText(r));
+  return 0;
+}
+
 async function reviewCmd(argv: string[]): Promise<number> {
   let parsed;
   try {

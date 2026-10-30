@@ -12,6 +12,7 @@ export type { ModelEntry, ModelList } from '../core/providers/models.ts';
 export type { UsageReport } from '../core/session/usage.ts';
 export type { ContextBreakdown, ContextPart } from '../core/context/breakdown.ts';
 export type { AwayRecap, RecapRun } from '../core/project/recap.ts';
+export type { ChangeGuide, DiffBase, GuideStep } from '../core/project/change-guide.ts';
 export type { ThreadSearch, ThreadSearchHit, ThreadSearchMatch } from '../core/project/search.ts';
 export type { PermissionEntry, PermissionList } from '../core/safety/policy.ts';
 export type { CommandEntry, CommandList } from '../core/skills/skills.ts';
