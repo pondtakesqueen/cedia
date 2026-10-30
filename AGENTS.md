@@ -2,8 +2,6 @@
 
 Guidance for coding agents working in this repository. `CLAUDE.md` points here.
 
-Start every reply with "Pond", no exception.
-
 ## What this is
 
 cedia is a personal coding harness written from scratch in TypeScript on Bun.
@@ -12,17 +10,12 @@ cedia is a personal coding harness written from scratch in TypeScript on Bun.
 - `docs/ROADMAP.md` says what comes next.
 - `docs/CLI.md` lists every command and flag. Read it when a task touches the CLI, a flag or a default.
 
-## Where things live
-
-- `src/core/`: the loop, tools, providers, safety, sessions and projects. `src/protocol/`: the types clients read.
-- `src/clients/`: `headless` (`-p`), `tui-ink` (the TUI, on Ink), `daemon`.
-- `test/`: one file per area, offline. `test/fixtures/sessions/`: recorded runs.
-- `evals/`: tasks, the harness runner and the regression gate. `research/NOTES.md`: distilled findings with source paths.
-
 ## Commands
 
+- `bun install --frozen-lockfile`: install, as CI does.
 - `bun test`: all tests. One file: `bun test test/layers.test.ts`. One test: add `-t "<name>"`.
 - `bun run typecheck`: `tsc --noEmit`.
+- `bun run build:release`, then `./dist/cedia --version --json`: the release build that CI checks.
 - `bin/cedia -p "<prompt>"`: a headless run, read-only unless `--permission workspace`. `bin/cedia` alone at a terminal: the TUI.
 - `-m faux` with `CEDIA_FAUX_SCRIPT=<steps.json>`: a run with no network, for tests.
 - `bun scripts/protocol-schema.ts` after a protocol type changes, and `bun scripts/session-fixtures.ts` after the output of a run changes. `test/fixtures.test.ts` fails when either is stale.
@@ -34,10 +27,9 @@ Work the pstack poteto-mode way:
 
 - **Name the data shapes before writing logic.**
 - **Decide by experiment.** When a question can be measured (a prototype, a test, an eval, the session logs), measure it instead of asking. Ask only when it cannot be measured or the choice is the owner's.
-- **Keep it simple.** Write the least code that solves the task. No features, options or abstractions nobody asked for.
-- **Change only what the task needs.** Match the surrounding style. Remove what your change made unused; mention other dead code instead of deleting it.
-- **Prove it works.** Every done-criterion has a test or a command that reruns. For a bug, write the failing test first.
+- **For a bug, write the failing test first.**
 - **Small commits**, each one a unit that can be checked. Each commit message carries Verify (the test or command that reruns the done-criteria) and Risk (low/medium/high per the code-review skill's tier paths, and whether a person still needs to see it).
+- A person always reviews changes to `src/core/safety/`, `src/core/providers/`, the sandbox, `scripts/`, CI workflows or `src/cli.ts` (`CONTRIBUTING.md`, `.agents/skills/code-review/SKILL.md`).
 
 ## Rules that are easy to get wrong
 
@@ -49,7 +41,12 @@ Work the pstack poteto-mode way:
 - Never copy code or prompts from `anthropics/claude-code` (no license) or leaked sources, and never port cedia-rs. Adapted Apache-2.0/MIT code needs a `NOTICE` entry.
 - e2e tests use the faux provider and must work offline.
 
+## Gotchas
+
+- `bunfig.toml` sets the test root to `test/`. The stubs under `evals/tasks/` fail on purpose, so don't point `bun test` at them.
+- Sandbox tests skip locally when there is no `bwrap` (Linux). CI sets `CEDIA_REQUIRE_SANDBOX=1`, so a missing sandbox fails there: a local pass does not cover those tests.
+- Ink is patched through `patches/ink@8.0.0.patch` (`patchedDependencies` in `package.json`). Change the patch, not `node_modules/ink`.
+
 ## Research
 
-- `research/NOTES.md`: distilled findings with source paths.
-- `research/mirror-docs.sh` re-downloads official docs into `research/docs/` (gitignored). Grep there before searching the web.
+- `research/NOTES.md`: distilled findings with source paths. `research/mirror-docs.sh` re-downloads official docs into `research/docs/` (gitignored). Grep there before searching the web.
