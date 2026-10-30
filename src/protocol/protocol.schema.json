@@ -4042,6 +4042,9 @@
                 "$ref": "#/definitions/ImageRef"
               }
             },
+            "pid": {
+              "type": "number"
+            },
             "at": {
               "type": "string"
             },

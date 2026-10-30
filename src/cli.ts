@@ -128,6 +128,8 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --workers <ref,...>      models besides the code model that a part of a split plan may run on; the planner
                                picks one per part by how hard it is (default: roles.workers in settings, none)
       --thread <id>            go on with a thread of this project instead of opening a new one
+      --take-over              with --thread: when its last run is still going in another process, stop that
+                               run and go on (default: refuse)
       --handoff-at <n|off>     hand off to a new session of the thread once the context reaches n tokens
                                (default: settings, then half the window, at most 150k)
       --handoff <note|compact> how a session hands off: the model writes a note, or the provider summarizes the
@@ -289,6 +291,7 @@ export async function main(argv: string[]): Promise<number> {
       media: { type: 'string' },
       'on-quota': { type: 'string' },
       thread: { type: 'string' },
+      'take-over': { type: 'boolean' },
       spawn: { type: 'string' },
       lsp: { type: 'string' },
       'cache-ttl': { type: 'string' },
@@ -358,6 +361,7 @@ export async function main(argv: string[]): Promise<number> {
     ...(values.media ? { media: values.media } : {}),
     ...(values['on-quota'] ? { onQuota: values['on-quota'] } : {}),
     ...(values.thread ? { thread: values.thread } : {}),
+    ...(values['take-over'] ? { takeOver: true } : {}),
     ...(values.spawn ? { spawn: values.spawn } : {}),
     ...(values.lsp ? { lsp: values.lsp } : {}),
     ...(values['cache-ttl'] ? { cacheTtl: values['cache-ttl'] } : {}),

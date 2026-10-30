@@ -48,7 +48,8 @@ type ThreadBody =
   // the conversation stood in, with how many of its events there were. What /rewind goes back to.
   // `permission`: what the run ran under (absent before cedia recorded it).
   // `images`: the ones shown with the prompt, so an edit and resend (core/project/fork.ts) can keep them.
-  | { kind: 'run'; id: string; prompt: string; cwd: string; tree?: string; from?: RunFrom; permission?: RunPermission; images?: ImageRef[] }
+  // `pid`: the process that runs it, which holds the thread until the run ends (core/project/busy.ts).
+  | { kind: 'run'; id: string; prompt: string; cwd: string; tree?: string; from?: RunFrom; permission?: RunPermission; images?: ImageRef[]; pid?: number }
   // The thread went back to just before run `run`: what happened from there to here is dropped from the fold
   // (core/project/rewind.ts), except what is not the conversation's (messages, ratings, archiving).
   | { kind: 'rewind'; run: string }
