@@ -1,0 +1,313 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/pool.contract.test.ts b/pool.contract.test.ts
+--- a/pool.contract.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/pool.contract.test.ts	2026-10-30 00:54:25.269382316 +0000
+@@ -0,0 +1,227 @@
++import { expect, test } from "bun:test";
++import { runPool } from "./pool";
++
++const flush = async () => {
++  for (let i = 0; i < 20; i++) await Promise.resolve();
++};
++
++const deferred = <T>() => {
++  let resolve!: (v: T) => void;
++  let reject!: (e: unknown) => void;
++  const promise = new Promise<T>((res, rej) => {
++    resolve = res;
++    reject = rej;
++  });
++  return { promise, resolve, reject };
++};
++
++test("rule 1: a bad limit or retries count is refused before any task runs", async () => {
++  let calls = 0;
++  const spy = () => {
++    calls++;
++    return 1;
++  };
++  for (const limit of [0, -1, 1.5, NaN]) {
++    await expect(runPool([spy], limit)).rejects.toBeInstanceOf(RangeError);
++  }
++  for (const retries of [-1, 1.5, NaN]) {
++    await expect(runPool([spy], 1, { retries })).rejects.toBeInstanceOf(RangeError);
++  }
++  expect(calls).toBe(0);
++});
++
++test("rule 1: a limit of Infinity runs everything", async () => {
++  const out = await runPool([() => 1, () => 2, () => 3], Infinity);
++  expect(out.map((r) => r.status === "fulfilled" && r.value)).toEqual([1, 2, 3]);
++});
++
++test("rule 2: never more than limit in flight, and a finished slot is refilled at once", async () => {
++  const d = Array.from({ length: 10 }, () => deferred<number>());
++  const started: number[] = [];
++  let current = 0;
++  let peak = 0;
++  const tasks = d.map((x, i) => () => {
++    started.push(i);
++    current++;
++    peak = Math.max(peak, current);
++    return x.promise.finally(() => current--);
++  });
++  const result = runPool(tasks, 3);
++  await flush();
++  expect(started).toEqual([0, 1, 2]);
++
++  d[0].resolve(0);
++  await flush();
++  expect(started).toEqual([0, 1, 2, 3]);
++
++  for (let i = 1; i < 10; i++) {
++    d[i].resolve(i);
++    await flush();
++  }
++  await result;
++  expect(peak).toBe(3);
++  expect(started).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
++});
++
++test("rule 2: results stay in input order when tasks finish in reverse", async () => {
++  const d = Array.from({ length: 4 }, () => deferred<number>());
++  const result = runPool(d.map((x) => () => x.promise), 4);
++  for (let i = 3; i >= 0; i--) {
++    d[i].resolve(i);
++    await flush();
++  }
++  const out = await result;
++  expect(out.map((r) => (r.status === "fulfilled" ? r.value : null))).toEqual([0, 1, 2, 3]);
++});
++
++test("rule 3: a sync throw is a rejection and a plain value is a fulfilment", async () => {
++  const boom = new Error("boom");
++  const out = await runPool(
++    [
++      () => {
++        throw boom;
++      },
++      () => 5,
++      () => Promise.resolve(6),
++    ],
++    2,
++  );
++  expect(out).toEqual([
++    { status: "rejected", reason: boom, attempts: 1 },
++    { status: "fulfilled", value: 5, attempts: 1 },
++    { status: "fulfilled", value: 6, attempts: 1 },
++  ]);
++});
++
++test("rule 4: retries: 2 means up to 3 calls, and attempts counts them", async () => {
++  let calls = 0;
++  const always = async () => {
++    calls++;
++    throw new Error("nope");
++  };
++  const [r] = await runPool([always], 1, { retries: 2 });
++  expect(calls).toBe(3);
++  expect(r).toMatchObject({ status: "rejected", attempts: 3 });
++
++  let flaky = 0;
++  const twice = async () => {
++    if (++flaky < 3) throw new Error("again");
++    return "ok";
++  };
++  expect(await runPool([twice], 1, { retries: 2 })).toEqual([{ status: "fulfilled", value: "ok", attempts: 3 }]);
++});
++
++test("rule 4: without retries a failing task is called once", async () => {
++  let calls = 0;
++  const [r] = await runPool(
++    [
++      async () => {
++        calls++;
++        throw "x";
++      },
++    ],
++    1,
++  );
++  expect(calls).toBe(1);
++  expect(r).toEqual({ status: "rejected", reason: "x", attempts: 1 });
++});
++
++test("rule 5: an already aborted signal starts nothing and settles every slot", async () => {
++  const ac = new AbortController();
++  ac.abort("stop");
++  let calls = 0;
++  const out = await runPool([() => (calls++, 1), () => (calls++, 2)], 2, { signal: ac.signal });
++  expect(calls).toBe(0);
++  expect(out).toEqual([
++    { status: "rejected", reason: "stop", attempts: 0 },
++    { status: "rejected", reason: "stop", attempts: 0 },
++  ]);
++});
++
++test("rule 5: abort mid-run starts nothing new, keeps in-flight results, and resolves", async () => {
++  const d = Array.from({ length: 5 }, () => deferred<string>());
++  const started: number[] = [];
++  const ac = new AbortController();
++  const result = runPool(
++    d.map((x, i) => () => (started.push(i), x.promise)),
++    2,
++    { signal: ac.signal },
++  );
++  await flush();
++  ac.abort("stop");
++  d[0].resolve("a");
++  d[1].resolve("b");
++  const out = await result;
++  expect(started).toEqual([0, 1]);
++  expect(out).toEqual([
++    { status: "fulfilled", value: "a", attempts: 1 },
++    { status: "fulfilled", value: "b", attempts: 1 },
++    { status: "rejected", reason: "stop", attempts: 0 },
++    { status: "rejected", reason: "stop", attempts: 0 },
++    { status: "rejected", reason: "stop", attempts: 0 },
++  ]);
++});
++
++test("rule 5: an abort cancels a pending retry and reports the attempts made", async () => {
++  const d = [deferred<number>(), deferred<number>()];
++  let calls = 0;
++  const ac = new AbortController();
++  const result = runPool(
++    [
++      () => {
++        const x = d[calls++];
++        return x.promise;
++      },
++    ],
++    1,
++    { retries: 5, signal: ac.signal },
++  );
++  await flush();
++  ac.abort("stop");
++  d[0].reject(new Error("fail"));
++  const [r] = await result;
++  expect(calls).toBe(1);
++  expect(r).toEqual({ status: "rejected", reason: "stop", attempts: 1 });
++});
++
++test("rule 6: failing tasks never make the pool reject", async () => {
++  const err = new Error("bad");
++  const out = await runPool([() => Promise.reject(err), () => Promise.reject(err)], 1);
++  expect(out).toEqual([
++    { status: "rejected", reason: err, attempts: 1 },
++    { status: "rejected", reason: err, attempts: 1 },
++  ]);
++});
++
++test("rule 2: random limits, sizes and settle orders never exceed the limit", async () => {
++  let seed = 42;
++  const rand = (n: number) => {
++    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
++    return seed % n;
++  };
++  for (let round = 0; round < 100; round++) {
++    const n = rand(15);
++    const limit = rand(5) === 0 ? Infinity : 1 + rand(5);
++    const d = Array.from({ length: n }, () => deferred<number>());
++    let current = 0;
++    let peak = 0;
++    const result = runPool(
++      d.map((x) => () => {
++        current++;
++        peak = Math.max(peak, current);
++        return x.promise.finally(() => current--);
++      }),
++      limit,
++    );
++    const pending = d.map((_, i) => i);
++    while (pending.length > 0) {
++      await flush();
++      expect(current).toBe(Math.min(limit, pending.length));
++      const [i] = pending.splice(rand(pending.length), 1);
++      d[i].resolve(i);
++    }
++    const out = await result;
++    expect(peak).toBe(Math.min(limit, n));
++    expect(out.map((r) => (r.status === "fulfilled" ? r.value : -1))).toEqual(d.map((_, i) => i));
++  }
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/pool.ts b/pool.ts
+--- a/pool.ts	2026-10-30 00:52:38.662146878 +0000
++++ b/pool.ts	2026-10-30 00:54:05.881990694 +0000
+@@ -26,41 +26,68 @@
+  */
+ export async function runPool<T>(tasks: Array<() => Promise<T> | T>, limit: number, opts: PoolOptions = {}): Promise<Settled<T>[]> {
+   const retries = opts.retries ?? 0;
+-  if (!(limit >= 1)) throw new RangeError(`limit must be at least 1, got ${limit}`);
+-  if (retries < 0) throw new RangeError(`retries must be at least 0, got ${retries}`);
++  if (!(limit === Infinity || (Number.isInteger(limit) && limit >= 1))) throw new RangeError(`limit must be at least 1, got ${limit}`);
++  if (!(Number.isInteger(retries) && retries >= 0)) throw new RangeError(`retries must be at least 0, got ${retries}`);
+ 
+-  const results: Settled<T>[] = [];
++  const signal = opts.signal;
++  const results = new Array<Settled<T>>(tasks.length);
+   let next = 0;
+   let running = 0;
+ 
+   return new Promise((resolve) => {
+-    if (tasks.length === 0) return resolve(results);
++    const finishIfDone = () => {
++      if (next >= tasks.length && running === 0) {
++        signal?.removeEventListener("abort", onAbort);
++        resolve(results);
++      }
++    };
++
++    /** Settles every task that has not started yet as rejected with `signal.reason`, without calling it. */
++    const cancelRest = () => {
++      for (; next < tasks.length; next++) results[next] = { status: "rejected", reason: signal?.reason, attempts: 0 };
++    };
++
++    const onAbort = () => {
++      cancelRest();
++      finishIfDone();
++    };
+ 
+     const launch = () => {
+-      while (running <= limit && next < tasks.length) {
+-        if (opts.signal?.aborted) break;
++      if (signal?.aborted) cancelRest();
++      while (running < limit && next < tasks.length) {
+         const index = next++;
+         running++;
+         attempt(index, 1);
+       }
+-      if (next >= tasks.length && running === 0) resolve(results);
++      finishIfDone();
+     };
+ 
+     const attempt = (index: number, attempts: number) => {
+       const done = (r: Settled<T>) => {
+-        results.push(r);
++        results[index] = r;
+         running--;
+         launch();
+       };
+-      (tasks[index]() as Promise<T>).then(
++      call(tasks[index]).then(
+         (value) => done({ status: "fulfilled", value, attempts }),
+         (reason) => {
+-          if (attempts < retries) attempt(index, attempts + 1);
++          if (attempts <= retries && signal?.aborted) done({ status: "rejected", reason: signal.reason, attempts });
++          else if (attempts <= retries) attempt(index, attempts + 1);
+           else done({ status: "rejected", reason, attempts });
+         },
+       );
+     };
+ 
++    signal?.addEventListener("abort", onAbort, { once: true });
+     launch();
+   });
+ }
++
++/** Calls `task` once; a sync throw becomes a rejection and a plain value a fulfilment. Never throws. */
++const call = <T>(task: () => Promise<T> | T): Promise<T> => {
++  try {
++    return Promise.resolve(task());
++  } catch (e) {
++    return Promise.reject(e);
++  }
++};

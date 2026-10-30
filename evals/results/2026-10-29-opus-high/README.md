@@ -297,3 +297,26 @@ What it says:
 - So part of the 18-7 → 23-3 gain on the tuning tasks is specific to those tasks. The merged prompts are not worse anywhere measured, but the next prompt change should be scored on held-out tasks too, not only on the ones that suggested it.
 
 Spent for this section: $0.38 + $0.69 Haiku (Anthropic API). Claude Code ($8.58) and the panels ($4.68, $3.32 and $3.20) ran at API price on the owner's subscription.
+
+## A faster review: Sonnet at medium effort (three runs, not adopted)
+
+Plan and review are most of a task's time, and Claude Code finishes in one pass at about 70 s. This arm keeps the merged prompts and changes only the review to `--review claude-code:sonnet@medium`. Starting Claude Code itself is not the cost: a one-line `claude -p` took 5.1 s, 2.4 s of it the API, and cedia starts the plan and review processes ahead of their prompts.
+
+| 30 runs | pass | wins / losses / tie or split | steady tasks | tasks won 3 of 3 | review sent back | time per task (plan, review, fix) |
+|---|---|---|---|---|---|---|
+| shape, review at high | 28/30 | 23 / 3 / 2 | 7 of 10 | 7 | 14 of 30 | 159 s (38, 45, 14) |
+| review at medium | 30/30 | 16 / 9 / 5 | 6 of 10 | 4 | 11 of 30 | 125 s (38, 21, 9) |
+
+| | correctness | quality | scope | tests | security |
+|---|---|---|---|---|---|
+| review at medium / CC Opus high | 8.53 / 8.32 | 8.03 / 8.10 | 8.65 / 8.93 | 8.25 / 5.10 | 9.07 / 8.87 |
+
+What it says:
+- The review at medium takes half the time (21 s against 45 s) and the task 21% less (125 s against 159 s).
+- It catches less, and that costs seven wins:
+  - hard-memo-async lost all three runs again;
+  - hard-pool lost two runs and wide-three-features lost one;
+  - correctness fell from 8.86 to 8.53.
+- The review at high effort is where much of auto's lead comes from, so it stays.
+
+Spent for this section: $0.33 Haiku (Anthropic API). The panel ($4.71) and the plan and review ran at API price on the owner's subscription.
