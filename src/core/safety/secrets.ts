@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -59,9 +60,70 @@ function secretValue(kind: string, quote: string, value: string, dotenv: boolean
   return tokenLike && !/[().[\]]/.test(value);
 }
 
+// The values themselves, as well as their shapes: what the user's environment and the repository's dotenv files
+// hold under a secret's name, so one printed with no name beside it (a log line, a config dump, a stack trace)
+// is caught too. Held in this process only, never written anywhere; longest first, so a value that holds a
+// shorter one goes whole.
+let known: string[] = [];
+
+// An environment variable that holds a secret by its name: kept out of the model's commands (tools/bash.ts), and
+// its value redacted wherever it shows.
+export const SECRET_ENV = /(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)($|_)/i;
+
+export function learnSecrets(values: Iterable<string>): void {
+  known = [...new Set([...known, ...values])].sort((a, b) => b.length - a.length);
+}
+
+export function forgetSecrets(): void {
+  known = [];
+}
+
+// A value long enough not to be a word: 8+ characters, 12+ when all digits; not a path, a reference or a flag.
+function worthKnowing(value: string): boolean {
+  if (value.length < 8 || (/^\d+$/.test(value) && value.length < 12)) return false;
+  if (/^[/~.]|^\$|^(true|false|null|none|undefined)$/i.test(value) || /\s/.test(value)) return false;
+  return !value.includes(REDACTED);
+}
+
+// What the environment holds under a secret's name, and what the dotenv files at `root` (`.env`, `.env.local`,
+// ...) hold under one, or as a value that looks like a key (16+ characters, letters and digits) whatever its name.
+export function secretsToKnow(env: Record<string, string | undefined>, root?: string): string[] {
+  const found: string[] = [];
+  for (const [name, value] of Object.entries(env)) if (value && (SECRET_ENV.test(name) || SECRET_NAME.test(name)) && worthKnowing(value)) found.push(value);
+  if (!root) return found;
+  let names: string[] = [];
+  try {
+    names = readdirSync(root).filter((f) => f === '.env' || f.startsWith('.env.'));
+  } catch {}
+  for (const f of names) {
+    let text: string;
+    try {
+      const st = statSync(join(root, f));
+      if (!st.isFile() || st.size > 256 * 1024) continue;
+      text = readFileSync(join(root, f), 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of text.split('\n')) {
+      const m = /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=[ \t]*(["']?)(.*?)\2[ \t]*(?:#.*)?$/.exec(line);
+      if (!m) continue;
+      const value = m[3]!;
+      const keyLike = value.length >= 16 && /[A-Za-z]/.test(value) && /\d/.test(value);
+      if ((SECRET_NAME.test(m[1]!) || keyLike) && worthKnowing(value)) found.push(value);
+    }
+  }
+  return found;
+}
+
 export function redactSecrets(text: string): { text: string; count: number } {
   let count = 0;
   let out = text;
+  for (const value of known) {
+    if (!out.includes(value)) continue;
+    const parts = out.split(value);
+    count += parts.length - 1;
+    out = parts.join(REDACTED);
+  }
   for (const re of TOKENS)
     out = out.replace(re, () => {
       count++;

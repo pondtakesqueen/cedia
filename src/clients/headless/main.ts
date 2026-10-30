@@ -13,6 +13,7 @@ import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadMed
 import { attachedNote, blobDir, STORED_IMAGE, storedImage, type ImageRef } from '../../core/images.ts';
 import { storeAttachment } from '../../core/video.ts';
 import { claimThread } from '../../core/project/busy.ts';
+import { learnSecrets, secretsToKnow } from '../../core/safety/secrets.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
@@ -486,6 +487,9 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     return preamble(args.cwd, { mode: policy.mode, ...(policy.plan ? { plan: { ask: !!(store && threadId) } } : {}), unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(ins ? { instructions: ins } : {}), ...(mem ? { memory: mem } : {}), ...(skillList ? { skills: skillList } : {}), ...(styleModifier ? { outputStyle: styleModifier } : {}), ...(profile?.instructions ? { profile: { name: profile.name, instructions: profile.instructions } } : {}), ...otherRoots() });
   };
 
+  // The secret values the environment and the repository's dotenv files hold, so tool output that prints one
+  // with no name beside it is redacted too (core/safety/secrets.ts).
+  for (const dir of new Set([projectRoot(args.cwd), args.cwd])) learnSecrets(secretsToKnow(process.env, dir));
   const ac = new AbortController();
   const onSignal = () => ac.abort();
   if (args.signal?.aborted) ac.abort();
