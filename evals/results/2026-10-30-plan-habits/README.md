@@ -11,7 +11,7 @@ bun evals/run.ts --harness cedia --model anthropic/claude-haiku-5-5 --review cla
   --cedia-arg=--plan=claude-code:opus@medium --cedia-arg=--sandbox=on --runs <3|2> --jobs 2 --only <tasks>
 ```
 
-- Tuning tasks (10 × 3 runs) were compared with Claude Code Opus xhigh (`evals/results/2026-10-29-opus-high/`, CC xhigh run). Held-out tasks (8 × 2 runs) were compared with Claude Code Opus high.
+- Tuning tasks (10 × 3 runs) were compared with Claude Code Opus at effort xhigh: `cc-xhigh/runs.jsonl`, 30 of 30 passed. These are the same diffs every arm's tuning panel judged. `claude-effort-xhigh.sh` is the `CEDIA_EVAL_CLAUDE_BIN` wrapper, and the runs used `CEDIA_EVAL_RUN_BUDGET=3 --harness claude --model opus`. The subscription's limit cut the first run short (`cc.log`), so the failed tasks were run again (`cc2.log`), and only passed runs are kept. Held-out tasks (8 × 2 runs) were compared with Claude Code Opus high: `2026-10-29-opus-high/held-out/cc.jsonl`.
 - `judge.py` judges each pair twice with A and B swapped. A pair is a win only when both orders agree, and is a split otherwise. Two panels ran, Sonnet and Opus (`JUDGE_MODEL=opus`).
 - `tally.py <dir> <arm>` gives the tally with every score. `notx.py <dir> <arm>` picks each pair's winner by the sum of the scores without `tests`.
 
@@ -29,7 +29,7 @@ Wins and losses for cedia, Sonnet panel / Opus panel. Splits are left out.
 | tests where needed (`nt`, `hnt`) | 13-15 / 10-16 | 3-9 / 2-12 | 6-8 / 4-9 | 7-5 / 3-6 |
 | planner probes alone (`po`, `hpo`) | 20-8 / 16-10 | 4-10 / 3-13 | 10-4 / 10-5 | 4-4 / 4-5 |
 
-The main rows come from `2026-10-29-opus-high/` (`judge-planmed`, `judge-opus/held-out-planmed`), re-tallied with `notx.py`.
+For main against xhigh on the tuning tasks, the cedia runs are `2026-10-29-opus-high/auto-planmed.jsonl` and the verdicts are `main/judge` and `main/opus` here. Main's held-out row is from `2026-10-29-opus-high/held-out/judge-planmed` and `judge-opus/held-out-planmed`, which compare against Claude Code high. Every row is re-tallied with `notx.py`. Main's tuning panel in `2026-10-29-opus-high/judge-planmed` compares against Claude Code high, not xhigh, so its tally differs from the one here.
 
 Tuning runs, per passed run:
 

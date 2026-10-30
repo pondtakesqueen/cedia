@@ -1,0 +1,28 @@
+Running 7 tasks x 3 runs on claude (opus), 3 at a time...
+  PASS hard-injection#2 (22.9s $0.1196)
+  PASS hard-injection#3 (24.5s $0.1209)
+  PASS hard-injection#1 (26.2s $0.1258)
+  PASS hard-ledger#1 (131.6s $0.5008)
+  PASS hard-ledger#2 (136.3s $0.5162)
+  PASS hard-ledger#3 (146.2s $0.5528)
+  PASS hard-memo-async#2 (178.2s $0.6412)
+  PASS hard-memo-async#1 (201.7s $0.6946)
+  PASS hard-memo-async#3 (226.0s $0.7925)
+  PASS hard-pool#2 (186.9s $0.6718)
+  PASS hard-sse#1 (36.2s $0.1849)
+  PASS hard-pool#1 (286.0s $0.9306)
+  PASS hard-sse#2 (55.2s $0.2439)
+  PASS hard-pool#3 (260.6s $0.8195)
+  PASS hard-sse#3 (53.0s $0.2300)
+  PASS wide-bug-hunt#1 (101.0s $0.4533)
+  PASS wide-bug-hunt#2 (90.9s $0.4223)
+  PASS wide-bug-hunt#3 (80.3s $0.3843)
+  PASS wide-three-features#2 (189.3s $0.6915)
+  PASS wide-three-features#1 (268.3s $0.9480)
+  PASS wide-three-features#3 (270.1s $0.9264)
+
+Results written to /tmp/claude-0/-home-user-cedia-code/7d5651d6-a6a7-5456-a496-4c6a46e5cb23/scratchpad/ccx/cc2.jsonl
+claude (opus): 7 tasks, 21 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 141.5s per run, 301032 input / 14285 output tokens per run, cache hit 92.5%
+  cost $10.9710 total, $0.5224 per passed run
