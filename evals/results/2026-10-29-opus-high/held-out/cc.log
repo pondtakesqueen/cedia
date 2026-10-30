@@ -1,0 +1,23 @@
+Running 8 tasks x 2 runs on claude (opus), 2 at a time...
+  PASS frontier-cron#2 (70.6s $0.3002)
+  PASS frontier-cron#1 (79.2s $0.3302)
+  PASS frontier-semver#1 (164.7s $0.6917)
+  PASS frontier-semver#2 (162.4s $0.6979)
+  PASS hard-redact-bugs#2 (36.6s $0.2045)
+  PASS hard-redact-bugs#1 (60.7s $0.2929)
+  PASS hard-shell-split#1 (248.9s $0.7933)
+  PASS hard-shell-split#2 (233.6s $0.7673)
+  PASS hard-window#1 (84.3s $0.3442)
+  PASS hard-window#2 (85.7s $0.3348)
+  PASS long-migrate#2 (31.9s $0.2289)
+  PASS long-migrate#1 (37.9s $0.2683)
+  PASS real-three-changes#2 (209.3s $1.5442)
+  PASS real-three-changes#1 (220.7s $1.3929)
+  PASS wide-deprecate#1 (26.8s $0.2055)
+  PASS wide-deprecate#2 (25.4s $0.1857)
+
+Results written to /tmp/claude-0/-home-user-cedia-code/7d5651d6-a6a7-5456-a496-4c6a46e5cb23/scratchpad/held/cc.jsonl
+claude (opus): 8 tasks, 16 scored runs
+  pass@1 100.0%  pass^k 100.0%  false-done 0.0%  refused claims 0.0%
+  avg 111.2s per run, 455487 input / 11159 output tokens per run, cache hit 93.8%
+  cost $8.5824 total, $0.5364 per passed run

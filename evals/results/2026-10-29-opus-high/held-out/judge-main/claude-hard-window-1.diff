@@ -1,0 +1,163 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/window.behaviour.test.ts b/window.behaviour.test.ts
+--- a/window.behaviour.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/window.behaviour.test.ts	2026-10-29 18:59:06.155591895 +0000
+@@ -0,0 +1,119 @@
++import { expect, test } from "bun:test";
++import { distinctInWindow, type Event } from "./window";
++
++// The original quadratic implementation, kept as the reference for the contract.
++function naive(events: Event[], windowMs: number): number[] {
++  return events.map((e) => {
++    const keys = new Set<string>();
++    for (const other of events) if (other.t > e.t - windowMs && other.t <= e.t) keys.add(other.key);
++    return keys.size;
++  });
++}
++
++// Small seeded generator, so every run checks the same cases.
++function lcg(seed: number) {
++  let s = seed >>> 0;
++  return () => {
++    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
++    return s / 4294967296;
++  };
++}
++
++test("the window excludes its start and includes its end", () => {
++  const events = [
++    { t: 0, key: "a" },
++    { t: 10, key: "b" },
++  ];
++  expect(distinctInWindow(events, 10)).toEqual([1, 1]);
++  expect(distinctInWindow(events, 10.5)).toEqual([1, 2]);
++});
++
++test("all events count, whatever their order", () => {
++  const events = [
++    { t: 8, key: "a" },
++    { t: 0, key: "b" },
++    { t: 8, key: "c" },
++  ];
++  expect(distinctInWindow(events, 10)).toEqual([3, 1, 3]);
++});
++
++test("one count per event in input order, duplicate keys count once", () => {
++  const events = [
++    { t: 1, key: "a" },
++    { t: 1, key: "a" },
++    { t: 2, key: "a" },
++  ];
++  expect(distinctInWindow(events, 10)).toEqual([1, 1, 1]);
++});
++
++test("keys are compared exactly", () => {
++  const keys = ["a", "A", "a ", "__proto__", "constructor"];
++  const events = keys.map((key) => ({ t: 5, key }));
++  expect(distinctInWindow(events, 1)).toEqual([5, 5, 5, 5, 5]);
++});
++
++test("a window too small or not finite is refused before the events are looked at", () => {
++  for (const w of [0, -1, NaN, Infinity]) {
++    expect(() => distinctInWindow([{ t: NaN, key: "a" }], w)).toThrow(RangeError);
++  }
++});
++
++test("a time that is not a finite number is refused, naming the first bad index", () => {
++  const bad = [undefined, NaN, Infinity, "5"];
++  for (const t of bad) {
++    const events = [{ t: 1, key: "a" }, { t, key: "b" } as unknown as Event];
++    expect(() => distinctInWindow(events, 10)).toThrow(TypeError);
++    expect(() => distinctInWindow(events, 10)).toThrow("event 1");
++  }
++});
++
++test("the input is not reordered or changed", () => {
++  const events = [
++    { t: 5, key: "b" },
++    { t: 1, key: "a" },
++    { t: 3, key: "c" },
++  ];
++  const copy = structuredClone(events);
++  distinctInWindow(events, 10);
++  expect(events).toEqual(copy);
++});
++
++test("window edges are computed in floating point, as before", () => {
++  // 1e20 - 1 rounds back to 1e20, so the event is not in its own window.
++  expect(distinctInWindow([{ t: 1e20, key: "a" }], 1)).toEqual([0]);
++  expect(distinctInWindow([{ t: 0.3, key: "a" }, { t: 0.1 + 0.2, key: "b" }], 0.1)).toEqual(
++    naive([{ t: 0.3, key: "a" }, { t: 0.1 + 0.2, key: "b" }], 0.1),
++  );
++});
++
++test("agrees with the original algorithm on random inputs", () => {
++  const rand = lcg(42);
++  const windows = [0.5, 1, 3, 10, 1e-9, 1e300];
++  for (let c = 0; c < 500; c++) {
++    const n = Math.floor(rand() * 61);
++    const w = windows[Math.floor(rand() * windows.length)];
++    const events: Event[] = [];
++    for (let i = 0; i < n; i++) {
++      const r = rand();
++      let t: number;
++      if (r < 0.6) t = Math.floor(rand() * 21);
++      else if (r < 0.7) t = -Math.floor(rand() * 21);
++      else if (r < 0.85) t = Math.floor(rand() * 21) + rand();
++      else t = 1e16 + Math.floor(rand() * 5);
++      events.push({ t, key: ["a", "b", "c", "d", "e"][Math.floor(rand() * 5)] });
++    }
++    expect({ case: c, result: distinctInWindow(events, w) }).toEqual({ case: c, result: naive(events, w) });
++  }
++});
++
++test("200,000 events return well under a second", () => {
++  const rand = lcg(7);
++  const events: Event[] = [];
++  for (let i = 0; i < 200_000; i++) events.push({ t: Math.floor(rand() * 1_000_000), key: `k${Math.floor(rand() * 1000)}` });
++  const start = performance.now();
++  const result = distinctInWindow(events, 1000);
++  const elapsed = performance.now() - start;
++  expect(result).toHaveLength(200_000);
++  expect(result.every((c) => c >= 1 && c <= 1000)).toBe(true);
++  expect(elapsed).toBeLessThan(1000);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/window.ts b/window.ts
+--- a/window.ts	2026-10-29 18:58:12.319887182 +0000
++++ b/window.ts	2026-10-29 18:58:58.763591456 +0000
+@@ -16,9 +16,31 @@
+   events.forEach((e, i) => {
+     if (typeof e.t !== "number" || !Number.isFinite(e.t)) throw new TypeError(`event ${i} has no finite time: ${e.t}`);
+   });
+-  return events.map((e) => {
+-    const keys = new Set<string>();
+-    for (const other of events) if (other.t > e.t - windowMs && other.t <= e.t) keys.add(other.key);
+-    return keys.size;
+-  });
++  // Sort the indices by time, then slide a window over them. Both ends only move forward: `t - windowMs` never
++  // decreases as `t` grows, and each group of equal times is added whole, as "all events" requires.
++  const order = events.map((_, i) => i).sort((a, b) => events[a].t - events[b].t);
++  const result = new Array<number>(events.length);
++  const counts = new Map<string, number>();
++  let lo = 0;
++  let hi = 0;
++  for (let i = 0; i < order.length; ) {
++    const t = events[order[i]].t;
++    let end = i;
++    while (end < order.length && events[order[end]].t === t) end++;
++    while (hi < order.length && events[order[hi]].t <= t) {
++      const key = events[order[hi]].key;
++      counts.set(key, (counts.get(key) ?? 0) + 1);
++      hi++;
++    }
++    while (lo < hi && !(events[order[lo]].t > t - windowMs)) {
++      const key = events[order[lo]].key;
++      const c = counts.get(key)!;
++      if (c === 1) counts.delete(key);
++      else counts.set(key, c - 1);
++      lo++;
++    }
++    for (let k = i; k < end; k++) result[order[k]] = counts.size;
++    i = end;
++  }
++  return result;
+ }

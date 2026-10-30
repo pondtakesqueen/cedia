@@ -1,0 +1,55 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/redact-review.test.ts b/redact-review.test.ts
+--- a/redact-review.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/redact-review.test.ts	2026-10-29 19:20:27.999668092 +0000
+@@ -0,0 +1,18 @@
++import { expect, test } from 'bun:test';
++import { REDACTED, redactSecrets } from './redact.ts';
++
++test('secret names that continue with a letter are still redacted', () => {
++  expect(redactSecrets('secretKey = "abcd1234efgh"')).toEqual({ text: `secretKey = "${REDACTED}"`, count: 1 });
++  expect(redactSecrets('SECRETS=abc123xyz')).toEqual({ text: `SECRETS=${REDACTED}`, count: 1 });
++  expect(redactSecrets('DB_PASSWORDS=hunter22x')).toEqual({ text: `DB_PASSWORDS=${REDACTED}`, count: 1 });
++  expect(redactSecrets('AUTH_TOKENS=abcd1234')).toEqual({ text: `AUTH_TOKENS=${REDACTED}`, count: 1 });
++  expect(redactSecrets('tokens: "abcd1234efgh"')).toEqual({ text: `tokens: "${REDACTED}"`, count: 1 });
++  expect(redactSecrets('{"accessToken":"abcd1234efgh5678"}')).toEqual({ text: `{"accessToken":"${REDACTED}"}`, count: 1 });
++  expect(redactSecrets('{"clientSecretValue":"abcd1234efgh5678"}')).toEqual({ text: `{"clientSecretValue":"${REDACTED}"}`, count: 1 });
++});
++
++test('token counts such as MAX_TOKENS and max_tokens are not secrets', () => {
++  expect(redactSecrets('MAX_TOKENS=4096')).toEqual({ text: 'MAX_TOKENS=4096', count: 0 });
++  expect(redactSecrets('max_tokens: 1000')).toEqual({ text: 'max_tokens: 1000', count: 0 });
++  expect(redactSecrets('tokenizer = "bert-base-uncased"')).toEqual({ text: 'tokenizer = "bert-base-uncased"', count: 0 });
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/redact.ts b/redact.ts
+--- a/redact.ts	2026-10-29 19:18:17.998404372 +0000
++++ b/redact.ts	2026-10-29 19:20:23.651667833 +0000
+@@ -15,9 +15,9 @@
+ 
+ // Token formats with a fixed prefix. The generic ones need a digit so prose and identifiers do not match.
+ const TOKENS: RegExp[] = [
+-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
++  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
+   /\bsk-ant-[A-Za-z0-9_-]{20,}/g, // Anthropic
+-  /\bsk-[A-Za-z0-9_-]{20,}/g, // OpenAI, DeepSeek and other sk- keys
++  /\bsk-(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}/g, // OpenAI, DeepSeek and other sk- keys
+   /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}/g, // Stripe
+   /\bgh[pousr]_[A-Za-z0-9]{30,}/g, // GitHub
+   /\bgithub_pat_[A-Za-z0-9_]{30,}/g,
+@@ -35,7 +35,7 @@
+ 
+ // `NAME=value`, `name: value`, `"name": "value"` and `NAME = "value"` where the name says secret.
+ const ASSIGNMENT =
+-  /\b([A-Za-z0-9_.-]*?(api[_-]?key|secret|token|passw(?:or)?d|pwd|private[_-]?key|access[_-]?key|credentials?)[A-Za-z0-9_.-]*)(["']?[ \t]*[:=][ \t]*)(["'`]?)([^\s"'`,;]+)\4/gi;
++  /\b(?!max_?tokens\b)([A-Za-z0-9_.-]*?(api[_-]?key|secret|token|passw(?:or)?d|pwd|private[_-]?key|access[_-]?key|credentials?)[A-Za-z0-9_.-]*)(["']?[ \t]*[:=][ \t]*)(["'`]?)([^\s"'`,;]+)\4/gi;
+ 
+ // Which assigned values count as secrets, so code that only names a secret (`password: hash(input)`,
+ // `token = getToken()`) still reads as written:
+@@ -61,7 +61,7 @@
+   out = out.replace(URL_PASSWORD, (_m, head: string, password: string) => {
+     if (password === REDACTED) return _m;
+     count++;
+-    return `${head}${REDACTED}`;
++    return `${head}${REDACTED}@`;
+   });
+   out = out.replace(ASSIGNMENT, (match, name: string, kind: string, sep: string, quote: string, value: string, offset: number, all: string) => {
+     if (value.includes(REDACTED)) return match;

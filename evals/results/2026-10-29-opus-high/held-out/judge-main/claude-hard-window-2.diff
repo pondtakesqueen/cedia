@@ -1,0 +1,116 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/window.contract.test.ts b/window.contract.test.ts
+--- a/window.contract.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/window.contract.test.ts	2026-10-29 19:00:19.007596225 +0000
+@@ -0,0 +1,75 @@
++import { expect, test } from "bun:test";
++import { distinctInWindow, type Event } from "./window";
++
++// The original O(n^2) implementation, kept as the reference.
++function naive(events: Event[], windowMs: number): number[] {
++  return events.map((e) => {
++    const keys = new Set<string>();
++    for (const other of events) if (other.t > e.t - windowMs && other.t <= e.t) keys.add(other.key);
++    return keys.size;
++  });
++}
++
++test("the window is open at its start and closed at its end", () => {
++  expect(distinctInWindow([{ t: 0, key: "a" }, { t: 10, key: "b" }, { t: 20, key: "c" }], 10)).toEqual([1, 1, 1]);
++  expect(distinctInWindow([{ t: 0, key: "a" }, { t: 10, key: "b" }, { t: 10, key: "c" }], 10)).toEqual([1, 2, 2]);
++});
++
++test("an event counts a later entry with the same or an earlier time", () => {
++  expect(distinctInWindow([{ t: 20, key: "a" }, { t: 5, key: "b" }, { t: 15, key: "c" }], 10)).toEqual([2, 1, 1]);
++  expect(distinctInWindow([{ t: 5, key: "a" }, { t: 5, key: "b" }], 1)).toEqual([2, 2]);
++});
++
++test("keys are compared exactly", () => {
++  const events = [{ t: 1, key: "a" }, { t: 1, key: "A" }, { t: 1, key: "a " }, { t: 1, key: "" }];
++  expect(distinctInWindow(events, 1)).toEqual([4, 4, 4, 4]);
++});
++
++test("a window that is not finite or not above zero is refused", () => {
++  for (const w of [-1, NaN, Infinity, -Infinity, "5" as unknown as number]) {
++    expect(() => distinctInWindow([], w)).toThrow(RangeError);
++    expect(() => distinctInWindow([{ t: 1, key: "a" }], w)).toThrow(RangeError);
++  }
++});
++
++test("a time that is not a finite number is refused, naming the first bad index", () => {
++  const events = [{ t: 1, key: "a" }, { t: 2, key: "b" }, { t: NaN, key: "c" }, { t: 3, key: "d" }, { t: "4" as unknown as number, key: "e" }];
++  expect(() => distinctInWindow(events, 10)).toThrow(TypeError);
++  expect(() => distinctInWindow(events, 10)).toThrow(/event 2 /);
++  expect(() => distinctInWindow([{ t: Infinity, key: "a" }], 10)).toThrow(/event 0 /);
++  expect(() => distinctInWindow([{ t: 1, key: "a" }, { key: "b" } as unknown as Event], 10)).toThrow(/event 1 /);
++});
++
++test("the window is checked before the events", () => {
++  expect(() => distinctInWindow([{ t: NaN, key: "a" }], 0)).toThrow(RangeError);
++});
++
++test("the input is not changed", () => {
++  const events = [{ t: 9, key: "a" }, { t: 1, key: "b" }, { t: 5, key: "a" }];
++  const copy = JSON.parse(JSON.stringify(events));
++  distinctInWindow(events, 4);
++  expect(events).toEqual(copy);
++});
++
++test("matches the original implementation on many small cases", () => {
++  let seed = 12345;
++  const next = (n: number) => {
++    seed = (seed * 1103515245 + 12345) % 2147483648;
++    return seed % n;
++  };
++  const windows = [1, 2.5, 10, 0.1];
++  const times = [-3, -0.3, 0, 0.1, 0.2, 0.3, 1, 2, 2.5, 5, 10, 12.5];
++  for (let c = 0; c < 300; c++) {
++    const n = next(61);
++    const events = Array.from({ length: n }, () => ({ t: times[next(times.length)], key: "k" + next(4) }));
++    const w = windows[next(windows.length)];
++    expect(distinctInWindow(events, w)).toEqual(naive(events, w));
++  }
++});
++
++test("handles 200,000 events", () => {
++  const events = Array.from({ length: 200_000 }, (_, i) => ({ t: (i * 7) % 100_000, key: "k" + (i % 5000) }));
++  const result = distinctInWindow(events, 1000);
++  expect(result.length).toBe(200_000);
++  expect(Math.max(...result)).toBeLessThanOrEqual(1000);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/window.ts b/window.ts
+--- a/window.ts	2026-10-29 18:58:59.285918685 +0000
++++ b/window.ts	2026-10-29 19:00:02.316891656 +0000
+@@ -16,9 +16,28 @@
+   events.forEach((e, i) => {
+     if (typeof e.t !== "number" || !Number.isFinite(e.t)) throw new TypeError(`event ${i} has no finite time: ${e.t}`);
+   });
+-  return events.map((e) => {
+-    const keys = new Set<string>();
+-    for (const other of events) if (other.t > e.t - windowMs && other.t <= e.t) keys.add(other.key);
+-    return keys.size;
+-  });
++  const order = events.map((_, i) => i).sort((a, b) => (events[a].t < events[b].t ? -1 : events[a].t > events[b].t ? 1 : 0));
++  const result = new Array<number>(events.length);
++  const counts = new Map<string, number>();
++  let lo = 0;
++  let hi = 0;
++  for (let g = 0; g < order.length; ) {
++    const t = events[order[g]].t;
++    let end = g;
++    while (end < order.length && events[order[end]].t === t) end++;
++    while (hi < order.length && events[order[hi]].t <= t) {
++      const key = events[order[hi++]].key;
++      counts.set(key, (counts.get(key) ?? 0) + 1);
++    }
++    const lim = t - windowMs;
++    while (lo < hi && events[order[lo]].t <= lim) {
++      const key = events[order[lo++]].key;
++      const c = counts.get(key)! - 1;
++      if (c) counts.set(key, c);
++      else counts.delete(key);
++    }
++    for (let i = g; i < end; i++) result[order[i]] = counts.size;
++    g = end;
++  }
++  return result;
+ }

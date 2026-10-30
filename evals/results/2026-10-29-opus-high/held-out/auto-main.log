@@ -1,0 +1,27 @@
+Running 8 tasks x 2 runs on cedia (anthropic/claude-haiku-5-5), 2 at a time...
+  PASS frontier-cron#2 (186.8s $0.0239, plan 38s, review changes 45s, fix 8s, peak 42k)
+  FAIL frontier-cron#1 (270.2s $0.0225, plan 45s, review approve 47s, peak 42k)
+  PASS frontier-semver#1 (275.8s $0.0319, plan 45s, review changes 74s, fix 46s, peak 54k)
+  PASS frontier-semver#2 (219.1s $0.0242, plan 41s, review changes 57s, fix 22s, peak 45k)
+  PASS hard-redact-bugs#1 (105.1s $0.0079, plan 24s, review changes 39s, fix 22s, peak 21k)
+  PASS hard-redact-bugs#2 (108.2s $0.0080, plan 26s, review changes 39s, fix 27s, peak 22k)
+  PASS hard-shell-split#1 (311.4s $0.0362, plan 38s, review changes 74s, fix 52s, peak 59k)
+  PASS hard-shell-split#2 (328.6s $0.0394, plan 37s, review changes 63s, fix 55s, peak 68k)
+  PASS hard-window#1 (93.6s $0.0050, plan 31s, review approve 34s, peak 15k)
+  PASS hard-window#2 (125.3s $0.0073, plan 27s, review approve 38s, peak 18k)
+  PASS long-migrate#1 (114.1s $0.0092, plan 36s, review changes 32s, fix 8s, peak 24k)
+  PASS long-migrate#2 (115.6s $0.0125, plan 39s, review approve 20s, peak 32k)
+  PASS real-three-changes#1 (438.5s $0.0510, plan 132s, review changes 89s, fix 45s, 1 handoff, 2 sub-threads (0 work, peak 54k), peak 80k)
+  PASS wide-deprecate#1 (58.3s $0.0072, plan 19s, review approve 18s, peak 23k)
+  PASS real-three-changes#2 (461.6s $0.0603, plan 102s, review changes 87s, fix 61s, 1 handoff, 3 sub-threads (0 work, peak 27k), peak 79k)
+  PASS wide-deprecate#2 (77.4s $0.0071, plan 22s, review approve 15s, peak 24k)
+
+Results written to /tmp/claude-0/-home-user-cedia-code/7d5651d6-a6a7-5456-a496-4c6a46e5cb23/scratchpad/held/auto-main.jsonl
+cedia (anthropic/claude-haiku-5-5): 8 tasks, 16 scored runs
+  pass@1 93.8%  pass^k 87.5%  false-done 0.0%  refused claims 0.0%
+  avg 205.6s per run, 643491 input / 25596 output tokens per run, cache hit 90.2%
+  peak context 40k mean, 80k max, 0 of 16 runs past 100k; 2 handoffs, 5 sub-threads (0 work, 0 handoffs in them, peak 54k)
+  repaired inputs: 18 edit: broken edits string
+  cache misses 22 (22 provider), 166k tokens the cache could have served
+  speed 260.8 output tok/s, 0.80s to first token per call; model 86.2% of time, cedia 0.0%
+  cost $0.3536 total, $0.0236 per passed run

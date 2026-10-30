@@ -1,0 +1,349 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/semver.contract.test.ts b/semver.contract.test.ts
+--- a/semver.contract.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/semver.contract.test.ts	2026-10-29 18:51:33.865686609 +0000
+@@ -0,0 +1,175 @@
++import { expect, test } from "bun:test";
++import { compare, maxSatisfying, parse, satisfies } from "./semver";
++
++test("versions: no leading zeros, no empty prerelease identifiers", () => {
++  expect(parse("01.2.3")).toBeNull();
++  expect(parse("1.2.3-01")).toBeNull();
++  expect(parse("1.2.3-a..b")).toBeNull();
++  expect(parse("vv1.2.3")).toBeNull();
++  expect(parse(" v1.2.3+b.1 ")).not.toBeNull();
++  expect(parse("1.2.3-0a")).not.toBeNull();
++});
++
++test("prerelease order", () => {
++  const sorted = [
++    "1.0.0-alpha",
++    "1.0.0-alpha.1",
++    "1.0.0-alpha.beta",
++    "1.0.0-beta",
++    "1.0.0-beta.2",
++    "1.0.0-beta.11",
++    "1.0.0-rc.1",
++    "1.0.0",
++  ].map((s) => parse(s)!);
++  for (let i = 0; i < sorted.length; i++) {
++    for (let j = i + 1; j < sorted.length; j++) {
++      expect(compare(sorted[i]!, sorted[j]!)).toBe(-1);
++      expect(compare(sorted[j]!, sorted[i]!)).toBe(1);
++    }
++  }
++  expect(compare(parse("1.2.3+a")!, parse("1.2.3+b")!)).toBe(0);
++});
++
++test("X-ranges", () => {
++  for (const r of ["1.x", "1", "1.X", "1.*"]) {
++    expect(satisfies("1.0.0", r)).toBe(true);
++    expect(satisfies("1.9.9", r)).toBe(true);
++    expect(satisfies("2.0.0", r)).toBe(false);
++    expect(satisfies("0.9.9", r)).toBe(false);
++  }
++  expect(satisfies("1.3.0", "1.2")).toBe(false);
++  expect(satisfies("1.2.9", "1.2.x")).toBe(true);
++  expect(satisfies("0.0.0", "*")).toBe(true);
++});
++
++test("operators with partial versions", () => {
++  expect(satisfies("2.0.0", ">1")).toBe(true);
++  expect(satisfies("1.9.9", ">1")).toBe(false);
++  expect(satisfies("1.3.0", "> 1.2")).toBe(true);
++  expect(satisfies("1.2.9", ">1.2")).toBe(false);
++  expect(satisfies("1.2.0", ">=1.2")).toBe(true);
++  expect(satisfies("1.1.9", ">=1.2")).toBe(false);
++  expect(satisfies("1.1.9", "<1.2")).toBe(true);
++  expect(satisfies("1.2.0", "<1.2")).toBe(false);
++  expect(satisfies("1.3.0", "<=1.2")).toBe(false);
++  expect(satisfies("1.2.9", "<=1.2")).toBe(true);
++  expect(satisfies("1.9.9", "<=1")).toBe(true);
++  expect(satisfies("2.0.0", "<=1")).toBe(false);
++  expect(satisfies("1.2.0", "=1.2")).toBe(true);
++  expect(satisfies("1.0.0", ">*")).toBe(false);
++  expect(satisfies("1.0.0", "<*")).toBe(false);
++});
++
++test("tilde with partial versions and prereleases", () => {
++  expect(satisfies("1.2.9", "~1.2")).toBe(true);
++  expect(satisfies("1.3.0", "~1.2")).toBe(false);
++  expect(satisfies("1.9.0", "~1")).toBe(true);
++  expect(satisfies("2.0.0", "~1")).toBe(false);
++  expect(satisfies("1.2.3-beta.3", "~1.2.3-beta.2")).toBe(true);
++  expect(satisfies("1.2.4-beta", "~1.2.3-beta.2")).toBe(false);
++});
++
++test("caret at its edges", () => {
++  expect(satisfies("0.2.9", "^0.2.3")).toBe(true);
++  expect(satisfies("0.3.0", "^0.2.3")).toBe(false);
++  expect(satisfies("0.0.3", "^0.0.3")).toBe(true);
++  expect(satisfies("0.0.4", "^0.0.3")).toBe(false);
++  expect(satisfies("0.0.9", "^0.0")).toBe(true);
++  expect(satisfies("0.1.0", "^0.0")).toBe(false);
++  expect(satisfies("0.0.9", "^0.0.x")).toBe(true);
++  expect(satisfies("0.1.0", "^0.0.x")).toBe(false);
++  expect(satisfies("0.9.0", "^0.x")).toBe(true);
++  expect(satisfies("1.0.0", "^0.x")).toBe(false);
++  expect(satisfies("0.9.0", "^0")).toBe(true);
++  expect(satisfies("1.0.0", "^0")).toBe(false);
++  expect(satisfies("1.9.0", "^1.x")).toBe(true);
++  expect(satisfies("2.0.0", "^1.x")).toBe(false);
++  expect(satisfies("1.9.0", "^1.2.x")).toBe(true);
++  expect(satisfies("2.0.0", "^1.2.x")).toBe(false);
++  expect(satisfies("2.0.0-0", "^1.2.3")).toBe(false);
++  expect(satisfies("0.0.3-beta.1", "^0.0.3-beta")).toBe(true);
++  expect(satisfies("0.0.4-0", "^0.0.3-beta")).toBe(false);
++});
++
++test("hyphen ranges", () => {
++  expect(satisfies("1.2.0", "1.2 - 2.3.4")).toBe(true);
++  expect(satisfies("2.3.4", "1.2 - 2.3.4")).toBe(true);
++  expect(satisfies("2.3.5", "1.2 - 2.3.4")).toBe(false);
++  expect(satisfies("2.3.9", "1.2.3 - 2.3")).toBe(true);
++  expect(satisfies("2.4.0", "1.2.3 - 2.3")).toBe(false);
++  expect(satisfies("2.9.9", "1.2.3 - 2")).toBe(true);
++  expect(satisfies("3.0.0", "1.2.3 - 2")).toBe(false);
++  expect(satisfies("1.2.2", "1.2.3 - 2")).toBe(false);
++});
++
++test("prerelease rule", () => {
++  expect(satisfies("1.2.3-beta.4", ">=1.2.3-alpha")).toBe(true);
++  expect(satisfies("3.4.5-beta", ">=1.2.3-alpha")).toBe(false);
++  expect(satisfies("1.0.0-a", "*")).toBe(false);
++  expect(satisfies("1.3.0-0", "~1.2.3")).toBe(false);
++});
++
++test("unreadable input", () => {
++  expect(satisfies("x", "*")).toBe(false);
++  expect(satisfies("1.2.3", "^1.2.3 || >=foo")).toBe(false);
++  expect(satisfies("1.2.3", ">=")).toBe(false);
++  expect(satisfies("1.2.3", "1.x.3 || 1.2.x-beta")).toBe(false);
++});
++
++test("sugar agrees with its expansion in the contract", () => {
++  const pairs: [string, string][] = [
++    ["1.x", ">=1.0.0 <2.0.0-0"],
++    ["1.2.x", ">=1.2.0 <1.3.0-0"],
++    ["1", ">=1.0.0 <2.0.0-0"],
++    [">1", ">=2.0.0"],
++    [">1.2", ">=1.3.0"],
++    [">=1.2", ">=1.2.0"],
++    ["<1.2", "<1.2.0-0"],
++    ["<=1.2", "<1.3.0-0"],
++    ["<=1", "<2.0.0-0"],
++    ["=1.2", ">=1.2.0 <1.3.0-0"],
++    ["~1.2.3", ">=1.2.3 <1.3.0-0"],
++    ["~1.2", ">=1.2.0 <1.3.0-0"],
++    ["~1", ">=1.0.0 <2.0.0-0"],
++    ["^1.2.3", ">=1.2.3 <2.0.0-0"],
++    ["^0.2.3", ">=0.2.3 <0.3.0-0"],
++    ["^0.0.3", ">=0.0.3 <0.0.4-0"],
++    ["^1.2.x", ">=1.2.0 <2.0.0-0"],
++    ["^0.0.x", ">=0.0.0 <0.1.0-0"],
++    ["^0.0", ">=0.0.0 <0.1.0-0"],
++    ["^0.x", ">=0.0.0 <1.0.0-0"],
++    ["^0", ">=0.0.0 <1.0.0-0"],
++    ["^1.x", ">=1.0.0 <2.0.0-0"],
++    ["^1.2.3-beta.2", ">=1.2.3-beta.2 <2.0.0-0"],
++    ["^0.0.3-beta", ">=0.0.3-beta <0.0.4-0"],
++    ["1.2 - 2.3.4", ">=1.2.0 <=2.3.4"],
++    ["1.2.3 - 2.3", ">=1.2.3 <2.4.0-0"],
++    ["1.2.3 - 2", ">=1.2.3 <3.0.0-0"],
++    ["*", ""],
++  ];
++  const versions: string[] = [];
++  for (const a of [0, 1, 2, 3])
++    for (const b of [0, 1, 2, 3])
++      for (const c of [0, 1, 2, 3])
++        for (const pre of ["", "-0", "-beta"]) versions.push(`${a}.${b}.${c}${pre}`);
++  for (const [sugar, expansion] of pairs)
++    for (const v of versions) expect(satisfies(v, sugar)).toBe(satisfies(v, expansion));
++});
++
++test("maxSatisfying orders prereleases", () => {
++  expect(maxSatisfying(["1.2.3-beta.10", "1.2.3-beta.2", "junk"], ">=1.2.3-beta.1")).toBe("1.2.3-beta.10");
++});
++
++test("a concrete part after a wildcard is unreadable", () => {
++  expect(satisfies("1.5.0", "1.x.3")).toBe(false);
++  expect(satisfies("1.5.0", "x.1")).toBe(false);
++  expect(satisfies("1.0.0", "^x.1.2")).toBe(false);
++  expect(satisfies("1.5.0", "1.x.x")).toBe(true);
++  expect(satisfies("1.5.0", "x.x.x")).toBe(true);
++});
++
++test("numeric prerelease identifiers compare as numbers beyond 2^53", () => {
++  expect(compare(parse("1.0.0-9007199254740993")!, parse("1.0.0-9007199254740992")!)).toBe(1);
++  expect(compare(parse("1.0.0-10")!, parse("1.0.0-9")!)).toBe(1);
++  expect(compare(parse("1.0.0-9999999999999999999")!, parse("1.0.0-10000000000000000000")!)).toBe(-1);
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/semver.ts b/semver.ts
+--- a/semver.ts	2026-10-29 18:48:03.340388884 +0000
++++ b/semver.ts	2026-10-29 18:51:38.319565274 +0000
+@@ -39,46 +39,120 @@
+  */
+ 
+ 
+-type Id = string | number;
++type Id = string;
+ export type SemVer = { major: number; minor: number; patch: number; prerelease: Id[] };
+ 
++const NUM = String.raw`0|[1-9]\d*`;
++const ID = String.raw`(?:${NUM}|\d*[A-Za-z-][0-9A-Za-z-]*)`;
++const PRE = String.raw`${ID}(?:\.${ID})*`;
++const BUILD = String.raw`[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*`;
++const EXACT = new RegExp(String.raw`^v?(${NUM})\.(${NUM})\.(${NUM})(?:-(${PRE}))?(?:\+${BUILD})?$`);
++const PARTIAL = new RegExp(
++  String.raw`^v?(${NUM}|[xX*])(?:\.(${NUM}|[xX*])(?:\.(${NUM}|[xX*])(?:-(${PRE}))?)?)?(?:\+${BUILD})?$`,
++);
++
++function ids(pre: string): Id[] {
++  return pre.split(".");
++}
++
+ export function parse(v: string): SemVer | null {
+-  const m = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(v.trim());
++  const m = EXACT.exec(v.trim());
+   if (!m) return null;
+-  return { major: +m[1]!, minor: +m[2]!, patch: +m[3]!, prerelease: m[4] ? m[4].split(".") : [] };
++  return { major: +m[1]!, minor: +m[2]!, patch: +m[3]!, prerelease: m[4] ? ids(m[4]) : [] };
+ }
+ 
+ export function compare(a: SemVer, b: SemVer): number {
+   const main = a.major - b.major || a.minor - b.minor || a.patch - b.patch;
+   if (main) return Math.sign(main);
+-  const pa = a.prerelease.join(".");
+-  const pb = b.prerelease.join(".");
+-  if (pa === pb) return 0;
+-  if (!pa) return 1;
+-  if (!pb) return -1;
+-  return pa < pb ? -1 : 1;
++  const pa = a.prerelease;
++  const pb = b.prerelease;
++  if (!pa.length || !pb.length) return Math.sign(pb.length - pa.length);
++  for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
++    const x = pa[i]!;
++    const y = pb[i]!;
++    if (x === y) continue;
++    const nx = /^\d+$/.test(x);
++    const ny = /^\d+$/.test(y);
++    if (nx && ny) return Math.sign(x.length - y.length) || (x < y ? -1 : 1);
++    if (nx) return -1;
++    if (ny) return 1;
++    return x < y ? -1 : 1;
++  }
++  return Math.sign(pa.length - pb.length);
+ }
+ 
+ type Op = "<" | "<=" | ">" | ">=" | "=";
+ type Comparator = { op: Op; v: SemVer };
++type Parts = { maj: number | null; min: number | null; pat: number | null; pre: Id[] };
++
++function at(major: number, minor: number, patch: number, prerelease: Id[] = []): SemVer {
++  return { major, minor, patch, prerelease };
++}
+ 
+-// Missing parts count as 0.
+-function loose(s: string): SemVer | null {
+-  const parts = s.replace(/^v/, "").split(".");
+-  while (parts.length < 3) parts.push("0");
+-  return parse(parts.map((p) => (p === "x" || p === "X" || p === "*" ? "0" : p)).join("."));
++// Matches nothing: no version is below 0.0.0-0.
++const NOTHING: Comparator = { op: "<", v: at(0, 0, 0, [0]) };
++
++// A partial version: a missing part (`x`, `X`, `*` or left out) is null, and so is every part after it.
++function partial(s: string): Parts | null {
++  const m = PARTIAL.exec(s.trim());
++  if (!m) return null;
++  const num = (p: string | undefined) => (p && /^\d/.test(p) ? +p : null);
++  const maj = num(m[1]);
++  const min = maj === null ? null : num(m[2]);
++  const pat = min === null ? null : num(m[3]);
++  if (m[4] && pat === null) return null;
++  if ((maj === null && num(m[2]) !== null) || (min === null && num(m[3]) !== null)) return null;
++  return { maj, min, pat, pre: m[4] ? ids(m[4]) : [] };
++}
++
++// The comparators one operator and one partial version stand for.
++function bounds(op: string | undefined, p: Parts): Comparator[] {
++  const { maj, min, pat, pre } = p;
++  if (maj === null) return op === ">" || op === "<" ? [NOTHING] : [];
++  const full = pat !== null;
++  const low = at(maj, min ?? 0, pat ?? 0, pre);
++  const zero = at(maj, min ?? 0, 0, [0]);
++  const succ = min === null ? at(maj + 1, 0, 0) : at(maj, min + 1, 0);
++  const cap = min === null ? at(maj + 1, 0, 0, [0]) : at(maj, min + 1, 0, [0]);
++  switch (op) {
++    case ">":
++      return full ? [{ op: ">", v: low }] : [{ op: ">=", v: succ }];
++    case ">=":
++      return [{ op: ">=", v: low }];
++    case "<":
++      return [{ op: "<", v: full ? low : zero }];
++    case "<=":
++      return full ? [{ op: "<=", v: low }] : [{ op: "<", v: cap }];
++    case "~":
++      return [{ op: ">=", v: low }, { op: "<", v: cap }];
++    case "^": {
++      const caret =
++        maj > 0 || min === null ? at(maj + 1, 0, 0, [0])
++        : min > 0 || pat === null ? at(0, min + 1, 0, [0])
++        : at(0, 0, pat + 1, [0]);
++      return [{ op: ">=", v: low }, { op: "<", v: caret }];
++    }
++    default:
++      return full ? [{ op: "=", v: low }] : [{ op: ">=", v: low }, { op: "<", v: cap }];
++  }
+ }
+ 
++// The comparators of one set, or null when it cannot be read.
+ function parseSet(set: string): Comparator[] | null {
++  const s = set.trim();
++  const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(s);
++  if (hyphen) {
++    const a = partial(hyphen[1]!);
++    const b = partial(hyphen[2]!);
++    return a && b ? [...bounds(">=", a), ...bounds("<=", b)] : null;
++  }
+   const out: Comparator[] = [];
+-  for (const tok of set.trim().split(/\s+/)) {
+-    if (!tok || tok === "*") continue;
++  for (const tok of s.replace(/(<=|>=|<|>|=|~|\^)\s+/g, "$1").split(/\s+/)) {
++    if (!tok) continue;
+     const m = /^(<=|>=|<|>|=|~|\^)?(.*)$/.exec(tok)!;
+-    const v = loose(m[2]!);
+-    if (!v) return null;
+-    if (m[1] === "^") out.push({ op: ">=", v }, { op: "<", v: { major: v.major + 1, minor: 0, patch: 0, prerelease: [] } });
+-    else if (m[1] === "~") out.push({ op: ">=", v }, { op: "<", v: { major: v.major, minor: v.minor + 1, patch: 0, prerelease: [] } });
+-    else out.push({ op: (m[1] ?? "=") as Op, v });
++    const p = partial(m[2]!);
++    if (!p) return null;
++    out.push(...bounds(m[1], p));
+   }
+   return out;
+ }
+@@ -88,13 +162,20 @@
+   return c.op === "<" ? d < 0 : c.op === "<=" ? d <= 0 : c.op === ">" ? d > 0 : c.op === ">=" ? d >= 0 : d === 0;
+ }
+ 
++function satisfiesSet(cs: Comparator[], v: SemVer): boolean {
++  if (!cs.every((c) => holds(c, v))) return false;
++  return (
++    !v.prerelease.length ||
++    cs.some((c) => c.v.prerelease.length && c.v.major === v.major && c.v.minor === v.minor && c.v.patch === v.patch)
++  );
++}
++
+ export function satisfies(version: string, range: string): boolean {
+   const v = parse(version);
+   if (!v) return false;
+-  return range.split("||").some((set) => {
+-    const cs = parseSet(set);
+-    return !!cs && cs.every((c) => holds(c, v));
+-  });
++  const sets = range.split("||").map(parseSet);
++  if (sets.some((cs) => !cs)) return false;
++  return sets.some((cs) => satisfiesSet(cs!, v));
+ }
+ 
+ /** The highest of `versions` that satisfies `range`, as given, or null when none does. Non-versions are skipped. */

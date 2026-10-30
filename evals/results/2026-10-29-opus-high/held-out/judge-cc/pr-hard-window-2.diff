@@ -1,0 +1,148 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/window.fast.test.ts b/window.fast.test.ts
+--- a/window.fast.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/window.fast.test.ts	2026-10-29 19:31:18.587706764 +0000
+@@ -0,0 +1,105 @@
++import { expect, test } from "bun:test";
++import { distinctInWindow, type Event } from "./window";
++
++// The original quadratic implementation, kept as the reference for the fast one.
++function reference(events: Event[], windowMs: number): number[] {
++  return events.map((e) => {
++    const keys = new Set<string>();
++    for (const other of events) if (other.t > e.t - windowMs && other.t <= e.t) keys.add(other.key);
++    return keys.size;
++  });
++}
++
++// Small deterministic PRNG so failures can be reproduced from the seed.
++function lcg(seed: number): () => number {
++  let s = seed >>> 0;
++  return () => {
++    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
++    return s / 4294967296;
++  };
++}
++
++test("the window is (t - windowMs, t]: an event exactly windowMs earlier is out", () => {
++  expect(distinctInWindow([{ t: 0, key: "a" }, { t: 10, key: "b" }], 10)).toEqual([1, 1]);
++  expect(distinctInWindow([{ t: 0, key: "a" }, { t: 9.5, key: "b" }], 10)).toEqual([1, 2]);
++});
++
++test("later entries with the same or an earlier time are in the window, whatever the order", () => {
++  expect(distinctInWindow([{ t: 10, key: "a" }, { t: 5, key: "b" }, { t: 10, key: "c" }], 10)).toEqual([3, 1, 3]);
++});
++
++test("no events with a valid window gives no counts", () => {
++  expect(distinctInWindow([], 10)).toEqual([]);
++});
++
++test("the same key at two times counts once; keys are compared exactly", () => {
++  const events = [
++    { t: 0, key: "a" },
++    { t: 1, key: "a" },
++    { t: 2, key: "A" },
++    { t: 3, key: "a " },
++  ];
++  expect(distinctInWindow(events, 10)).toEqual([1, 1, 2, 3]);
++});
++
++test("a window that is not a finite number above 0 is a RangeError, even with bad events", () => {
++  for (const w of [0, -1, NaN, Infinity, "5" as unknown as number]) {
++    expect(() => distinctInWindow([], w)).toThrow(RangeError);
++    expect(() => distinctInWindow([{ t: 1, key: "a" }], w)).toThrow(RangeError);
++    expect(() => distinctInWindow([{ t: NaN, key: "a" }], w)).toThrow(RangeError);
++  }
++});
++
++test("a time that is not a finite number is a TypeError naming the first bad index", () => {
++  expect(() => distinctInWindow([{ t: 1, key: "a" }, { t: NaN, key: "b" }, { t: "x", key: "c" } as unknown as Event], 5)).toThrow("event 1 ");
++  expect(() => distinctInWindow([{ t: "3", key: "a" } as unknown as Event], 5)).toThrow(TypeError);
++  expect(() => distinctInWindow([{ t: Infinity, key: "a" }], 5)).toThrow(TypeError);
++});
++
++test("matches the original quadratic version on random small inputs", () => {
++  const rand = lcg(42);
++  const windows = [0.5, 1, 3, 10, 0.1];
++  const fractions = [0.1, 0.2, 0.3];
++  for (let c = 0; c < 500; c++) {
++    const n = Math.floor(rand() * 61);
++    const keyCount = 1 + Math.floor(rand() * 5);
++    const events: Event[] = [];
++    for (let i = 0; i < n; i++) {
++      let t = Math.floor(rand() * 21);
++      const r = rand();
++      if (r < 0.05) t = -t;
++      else if (r < 0.15) t += fractions[Math.floor(rand() * 3)];
++      events.push({ t, key: `k${Math.floor(rand() * keyCount)}` });
++    }
++    const w = windows[Math.floor(rand() * windows.length)];
++    const actual = distinctInWindow(events, w);
++    expect(actual).toEqual(reference(events, w));
++  }
++});
++
++test("a time too large for windowMs to change makes the window empty, as before", () => {
++  expect(distinctInWindow([{ t: 1e20, key: "a" }], 1)).toEqual([0]);
++  const events = [{ t: 0, key: "a" }, { t: 1e20, key: "b" }, { t: 1e20, key: "c" }];
++  expect(distinctInWindow(events, 1)).toEqual(reference(events, 1));
++});
++
++test("200,000 unsorted events finish in under a second, and sampled counts are right", () => {
++  const rand = lcg(7);
++  const n = 200_000;
++  const w = 1000;
++  const events: Event[] = [];
++  for (let i = 0; i < n; i++) events.push({ t: rand() * 1_000_000, key: `k${Math.floor(rand() * 1000)}` });
++
++  const start = performance.now();
++  const result = distinctInWindow(events, w);
++  const elapsed = performance.now() - start;
++  expect(elapsed).toBeLessThan(1000);
++  expect(result.length).toBe(n);
++
++  for (let s = 0; s < 20; s++) {
++    const i = Math.floor(rand() * n);
++    const keys = new Set<string>();
++    for (const other of events) if (other.t > events[i].t - w && other.t <= events[i].t) keys.add(other.key);
++    expect(result[i]).toBe(keys.size);
++  }
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/window.ts b/window.ts
+--- a/window.ts	2026-10-29 19:27:30.602305771 +0000
++++ b/window.ts	2026-10-29 19:30:27.672824943 +0000
+@@ -16,9 +16,30 @@
+   events.forEach((e, i) => {
+     if (typeof e.t !== "number" || !Number.isFinite(e.t)) throw new TypeError(`event ${i} has no finite time: ${e.t}`);
+   });
+-  return events.map((e) => {
+-    const keys = new Set<string>();
+-    for (const other of events) if (other.t > e.t - windowMs && other.t <= e.t) keys.add(other.key);
+-    return keys.size;
+-  });
++  // Sweep the events in time order. The window of an event at time t holds the events with time in (t - windowMs, t].
++  const order = events.map((_, i) => i).sort((a, b) => events[a].t - events[b].t);
++  const counts = new Map<string, number>(); // key -> events of that key now in the window
++  const result = new Array<number>(events.length);
++  let lo = 0; // order[lo..hi) is the window
++  let hi = 0;
++  for (let g = 0; g < order.length; ) {
++    const t = events[order[g]].t;
++    // Every event at time t sees all the others at t, so add the whole group before counting.
++    while (hi < order.length && events[order[hi]].t <= t) {
++      const key = events[order[hi]].key;
++      counts.set(key, (counts.get(key) ?? 0) + 1);
++      hi++;
++    }
++    const from = t - windowMs;
++    while (lo < hi && events[order[lo]].t <= from) {
++      const key = events[order[lo]].key;
++      const left = counts.get(key)! - 1;
++      if (left === 0) counts.delete(key);
++      else counts.set(key, left);
++      lo++;
++    }
++    const size = counts.size;
++    for (; g < hi; g++) result[order[g]] = size;
++  }
++  return result;
+ }

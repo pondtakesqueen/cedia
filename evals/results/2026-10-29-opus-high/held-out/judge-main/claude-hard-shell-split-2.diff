@@ -1,0 +1,292 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.test.ts b/shell.test.ts
+--- a/shell.test.ts	2026-10-29 18:53:30.650368565 +0000
++++ b/shell.test.ts	2026-10-29 18:58:42.581196909 +0000
+@@ -48,3 +48,63 @@
+   expect(simpleCommands(' ; ; ')).toEqual([]);
+   expect(simpleCommands('a;;b')).toEqual([['a'], ['b']]);
+ });
++
++test('separators inside quotes are literal', () => {
++  expect(simpleCommands('echo "a;b|c"')).toEqual([['echo', 'a;b|c']]);
++  expect(simpleCommands("echo 'a && b'")).toEqual([['echo', 'a && b']]);
++  expect(simpleCommands('a|&b')).toEqual([['a'], ['b']]);
++});
++
++test('substitutions nest and respect quotes', () => {
++  expect(simpleCommands('a $(b $(c))')).toEqual([['a'], ['b'], ['c']]);
++  expect(simpleCommands('echo "$(rm x)"')).toEqual([['echo', ''], ['rm', 'x']]);
++  expect(simpleCommands("echo '$(rm x)'")).toEqual([['echo', '$(rm x)']]);
++});
++
++test('redirection operators and quoted or empty words', () => {
++  expect(simpleCommands('a >&2 b')).toEqual([['a', 'b']]);
++  expect(simpleCommands('echo "" x')).toEqual([['echo', '', 'x']]);
++  expect(simpleCommands('echo ">" x')).toEqual([['echo', '>', 'x']]);
++  expect(simpleCommands('echo if A=1')).toEqual([['echo', 'if', 'A=1']]);
++});
++
++test('wrappers by path, env -S and shell options', () => {
++  expect(simpleCommands('env -u X FOO=1 rm a')).toEqual([['rm', 'a']]);
++  expect(simpleCommands('/usr/bin/sudo rm a')).toEqual([['rm', 'a']]);
++  expect(simpleCommands("env -S 'rm -rf /'")).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands('bash -o pipefail -c "rm a"')).toEqual([['rm', 'a']]);
++  expect(simpleCommands(`bash -c "eval 'rm a'"`)).toEqual([['rm', 'a']]);
++  expect(simpleCommands('bash script.sh')).toEqual([['bash', 'script.sh']]);
++});
++
++test('quoted assignment values, glued redirections and nested backticks', () => {
++  expect(simpleCommands('FOO="a b" rm -rf /')).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands("FOO='x' sudo rm a")).toEqual([['rm', 'a']]);
++  expect(simpleCommands('A=1 B="2" rm x')).toEqual([['rm', 'x']]);
++  expect(simpleCommands('ENV=a\\ b rm x')).toEqual([['rm', 'x']]);
++  expect(simpleCommands('rm>/dev/null -rf /')).toEqual([['rm', '-rf', '/']]);
++  expect(simpleCommands('git>/dev/null push --force')).toEqual([['git', 'push', '--force']]);
++  expect(simpleCommands('echo `echo \\`rm x\\``')).toEqual([['echo'], ['echo'], ['rm', 'x']]);
++});
++
++test('unbalanced input is null', () => {
++  for (const line of ['echo $(x', 'echo `x', `bash -c "echo 'x"`, 'echo "$(x)']) {
++    expect(simpleCommands(line)).toBeNull();
++  }
++});
++
++test('odd input never throws', () => {
++  for (const line of ['&', '\\', '>', 'sudo', 'bash -c', 'eval', '((', ')', '$', '`', '$(', '"', '&>', '2>&', 'env -S', 'bash -c ""']) {
++    const result = simpleCommands(line);
++    expect(result === null || Array.isArray(result)).toBe(true);
++  }
++});
++
++test('shell -c and eval agree with the plain line', () => {
++  for (const line of ['git reset --hard && ls', 'cd x; make', 'sudo -u root rm a', 'a > out 2>&1 b', '(cd x && make)', 'a &> log b']) {
++    expect(simpleCommands(`bash -c '${line}'`)).toEqual(simpleCommands(line));
++  }
++  for (const line of ['rm -rf /tmp/x', 'sudo -u root rm a', 'FOO=1 nice -n 5 make', 'a > out 2>&1 b']) {
++    expect(simpleCommands(`eval ${line}`)).toEqual(simpleCommands(line));
++  }
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.ts b/shell.ts
+--- a/shell.ts	2026-10-29 18:53:30.650325361 +0000
++++ b/shell.ts	2026-10-29 18:58:50.687590975 +0000
+@@ -18,6 +18,214 @@
+ ]);
+ 
+ 
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
++const REDIRECT = /^(\d*|&)[<>]/; // starts with a redirection: >out, 2>/dev/null, 2>&1
++const REDIRECT_OP = /^(\d*|&)(>>?|<<?<?)&?$/; // an operator alone; its target is the next word
++const MAX_DEPTH = 32;
++
++// lead is the unquoted text before the first quote, so `FOO="a b"` still reads as an assignment.
++type Word = { text: string; quoted: boolean; lead: string };
++type Tok = ({ kind: 'word' } & Word) | { kind: 'sep' } | { kind: 'sub'; cmds: string[][] };
++
++function basename(word: string): string {
++  return word.slice(word.lastIndexOf('/') + 1);
++}
++
++// Index of the quote or backtick that closes the one opened before `start`, or -1.
++function closeDouble(s: string, start: number): number {
++  for (let i = start; i < s.length; i++) {
++    if (s[i] === '\\') i++;
++    else if (s[i] === '"') return i;
++  }
++  return -1;
++}
++
++function closeBacktick(s: string, start: number): number {
++  for (let i = start; i < s.length; i++) {
++    if (s[i] === '\\') i++;
++    else if (s[i] === '`') return i;
++  }
++  return -1;
++}
++
++// Index of the ) that closes a $( opened before `start`, or -1.
++function matchParen(s: string, start: number): number {
++  let depth = 0;
++  for (let i = start; i < s.length; i++) {
++    const c = s[i];
++    if (c === '\\') i++;
++    else if (c === "'") {
++      i = s.indexOf("'", i + 1);
++      if (i < 0) return -1;
++    } else if (c === '"') {
++      i = closeDouble(s, i + 1);
++      if (i < 0) return -1;
++    } else if (c === '`') {
++      i = closeBacktick(s, i + 1);
++      if (i < 0) return -1;
++    } else if (c === '(') depth++;
++    else if (c === ')') {
++      if (depth === 0) return i;
++      depth--;
++    }
++  }
++  return -1;
++}
++
++// Splits a command line into words and separators. Substitutions become 'sub' tokens holding their commands.
++function lex(s: string, depth: number): Tok[] | null {
++  const toks: Tok[] = [];
++  let word = null as Word | null;
++  const flush = () => {
++    if (word) toks.push({ kind: 'word', ...word });
++    word = null;
++  };
++  const append = (text: string, quoted: boolean) => {
++    const w = (word ??= { text: '', quoted: false, lead: '' });
++    w.text += text;
++    if (quoted) w.quoted = true;
++    else if (!w.quoted) w.lead += text;
++  };
++  // Parses the $( ) or backtick substitution at s[i]; returns the index after it, or -1.
++  const substitute = (i: number): number => {
++    const tick = s[i] === '`';
++    const start = tick ? i + 1 : i + 2;
++    const end = tick ? closeBacktick(s, start) : matchParen(s, start);
++    if (end < 0) return -1;
++    const body = s.slice(start, end);
++    const cmds = parse(tick ? body.replace(/\\([$`\\])/g, '$1') : body, depth + 1);
++    if (!cmds) return -1;
++    toks.push({ kind: 'sub', cmds });
++    return end + 1;
++  };
++  let i = 0;
++  while (i < s.length) {
++    const c = s[i];
++    const next = s[i + 1];
++    if (c === ' ' || c === '\t') {
++      flush();
++      i++;
++    } else if (c === '\n' || c === ';' || c === '(' || c === ')') {
++      flush();
++      toks.push({ kind: 'sep' });
++      i++;
++    } else if (c === '<' || c === '>' || (c === '&' && next === '>')) {
++      // A redirection ends the word before it, but a fd number like the 2 in 2>f stays with it.
++      if (!(word && !word.quoted && /^\d+$/.test(word.text))) flush();
++      const op = /^&?[<>]+&?/.exec(s.slice(i))![0];
++      append(op, false);
++      i += op.length;
++    } else if (c === '|' || c === '&') {
++      flush();
++      toks.push({ kind: 'sep' });
++      i += next === c || next === '&' ? 2 : 1;
++    } else if (c === "'") {
++      const end = s.indexOf("'", i + 1);
++      if (end < 0) return null;
++      append(s.slice(i + 1, end), true);
++      i = end + 1;
++    } else if (c === '"') {
++      append('', true);
++      i++;
++      while (s[i] !== '"') {
++        if (i >= s.length) return null;
++        if (s[i] === '\\' && i + 1 < s.length) {
++          append(s[i + 1], true);
++          i += 2;
++        } else if ((s[i] === '$' && s[i + 1] === '(') || s[i] === '`') {
++          i = substitute(i);
++          if (i < 0) return null;
++        } else {
++          append(s[i], false);
++          i++;
++        }
++      }
++      i++;
++    } else if ((c === '$' && next === '(') || c === '`') {
++      flush();
++      i = substitute(i);
++      if (i < 0) return null;
++    } else if (c === '\\') {
++      append(next ?? '\\', true);
++      i += 2;
++    } else {
++      append(c, false);
++      i++;
++    }
++  }
++  flush();
++  return toks;
++}
++
++// Turns the words of one command (between separators) into commands: redirections dropped, leading assignments,
++// keywords and wrappers skipped, shell -c and eval unpacked. Returns null if an unpacked script cannot be parsed.
++function commandsOf(words: Word[], depth: number): string[][] | null {
++  const plain: Word[] = [];
++  for (let i = 0; i < words.length; i++) {
++    const w = words[i];
++    if (!w.quoted && REDIRECT_OP.test(w.text)) i++;
++    else if (w.quoted || !REDIRECT.test(w.text)) plain.push(w);
++  }
++  let k = 0;
++  while (k < plain.length) {
++    const w = plain[k];
++    if (ASSIGNMENT.test(w.lead) || (!w.quoted && KEYWORDS.has(w.text))) {
++      k++;
++      continue;
++    }
++    const name = basename(w.text);
++    const wrapper = WRAPPERS.get(name);
++    if (!wrapper) break;
++    k++;
++    while (k < plain.length && plain[k].text.startsWith('-')) {
++      const flag = plain[k++].text;
++      if (flag === '--') break;
++      const split = name === 'env' ? /^(?:-S|--split-string=?)(.*)$/.exec(flag) : null;
++      if (split) return parse([split[1], ...plain.slice(k).map((p) => p.text)].join(' '), depth + 1);
++      if (wrapper.value?.includes(flag)) k++;
++    }
++    k += wrapper.positional ?? 0;
++  }
++  const argv = plain.slice(k).map((p) => p.text);
++  if (argv.length === 0) return [];
++  const name = basename(argv[0]);
++  if (SHELLS.has(name)) {
++    let j = 1;
++    let inline = false;
++    while (j < argv.length && /^[-+]/.test(argv[j])) {
++      const flag = argv[j++];
++      if (flag === '--') break;
++      if (/^-[a-zA-Z]*c/.test(flag)) inline = true;
++      if (/^[-+][a-zA-Z]*o$/i.test(flag) || flag === '--rcfile' || flag === '--init-file') j++;
++    }
++    if (inline && j < argv.length) return parse(argv[j], depth + 1);
++  }
++  if (name === 'eval') return parse(argv.slice(1).join(' '), depth + 1);
++  return [argv];
++}
++
++// Parses a command line into commands; null if it cannot be parsed. Nesting deeper than MAX_DEPTH is null.
++function parse(command: string, depth: number): string[][] | null {
++  if (depth > MAX_DEPTH) return null;
++  const toks = lex(command, depth);
++  if (!toks) return null;
++  const groups: Tok[][] = [[]];
++  for (const t of toks) {
++    if (t.kind === 'sep') groups.push([]);
++    else groups[groups.length - 1].push(t);
++  }
++  const out: string[][] = [];
++  for (const group of groups) {
++    const words = group.flatMap((t): Word[] => (t.kind === 'word' ? [t] : []));
++    const argv = commandsOf(words, depth);
++    if (!argv) return null;
++    out.push(...argv, ...group.flatMap((t) => (t.kind === 'sub' ? t.cmds : [])));
++  }
++  return out;
++}
++
+ // Splits a shell command line into the argv of each simple command, so a permission policy can check every
+ // command a line would run. It is not a full shell parser; it must never hide a command from the policy.
+ //
+@@ -37,5 +245,5 @@
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  return parse(command, 0);
+ }
