@@ -1,0 +1,155 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.rules.test.ts b/deny.rules.test.ts
+--- a/deny.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/deny.rules.test.ts	2026-10-30 03:16:02.862175121 +0000
+@@ -0,0 +1,69 @@
++import { expect, test } from 'bun:test';
++import { denyListed, insideWorkspace, sameDir } from './deny.ts';
++
++const cwd = '/work/repo';
++const name = (argv: string[]) => denyListed(argv, cwd)?.name;
++
++test('git path and global options', () => {
++  expect(name(['/usr/bin/git', 'push', '-f'])).toBe('force-push');
++  for (const opt of ['-C x', '-c a=b', '--git-dir d', '--work-tree w', '--namespace n', '--git-dir=d']) {
++    expect([opt, name(['git', ...opt.split(' '), 'push', '-f'])]).toEqual([opt, 'force-push']);
++    expect([opt, name(['git', ...opt.split(' '), 'push', 'origin', 'feat'])]).toEqual([opt, undefined]);
++  }
++  expect(name(['git', '-C'])).toBeUndefined();
++});
++
++test('force-push flags and refspecs', () => {
++  for (const flag of ['--force', '--force=1', '--force-with-lease', '--mirror', '--delete', '--prune', '-d', '-f', '-uf', '-df', '+x', ':x'])
++    expect([flag, name(['git', 'push', flag])]).toEqual([flag, 'force-push']);
++  for (const flag of ['-u', '-v', '--forceful'])
++    expect([flag, name(['git', 'push', flag])]).toEqual([flag, undefined]);
++});
++
++test('reset and clean forms', () => {
++  expect(name(['git', 'reset', '--mixed'])).toBeUndefined();
++  for (const flags of [['-f'], ['-xf'], ['--force'], ['-fn']]) expect([flags, name(['git', 'clean', ...flags])]).toEqual([flags, 'clean-force']);
++  for (const flags of [['-f', '-n'], ['-f', '--dry-run'], ['-n', '-f']]) expect([flags, name(['git', 'clean', ...flags])]).toEqual([flags, undefined]);
++});
++
++test('rm recursive forms and -- split', () => {
++  for (const flags of [['-r'], ['-R'], ['-fR'], ['--recursive']]) expect([flags, name(['rm', ...flags, '/etc'])]).toEqual([flags, 'rm-outside']);
++  expect(name(['rm', '-f', '/etc'])).toBeUndefined();
++  expect(name(['rm', '-rf', '--', ''])).toBe('rm-outside');
++  expect(name(['rm', '-rf', '--'])).toBe('rm-outside');
++});
++
++test('unresolvable targets', () => {
++  for (const t of ['$X', 'a$b', '~bob', '~bob/x']) expect([t, name(['rm', '-rf', t])]).toEqual([t, 'rm-outside']);
++  expect(name(['rm', '-rf', '~/x'])).toBe('rm-outside'); // home is outside /work/repo
++});
++
++test('find start paths', () => {
++  for (const argv of [['find', '/', '-exec', 'rm', '{}', ';'], ['find', 'src', '..', '-execdir', 'rm', '{}', ';'], ['find', '$D', '-delete']])
++    expect([argv, name(argv)]).toEqual([argv, 'rm-outside']);
++  expect(name(['find', '/', '-print'])).toBeUndefined();
++});
++
++test('never throws on malformed argv', () => {
++  for (const argv of [[], [''], ['git'], ['git', '-C'], ['rm'], ['find']]) expect(name(argv)).toBeUndefined();
++  expect(name(['rm', '-r'])).toBe('rm-outside');
++});
++
++test('rm decision agrees with the path helpers', () => {
++  const targets = ['.', './', '..', '/', '~', '~/x', '/work/repo', '/work/repo/b', '/work/repo/../x', 'src', 'src/../..', '*', '../*', '$D', '~u'];
++  const flagSets = [['-rf'], ['-r', '-f'], ['-fr'], ['--recursive'], ['-rf', '--']];
++  for (const t of targets) {
++    const bad = t.includes('$') || /^~[^/]/.test(t) || !insideWorkspace(t, cwd) || sameDir(t, cwd);
++    for (const flags of flagSets) {
++      const want = bad ? 'rm-outside' : undefined;
++      expect([flags, t, name(['rm', ...flags, t])]).toEqual([flags, t, want]);
++    }
++    const fbad = t.includes('$') || /^~[^/]/.test(t) || !insideWorkspace(t, cwd);
++    expect([t, name(['find', t, '-delete'])]).toEqual([t, fbad ? 'rm-outside' : undefined]);
++  }
++});
++
++test('hit reasons name the trigger', () => {
++  expect(denyListed(['git', 'push', '--mirror'], cwd)?.reason).toContain('--mirror');
++  expect(denyListed(['rm', '-rf', '/etc'], cwd)?.reason).toContain('/etc');
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/deny.ts b/deny.ts
+--- a/deny.ts	2026-10-30 03:13:59.793620244 +0000
++++ b/deny.ts	2026-10-30 03:15:55.994175278 +0000
+@@ -1,5 +1,5 @@
+ import { homedir } from 'node:os';
+-import { isAbsolute, relative, resolve } from 'node:path';
++import { basename, isAbsolute, relative, resolve } from 'node:path';
+ 
+ export type Hit = { name: 'force-push' | 'reset-hard' | 'clean-force' | 'rm-outside'; reason: string };
+ 
+@@ -14,6 +14,54 @@
+ // Same directory as cwd, e.g. `.`, `./`, or cwd's absolute path.
+ export const sameDir = (path: string, cwd: string) => relative(resolve(cwd), resolve(cwd, expandHome(path))) === '';
+ 
++// Short flag group: one dash then letters, e.g. -f, -fu, -rf (not --long, not a bare "-").
++const shortGroup = (w: string, letters: RegExp) => /^-[^-]/.test(w) && letters.test(w.slice(1));
++// A path only known when the shell runs it: contains $, or is ~user.
++const unresolvable = (p: string) => p.includes('$') || /^~[^/]/.test(p);
++const GIT_VALUE_OPTS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
++const PUSH_LONG = /^--(force|force-with-lease|mirror|delete|prune)(=|$)/;
++
++// git: skip global options, then check the subcommand's words.
++function gitHit(args: string[]): Hit | undefined {
++  let i = 0;
++  while (i < args.length && args[i].startsWith('-')) i += GIT_VALUE_OPTS.has(args[i]) ? 2 : 1;
++  const sub = args[i];
++  if (sub === undefined) return undefined;
++  const rest = args.slice(i + 1);
++  if (sub === 'push') {
++    const w = rest.find((w) => PUSH_LONG.test(w) || shortGroup(w, /[fd]/) || /^[+:]/.test(w));
++    return w === undefined ? undefined : { name: 'force-push', reason: `git push: ${w}` };
++  }
++  if (sub === 'reset') return rest.includes('--hard') ? { name: 'reset-hard', reason: 'git reset --hard' } : undefined;
++  if (sub === 'clean') {
++    const f = rest.find((w) => w === '--force' || shortGroup(w, /f/));
++    if (f === undefined || rest.includes('-n') || rest.includes('--dry-run')) return undefined;
++    return { name: 'clean-force', reason: `git clean: ${f}` };
++  }
++  return undefined;
++}
++
++// rm: only recursive removal; the targets must be inside cwd and not cwd itself.
++function rmHit(args: string[], cwd: string): Hit | undefined {
++  const dd = args.indexOf('--');
++  const before = dd < 0 ? args : args.slice(0, dd);
++  const after = dd < 0 ? [] : args.slice(dd + 1);
++  if (!before.some((w) => w === '--recursive' || shortGroup(w, /[rR]/))) return undefined;
++  const targets = [...before.filter((w) => !w.startsWith('-')), ...after];
++  if (targets.length === 0) return { name: 'rm-outside', reason: 'rm -r with no targets (they may come from xargs)' };
++  const t = targets.find((t) => unresolvable(t) || !insideWorkspace(t, cwd) || sameDir(t, cwd));
++  return t === undefined ? undefined : { name: 'rm-outside', reason: `rm -r target not inside workspace: ${t}` };
++}
++
++// find: start paths of -delete, -exec or -execdir must be inside cwd (cwd itself is fine).
++function findHit(args: string[], cwd: string): Hit | undefined {
++  if (!args.some((w) => w === '-delete' || w === '-exec' || w === '-execdir')) return undefined;
++  const i = args.findIndex((w) => w.startsWith('-'));
++  const starts = args.slice(0, i < 0 ? args.length : i);
++  const s = (starts.length > 0 ? starts : ['.']).find((s) => unresolvable(s) || !insideWorkspace(s, cwd));
++  return s === undefined ? undefined : { name: 'rm-outside', reason: `find start path not inside workspace: ${s}` };
++}
++
+ // Looks at one simple command's argv (already split, quotes removed) and returns a Hit when it must be denied.
+ //
+ // git (argv[0] may be a path such as /usr/bin/git). Global options before the subcommand are skipped; -C, -c,
+@@ -36,5 +84,15 @@
+ //
+ // Anything else: undefined.
+ export function denyListed(argv: string[], cwd: string): Hit | undefined {
+-  throw new Error('not implemented');
++  const [cmd = '', ...args] = argv;
++  switch (basename(cmd)) {
++    case 'git':
++      return gitHit(args);
++    case 'rm':
++      return rmHit(args, cwd);
++    case 'find':
++      return findHit(args, cwd);
++    default:
++      return undefined;
++  }
+ }

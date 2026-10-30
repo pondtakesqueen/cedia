@@ -1,0 +1,377 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.rules.test.ts b/shell.rules.test.ts
+--- a/shell.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/shell.rules.test.ts	2026-10-30 03:24:28.902163547 +0000
+@@ -0,0 +1,151 @@
++import { expect, test } from 'bun:test';
++import { simpleCommands } from './shell.ts';
++
++test('separators split commands but not quoted text', () => {
++  expect(simpleCommands('a;b&c|d&&e||f')).toEqual([['a'], ['b'], ['c'], ['d'], ['e'], ['f']]);
++  expect(simpleCommands('echo "a;b|c&d" \'x(y)\'')).toEqual([['echo', 'a;b|c&d', 'x(y)']]);
++  expect(simpleCommands('a $(b; c) d')).toEqual([['a', 'd'], ['b'], ['c']]);
++});
++
++test('substitutions are commands listed after their command', () => {
++  expect(simpleCommands('echo "`id`"')).toEqual([['echo', ''], ['id']]);
++  expect(simpleCommands('echo "$(rm x)"')).toEqual([['echo', ''], ['rm', 'x']]);
++  expect(simpleCommands('cat > $(rm x)')).toEqual([['cat'], ['rm', 'x']]);
++  expect(simpleCommands('A=$(rm x) ls')).toEqual([['ls'], ['rm', 'x']]);
++  expect(simpleCommands('echo $(true)')).toEqual([['echo'], ['true']]);
++});
++
++test('2>&1, >&2 and &>file are redirections, not background jobs', () => {
++  expect(simpleCommands('a 2>&1 b')).toEqual([['a', 'b']]);
++  expect(simpleCommands('a >&2')).toEqual([['a']]);
++  expect(simpleCommands('a &>f b')).toEqual([['a', 'b']]);
++  expect(simpleCommands('a&>f')).toEqual([['a']]);
++  expect(simpleCommands('cat <&3 x')).toEqual([['cat', 'x']]);
++  expect(simpleCommands('a >| f x')).toEqual([['a', 'x']]);
++});
++
++test('word splitting and quote removal', () => {
++  expect(simpleCommands('a\tb')).toEqual([['a', 'b']]);
++  expect(simpleCommands('a"b"\'c\'')).toEqual([['abc']]);
++  expect(simpleCommands("'a\\\"b'")).toEqual([['a\\"b']]);
++  expect(simpleCommands('"a\\b"')).toEqual([['ab']]);
++  expect(simpleCommands('a\\ b')).toEqual([['a b']]);
++  expect(simpleCommands('x \'\' ""')).toEqual([['x', '', '']]);
++});
++
++test('a redirection operator alone drops itself and its target', () => {
++  for (const op of ['>', '>>', '<', '2>', '&>', '>&']) {
++    expect(simpleCommands(`ls ${op} f x`)).toEqual([['ls', 'x']]);
++  }
++  expect(simpleCommands('ls > ; rm x')).toEqual([['ls'], ['rm', 'x']]);
++});
++
++test('attached redirections drop themselves', () => {
++  expect(simpleCommands('c >o')).toEqual([['c']]);
++  expect(simpleCommands('c 2>/dev/null')).toEqual([['c']]);
++  expect(simpleCommands('c >>o')).toEqual([['c']]);
++  expect(simpleCommands('c <i')).toEqual([['c']]);
++  expect(simpleCommands('echo a>b')).toEqual([['echo', 'a']]);
++  expect(simpleCommands('echo ">" x')).toEqual([['echo', '>', 'x']]);
++});
++
++test('leading assignments are skipped, quoted names are not assignments', () => {
++  expect(simpleCommands('A=1 B="x y" cmd')).toEqual([['cmd']]);
++  expect(simpleCommands('"A=1" cmd')).toEqual([['A=1', 'cmd']]);
++});
++
++test('keywords are skipped', () => {
++  for (const kw of ['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']) {
++    expect(simpleCommands(`${kw} a`)).toEqual([['a']]);
++  }
++  expect(simpleCommands('while ! a; do b; done')).toEqual([['a'], ['b']]);
++  expect(simpleCommands('{rm')).toEqual([['{rm']]);
++});
++
++test('every wrapper is unwrapped', () => {
++  expect(simpleCommands('sudo -u root ls')).toEqual([['ls']]);
++  expect(simpleCommands('doas -C conf ls')).toEqual([['ls']]);
++  expect(simpleCommands('env -u HOME ls')).toEqual([['ls']]);
++  expect(simpleCommands('command ls')).toEqual([['ls']]);
++  expect(simpleCommands('nohup ls')).toEqual([['ls']]);
++  expect(simpleCommands('time -f %e ls')).toEqual([['ls']]);
++  expect(simpleCommands('exec -a name ls')).toEqual([['ls']]);
++  expect(simpleCommands('nice -n 5 ls')).toEqual([['ls']]);
++  expect(simpleCommands('ionice -c 2 ls')).toEqual([['ls']]);
++  expect(simpleCommands('setsid ls')).toEqual([['ls']]);
++  expect(simpleCommands('stdbuf -o L ls')).toEqual([['ls']]);
++  expect(simpleCommands('timeout 5 ls')).toEqual([['ls']]);
++  expect(simpleCommands('timeout -s KILL 5 ls')).toEqual([['ls']]);
++  expect(simpleCommands('xargs -n 1 rm')).toEqual([['rm']]);
++});
++
++test('-- ends wrapper flags, a wrapper path is its basename, a bare wrapper is kept', () => {
++  expect(simpleCommands('sudo -- ls')).toEqual([['ls']]);
++  expect(simpleCommands('env -- ls -l')).toEqual([['ls', '-l']]);
++  expect(simpleCommands('/usr/bin/sudo rm x')).toEqual([['rm', 'x']]);
++  expect(simpleCommands('sudo -v')).toEqual([['sudo', '-v']]);
++  expect(simpleCommands('timeout 5')).toEqual([['timeout', '5']]);
++});
++
++test('shell scripts and eval are unpacked', () => {
++  for (const shell of ['bash', 'sh', 'zsh', 'dash', 'ksh']) {
++    expect(simpleCommands(`${shell} -c 'a'`)).toEqual([['a']]);
++  }
++  expect(simpleCommands("bash -ec 'a;b'")).toEqual([['a'], ['b']]);
++  expect(simpleCommands("bash -o pipefail -c 'a'")).toEqual([['a']]);
++  expect(simpleCommands('bash x.sh')).toEqual([['bash', 'x.sh']]);
++  expect(simpleCommands(`eval "a 'b c'"`)).toEqual([['a', 'b c']]);
++});
++
++test('empty commands are left out', () => {
++  expect(simpleCommands('> out')).toEqual([]);
++  expect(simpleCommands('A=1')).toEqual([]);
++  expect(simpleCommands('fi')).toEqual([]);
++  expect(simpleCommands('eval')).toEqual([]);
++  expect(simpleCommands("bash -c ''")).toEqual([]);
++});
++
++test('unbalanced input returns null', () => {
++  expect(simpleCommands('"')).toBeNull();
++  expect(simpleCommands("'")).toBeNull();
++  expect(simpleCommands('echo "a\\')).toBeNull();
++  expect(simpleCommands('$(a')).toBeNull();
++  expect(simpleCommands('`a')).toBeNull();
++  expect(simpleCommands('(a')).toBeNull();
++  expect(simpleCommands('echo $(x "y)')).toBeNull();
++  expect(simpleCommands(`bash -c "echo 'x"`)).toBeNull();
++});
++
++// Deterministic generator (linear congruential), so the cases are the same on every run.
++let seed = 7;
++const rand = (n: number): number => {
++  seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
++  return (seed >>> 8) % n;
++};
++const pick = <T>(xs: T[]): T => xs[rand(xs.length)];
++const gap = (): string => Array.from({ length: 1 + rand(3) }, () => pick([' ', '\t'])).join('');
++
++test('generated lines give the same commands in every form', () => {
++  const FIRST = ['ls', 'git', 'rm', 'x'];
++  const REST = ['push', '-f', 'a.txt', 'x', 'rm', '-rf'];
++  const SEPS = [';', '&&', '||', '|', '&', '\n'];
++  for (let n = 0; n < 200; n++) {
++    const texts = Array.from({ length: 1 + rand(4) }, () =>
++      [pick(FIRST), ...Array.from({ length: rand(4) }, () => pick(REST))].join(gap()),
++    );
++    const seps = texts.slice(1).map(() => pick(SEPS) + gap());
++    const join = (parts: string[]) => parts.reduce((acc, part, k) => (k === 0 ? part : acc + seps[k - 1] + part), '');
++    const cmds = texts.map((t) => t.split(/[ \t]+/));
++    const line = join(texts);
++    const redirected = join(texts.map((t) => `${t} 2>/dev/null`));
++    expect(simpleCommands(line)).toEqual(cmds);
++    expect(simpleCommands(redirected)).toEqual(cmds);
++    expect(simpleCommands(`(${line})`)).toEqual(cmds);
++    expect(simpleCommands(`\`${line}\``)).toEqual(cmds);
++    expect(simpleCommands(`bash -c '${line}'`)).toEqual(cmds);
++    expect(simpleCommands(`eval ${line}`)).toEqual(cmds);
++    expect(simpleCommands(`FOO=1 ${line}`)).toEqual(cmds);
++    expect(simpleCommands(`sudo ${line}`)).toEqual(cmds);
++    expect(simpleCommands(`echo $(${line})`)).toEqual([['echo'], ...cmds]);
++  }
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/shell.ts b/shell.ts
+--- a/shell.ts	2026-10-30 03:17:46.578728030 +0000
++++ b/shell.ts	2026-10-30 03:24:17.442480940 +0000
+@@ -17,6 +17,70 @@
+   ['xargs', { value: ['-a', '-d', '-E', '-e', '-I', '-i', '-L', '-l', '-n', '-P', '-s', '--arg-file', '--delimiter', '--eof', '--replace', '--max-lines', '--max-args', '--max-procs', '--max-chars', '--process-slot-var'] }],
+ ]);
+ 
++const KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until']);
++const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
++const SHELL_VALUE_FLAGS = new Set(['-o', '+o', '-O', '+O', '--rcfile', '--init-file']);
++const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
++const REDIRECT = /(?:\d+|&)?(?:>>|>&|>\||<&|>|<)/y; // a redirection operator at the start of a word
++const PLAIN = /[^\s;&|()<>`$'"\\]+/y; // unquoted text with nothing special in it
++const DQ_PLAIN = /[^"\\$`]+/y; // text inside double quotes with nothing special in it
++const BLANKS = /[^\S\n]+/y; // whitespace other than a newline
++
++// One word: `text` with quotes and escapes removed, `raw` as written, `quoted` set when a quote was used,
++// so "" still counts as a word.
++type Word = { text: string; raw: string; quoted: boolean };
++
++// Turns the words of one command into argv: skips keywords and assignments, unwraps wrappers, and unpacks
++// `eval` and shell `-c` scripts. Null if such a script is unbalanced.
++function finish(words: Word[]): string[][] | null {
++  let i = 0;
++  for (;;) {
++    while (i < words.length && (KEYWORDS.has(words[i].raw) || ASSIGNMENT.test(words[i].raw))) i++;
++    if (i === words.length) return [];
++    const name = words[i].text.slice(words[i].text.lastIndexOf('/') + 1);
++    const wrapper = WRAPPERS.get(name);
++    if (wrapper === undefined) {
++      if (name === 'eval') return simpleCommands(words.slice(i + 1).map((w) => w.text).join(' '));
++      if (SHELLS.has(name)) {
++        const script = shellScript(words, i);
++        if (script !== undefined) return simpleCommands(script);
++      }
++      break;
++    }
++    const next = afterWrapper(words, i, wrapper);
++    if (next >= words.length) break; // nothing to run after the wrapper: keep it as it is
++    i = next;
++  }
++  return [words.slice(i).map((w) => w.text)];
++}
++
++// Index of the first word after a wrapper at words[i], its flags, the words of its value flags and its positionals.
++function afterWrapper(words: Word[], i: number, wrapper: Wrapper): number {
++  let j = i + 1;
++  while (j < words.length && words[j].text.startsWith('-')) {
++    const flag = words[j].text;
++    j++;
++    if (flag === '--') break;
++    if (wrapper.value?.includes(flag)) j++;
++  }
++  return j + (wrapper.positional ?? 0);
++}
++
++// The script of `bash -c <script>` (flags may come before -c), or undefined when there is none.
++function shellScript(words: Word[], i: number): string | undefined {
++  let runs = false;
++  let j = i + 1;
++  for (; j < words.length && /^[-+]/.test(words[j].text); j++) {
++    const flag = words[j].text;
++    if (flag === '--') {
++      j++;
++      break;
++    }
++    if (/^-[A-Za-z]*c/.test(flag)) runs = true;
++    else if (SHELL_VALUE_FLAGS.has(flag)) j++;
++  }
++  return runs ? words[j]?.text : undefined;
++}
+ 
+ // Splits a shell command line into the argv of each simple command, so a permission policy can check every
+ // command a line would run. It is not a full shell parser; it must never hide a command from the policy.
+@@ -37,5 +101,146 @@
+ // - Empty commands are left out.
+ // - Unbalanced quotes: return null.
+ export function simpleCommands(command: string): string[][] | null {
+-  throw new Error('not implemented');
++  let pos = 0;
++
++  // Moves past the text that `re` matches at pos and returns it, or returns null when it does not match.
++  const run = (re: RegExp): string | null => {
++    re.lastIndex = pos;
++    const m = re.exec(command);
++    if (m === null) return null;
++    pos = re.lastIndex;
++    return m[0];
++  };
++
++  // Reads the word at pos. Quotes and escapes are removed; $( ) and backticks are commands, added to `pending`.
++  // A backtick ends the word when `close` is a backtick. Null when a quote or a substitution is unbalanced.
++  const word = (pending: string[][], close: string | null): Word | null => {
++    const start = pos;
++    let text = '';
++    let quoted = false;
++    for (;;) {
++      const plain = run(PLAIN);
++      if (plain !== null) {
++        text += plain;
++        continue;
++      }
++      const c = command[pos];
++      if (c === "'") {
++        const end = command.indexOf("'", pos + 1);
++        if (end < 0) return null;
++        text += command.slice(pos + 1, end);
++        pos = end + 1;
++        quoted = true;
++      } else if (c === '"') {
++        quoted = true;
++        pos++;
++        for (;;) {
++          const dq = run(DQ_PLAIN);
++          if (dq !== null) {
++            text += dq;
++            continue;
++          }
++          const d = command[pos];
++          if (d === undefined) return null;
++          if (d === '"') {
++            pos++;
++            break;
++          }
++          if (d === '\\') {
++            if (pos + 1 >= command.length) return null;
++            text += command[pos + 1];
++            pos += 2;
++          } else if (d === '$' && command[pos + 1] === '(') {
++            pos += 2;
++            const subs = list(')');
++            if (subs === null) return null;
++            pending.push(...subs);
++          } else if (d === '`') {
++            pos++;
++            const subs = list('`');
++            if (subs === null) return null;
++            pending.push(...subs);
++          } else {
++            text += d; // a $ that does not start a substitution
++            pos++;
++          }
++        }
++      } else if (c === '\\') {
++        if (pos + 1 >= command.length) {
++          text += c;
++          pos++;
++        } else {
++          if (command[pos + 1] !== '\n') text += command[pos + 1]; // backslash newline continues the line
++          pos += 2;
++        }
++      } else if (c === '$' && command[pos + 1] === '(') {
++        pos += 2;
++        const subs = list(')');
++        if (subs === null) return null;
++        pending.push(...subs);
++      } else if (c === '`' && close !== '`') {
++        pos++;
++        const subs = list('`');
++        if (subs === null) return null;
++        pending.push(...subs);
++      } else if (c === '$') {
++        text += c;
++        pos++;
++      } else {
++        break;
++      }
++    }
++    return { text, raw: command.slice(start, pos), quoted };
++  };
++
++  // Reads commands up to `close` (or to the end of input when close is null). Null when unbalanced.
++  const list = (close: string | null): string[][] | null => {
++    const out: string[][] = [];
++    let words: Word[] = [];
++    let pending: string[][] = []; // commands inside substitutions of the current command
++    let dropNext = false; // the last word was a redirection operator alone, so the next word is its target
++
++    // Ends the current command: its argv, then the commands of its substitutions. False when its argv is unbalanced.
++    const end = (): boolean => {
++      const cmds = finish(words);
++      if (cmds === null) return false;
++      out.push(...cmds, ...pending);
++      words = [];
++      pending = [];
++      dropNext = false;
++      return true;
++    };
++
++    for (;;) {
++      run(BLANKS);
++      const c = command[pos];
++      if (c === undefined) return close === null && end() ? out : null;
++      if (c === close) {
++        pos++;
++        return end() ? out : null;
++      }
++      if (c === '(') {
++        pos++;
++        if (!end()) return null;
++        const sub = list(')');
++        if (sub === null) return null;
++        out.push(...sub);
++      } else if (c === ';' || c === '|' || c === '\n' || c === ')') {
++        pos++;
++        if (!end()) return null;
++      } else if (c === '&' && command[pos + 1] !== '>') {
++        pos++;
++        if (!end()) return null;
++      } else {
++        const op = run(REDIRECT);
++        const w = word(pending, close);
++        if (w === null) return null;
++        if (op !== null) dropNext = w.raw === ''; // an operator with its target attached drops the whole word
++        else if (dropNext) dropNext = false;
++        else if (w.text !== '' || w.quoted) words.push(w);
++      }
++    }
++  };
++
++  return list(null);
+ }

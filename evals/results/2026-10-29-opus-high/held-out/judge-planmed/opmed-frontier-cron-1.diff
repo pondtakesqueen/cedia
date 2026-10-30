@@ -1,0 +1,327 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/cron.fix.test.ts b/cron.fix.test.ts
+--- a/cron.fix.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/cron.fix.test.ts	2026-10-30 03:11:55.218682518 +0000
+@@ -0,0 +1,246 @@
++import { expect, test } from "bun:test";
++import { nextRun } from "./cron";
++
++const at = (iso: string) => new Date(iso);
++const run = (expr: string, iso: string) => nextRun(expr, at(iso)).toISOString();
++
++test("a wrong number of fields throws", () => {
++  expect(() => nextRun("* * * * * *", at("2026-01-01T00:00:00Z"))).toThrow(RangeError);
++  expect(() => nextRun("", at("2026-01-01T00:00:00Z"))).toThrow(RangeError);
++});
++
++test("values outside a field's range throw, and the top of each range is accepted", () => {
++  for (const expr of ["60 * * * *", "* 24 * * *", "* * 0 * *", "* * 32 * *", "* * * 0 *", "* * * 13 *", "* * * * 8"]) {
++    expect(() => nextRun(expr, at("2026-01-01T00:00:00Z")), expr).toThrow(RangeError);
++  }
++  expect(() => nextRun("59 23 31 12 7", at("2026-01-01T00:00:00Z"))).not.toThrow();
++});
++
++test("month names work in any case", () => {
++  expect(run("0 0 1 jul *", "2026-01-01T00:00:00Z")).toBe("2026-07-01T00:00:00.000Z");
++  expect(run("0 0 1 FEB-apr/2 *", "2026-01-01T00:00:00Z")).toBe("2026-02-01T00:00:00.000Z");
++  expect(run("0 0 1 FEB-apr/2 *", "2026-02-01T00:00:00Z")).toBe("2026-04-01T00:00:00.000Z");
++  expect(run("0 0 1 FEB-apr/2 *", "2026-04-01T00:00:00Z")).toBe("2027-02-01T00:00:00.000Z");
++});
++
++test("weekday names work in any case and agree with numbers", () => {
++  expect(run("0 8 * * MON-fri", "2026-01-02T09:00:00Z")).toBe(run("0 8 * * 1-5", "2026-01-02T09:00:00Z"));
++  expect(run("0 8 * * MON-fri", "2026-01-02T09:00:00Z")).toBe("2026-01-05T08:00:00.000Z");
++});
++
++test("an unknown name, or a name in a field without names, throws", () => {
++  expect(() => nextRun("0 0 * * FOO", at("2026-01-01T00:00:00Z"))).toThrow(RangeError);
++  expect(() => nextRun("0 0 1 MON *", at("2026-01-01T00:00:00Z"))).toThrow(RangeError);
++  expect(() => nextRun("JAN * * * *", at("2026-01-01T00:00:00Z"))).toThrow(RangeError);
++});
++
++test("only ASCII letters make a name", () => {
++  expect(() => nextRun("0 0 * * ſun", at("2026-01-01T00:00:00Z"))).toThrow(RangeError);
++  expect(() => nextRun("0 0 1 ſep *", at("2026-01-01T00:00:00Z"))).toThrow(RangeError);
++});
++
++test("a stepped range covers its values, and Sunday as 7 counts once", () => {
++  expect(run("0 0 * * 1-7/3", "2026-01-01T00:00:00Z")).toBe("2026-01-04T00:00:00.000Z");
++  expect(run("0 0 * * 1-7/3", "2026-01-04T00:00:00Z")).toBe("2026-01-05T00:00:00.000Z");
++  expect(run("0 0 * * 1-7/3", "2026-01-05T00:00:00Z")).toBe("2026-01-08T00:00:00.000Z");
++  expect(run("0 0 31 2 1", "2026-01-01T00:00:00Z")).toBe("2026-02-02T00:00:00.000Z");
++});
++
++test("0 and 7 are both Sunday", () => {
++  expect(run("0 0 * * 7", "2026-01-01T00:00:00Z")).toBe("2026-01-04T00:00:00.000Z");
++  expect(run("0 0 * * 5-7", "2026-01-01T00:00:00Z")).toBe("2026-01-02T00:00:00.000Z");
++  expect(run("0 0 * * 5-7", "2026-01-02T00:00:00Z")).toBe("2026-01-03T00:00:00.000Z");
++  expect(run("0 0 * * 5-7", "2026-01-03T00:00:00Z")).toBe("2026-01-04T00:00:00.000Z");
++});
++
++test("a range that runs backwards throws", () => {
++  expect(() => nextRun("5-1 * * * *", at("2026-01-01T00:00:00Z"))).toThrow(RangeError);
++  expect(() => nextRun("0 0 * * SAT-SUN", at("2026-01-01T00:00:00Z"))).toThrow(RangeError);
++});
++
++test("a step runs from the item's first value to the end of the field", () => {
++  expect(run("*/15 * * * *", "2026-01-01T00:00:00Z")).toBe("2026-01-01T00:15:00.000Z");
++  expect(run("*/15 * * * *", "2026-01-01T00:15:00Z")).toBe("2026-01-01T00:30:00.000Z");
++  expect(run("*/15 * * * *", "2026-01-01T00:45:00Z")).toBe("2026-01-01T01:00:00.000Z");
++  expect(run("0-59/15 * * * *", "2026-01-01T00:45:00Z")).toBe("2026-01-01T01:00:00.000Z");
++  expect(run("10-30/10 * * * *", "2026-01-01T00:10:00Z")).toBe("2026-01-01T00:20:00.000Z");
++  expect(run("10-30/10 * * * *", "2026-01-01T00:20:00Z")).toBe("2026-01-01T00:30:00.000Z");
++  expect(run("10-30/10 * * * *", "2026-01-01T00:30:00Z")).toBe("2026-01-01T01:10:00.000Z");
++  expect(run("5/20 * * * *", "2026-01-01T00:06:00Z")).toBe("2026-01-01T00:25:00.000Z");
++  expect(run("5/20 * * * *", "2026-01-01T00:45:00Z")).toBe("2026-01-01T01:05:00.000Z");
++  expect(run("*/100 * * * *", "2026-01-01T00:00:00Z")).toBe("2026-01-01T01:00:00.000Z");
++});
++
++test("a step must be a whole number of 1 or more", () => {
++  for (const expr of ["*/0 * * * *", "*/ * * * *", "*/-1 * * * *", "*/1.5 * * * *", "*/x * * * *", "5/0 * * * *"]) {
++    expect(() => nextRun(expr, at("2026-01-01T00:00:00Z")), expr).toThrow(RangeError);
++  }
++});
++
++test("malformed items throw", () => {
++  for (const item of ["1,,2", "1-", "-1", "1-2-3", "1/2/3", "/5", "1.5", "1e1", "0x1", "+1"]) {
++    expect(() => nextRun(`${item} * * * *`, at("2026-01-01T00:00:00Z")), item).toThrow(RangeError);
++  }
++});
++
++test("a field that covers its whole range, written out, does not limit the other day field", () => {
++  expect(run("0 0 1-31 * 1", "2026-01-01T00:00:00Z")).toBe("2026-01-05T00:00:00.000Z");
++  expect(run("0 0 13 * 0-6", "2026-01-01T00:00:00Z")).toBe("2026-01-13T00:00:00.000Z");
++  expect(run("0 0 1-7 * 1-7", "2026-01-01T00:00:00Z")).toBe("2026-01-02T00:00:00.000Z");
++});
++
++test("when both day fields leave values out, either one matches", () => {
++  expect(run("0 0 1,15 * 1", "2026-01-01T00:00:00Z")).toBe("2026-01-05T00:00:00.000Z");
++  expect(run("0 0 1,15 * 1", "2026-01-12T00:00:00Z")).toBe("2026-01-15T00:00:00.000Z");
++  expect(run("0 0 13 * 5", "2026-01-01T00:00:00Z")).toBe("2026-01-02T00:00:00.000Z");
++});
++
++test("a stepped weekday field leaves values out", () => {
++  expect(run("0 0 1 * */2", "2026-01-01T00:00:00Z")).toBe("2026-01-03T00:00:00.000Z");
++});
++
++test("29 February is found even when it is years away", () => {
++  expect(run("0 0 29 2 *", "2026-01-01T00:00:00Z")).toBe("2028-02-29T00:00:00.000Z");
++  expect(run("0 0 29 2 *", "2096-03-01T00:00:00Z")).toBe("2104-02-29T00:00:00.000Z");
++  expect(run("0 0 29 2 1", "2026-01-01T00:00:00Z")).toBe("2026-02-02T00:00:00.000Z");
++});
++
++test("an expression that never fires throws", () => {
++  expect(() => nextRun("0 0 30 2 *", at("2026-01-01T00:00:00Z"))).toThrow(RangeError);
++  expect(() => nextRun("0 0 31 4,6,9,11 *", at("2026-01-01T00:00:00Z"))).toThrow(RangeError);
++});
++
++test("the result is the first whole minute strictly after the given time", () => {
++  expect(run("* * * * *", "2026-01-01T10:00:00.000Z")).toBe("2026-01-01T10:01:00.000Z");
++  expect(run("* * * * *", "2026-01-01T10:00:59.999Z")).toBe("2026-01-01T10:01:00.000Z");
++});
++
++// A reference that is simple to read: walk the days, then the sorted hours and minutes.
++type Sets = { minutes: number[]; hours: number[]; doms: Set<number>; months: Set<number>; dows: Set<number> };
++const WINDOW = (8 * 366 + 1) * 86_400_000;
++
++function expected(s: Sets, after: Date): string | null {
++  const either = s.doms.size < 31 && s.dows.size < 7;
++  const end = after.getTime() + WINDOW;
++  const start = Date.UTC(after.getUTCFullYear(), after.getUTCMonth(), after.getUTCDate());
++  for (let k = 0; k < 2935; k++) {
++    const dayMs = start + k * 86_400_000;
++    const d = new Date(dayMs);
++    const domOk = s.doms.has(d.getUTCDate());
++    const dowOk = s.dows.has(d.getUTCDay());
++    if (!s.months.has(d.getUTCMonth() + 1)) continue;
++    if (!(either ? domOk || dowOk : domOk && dowOk)) continue;
++    for (const h of s.hours) {
++      for (const m of s.minutes) {
++        const cand = dayMs + h * 3_600_000 + m * 60_000;
++        if (cand >= end) return null;
++        if (cand > after.getTime()) return new Date(cand).toISOString();
++      }
++    }
++  }
++  return null;
++}
++
++// Seeded so every run builds the same cases.
++function mulberry32(seed: number) {
++  return () => {
++    seed |= 0;
++    seed = (seed + 0x6d2b79f5) | 0;
++    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
++    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
++    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
++  };
++}
++
++const RANGES: [number, number][] = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
++const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
++const DAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
++
++// How a value is written: a number, or a name in random case. Sunday may be written 7 when it stands alone.
++function show(i: number, v: number, rnd: () => number, single: boolean): string {
++  if (i === 4 && v === 0 && single && rnd() < 0.5) return "7";
++  const name = i === 3 ? MONTHS[v - 1] : i === 4 && v <= 6 ? DAYS[v] : undefined;
++  if (name && rnd() < 0.5) return rnd() < 0.5 ? name.toLowerCase() : name;
++  return String(v);
++}
++
++function item(i: number, rnd: () => number): { values: number[]; text: string } {
++  const [min, max] = RANGES[i]!;
++  const pick = (lo: number, hi: number) => lo + Math.floor(rnd() * (hi - lo + 1));
++  const s = 1 + Math.floor(rnd() * 20);
++  let lo = min;
++  let hi = max;
++  let step = 1;
++  let text: string;
++  switch (Math.floor(rnd() * 6)) {
++    case 0:
++      text = "*";
++      break;
++    case 1:
++      lo = hi = pick(min, max);
++      text = show(i, lo, rnd, true);
++      break;
++    case 2: {
++      lo = pick(min, max);
++      hi = pick(lo, max);
++      text = `${show(i, lo, rnd, false)}-${show(i, hi, rnd, false)}`;
++      break;
++    }
++    case 3:
++      step = s;
++      text = `*/${s}`;
++      break;
++    case 4:
++      lo = pick(min, max);
++      step = s;
++      text = `${show(i, lo, rnd, false)}/${s}`;
++      break;
++    default:
++      lo = pick(min, max);
++      hi = pick(lo, max);
++      step = s;
++      text = `${show(i, lo, rnd, false)}-${show(i, hi, rnd, false)}/${s}`;
++  }
++  const values: number[] = [];
++  for (let v = lo; v <= hi; v += step) values.push(v);
++  return { values, text };
++}
++
++test("nextRun agrees with a day-by-day reference on seeded random expressions", () => {
++  const rnd = mulberry32(20260101);
++  for (let n = 0; n < 500; n++) {
++    const parts: { values: number[]; text: string }[][] = [];
++    for (let i = 0; i < 5; i++) {
++      const count = 1 + Math.floor(rnd() * 3);
++      parts.push(Array.from({ length: count }, () => item(i, rnd)));
++    }
++    const sets = parts.map((items) => new Set(items.flatMap((it) => it.values)));
++    // Sunday as 7 and 0 is the same day.
++    const dows = new Set([...sets[4]!].map((v) => (v === 7 ? 0 : v)));
++    const s: Sets = {
++      minutes: [...sets[0]!].sort((a, b) => a - b),
++      hours: [...sets[1]!].sort((a, b) => a - b),
++      doms: sets[2]!,
++      months: sets[3]!,
++      dows,
++    };
++    // The same sets written as a plain list of values.
++    const listed = [0, 1, 2, 3, 4].map((i) => {
++      const vals = i === 4 ? [...dows] : [...sets[i]!];
++      return vals.sort((a, b) => a - b).map((v) => show(i, v, rnd, true)).join(",");
++    });
++    const exprs = [parts.map((items) => items.map((it) => it.text).join(",")).join(" "), listed.join(" ")];
++
++    const after = new Date(Date.UTC(2024, 0, 1) + Math.floor(rnd() * 7 * 366 * 86_400_000));
++    const want = expected(s, after);
++    for (const expr of exprs) {
++      let got: string;
++      try {
++        got = nextRun(expr, after).toISOString();
++      } catch {
++        got = "throws";
++      }
++      expect({ expr, after: after.toISOString(), got }).toEqual({ expr, after: after.toISOString(), got: want ?? "throws" });
++    }
++  }
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/cron.ts b/cron.ts
+--- a/cron.ts	2026-10-30 03:08:06.688977154 +0000
++++ b/cron.ts	2026-10-30 03:11:55.212352793 +0000
+@@ -22,21 +22,35 @@
+  */
+ 
+ 
+-const RANGES: [number, number][] = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]];
++const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
++const DAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
++const RANGES: [number, number][] = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
++const NAMES: (string[] | undefined)[] = [undefined, undefined, undefined, MONTHS, DAYS];
+ 
+-function field(text: string, [min, max]: [number, number]): Set<number> {
++/** One value of a field, as digits or a name; throws RangeError otherwise. */
++function value(text: string, min: number, names?: string[]): number {
++  if (/^\d+$/.test(text)) return Number(text);
++  // Only ASCII letters are names: toUpperCase would turn a long s (ſ) into S.
++  const index = /^[a-z]+$/i.test(text) ? (names?.indexOf(text.toUpperCase()) ?? -1) : -1;
++  if (index < 0) throw new RangeError(`bad value: ${text}`);
++  return index + min;
++}
++
++/** The set of values a field allows; throws RangeError on any item that breaks the rules. */
++function field(text: string, [min, max]: [number, number], names?: string[]): Set<number> {
+   const out = new Set<number>();
+   for (const item of text.split(",")) {
+-    const [span, stepText] = item.split("/");
+-    const step = Number(stepText) || 1;
++    const m = /^(?:(\*)|([^-/]+)(?:-([^-/]+))?)(?:\/(\d+))?$/.exec(item);
++    if (!m) throw new RangeError(`bad field: ${text}`);
++    const [, star, a, b, stepText] = m;
++    const step = stepText === undefined ? 1 : Number(stepText);
+     let lo = min;
+     let hi = max;
+-    if (span !== "*") {
+-      const [a, b] = span!.split("-");
+-      lo = Number(a);
+-      hi = b === undefined ? lo : Number(b);
++    if (!star) {
++      lo = value(a!, min, names);
++      hi = b !== undefined ? value(b, min, names) : stepText !== undefined ? max : lo;
+     }
+-    if (Number.isNaN(lo) || Number.isNaN(hi) || lo < min || hi > max) throw new RangeError(`bad field: ${text}`);
++    if (step < 1 || lo < min || hi > max || lo > hi) throw new RangeError(`bad field: ${text}`);
+     for (let v = lo; v <= hi; v += step) out.add(v);
+   }
+   return out;
+@@ -45,13 +59,24 @@
+ export function nextRun(expr: string, after: Date): Date {
+   const parts = expr.trim().split(/\s+/);
+   if (parts.length !== 5) throw new RangeError(`expected 5 fields, got ${parts.length}`);
+-  const [minutes, hours, doms, months, dows] = parts.map((p, i) => field(p, RANGES[i]!));
++  const [minutes, hours, doms, months, dows] = parts.map((p, i) => field(p, RANGES[i]!, NAMES[i]));
++  if (dows!.has(7)) {
++    dows!.delete(7);
++    dows!.add(0);
++  }
++  // When both day fields leave values out, the day matches if either one does.
++  const either = doms!.size < 31 && dows!.size < 7;
++  const dayOk = (d: Date) => {
++    const domOk = doms!.has(d.getUTCDate());
++    const dowOk = dows!.has(d.getUTCDay());
++    return either ? domOk || dowOk : domOk && dowOk;
++  };
+   const t = new Date(after.getTime() + 60_000);
+   t.setUTCSeconds(0, 0);
+-  // A year ahead is enough to find any time.
+-  const end = after.getTime() + 366 * 24 * 3600_000;
++  // 29 February can be 8 years away (2096 to 2104, as 2100 is not a leap year), so search that far.
++  const end = after.getTime() + (8 * 366 + 1) * 86_400_000;
+   while (t.getTime() < end) {
+-    if (!months!.has(t.getUTCMonth() + 1) || !doms!.has(t.getUTCDate()) || !dows!.has(t.getUTCDay())) {
++    if (!months!.has(t.getUTCMonth() + 1) || !dayOk(t)) {
+       t.setUTCDate(t.getUTCDate() + 1);
+       t.setUTCHours(0, 0, 0, 0);
+     } else if (!hours!.has(t.getUTCHours())) {

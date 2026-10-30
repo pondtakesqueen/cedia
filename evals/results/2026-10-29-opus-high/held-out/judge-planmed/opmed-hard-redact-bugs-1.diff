@@ -1,0 +1,79 @@
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/redact.rules.test.ts b/redact.rules.test.ts
+--- a/redact.rules.test.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/redact.rules.test.ts	2026-10-30 03:17:41.028948781 +0000
+@@ -0,0 +1,42 @@
++import { expect, test } from 'bun:test';
++import { REDACTED, redactSecrets } from './redact.ts';
++
++test('a generic sk- key needs a digit, and a key with one is still redacted', () => {
++  expect(redactSecrets('key sk-proj-abcdefghijklmnop1234 end')).toEqual({ text: `key ${REDACTED} end`, count: 1 });
++  expect(redactSecrets('sk-learn-and-more-words').count).toBe(0);
++});
++
++test('a URL password keeps the @ before the host', () => {
++  expect(redactSecrets('postgres://u:hunter2pw@host/db').text).toBe(`postgres://u:${REDACTED}@host/db`);
++});
++
++test('a plural token name that holds a secret is redacted', () => {
++  expect(redactSecrets('API_TOKENS=abc123def456ghi')).toEqual({ text: `API_TOKENS=${REDACTED}`, count: 1 });
++  expect(redactSecrets('export AUTH_TOKENS=abcd1234efgh').count).toBe(1);
++  expect(redactSecrets('tokens: abc123def456gh').count).toBe(1);
++  expect(redactSecrets('"access_tokens": "abcd1234efgh"').count).toBe(1);
++  expect(redactSecrets('MAX_TOKENS=4096').count).toBe(0);
++});
++
++test('an sk-ant- key needs no digit, and a generic sk- key needs 20 characters and a digit', () => {
++  expect(redactSecrets('sk-ant-' + 'a'.repeat(20)).count).toBe(1);
++  expect(redactSecrets('sk-' + 'a'.repeat(20)).count).toBe(0);
++  expect(redactSecrets('sk-' + 'a'.repeat(19) + '1').count).toBe(1);
++  expect(redactSecrets('sk-' + 'a'.repeat(18) + '1').count).toBe(0);
++});
++
++test('a URL password of 3 characters is redacted and 2 is not', () => {
++  expect(redactSecrets('postgres://u:abc@host/db').text).toBe(`postgres://u:${REDACTED}@host/db`);
++  expect(redactSecrets('postgres://u:ab@host/db').count).toBe(0);
++});
++
++test('a key block cut before its end takes the rest of the text', () => {
++  expect(redactSecrets('x\n-----BEGIN PRIVATE KEY-----\nAAA\nkeep')).toEqual({ text: `x\n${REDACTED}`, count: 1 });
++});
++
++test('a redacted text redacts to itself', () => {
++  for (const s of ['x\n-----BEGIN PRIVATE KEY-----\nAAA\n-----END PRIVATE KEY-----\ny', 'secretKey=Sup3rSecret99', 'postgres://u:hunter2pw@host/db']) {
++    const once = redactSecrets(s).text;
++    expect(redactSecrets(once)).toEqual({ text: once, count: 0 });
++  }
++});
+diff -ruN '--exclude=node_modules' '--exclude=.git' a/redact.ts b/redact.ts
+--- a/redact.ts	2026-10-30 03:15:46.459374694 +0000
++++ b/redact.ts	2026-10-30 03:17:43.550172818 +0000
+@@ -15,9 +15,9 @@
+ 
+ // Token formats with a fixed prefix. The generic ones need a digit so prose and identifiers do not match.
+ const TOKENS: RegExp[] = [
+-  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
++  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)/g,
+   /\bsk-ant-[A-Za-z0-9_-]{20,}/g, // Anthropic
+-  /\bsk-[A-Za-z0-9_-]{20,}/g, // OpenAI, DeepSeek and other sk- keys
++  /\bsk-(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}/g, // OpenAI, DeepSeek and other sk- keys
+   /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}/g, // Stripe
+   /\bgh[pousr]_[A-Za-z0-9]{30,}/g, // GitHub
+   /\bgithub_pat_[A-Za-z0-9_]{30,}/g,
+@@ -35,7 +35,7 @@
+ 
+ // `NAME=value`, `name: value`, `"name": "value"` and `NAME = "value"` where the name says secret.
+ const ASSIGNMENT =
+-  /\b([A-Za-z0-9_.-]*?(api[_-]?key|secret|token|passw(?:or)?d|pwd|private[_-]?key|access[_-]?key|credentials?)[A-Za-z0-9_.-]*)(["']?[ \t]*[:=][ \t]*)(["'`]?)([^\s"'`,;]+)\4/gi;
++  /\b([A-Za-z0-9_.-]*?(api[_-]?key|secret|(?<!max[_-])token|passw(?:or)?d|pwd|private[_-]?key|access[_-]?key|credentials?)[A-Za-z0-9_.-]*)(["']?[ \t]*[:=][ \t]*)(["'`]?)([^\s"'`,;]+)\4/gi;
+ 
+ // Which assigned values count as secrets, so code that only names a secret (`password: hash(input)`,
+ // `token = getToken()`) still reads as written:
+@@ -61,7 +61,7 @@
+   out = out.replace(URL_PASSWORD, (_m, head: string, password: string) => {
+     if (password === REDACTED) return _m;
+     count++;
+-    return `${head}${REDACTED}`;
++    return `${head}${REDACTED}@`;
+   });
+   out = out.replace(ASSIGNMENT, (match, name: string, kind: string, sep: string, quote: string, value: string, offset: number, all: string) => {
+     if (value.includes(REDACTED)) return match;

@@ -350,3 +350,31 @@ What it says:
 So `-m auto` reviews at medium with probes when the review can run in Claude Code's sandbox, and at high otherwise.
 
 Spent for this section: $0.28 + $0.34 Haiku (Anthropic API). The panels and the plan and review ran on the owner's subscription.
+
+## The probing review in a real sandbox, the plan at medium effort, and a second judge
+
+The probe arm above ran its probes unsandboxed. These arms run the code this README now describes (`--sandbox on`; bubblewrap and socat installed in the eval container), so each review's `bun -e` runs in Claude Code's sandbox: a probe that writes the tree gets EROFS and one that fetches gets a denied proxy, checked by hand with a real `claude`. Every arm reviews with `claude-code:sonnet@medium` and probes.
+- sandbox: the plan at `claude-code:opus@low`. Files: `auto-revprobe-sandbox.*`, `judge-revprobe-sandbox/`.
+- plan at medium: the plan at `claude-code:opus@medium`. Files: `auto-planmed.*`, `judge-planmed/`; held out, `held-out/auto-planmed.*`, `held-out/judge-planmed/`.
+
+The three arms ran at the same time, so their times are not comparable with the sections above (the plan at medium took 68 s, at low 38 s, under that load).
+
+The panel so far was one judge, Sonnet. Opus judged the same pairs again, blind and in both orders: `judge-opus/` (tally: `python3 judge-opus/tally.py judge-opus/planmed opmed`).
+
+| against CC Opus high | runs | pass | Sonnet judge | Opus judge |
+|---|---|---|---|---|
+| tuning: shape, review at high, plan at low | 30 | 28/30 | 23 / 3 / 2 | 21 / 4 / 3 |
+| tuning: sandbox, plan at low | 30 | 30/30 | 18 / 5 / 7 | 18 / 11 / 1 |
+| tuning: plan at medium | 30 | 30/30 | 22 / 2 / 6 | 24 / 3 / 3 |
+| held out: probing review, plan at low (unsandboxed) | 16 | 15/16 | 7 / 2 / 6 | 5 / 4 / 6 |
+| held out: plan at medium | 16 | 16/16 | 9 / 4 / 3 | 10 / 3 / 3 |
+
+Plan at medium, scores against CC Opus high under the Opus judge: correctness 8.92 / 8.53, tests 8.90 / 4.83, security 9.45 / 9.32 on the tuning tasks; correctness 8.44 / 8.22, tests 8.53 / 5.00 held out.
+
+What it says:
+- The two judges agree on most pairs (22 to 26 of 30 on the tuning arms, 9 and 10 of 15-16 held out) and named opposite winners on 1 pair of 119; where they differ, one says split or tie.
+- Opus is stricter on the probing review with the plan at low: 18 to 11 against high review's 21 to 4. Under Sonnet the gap looked like noise; under Opus it is not.
+- The plan at medium is the best arm under both judges, on both task sets. The two tasks auto kept losing come back: hard-memo-async (2 wins, 1 split under Sonnet) and hard-pool (1 win, 2 splits), with no loss on either. Its correctness is the highest of any arm.
+- So `-m auto` plans at medium. Its plan costs more of the subscription and time; that time has to be measured on a quiet run before it is quoted.
+
+Spent for this section: $0.34 + $0.36 + $0.33 Haiku (Anthropic API). The plan, review and panels ran on the owner's subscription, which hit its five-hour limit once; the judge resumes the pairs that failed.
