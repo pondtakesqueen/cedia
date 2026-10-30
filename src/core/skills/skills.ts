@@ -6,6 +6,7 @@ import { redactSecrets } from '../safety/secrets.ts';
 import { inert } from '../trust/frame.ts';
 import type { ToolSpec } from '../tools/registry.ts';
 import type { SessionEvent } from '../types.ts';
+import { BUILTIN_SKILLS } from './builtin.ts';
 
 // Skills: a folder with a SKILL.md (Agent Skills format: front matter with a name and a description, then the
 // instructions) and any files it uses. Only the names and descriptions go in the session's first turn; the model
@@ -27,12 +28,15 @@ import type { SessionEvent } from '../types.ts';
 // skill) is the person's to pick: it is a `/` command but stays out of the first turn's list, so a plugin with dozens
 // of them costs the session nothing until one is asked for. The skill tool still loads it by name, for the `/` line
 // and for a loaded skill that names it.
+//
+// cedia's own skills (builtin.ts, such as /init) come last, so any other skill of the same name wins. They are all
+// `/`-only, and their text is in cedia rather than in a folder, so they have no files.
 
 export type Skill = {
   name: string;
   description: string;
   dir: string;
-  source: 'user' | 'repository' | 'plugin';
+  source: 'user' | 'repository' | 'plugin' | 'builtin';
   argumentHint?: string;
   // The plugin a `plugin` skill came from.
   plugin?: string;
@@ -40,6 +44,8 @@ export type Skill = {
   file?: string;
   // Only the person picks it, with `/`: `disable-model-invocation: true`. Left out of the first turn's list.
   manual?: true;
+  // A `builtin` skill's instructions, which come with cedia; its `dir` is empty and it has no files.
+  text?: string;
   // A user's skill from another client's folder: outside cedia's home, which commands may not read, so the model is
   // told where it is and may run its scripts.
   shared?: true;
@@ -192,10 +198,12 @@ export function loadSkills(cwd: string, home: string, shared: string[] = []): Sk
     }
   }
   found.push(...pluginSkills(home));
+  for (const b of BUILTIN_SKILLS)
+    found.push({ name: b.name, description: b.description, dir: '', source: 'builtin', text: b.text, manual: true, ...(b.argumentHint ? { argumentHint: b.argumentHint } : {}) });
   const seen = new Set<string>();
   let listed = 0;
   let manual = 0;
-  return found.filter((s) => !seen.has(s.name) && seen.add(s.name) && (s.manual ? ++manual <= MAX_MANUAL : ++listed <= MAX_SKILLS));
+  return found.filter((s) => !seen.has(s.name) && seen.add(s.name) && (s.source === 'builtin' || (s.manual ? ++manual <= MAX_MANUAL : ++listed <= MAX_SKILLS)));
 }
 
 // How the list reaches the model: one frame, a line a skill, cut at the cap.
@@ -279,6 +287,11 @@ export function skillTool(skills: Skill[]): ToolSpec {
     async run(input) {
       const skill = findSkill(skills, String(input.name ?? ''));
       if (!skill) return { text: `no skill ${String(input.name ?? '')}; the skills are: ${skills.filter((s) => !s.manual).map((s) => s.name).join(', ')}`, isError: true };
+      // Never a file read: its empty `dir` would resolve to the working directory.
+      if (skill.text !== undefined) {
+        if (typeof input.file === 'string' && input.file) return { text: `skill ${skill.name} comes with cedia and has no files`, isError: true };
+        return { text: `Skill ${skill.name}, built into cedia: how to do this kind of task.\n\n${skill.text}`, isError: false };
+      }
       if (typeof input.file === 'string' && input.file && !skill.file) {
         const f = skillFile(skill, input.file);
         return 'error' in f ? { text: f.error, isError: true } : { text: inert(f.text), isError: false };
@@ -307,12 +320,16 @@ export const commandList = (skills: Skill[]): CommandList => ({
 });
 
 // A prompt that starts with `/<skill>`: the person picked that skill from the command list. The prompt goes as
-// typed, with a line asking the writer to load the skill first; any other prompt, `/` or not, is left alone.
+// typed, with a line asking the writer to load the skill first; any other prompt, `/` or not, is left alone. A skill
+// that comes with cedia brings its instructions in the prompt instead, so a session with no other skill needs no
+// skill tool, and its tool list stays the same.
 export function skillCommand(prompt: string, skills: Skill[]): string | undefined {
   const m = /^\/((?:[A-Za-z0-9][A-Za-z0-9._-]*:[A-Za-z0-9_-]+)|[a-z0-9-]+)(?:\s|$)/.exec(prompt);
   const skill = m && findSkill(skills, m[1]!);
   if (!m || !skill) return undefined;
   const rest = prompt.slice(m[0].length).trim();
+  if (skill.text !== undefined)
+    return `${prompt.trimEnd()}\n\n(/${m[1]} is cedia's ${skill.name} skill. Do what its instructions say${rest ? ', for the text after the command' : ''}.)\n\n<skill_instructions>\n${skill.text}\n</skill_instructions>`;
   return `${prompt.trimEnd()}\n\n(/${m[1]} is the ${skill.name} skill: load it with the skill tool first, then do what it says${rest ? ', for the text after the command' : ''}.)`;
 }
 

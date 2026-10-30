@@ -569,7 +569,8 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const spawnHere = header?.tools.some((d) => d.name === 'spawn' && d.description === spawnOther.description) ? spawnOther : spawn;
     // With skills, or on a resumed session that had the tool: its tool list stays as it was even when the skills
     // are gone since, and a call to one that is gone says so.
-    const withSkill = skills.length > 0 || !!header?.tools.some((d) => d.name === 'skill');
+    // cedia's own skills come in the `/` prompt itself (skillCommand), so they add no tool to a session.
+    const withSkill = skills.some((s) => s.source !== 'builtin') || !!header?.tools.some((d) => d.name === 'skill');
     // MCP tools: all for the writer, the read-only ones for reviewers and sub-threads; past the definition budget
     // they run through mcp_call. A resumed session whose server is gone keeps the tool, and a call to it says the
     // server is not there; one opened with a tool that now runs through mcp_call keeps it by name.
