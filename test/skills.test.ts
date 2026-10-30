@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { lintSession } from '../src/core/session/lint.ts';
 import { SessionLog } from '../src/core/session/log.ts';
-import { commandList, frontMatter, loadSkills, skillCommand, skillsBlock, skillTool } from '../src/core/skills/skills.ts';
+import { commandList, findSkill, frontMatter, loadSkills, skillCommand, skillsBlock, skillTool } from '../src/core/skills/skills.ts';
 
 function repo() {
   const dir = mkdtempSync(join(tmpdir(), 'cedia-skills-'));
@@ -103,6 +103,37 @@ describe('skills', () => {
     const result = events.find((e) => e.kind === 'tool_result');
     expect(result && result.kind === 'tool_result' && JSON.stringify(result)).toContain('Three lines: five, seven, five syllables.');
     expect(lintSession(events)).toEqual([]);
+  });
+
+  test('disable-model-invocation: a / command left out of the first turn, still loaded by name, counted apart from the cap', async () => {
+    const dir = repo();
+    skill(join(dir, '.agents', 'skills'), 'statechart', 'name: statechart\ndescription: "Check a TLA+ model"\ndisable-model-invocation: true', 'Write the spec.\n');
+    skill(join(dir, '.agents', 'skills'), 'lint', 'name: lint\ndescription: run the linter\ndisable-model-invocation: false');
+    for (let i = 0; i < 60; i++) skill(join(dir, '.claude', 'skills'), `m${i}`, `name: m${i}\ndescription: manual ${i}\ndisable-model-invocation: true`);
+    const found = loadSkills(dir, mkdtempSync(join(tmpdir(), 'h-')));
+    expect(found.find((s) => s.name === 'statechart')?.manual).toBe(true);
+    expect(found.find((s) => s.name === 'lint')?.manual).toBeUndefined();
+    // 61 manual skills and one listed: past the 50 a session lists, yet all are there.
+    expect(found).toHaveLength(62);
+    const block = skillsBlock(found);
+    expect(block).toContain('- lint');
+    expect(block).not.toContain('statechart');
+    expect(block).not.toContain('m0');
+    expect(skillsBlock(found.filter((s) => s.manual))).toBe('');
+    expect(commandList(found).commands.map((c) => c.name)).toContain('statechart');
+    expect(skillCommand('/statechart', found)).toContain('load it with the skill tool first');
+    const tool = skillTool(found);
+    expect((await tool.run({ name: 'statechart' }, ctx)).text).toContain('Write the spec.');
+    expect((await tool.run({ name: 'nope' }, ctx)).text).toBe('no skill nope; the skills are: lint');
+  });
+
+  test('a bare name finds a plugin skill only when one plugin has it and nothing has the name itself', () => {
+    const at = (name: string, plugin?: string) => ({ name: plugin ? `${plugin}:${name}` : name, description: 'd', dir: '/x', source: plugin ? 'plugin' : 'user', ...(plugin ? { plugin } : {}) }) as const;
+    const skills = [at('statechart', 'pstack'), at('how', 'pstack'), at('how', 'other'), at('tdd'), at('tdd', 'pstack')];
+    expect(findSkill(skills, 'statechart')?.name).toBe('pstack:statechart');
+    expect(findSkill(skills, 'how')).toBeUndefined();
+    expect(findSkill(skills, 'tdd')?.name).toBe('tdd');
+    expect(findSkill(skills, 'other:statechart')).toBeUndefined();
   });
 
   test('each skill is a / command, and a prompt that starts with one asks for it to be loaded first', () => {
