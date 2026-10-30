@@ -365,8 +365,8 @@ describe('settings', () => {
       expect(loadPlanWhen('never')).toBe('never');
       // Modes keep the writer and pick the steps around it.
       writeFileSync(join(home, 'settings.json'), JSON.stringify({}));
-      expect(modeFlags('auto', {})).toEqual({ plan: 'claude-code:opus@low', review: 'claude-code:sonnet@high', reviewProbe: 'claude-code:sonnet@medium', planWhen: 'auto' });
-      expect(modeFlags('auto', { review: 'none', planWhen: 'always' })).toEqual({ plan: 'claude-code:opus@low', planWhen: 'always' });
+      expect(modeFlags('auto', {})).toEqual({ plan: 'claude-code:opus@medium', review: 'claude-code:sonnet@high', reviewProbe: 'claude-code:sonnet@medium', planWhen: 'auto' });
+      expect(modeFlags('auto', { review: 'none', planWhen: 'always' })).toEqual({ plan: 'claude-code:opus@medium', planWhen: 'always' });
       expect(() => modeFlags('oplan', {})).toThrow('roles.plan');
       writeFileSync(join(home, 'settings.json'), JSON.stringify({ roles: { plan: 'claude-code:opus@high' } }));
       expect(modeFlags('oplan', {})).toEqual({ planWhen: 'always' });
