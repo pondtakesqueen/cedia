@@ -66,7 +66,7 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
        cedia -p "<prompt>" [options]   (prompt may also come on stdin)
        cedia --version [--json]             the version; --json adds the protocol hash and capabilities
 
-  -m, --model <ref>            the code role: model alias or ref (default: $CEDIA_MODEL, roles.code in settings, deepseek)
+  -m, --model <ref>            the code role: model alias or ref (default: $CEDIA_MODEL, roles.code in settings, haiku)
       --plan <ref>             the plan role: a model, claude-code[:<model>] to plan in your own Claude Code
                                (default opus there), or none (default: roles.plan in settings, none)
       --output-format <f>      text | json | stream-json (default text)
@@ -88,7 +88,7 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --on-quota <fallback|wait:<min>>  on a spent quota that says when it comes back, wait up to min minutes in all
                                before falling back (default: settings onQuota, fallback)
       --review <ref>           the review role, after the done gate passes: a model, claude-code[:<model>]
-                               (default sonnet there), or none. Changes it asks for go back to the writer once
+                               (default opus at medium there), or none. Changes it asks for go back to the writer once
       --goal <condition>       keep going until a separate judge finds the condition holds: after each claim of done
                                it reads the change and answers met, not met (the writer goes on with what is
                                missing, at most 3 more times) or impossible. Exit 1 unless met
@@ -137,7 +137,7 @@ const USAGE = `usage: cedia [options]                 the TUI, at a terminal: ea
       --handoff-at <n|off>     hand off to a new session of the thread once the context reaches n tokens
                                (default: settings, then half the window, at most 150k)
       --handoff <note|compact> how a session hands off: the model writes a note, or the provider summarizes the
-                               older turns and the newest are kept (Claude API models only; default: settings, note)
+                               older turns and the newest are kept (Claude API models only; default: settings, compact)
       --check <command>        declared check for the done gate, e.g. 'bun test'; repeatable
       --image <file>           show the model this image (PNG, JPEG, GIF, WebP) with the prompt, or a video (MP4, MOV,
                                WebM, MKV, AVI) as up to 8 frames where its picture changes (needs ffmpeg); repeatable
