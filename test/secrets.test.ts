@@ -71,3 +71,43 @@ test('long runs of token-like text redact in linear time', () => {
     expect(performance.now() - t).toBeLessThan(1000);
   }
 });
+
+test('a known secret value is redacted wherever it appears, with no name beside it', async () => {
+  const { learnSecrets, forgetSecrets, secretsToKnow } = await import('../src/core/safety/secrets.ts');
+  const { mkdtempSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const root = mkdtempSync(join(tmpdir(), 'cedia-known-'));
+  writeFileSync(join(root, '.env'), 'DB_PASSWORD="hunter2hunter2"\nPORT=3000\nNODE_ENV=development\nSTRIPE_WEBHOOK=whsec9a8b7c6d5e4f3a2b1\n# OTHER_TOKEN=commentedout1\n');
+  writeFileSync(join(root, '.env.local'), 'export SERVICE_TOKEN=plainletterstoken\n');
+  const values = secretsToKnow({ MY_SERVICE_KEY: 'k3y-value-123', HOME: '/root', SHORT_TOKEN: 'abc', TOKEN_PATH: '/etc/token', LANG: 'en_US.UTF-8' }, root);
+  expect(values.sort()).toEqual(['hunter2hunter2', 'k3y-value-123', 'plainletterstoken', 'whsec9a8b7c6d5e4f3a2b1'].sort());
+  try {
+    learnSecrets(values);
+    const r = redactSecrets('connecting with hunter2hunter2 on port 3000 (development)\nsig whsec9a8b7c6d5e4f3a2b1, key k3y-value-123 twice: k3y-value-123');
+    expect(r.text).toBe(`connecting with ${REDACTED} on port 3000 (development)\nsig ${REDACTED}, key ${REDACTED} twice: ${REDACTED}`);
+    expect(r.count).toBe(4);
+  } finally {
+    forgetSecrets();
+  }
+  expect(redactSecrets('connecting with hunter2hunter2').count).toBe(0);
+});
+
+test('e2e: a dotenv value a command prints with no name never reaches the session log (offline, faux)', async () => {
+  const { mkdtempSync, writeFileSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'cedia-known-e2e-'));
+  const home = join(dir, '.home');
+  Bun.spawnSync(['mkdir', '-p', home]);
+  writeFileSync(join(dir, '.env'), 'DB_PASSWORD=s3cretvalue99\n');
+  const script = join(home, 'script.json');
+  writeFileSync(script, JSON.stringify([{ blocks: [{ type: 'tool_use', id: 'c1', name: 'bash', input: { command: "printf 'conn %s ok\\n' \"$(cut -d= -f2 .env)\"" } }] }, { blocks: [{ type: 'text', text: 'done' }] }]));
+  const bin = join(import.meta.dir, '..', 'bin', 'cedia');
+  const p = Bun.spawnSync([bin, '-m', 'faux', '-p', 'go', '--permission', 'workspace', '--sandbox', 'off', '--output-format', 'json', '--cwd', dir], { env: { ...process.env, CEDIA_FAUX_SCRIPT: script, CEDIA_HOME: home }, stdin: 'ignore' });
+  expect(p.exitCode).toBe(0);
+  const logs = (Bun.spawnSync(['find', home, '-name', '*.jsonl']).stdout.toString().trim().split('\n')).filter(Boolean);
+  const all = logs.map((f) => readFileSync(f, 'utf8')).join('\n');
+  expect(all).toContain(`conn ${REDACTED} ok`);
+  expect(all).not.toContain('s3cretvalue99');
+});

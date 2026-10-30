@@ -13,7 +13,7 @@ const MAX_HITS = 20;
 const AROUND = 200;
 
 // The text a model saw or wrote, per event, with a label saying where it came from.
-function texts(events: SessionEvent[]): { label: string; text: string }[] {
+export function sessionTexts(events: SessionEvent[]): { label: string; text: string }[] {
   const out: { label: string; text: string }[] = [];
   const tools = new Map<string, string>();
   for (const e of events) {
@@ -68,7 +68,7 @@ export function recallTool(sessions: () => EarlierSession[]): ToolSpec {
       const all = sessions();
       // Newest session first: the latest work is the likeliest to matter.
       for (const [i, s] of [...all.entries()].reverse()) {
-        for (const t of texts(s.events()).reverse()) {
+        for (const t of sessionTexts(s.events()).reverse()) {
           const at = find(t.text);
           if (at < 0) continue;
           total++;

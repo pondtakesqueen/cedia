@@ -1,5 +1,6 @@
 import { clip, MAX_SHELL_OUTPUT_CHARS, preview, type ToolSpec } from './registry.ts';
 import { summarizeTestFailures } from './testfail.ts';
+import { SECRET_ENV } from '../safety/secrets.ts';
 
 // A command counts as read-only when every command in its pipeline, && chain or ; list is on this list (or is a
 // `cd`) and nothing writes, substitutes or redirects. Read-only commands run in parallel and in read-only sessions;
@@ -141,12 +142,11 @@ function splitTopLevel(command: string): string[] | null {
 // command by planting one (Claude Code 2.1.309 ran startup files outside the sandbox).
 // Git's environment config (GIT_CONFIG_COUNT with GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n) goes as one: a value
 // can be a credential header, and a count left without its keys makes every git command fail.
-const SECRET = /(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?)($|_)/i;
 const SHELL_STARTUP = new Set(['BASH_ENV', 'ENV', 'ZDOTDIR']);
 const GIT_ENV_CONFIG = /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/;
 export function scrubbedEnv(env: Record<string, string | undefined> = process.env): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined && !SECRET.test(e[0]) && !SHELL_STARTUP.has(e[0]) && !GIT_ENV_CONFIG.test(e[0]) && !e[0].startsWith('CEDIA_')),
+    Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined && !SECRET_ENV.test(e[0]) && !SHELL_STARTUP.has(e[0]) && !GIT_ENV_CONFIG.test(e[0]) && !e[0].startsWith('CEDIA_')),
   );
 }
 

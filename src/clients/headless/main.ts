@@ -12,6 +12,8 @@ import { dayOf } from '../../core/session/usage.ts';
 import { cediaHome, detectChecks, loadChecks, loadContext, loadFallback, loadMedia, loadHandoff, loadHandoffAt, loadHooks, loadMcp, loadMaxEffort, capEffort, loadPolicy, loadPrivacy, loadQuotaWait, loadRoles, loadSandbox, loadSpawn, loadAsk, loadTodo, loadProfiles, loadLsp, loadPlanWhen, loadPlanOverlap, loadPromptSuggestions, isMode, modeFlags, type Mode, type RoleChoice } from '../../core/config.ts';
 import { attachedNote, blobDir, STORED_IMAGE, storedImage, type ImageRef } from '../../core/images.ts';
 import { storeAttachment } from '../../core/video.ts';
+import { claimThread } from '../../core/project/busy.ts';
+import { learnSecrets, secretsToKnow } from '../../core/safety/secrets.ts';
 import { defaultHandoffAt, handoffNote, MAX_HANDOFFS, resumeChoice } from '../../core/project/handoff.ts';
 import { compactedNote, compactPlan, seedCompacted } from '../../core/project/compact.ts';
 import { instructionsBlock, loadInstructions } from '../../core/project/instructions.ts';
@@ -80,6 +82,8 @@ export type HeadlessArgs = {
   media?: string;
   // Continues this thread of the project instead of opening a new one.
   thread?: string;
+  // When the thread's last run is still going in another process: stop it and go on, instead of refusing.
+  takeOver?: boolean;
   // Tokens of context at which a writer session hands off to a new one, or "off".
   handoffAt?: string;
   // "note" or "compact": how it hands off.
@@ -367,6 +371,14 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     await sandbox.close();
     throw new Error(`no thread ${args.thread} in this project${args.noSessionFile ? ' (threads need session files)' : ''}`);
   }
+  if (args.thread) {
+    const claim = await claimThread(store!, args.thread, { takeOver: !!args.takeOver });
+    if (!claim.ok) {
+      await sandbox.close();
+      throw new Error(claim.error);
+    }
+    if (claim.tookOver) say(`cedia: stopped run ${claim.tookOver.run} (pid ${claim.tookOver.pid}) of thread ${args.thread} to go on with it\n`);
+  }
   const resumed = args.thread ? store!.read(args.thread) : undefined;
   const threadId = resumed?.id ?? store?.open(args.prompt, profile ? { profile: profile.name } : {});
   // This run's id: every thread event it writes carries it, so a rewind past the run drops them even when they are
@@ -475,6 +487,9 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     return preamble(args.cwd, { mode: policy.mode, ...(policy.plan ? { plan: { ask: !!(store && threadId) } } : {}), unlock: policy.unlock ?? [], checks, sandbox, ...(context ? { context } : {}), ...(ins ? { instructions: ins } : {}), ...(mem ? { memory: mem } : {}), ...(skillList ? { skills: skillList } : {}), ...(styleModifier ? { outputStyle: styleModifier } : {}), ...(profile?.instructions ? { profile: { name: profile.name, instructions: profile.instructions } } : {}), ...otherRoots() });
   };
 
+  // The secret values the environment and the repository's dotenv files hold, so tool output that prints one
+  // with no name beside it is redacted too (core/safety/secrets.ts).
+  for (const dir of new Set([projectRoot(args.cwd), args.cwd])) learnSecrets(secretsToKnow(process.env, dir));
   const ac = new AbortController();
   const onSignal = () => ac.abort();
   if (args.signal?.aborted) ac.abort();
@@ -992,7 +1007,7 @@ export async function runHeadless(given: HeadlessArgs, out: (s: string) => void 
     const last = resumed?.sessions.findLast((s) => s.role === 'code' && !resumed.rewound.includes(s.sessionId));
     const tree = snapshots?.take();
     const from = last?.path && sessionExists(last.path) ? { sessionId: last.sessionId, path: last.path, events: SessionLog.load(last.path).events.length, model: last.model } : undefined;
-    store.append(threadId, { kind: 'run', id: runId, prompt: args.prompt.slice(0, 500), cwd: args.cwd, ...(tree ? { tree } : {}), ...(from ? { from } : {}), permission, ...(images.length ? { images } : {}) });
+    store.append(threadId, { kind: 'run', id: runId, prompt: args.prompt.slice(0, 500), cwd: args.cwd, ...(tree ? { tree } : {}), ...(from ? { from } : {}), permission, ...(images.length ? { images } : {}), pid: process.pid });
   }
   try {
     if (roles.plan && planWhen !== 'never') warm('plan', roles.plan);
