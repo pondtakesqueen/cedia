@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { sharedSkillDirs } from '../src/core/config.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 import { SessionLog } from '../src/core/session/log.ts';
 import { carriedSkills, carriedSkillsNote, commandList, findSkill, frontMatter, loadedSkills, loadSkills, skillCommand, skillsBlock, skillTool } from '../src/core/skills/skills.ts';
@@ -166,6 +167,47 @@ describe('skills', () => {
     const [file] = readdirSync(join(sessions, project!));
     const events = SessionLog.load(join(sessions, project!, file!)).events;
     expect(JSON.stringify(events.filter((e) => e.kind === 'user'))).toContain('load it with the skill tool first');
+  });
+});
+
+describe("the user's skills in other clients' folders", () => {
+  test("read after cedia's own, which wins a name, and before the repository's; their folder is named so their scripts can run", async () => {
+    const dir = repo();
+    const home = mkdtempSync(join(tmpdir(), 'cedia-skills-home-'));
+    const agents = mkdtempSync(join(tmpdir(), 'cedia-agents-'));
+    const claude = mkdtempSync(join(tmpdir(), 'cedia-claude-'));
+    skill(join(home, 'skills'), 'deploy', "name: deploy\ndescription: cedia's deploy");
+    skill(agents, 'deploy', "name: deploy\ndescription: the shared deploy");
+    const pdf = skill(agents, 'pdf', 'name: pdf\ndescription: fill PDF forms', 'Run scripts/fill.py.\n');
+    writeFileSync(join(pdf, 'fill.py'), 'print(1)\n');
+    skill(claude, 'pdf', 'name: pdf\ndescription: the other pdf');
+    skill(claude, 'review', 'name: review\ndescription: review a change');
+    skill(join(dir, '.agents', 'skills'), 'review', "name: review\ndescription: the repository's review");
+    const found = loadSkills(dir, home, [agents, claude]);
+    expect(found.map((s) => [s.name, s.source, s.description, !!s.shared])).toEqual([
+      ['deploy', 'user', "cedia's deploy", false],
+      ['pdf', 'user', 'fill PDF forms', true],
+      ['review', 'user', 'review a change', true],
+    ]);
+    const tool = skillTool(found);
+    const loaded = await tool.run({ name: 'pdf' }, ctx);
+    expect(loaded.text).toContain(`Its folder is ${pdf}.`);
+    expect(loaded.text).toContain('fill.py');
+    // cedia's own home stays unnamed: commands may not read it.
+    expect((await tool.run({ name: 'deploy' }, ctx)).text).not.toContain('Its folder is');
+  });
+
+  test('none under CEDIA_HOME, ~/.agents/skills then ~/.claude/skills otherwise', () => {
+    const was = process.env.CEDIA_HOME;
+    try {
+      process.env.CEDIA_HOME = '/tmp/x';
+      expect(sharedSkillDirs()).toEqual([]);
+      delete process.env.CEDIA_HOME;
+      expect(sharedSkillDirs()).toEqual([join(homedir(), '.agents', 'skills'), join(homedir(), '.claude', 'skills')]);
+    } finally {
+      if (was === undefined) delete process.env.CEDIA_HOME;
+      else process.env.CEDIA_HOME = was;
+    }
   });
 });
 

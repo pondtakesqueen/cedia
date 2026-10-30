@@ -12,7 +12,8 @@ import type { SessionEvent } from '../types.ts';
 // loads a skill's text, or one of its files, with the skill tool when a task matches it. The first turn changes
 // only when the set of skills does, and the system prompt and tool list stay the same across repositories.
 //
-// The user's own skills (~/.cedia/skills) are the user's words. A repository's (.agents/skills, .claude/skills
+// The user's own skills (~/.cedia/skills, then the folders other clients share: ~/.agents/skills, ~/.claude/skills)
+// are the user's words. A repository's (.agents/skills, .claude/skills
 // or .cursor/skills in each directory from the working directory up to the repository root) are the repository's,
 // like its AGENTS.md: a skill whose folder resolves outside the repository is left out, its files are read only
 // inside its folder and never when they look like secrets, and all of it is redacted and made inert. Neither kind
@@ -39,6 +40,9 @@ export type Skill = {
   file?: string;
   // Only the person picks it, with `/`: `disable-model-invocation: true`. Left out of the first turn's list.
   manual?: true;
+  // A user's skill from another client's folder: outside cedia's home, which commands may not read, so the model is
+  // told where it is and may run its scripts.
+  shared?: true;
 };
 
 // `cedia commands --json`: what a client offers when the person types `/`. Each skill is a command; `/<name> <text>`
@@ -160,14 +164,19 @@ const subdirs = (dir: string): string[] => {
   }
 };
 
-// The skills a session in `cwd` can use. The user's come first and win a name; then the repository's, nearest
-// directory first.
-export function loadSkills(cwd: string, home: string): Skill[] {
+// The skills a session in `cwd` can use. The user's come first and win a name (cedia's own folder, then `shared`,
+// the other clients' folders: sharedSkillDirs); then the repository's, nearest directory first.
+export function loadSkills(cwd: string, home: string, shared: string[] = []): Skill[] {
   const found: Skill[] = [];
   for (const d of subdirs(join(home, 'skills'))) {
     const s = readSkill(d, 'user');
     if (s) found.push(s);
   }
+  for (const dir of shared)
+    for (const d of subdirs(dir)) {
+      const s = readSkill(d, 'user');
+      if (s) found.push({ ...s, shared: true });
+    }
   const root = real(repoRoot(resolve(cwd)));
   const here = real(resolve(cwd));
   if (root && here && inside(root, here)) {
@@ -278,7 +287,7 @@ export function skillTool(skills: Skill[]): ToolSpec {
       if ('error' in f) return { text: f.error, isError: true };
       const body = (frontMatter(f.text)?.body ?? f.text).trim();
       const files = skill.file ? [] : skillFiles(real(skill.dir) ?? skill.dir);
-      const where = skill.source !== 'user' && !skill.file ? ` Its folder is ${inert(skill.dir)}.` : '';
+      const where = (skill.source !== 'user' || skill.shared) && !skill.file ? ` Its folder is ${inert(skill.dir)}.` : '';
       const from = skill.source === 'user' ? 'from the user' : skill.source === 'plugin' ? `from the ${inert(skill.plugin ?? '')} plugin` : 'from the repository';
       // A Claude Code command stands for the text after it with $ARGUMENTS,
       // and runs each !`command` first, putting its output in the prompt; here the model runs them.

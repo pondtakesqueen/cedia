@@ -142,6 +142,10 @@ export type RoleChoice = { via: 'cedia'; model: ModelSpec; effort?: Effort } | {
 export type ClaudeCodeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export const cediaHome = () => process.env.CEDIA_HOME ?? join(homedir(), '.cedia');
+// The user's skills that other clients keep (agentskills.io's cross-client ~/.agents/skills, and Claude Code's
+// ~/.claude/skills), read after cedia's own. None under CEDIA_HOME: a home of its own (a test, a second setup) does
+// not take the user's other folders with it.
+export const sharedSkillDirs = (): string[] => (process.env.CEDIA_HOME ? [] : [join(homedir(), '.agents', 'skills'), join(homedir(), '.claude', 'skills')]);
 
 export function readSettings(path: string): Settings {
   if (!existsSync(path)) return {};
