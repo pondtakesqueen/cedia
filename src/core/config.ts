@@ -437,10 +437,9 @@ export function loadCompleteModel(flag?: string): string {
 // Modes a model picker offers beside the models, picked as `-m auto` or `-m oplan`. Both keep the writer the user's
 // code role, since a writer that changed from prompt to prompt would lose the cache each time; they choose the
 // steps around it. auto: the triage model decides per prompt whether the planner runs, with plan and review from
-// settings, or where none is set from the user's Claude Code: Opus at low plans (a third less plan time than at
-// medium, a quarter less cost, 5 to 5 blind on small tasks and a win on a real one), Sonnet at high reviews (30% less
-// cost a task than an Opus review, 6 to 5 blind; evals/results/2026-10-29-cheaper-opus/, 2026-10-29-auto/). oplan:
-// the roles and efforts as set, planned every prompt.
+// settings, or where none is set from the user's Claude Code: Opus at medium plans (see modeFlags), Sonnet at high
+// reviews (30% less cost a task than an Opus review, 6 to 5 blind; evals/results/2026-10-29-cheaper-opus/,
+// 2026-10-29-auto/), at medium where it may probe. oplan: the roles and efforts as set, planned every prompt.
 export type Mode = 'auto' | 'oplan';
 export const MODES: { name: Mode; label: string }[] = [
   { name: 'auto', label: 'Auto: plans and reviews code changes, answers the rest straight away' },
