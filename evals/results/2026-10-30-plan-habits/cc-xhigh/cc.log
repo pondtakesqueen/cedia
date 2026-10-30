@@ -1,0 +1,37 @@
+Running 10 tasks x 3 runs on claude (opus), 5 at a time...
+  PASS hard-deny-list#2 (109.7s $0.3969)
+  PASS hard-deny-list#1 (110.7s $0.4062)
+  PASS hard-edit-tiers#1 (134.8s $0.4886)
+  PASS hard-deny-list#3 (162.6s $0.5571)
+  PASS hard-edit-tiers#2 (151.8s $0.5259)
+  PASS hard-edit-tiers#3 (138.9s $0.4921)
+  PASS hard-injection#1 (32.4s $0.1151)
+  PASS hard-injection#2 (26.1s $0.1039)
+  FAIL hard-ledger#1 (6.7s $0.0499)
+  FAIL hard-injection#3 (15.9s $0.0632)
+  FAIL hard-ledger#2 (3.6s $0.0000)
+  FAIL hard-ledger#3 (7.0s $0.0000)
+  FAIL hard-memo-async#1 (7.0s $0.0000)
+  FAIL hard-memo-async#2 (8.5s $0.0000)
+  PASS hard-csv-stream#3 (463.1s $0.9599)
+  FAIL hard-memo-async#3 (9.8s $0.0000)
+  FAIL hard-pool#1 (8.3s $0.0000)
+  FAIL hard-pool#2 (16.4s $0.0000)
+  PASS hard-csv-stream#2 (491.8s $1.4893)
+  FAIL hard-pool#3 (26.1s $0.0000)
+  FAIL hard-sse#1 (21.3s $0.0000)
+  FAIL hard-sse#2 (11.1s $0.0000)
+  FAIL hard-sse#3 (10.5s $0.0000)
+  FAIL wide-bug-hunt#2 (5.6s $0.0000)
+  FAIL wide-bug-hunt#1 (7.1s $0.0000)
+  FAIL wide-three-features#1 (7.8s $0.0000)
+  FAIL wide-bug-hunt#3 (8.4s $0.0000)
+  FAIL wide-three-features#2 (6.3s $0.0000)
+  FAIL wide-three-features#3 (4.9s $0.0000)
+  PASS hard-csv-stream#1 (517.8s $1.1632)
+
+Results written to /tmp/claude-0/-home-user-cedia-code/7d5651d6-a6a7-5456-a496-4c6a46e5cb23/scratchpad/ccx/cc.jsonl
+claude (opus): 10 tasks, 30 scored runs
+  pass@1 36.7%  pass^k 30.0%  false-done 0.0%  refused claims 0.0%
+  avg 84.4s per run, 157087 input / 6059 output tokens per run, cache hit 93.9%
+  cost $6.8113 total, $0.6192 per passed run
