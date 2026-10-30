@@ -677,7 +677,8 @@
           "enum": [
             "user",
             "repository",
-            "plugin"
+            "plugin",
+            "builtin"
           ]
         },
         "argumentHint": {

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { sharedSkillDirs } from '../src/core/config.ts';
 import { lintSession } from '../src/core/session/lint.ts';
 import { SessionLog } from '../src/core/session/log.ts';
+import { BUILTIN_SKILLS } from '../src/core/skills/builtin.ts';
 import { carriedSkills, carriedSkillsNote, commandList, findSkill, frontMatter, loadedSkills, loadSkills, skillCommand, skillsBlock, skillTool } from '../src/core/skills/skills.ts';
 import { inert } from '../src/core/trust/frame.ts';
 import type { SessionEvent } from '../src/core/types.ts';
@@ -22,6 +23,8 @@ function skill(at: string, name: string, front: string, body = 'Do it this way.\
 }
 
 const ctx = { cwd: '/', signal: new AbortController().signal } as never;
+// The skills a test laid out, without the ones that come with cedia (/init).
+const own = (found: ReturnType<typeof loadSkills>) => found.filter((s) => s.source !== 'builtin');
 
 describe('skills', () => {
   test('front matter: plain, quoted and folded values; no front matter, no skill', () => {
@@ -49,7 +52,7 @@ describe('skills', () => {
     writeFileSync(join(outside, 'notes.md'), '---\nname: notes\ndescription: private notes\n---\n');
     mkdirSync(join(dir, '.agents', 'skills', 'notes'));
     symlinkSync(join(outside, 'notes.md'), join(dir, '.agents', 'skills', 'notes', 'SKILL.md'));
-    const found = loadSkills(join(dir, 'pkg'), home);
+    const found = own(loadSkills(join(dir, 'pkg'), home));
     expect(found.map((s) => [s.name, s.source, s.description])).toEqual([
       ['deploy', 'user', "the user's deploy steps"],
       ['lint', 'repository', 'the package linter'],
@@ -116,8 +119,8 @@ describe('skills', () => {
     const found = loadSkills(dir, mkdtempSync(join(tmpdir(), 'h-')));
     expect(found.find((s) => s.name === 'statechart')?.manual).toBe(true);
     expect(found.find((s) => s.name === 'lint')?.manual).toBeUndefined();
-    // 61 manual skills and one listed: past the 50 a session lists, yet all are there.
-    expect(found).toHaveLength(62);
+    // 61 manual skills and one listed: past the 50 a session lists, yet all are there, and /init too.
+    expect(found).toHaveLength(63);
     const block = skillsBlock(found);
     expect(block).toContain('- lint');
     expect(block).not.toContain('statechart');
@@ -144,7 +147,7 @@ describe('skills', () => {
     skill(join(dir, '.agents', 'skills'), 'haiku', 'name: haiku\ndescription: answer in haiku\nargument-hint: <topic>');
     skill(join(dir, '.agents', 'skills'), 'plain', 'name: plain\ndescription: plain words');
     const found = loadSkills(dir, mkdtempSync(join(tmpdir(), 'h-')));
-    expect(commandList(found).commands).toEqual([
+    expect(commandList(own(found)).commands).toEqual([
       { name: 'haiku', description: 'answer in haiku', kind: 'skill', source: 'repository', argumentHint: '<topic>' },
       { name: 'plain', description: 'plain words', kind: 'skill', source: 'repository' },
     ]);
@@ -155,7 +158,7 @@ describe('skills', () => {
 
     const home = join(dir, '.home');
     const p = Bun.spawnSync([join(import.meta.dir, '..', 'bin', 'cedia'), 'commands', '--json', '--cwd', dir], { env: { ...process.env, CEDIA_HOME: home } });
-    expect(JSON.parse(p.stdout.toString()).commands.map((c: { name: string }) => c.name)).toEqual(['haiku', 'plain']);
+    expect(JSON.parse(p.stdout.toString()).commands.map((c: { name: string }) => c.name)).toEqual(['haiku', 'plain', 'init']);
 
     // Through a run: the writer's message carries the request to load it.
     const script = join(dir, '.script.json');
@@ -167,6 +170,57 @@ describe('skills', () => {
     const [file] = readdirSync(join(sessions, project!));
     const events = SessionLog.load(join(sessions, project!, file!)).events;
     expect(JSON.stringify(events.filter((e) => e.kind === 'user'))).toContain('load it with the skill tool first');
+  });
+});
+
+describe("cedia's own skills", () => {
+  test('/init comes with cedia: / only, out of the first turn, loaded from cedia and never from a file', async () => {
+    const dir = repo();
+    writeFileSync(join(dir, 'SKILL.md'), '---\nname: init\ndescription: planted\n---\nplanted text\n');
+    const found = loadSkills(dir, mkdtempSync(join(tmpdir(), 'h-')));
+    const init = findSkill(found, 'init')!;
+    expect([init.source, init.manual, init.dir]).toEqual(['builtin', true, '']);
+    expect(skillsBlock(found)).toBe('');
+    expect(commandList(found).commands).toContainEqual(expect.objectContaining({ name: 'init', source: 'builtin', argumentHint: '[what to focus on]' }));
+    // Its text rides the prompt, so no skill tool is needed for it.
+    expect(skillCommand('/init the release steps', found)).toStartWith("/init the release steps\n\n(/init is cedia's init skill. Do what its instructions say, for the text after the command.)\n\n<skill_instructions>\nWrite this repository's AGENTS.md");
+    const tool = skillTool(found);
+    const loaded = await tool.run({ name: 'init' }, { ...(ctx as object), cwd: dir } as never);
+    expect(loaded.text).toStartWith('Skill init, built into cedia');
+    expect(loaded.text).toContain('Under 200 lines');
+    expect(loaded.text).not.toContain('planted');
+    expect(await tool.run({ name: 'init', file: 'SKILL.md' }, ctx)).toEqual({ text: 'skill init comes with cedia and has no files', isError: true });
+  });
+
+  test('/init in a run: its instructions ride the prompt, and a session with no other skill gets no skill tool', () => {
+    const dir = repo();
+    const home = join(dir, '.home');
+    const script = join(dir, '.script.json');
+    writeFileSync(script, JSON.stringify([{ blocks: [{ type: 'text', text: 'ok' }] }]));
+    const r = Bun.spawnSync([join(import.meta.dir, '..', 'bin', 'cedia'), '-m', 'faux', '-p', '/init', '--cwd', dir, '--sandbox', 'off'], { env: { ...process.env, CEDIA_FAUX_SCRIPT: script, CEDIA_HOME: home } });
+    expect(r.exitCode).toBe(0);
+    const sessions = join(home, 'sessions');
+    const [project] = readdirSync(sessions);
+    const [file] = readdirSync(join(sessions, project!));
+    const events = SessionLog.load(join(sessions, project!, file!)).events;
+    expect(JSON.stringify(events.filter((e) => e.kind === 'user'))).toContain('Under 200 lines');
+    const header = events.find((e) => e.kind === 'session') as { tools: { name: string }[] } | undefined;
+    expect(header!.tools.map((t) => t.name)).not.toContain('skill');
+  });
+
+  test("a user's or repository's skill named init wins", () => {
+    const dir = repo();
+    skill(join(dir, '.agents', 'skills'), 'init', "name: init\ndescription: the repository's init");
+    const found = loadSkills(dir, mkdtempSync(join(tmpdir(), 'h-')));
+    expect(found.filter((s) => s.name === 'init').map((s) => [s.source, s.description])).toEqual([['repository', "the repository's init"]]);
+  });
+
+  test('the text names no other client and keeps to the shape it asks for', () => {
+    const { text, description } = BUILTIN_SKILLS.find((s) => s.name === 'init')!;
+    expect(text.split('\n').length).toBeLessThan(200);
+    expect(description.length).toBeLessThanOrEqual(1024);
+    expect(description).not.toMatch(/[<>]/);
+    expect(text).not.toContain('Claude Code');
   });
 });
 
@@ -183,7 +237,7 @@ describe("the user's skills in other clients' folders", () => {
     skill(claude, 'pdf', 'name: pdf\ndescription: the other pdf');
     skill(claude, 'review', 'name: review\ndescription: review a change');
     skill(join(dir, '.agents', 'skills'), 'review', "name: review\ndescription: the repository's review");
-    const found = loadSkills(dir, home, [agents, claude]);
+    const found = own(loadSkills(dir, home, [agents, claude]));
     expect(found.map((s) => [s.name, s.source, s.description, !!s.shared])).toEqual([
       ['deploy', 'user', "cedia's deploy", false],
       ['pdf', 'user', 'fill PDF forms', true],
