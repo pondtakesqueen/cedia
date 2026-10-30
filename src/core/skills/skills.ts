@@ -5,13 +5,15 @@ import { enabledPlugins } from '../plugins/plugins.ts';
 import { redactSecrets } from '../safety/secrets.ts';
 import { inert } from '../trust/frame.ts';
 import type { ToolSpec } from '../tools/registry.ts';
+import type { SessionEvent } from '../types.ts';
 
 // Skills: a folder with a SKILL.md (Agent Skills format: front matter with a name and a description, then the
 // instructions) and any files it uses. Only the names and descriptions go in the session's first turn; the model
 // loads a skill's text, or one of its files, with the skill tool when a task matches it. The first turn changes
 // only when the set of skills does, and the system prompt and tool list stay the same across repositories.
 //
-// The user's own skills (~/.cedia/skills) are the user's words. A repository's (.agents/skills, .claude/skills
+// The user's own skills (~/.cedia/skills, then the folders other clients share: ~/.agents/skills, ~/.claude/skills)
+// are the user's words. A repository's (.agents/skills, .claude/skills
 // or .cursor/skills in each directory from the working directory up to the repository root) are the repository's,
 // like its AGENTS.md: a skill whose folder resolves outside the repository is left out, its files are read only
 // inside its folder and never when they look like secrets, and all of it is redacted and made inert. Neither kind
@@ -38,6 +40,9 @@ export type Skill = {
   file?: string;
   // Only the person picks it, with `/`: `disable-model-invocation: true`. Left out of the first turn's list.
   manual?: true;
+  // A user's skill from another client's folder: outside cedia's home, which commands may not read, so the model is
+  // told where it is and may run its scripts.
+  shared?: true;
 };
 
 // `cedia commands --json`: what a client offers when the person types `/`. Each skill is a command; `/<name> <text>`
@@ -159,14 +164,19 @@ const subdirs = (dir: string): string[] => {
   }
 };
 
-// The skills a session in `cwd` can use. The user's come first and win a name; then the repository's, nearest
-// directory first.
-export function loadSkills(cwd: string, home: string): Skill[] {
+// The skills a session in `cwd` can use. The user's come first and win a name (cedia's own folder, then `shared`,
+// the other clients' folders: sharedSkillDirs); then the repository's, nearest directory first.
+export function loadSkills(cwd: string, home: string, shared: string[] = []): Skill[] {
   const found: Skill[] = [];
   for (const d of subdirs(join(home, 'skills'))) {
     const s = readSkill(d, 'user');
     if (s) found.push(s);
   }
+  for (const dir of shared)
+    for (const d of subdirs(dir)) {
+      const s = readSkill(d, 'user');
+      if (s) found.push({ ...s, shared: true });
+    }
   const root = real(repoRoot(resolve(cwd)));
   const here = real(resolve(cwd));
   if (root && here && inside(root, here)) {
@@ -277,7 +287,7 @@ export function skillTool(skills: Skill[]): ToolSpec {
       if ('error' in f) return { text: f.error, isError: true };
       const body = (frontMatter(f.text)?.body ?? f.text).trim();
       const files = skill.file ? [] : skillFiles(real(skill.dir) ?? skill.dir);
-      const where = skill.source !== 'user' && !skill.file ? ` Its folder is ${inert(skill.dir)}.` : '';
+      const where = (skill.source !== 'user' || skill.shared) && !skill.file ? ` Its folder is ${inert(skill.dir)}.` : '';
       const from = skill.source === 'user' ? 'from the user' : skill.source === 'plugin' ? `from the ${inert(skill.plugin ?? '')} plugin` : 'from the repository';
       // A Claude Code command stands for the text after it with $ARGUMENTS,
       // and runs each !`command` first, putting its output in the prompt; here the model runs them.
@@ -305,3 +315,38 @@ export function skillCommand(prompt: string, skills: Skill[]): string | undefine
   const rest = prompt.slice(m[0].length).trim();
   return `${prompt.trimEnd()}\n\n(/${m[1]} is the ${skill.name} skill: load it with the skill tool first, then do what it says${rest ? ', for the text after the command' : ''}.)`;
 }
+
+// A session that goes on from another (a handoff note, a summary of its older turns, a fallback model) starts without
+// the skills the other loaded: their instructions were tool results it no longer holds, and losing them fails
+// silently (agentskills.io's client guide: "exempt skill content from pruning"). So the new session's first turn names
+// them, and the model loads each again when it needs it. The names come from the skill calls that loaded a skill's
+// instructions (not one of its files) and succeeded, and from the line an earlier carry put in the session's own
+// first turn, so a chain of handoffs keeps them. That line can only come from cedia: a repository's text is made
+// inert, which escapes its tags.
+const CARRIED = /<skills_loaded>([^<]*)<\/skills_loaded>/;
+const LOADED_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,128}$/;
+
+export function loadedSkills(events: SessionEvent[]): string[] {
+  const names: string[] = [];
+  const add = (n: string) => {
+    if (LOADED_NAME.test(n) && !names.includes(n)) names.push(n);
+  };
+  const ok = new Set(events.flatMap((e) => (e.kind === 'tool_result' && e.status === 'completed' && !e.output.isError ? [e.callId] : [])));
+  for (const e of events) {
+    if (e.kind === 'user' || e.kind === 'reminder') for (const n of CARRIED.exec(e.text)?.[1]?.split(',') ?? []) add(n.trim());
+    else if (e.kind === 'tool_intent' && e.tool === 'skill' && !e.input.file && ok.has(e.callId) && typeof e.input.name === 'string') add(e.input.name);
+  }
+  return names;
+}
+
+// The skills to name in the next session: those loaded in what it does not keep word for word (`dropped`), less those
+// loaded again in what it keeps (a summary's kept turns).
+export function carriedSkills(dropped: SessionEvent[], kept: SessionEvent[] = []): string[] {
+  const again = new Set(loadedSkills(kept));
+  return loadedSkills(dropped).filter((n) => !again.has(n));
+}
+
+export const carriedSkillsNote = (names: string[]): string =>
+  names.length
+    ? `<skills_loaded>${names.join(', ')}</skills_loaded>\nThe earlier session had loaded these skills, and their instructions are not in this session. Load each again with the skill tool before the step it covers.`
+    : '';

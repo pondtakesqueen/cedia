@@ -9,7 +9,7 @@ import type { TuiArgs } from './clients/tui-ink/args.ts';
 import { ALIASES, resolveModel } from './core/providers/catalog.ts';
 import { GUARDS, PERMISSION_ENTRIES, type PermissionList } from './core/safety/policy.ts';
 import { applyAllowRules, suggestAllowRules } from './core/safety/suggest.ts';
-import { cediaHome, loadCompleteModel, loadHandoffAt, loadPermissionSetting, loadPolicy, loadRoles } from './core/config.ts';
+import { cediaHome, sharedSkillDirs, loadCompleteModel, loadHandoffAt, loadPermissionSetting, loadPolicy, loadRoles } from './core/config.ts';
 import { processKeychain } from './core/providers/keychain.ts';
 import { modelLine, modelList } from './core/providers/models.ts';
 import { threadLine, threadsDir, ThreadStore, type Rating } from './core/project/threads.ts';
@@ -699,7 +699,7 @@ function skills(argv: string[]): number {
     console.error('usage: cedia skills [list] [--cwd <dir>]');
     return 2;
   }
-  const found = loadSkills(resolve(parsed.values.cwd ?? process.cwd()), cediaHome());
+  const found = loadSkills(resolve(parsed.values.cwd ?? process.cwd()), cediaHome(), sharedSkillDirs());
   // A repository's description could carry terminal escapes; they are shown as text.
   const shown = (t: string) => t.replace(/[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
   console.log(found.length ? found.map((s) => `${s.name}  (${s.source}${s.manual ? ', / only' : ''})  ${shown(s.dir)}\n    ${shown(s.description)}`).join('\n') : 'no skills here');
@@ -1063,7 +1063,7 @@ function commands(argv: string[]): number {
     console.error(`cedia: ${(e as Error).message}`);
     return 2;
   }
-  const list = commandList(loadSkills(resolve(parsed.values.cwd ?? process.cwd()), cediaHome()));
+  const list = commandList(loadSkills(resolve(parsed.values.cwd ?? process.cwd()), cediaHome(), sharedSkillDirs()));
   const shown = (t: string) => t.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
   console.log(parsed.values.json ? JSON.stringify(list) : list.commands.map((c) => `/${c.name}${c.argumentHint ? ` ${shown(c.argumentHint)}` : ''}  ${shown(c.description)}`).join('\n') || 'no commands here');
   return 0;
