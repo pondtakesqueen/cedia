@@ -79,10 +79,40 @@ export const BASELINE_DIR = resolve(import.meta.dir, "gate/baseline");
 export const slug = (model: string) => model.replace(/[^a-zA-Z0-9.-]+/g, "_");
 export const baselinePath = (model: string, dir = BASELINE_DIR) => join(dir, `${slug(model)}.json`);
 
+const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+// A path is the file it names. Directory order, JSON key order, `./`, and `\` are spellings of that path.
+function canonicalPath(path: string): string {
+  return path.replaceAll("\\", "/").replace(/\/+/g, "/").replace(/^(?:\.\/)+/, "");
+}
+
+function canonicalFiles(files: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!files) return undefined;
+  const out: Record<string, string> = {};
+  const entries = Object.entries(files).map(([path, text]) => [canonicalPath(path), text] as const);
+  entries.sort((a, b) => byCodeUnit(a[0], b[0]));
+  for (const [path, text] of entries) out[path] = text;
+  return out;
+}
+
 // What decides a task's result: change any of it and the old numbers stop applying.
+// The hash is of the files, so two machines that read a directory in different orders still agree.
 export function taskHash(t: Task): string {
   const { id, prompt, setup, verify, expectedExitCode, hidden, executable, timeoutSec, budgetUsd } = t;
-  return createHash("sha256").update(JSON.stringify({ id, prompt, setup, verify, expectedExitCode, hidden, executable, timeoutSec, budgetUsd })).digest("hex").slice(0, 16);
+  return createHash("sha256")
+    .update(JSON.stringify({
+      id,
+      prompt,
+      setup: canonicalFiles(setup),
+      verify,
+      expectedExitCode,
+      hidden: canonicalFiles(hidden),
+      executable: executable?.map(canonicalPath).sort(byCodeUnit),
+      timeoutSec,
+      budgetUsd,
+    }))
+    .digest("hex")
+    .slice(0, 16);
 }
 
 // P(X <= k) for X hypergeometric: `draws` runs taken from `total`, of which `good` passed.

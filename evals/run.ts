@@ -505,7 +505,8 @@ export function repoTask(repo: NonNullable<Task["repo"]>): { setup: Record<strin
 function readTree(root: string, prefix = ""): Record<string, string> {
   if (!existsSync(root)) return {};
   const out: Record<string, string> = {};
-  for (const e of readdirSync(join(root, prefix), { withFileTypes: true })) {
+  const entries = readdirSync(join(root, prefix), { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const e of entries) {
     const rel = prefix ? `${prefix}/${e.name}` : e.name;
     if (e.isDirectory()) Object.assign(out, readTree(root, rel));
     else out[rel] = readFileSync(join(root, rel), "utf8");
