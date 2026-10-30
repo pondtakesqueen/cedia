@@ -15,13 +15,14 @@ const GIT_READ = new Set(['status', 'log', 'diff', 'show', 'branch', 'rev-parse'
 // Flags that write a file or run another program (a preprocessor, a pager, a compressor, a diff driver).
 const FORBIDDEN_FLAGS: Record<string, RegExp> = {
   find: /^-(exec|execdir|delete|ok|okdir|fprint|fprint0|fprintf|fls)$/,
-  sed: /^(-i|--in-place)/,
+  // Short flags may come bundled (`-ni`), so a letter anywhere in the bundle counts.
+  sed: /^(-[A-Za-z]*[if]|--in-place|--file)/,
   awk: /^(-i|-f|-E|-l|--include|--file|--exec|--load)/,
-  sort: /^(-o|--output|--compress-program)/,
+  sort: /^(-[A-Za-z]*o|--output|--compress-program)/,
   rg: /^--pre(=|$)/,
   date: /^(-s|--set)/,
-  tree: /^(-o|-R)/,
-  file: /^(-C|--compile)/,
+  tree: /^-[A-Za-z]*[oR]/,
+  file: /^(-[A-Za-z]*C|--compile)/,
   git: /^(-c|--exec-path|--output|-O|--open-files-in-pager|--ext-diff|--textconv)/,
 };
 
@@ -90,13 +91,19 @@ export function checkReadOnly(command: string): Verdict {
       if (sub === 'branch' && args.some((a) => /^-(d|D|m|M|c|C|f)$|^--(delete|move|copy|force|set-upstream)/.test(a))) return { ok: false, reason: 'git branch with that flag writes' };
       if (sub === 'remote' && args.some((a) => /^(add|remove|rm|rename|set-url|prune|update)$/.test(a))) return { ok: false, reason: 'git remote with that subcommand writes' };
     }
-    if (cmd === 'awk' && args.some((a) => /system\s*\(|printf?\s*>|\|\s*"|\|\s*getline|\|&/.test(a))) return { ok: false, reason: 'awk program can write or run commands' };
+    // Any pipe but `||` runs a command, whatever names it (`print | cmd`), and any `>` after a print may redirect it.
+    if (cmd === 'awk' && args.some((a) => /system\s*\(|\bprintf?\b[^;{}]*>|(^|[^|])\|(?!\|)/.test(a))) return { ok: false, reason: 'awk program can write or run commands' };
     // uniq writes its output to a second file name.
     if (cmd === 'uniq' && args.filter((a) => !a.startsWith('-')).length > 1) return { ok: false, reason: 'uniq with an output file writes' };
-    if (cmd === 'sed' && args.some((a) => /(^|;)\s*[0-9,$]*\s*[wWe]\b|\/[wW]\s/.test(a))) return { ok: false, reason: 'sed script can write or run commands' };
+    if (cmd === 'sed' && args.some((a) => /(^|;)\s*[0-9,$]*\s*[wWe]\b|\/[wW]\s/.test(a) || sedSubstituteRuns(a))) return { ok: false, reason: 'sed script can write or run commands' };
   }
   return { ok: true };
 }
+
+// An `s` command with the e flag runs its result as a command, and with w writes a file, whatever the delimiter
+// (`s|a|b|gw out`).
+const sedSubstituteRuns = (script: string) =>
+  [...script.matchAll(/s([^\s\w\\])(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1([A-Za-z0-9]*)/g)].some((m) => /[ewW]/.test(m[2]!));
 
 // Splits on |, ||, &&, ; and newlines outside quotes. A ; or newline that ends the command, or follows another,
 // leaves no empty command behind.

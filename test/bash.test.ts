@@ -20,6 +20,12 @@ describe('read-only bash policy', () => {
     "awk '{print $1}' f",
     'rg --pre-glob "*.gz" x',
     'git grep -n needle',
+    "sed -n 's/a/b/p' f",
+    "sed 's|x|eval|g' f",
+    "sed -n '/class Foo/p' src/a.ts",
+    "awk '$1 > 5' f",
+    "awk '$1 || $2 {print $1}' f",
+    'sort -k2 -n f',
     // The shapes models batch their reads in (session logs, 2026-10-29): a cd to the working directory, ; lists,
     // newlines between commands, git -C, nl and od.
     'cd /work/repo && ls -la && cat package.json',
@@ -79,6 +85,20 @@ describe('read-only bash policy', () => {
     'ls | ; cat x',
     'git -C /work push',
     'git -C',
+    // Bundled short flags and the forms the first list of patterns missed (audit, 2026-10-30).
+    "sed -ni 's/a/b/' f",
+    "sed -Ei 's/a/b/' f",
+    'sed -f prog.sed f',
+    "sed 's/a/touch x/e' f",
+    "sed -n 's/a/b/gw out' f",
+    "sed 's|a|b|w out' f",
+    'sort -uo out in',
+    'sort -uoout in',
+    'tree -fo out.txt',
+    'file -zC -m magic',
+    `awk 'BEGIN{c="sh"; print "x" | c}'`,
+    `awk 'BEGIN{print("x") > "out"}'`,
+    `awk '{print $1 >> "out"}' f`,
   ];
   for (const c of allowed) test(`allows: ${c}`, () => expect(checkReadOnly(c)).toEqual({ ok: true }));
   for (const c of refused) test(`refuses: ${c}`, () => expect(checkReadOnly(c).ok).toBe(false));
