@@ -25,16 +25,16 @@ describe('test failure summaries', () => {
   });
 
   test('a long bun run test keeps the failure lines', async () => {
-    expect(isTestCommand('bun run test')).toBe(true);
-    expect(isTestCommand('bun run test -- test/a.test.ts')).toBe(true);
-    expect(isTestCommand('bun run test -- --bail')).toBe(true);
     const fail = 'FAILED test_login - AssertionError: expected home, got login';
-    const text = `${'ok line\n'.repeat(2500)}${fail}\n${'ok tail\n'.repeat(400)}`;
+    const text = `${'ok line\n'.repeat(2500)}${fail}\n${'ok tail\n'.repeat(800)}`;
     expect(text.length).toBeGreaterThan(8_000);
     expect(text.indexOf(fail)).toBeGreaterThan(4_000);
     expect(text.length - (text.indexOf(fail) + fail.length)).toBeGreaterThan(4_000);
-    const s = summarizeTestFailures('bun run test', text)!;
-    expect(s).toContain(fail);
+    const s = summarizeTestFailures('bun run test', text);
+    expect(s ?? '').toContain(fail);
+    expect(isTestCommand('bun run test')).toBe(true);
+    expect(isTestCommand('bun run test -- test/a.test.ts')).toBe(true);
+    expect(isTestCommand('bun run test -- --bail')).toBe(true);
     expect(s).toContain('lines not shown');
     expect((s.match(/ok line/g) ?? []).length).toBeLessThan(10);
 
@@ -45,7 +45,7 @@ describe('test failure summaries', () => {
       writeFileSync(spilled, full);
       return spilled;
     };
-    const command = `bun run test; python3 -c "print('ok line\\n' * 2500); print('${fail}'); print('ok tail\\n' * 400)"`;
+    const command = `bun run test; python3 -c "print('ok line\\n' * 2500); print('${fail}'); print('ok tail\\n' * 800)"`;
     const r = await bashTool.run({ command }, { cwd, signal: AbortSignal.timeout(30_000), spill });
     expect(r.text).toContain(fail);
     expect(r.text).toContain(spilled);
