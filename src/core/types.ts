@@ -19,6 +19,9 @@ export const ZERO_USAGE: Usage = { uncached: 0, cacheRead: 0, cacheWrite: 0, out
 
 // 'compaction': the reply to a compaction request, which holds the summary block and nothing else.
 export type StopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal' | 'aborted' | 'error' | 'compaction';
+// Why a provider's classifier declined a turn, as its stop_details name it (Anthropic: cyber, bio, frontier_llm,
+// reasoning_extraction, general_harms, or null). The explanation is for showing, not for parsing: its text changes.
+export type Refusal = { category: string | null; explanation?: string };
 
 // Opaque fields carry each wire's reasoning payload so it replays byte for byte to the same wire.
 export type AssistantBlock =
@@ -72,7 +75,7 @@ type EventBody =
   // waits do not count against it. Nothing reaches the model.
   | { kind: 'retry'; requestId: EventId; n: number; waitMs: number; code: AttemptErrorCode; status?: number; of?: number }
   // costUsd: what this reply cost at the model's price when it ran, so a client can show a run's spend as it grows.
-  | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; costUsd?: number }
+  | { kind: 'assistant'; wire: Wire; model: string; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; costUsd?: number; refusal?: Refusal }
   // The request's body sent again with no output while a tool runs long, so its cached prefix does not expire
   // (core/loop/run.ts). Nothing reaches the model's context; it is logged for its cost.
   | { kind: 'keepalive'; requestId: EventId; usage?: Usage; error?: AttemptError; ms: number }
@@ -193,7 +196,7 @@ export type StreamEvent =
   | { type: 'toolcall_start'; index: number; id: string; name: string }
   | { type: 'toolcall_delta'; index: number; delta: string }
   | { type: 'toolcall_end'; index: number }
-  | { type: 'done'; blocks: AssistantBlock[]; stop: StopReason; usage: Usage }
+  | { type: 'done'; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; refusal?: Refusal }
   | { type: 'error'; error: AttemptError };
 
 export type Provider = {
@@ -288,7 +291,7 @@ export type ModelUsage = Usage & { costUsd: number; requests: number };
 // model may not see this repository (its data policy); refusal: the model declined the task; empty_reply: it
 // ended its turn twice with nothing.
 export type FailureCause = 'api_error' | 'privacy' | 'refusal' | 'empty_reply';
-export type Failure = { cause: FailureCause; code?: AttemptErrorCode; status?: number };
+export type Failure = { cause: FailureCause; code?: AttemptErrorCode; status?: number; category?: string };
 
 // Why a request read less from the prompt cache than the request before it had sent. Causes come from what the
 // log proves (hashes, model, time since the last reply), most specific first; 'provider' means the prefix did

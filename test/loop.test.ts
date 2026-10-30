@@ -616,6 +616,12 @@ describe('malformed turns', () => {
     expect(await runPrompt(opts, 'go')).toMatchObject({ subtype: 'error_during_execution', result: 'I will not do that.', failure: { cause: 'refusal' } });
     const silent = setup([{ blocks: [], stop: 'refusal' }]);
     expect((await runPrompt(silent.opts, 'go')).result).toContain('declined');
+    // The provider's category and explanation reach the result and the log, so a refusal says which classifier fired.
+    const flagged = setup([{ blocks: [], stop: 'refusal', refusal: { category: 'cyber', explanation: 'flagged as offensive security' } }]);
+    const res = await runPrompt(flagged.opts, 'go');
+    expect(res.failure).toEqual({ cause: 'refusal', category: 'cyber' });
+    expect(res.result).toContain('declined (cyber): flagged as offensive security');
+    expect(of(flagged.log.events, 'assistant')[0]!.refusal).toEqual({ category: 'cyber', explanation: 'flagged as offensive security' });
   });
 
   test('a tool that returns something other than text, or throws a non-Error, still gets a string result', async () => {

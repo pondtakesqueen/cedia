@@ -1125,6 +1125,9 @@
         },
         "status": {
           "type": "number"
+        },
+        "category": {
+          "type": "string"
         }
       },
       "required": [
@@ -2136,6 +2139,24 @@
       ],
       "additionalProperties": false
     },
+    "Refusal": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "explanation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "category"
+      ],
+      "additionalProperties": false
+    },
     "Restored": {
       "type": "object",
       "properties": {
@@ -2718,6 +2739,9 @@
             },
             "costUsd": {
               "type": "number"
+            },
+            "refusal": {
+              "$ref": "#/definitions/Refusal"
             },
             "id": {
               "$ref": "#/definitions/EventId"
@@ -3701,6 +3725,9 @@
             },
             "usage": {
               "$ref": "#/definitions/Usage"
+            },
+            "refusal": {
+              "$ref": "#/definitions/Refusal"
             }
           },
           "required": [

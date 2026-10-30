@@ -1,5 +1,5 @@
 import { imageBase64 } from '../images.ts';
-import type { AssistantBlock, CompactionBlock, ImageRef, JsonObject, Message, Provider, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
+import type { AssistantBlock, CompactionBlock, ImageRef, JsonObject, Message, Provider, Refusal, StopReason, StreamEvent, Usage, WireRequest } from '../types.ts';
 import { Assembler } from './assemble.ts';
 import { authHeaders, classifyStreamError, post, type Fetcher } from './http.ts';
 import { readSse } from './sse.ts';
@@ -134,6 +134,7 @@ export async function* parseAnthropic(body: ReadableStream<Uint8Array>): AsyncGe
   const a = new Assembler();
   const usage: Usage = { uncached: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
   let stop: StopReason = 'end_turn';
+  let refusal: Refusal | undefined;
   let started = false;
   let finished = false;
   // A compaction reply arrives as one whole block, with no deltas.
@@ -196,6 +197,10 @@ export async function* parseAnthropic(body: ReadableStream<Uint8Array>): AsyncGe
         break;
       case 'message_delta':
         if (d.delta?.stop_reason) stop = STOP[d.delta.stop_reason] ?? 'end_turn';
+        if (stop === 'refusal') {
+          const sd = d.delta?.stop_details;
+          refusal = { category: typeof sd?.category === 'string' ? sd.category : null, ...(typeof sd?.explanation === 'string' ? { explanation: sd.explanation } : {}) };
+        }
         applyUsage(d.usage);
         break;
       case 'message_stop':
@@ -215,7 +220,7 @@ export async function* parseAnthropic(body: ReadableStream<Uint8Array>): AsyncGe
   a.endAll();
   yield* a.drain();
   const blocks = a.finish(stop === 'max_tokens');
-  yield { type: 'done', blocks: compaction ? [compaction, ...blocks] : blocks, stop, usage };
+  yield { type: 'done', blocks: compaction ? [compaction, ...blocks] : blocks, stop, usage, ...(refusal ? { refusal } : {}) };
 }
 
 export function anthropicProvider(fetcher?: Fetcher): Provider {

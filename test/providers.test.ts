@@ -192,6 +192,20 @@ describe('request bodies', () => {
     expect(five).toBeCloseTo(opus.price.cacheWrite);
   });
 
+  test('anthropic: a refusal keeps the category and explanation its stop_details name', async () => {
+    const sse = [
+      { type: 'message_start', message: { usage: { input_tokens: 3, output_tokens: 0 } } },
+      { type: 'message_delta', delta: { stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber', explanation: 'flagged as offensive security' } }, usage: { output_tokens: 0 } },
+      { type: 'message_stop' },
+    ].map((d) => `event: ${d.type}\ndata: ${JSON.stringify(d)}\n\n`).join('');
+    const d = done(await all(parseAnthropic(streamFromString(sse, 50))))!;
+    expect(d.stop).toBe('refusal');
+    expect(d.refusal).toEqual({ category: 'cyber', explanation: 'flagged as offensive security' });
+    // stop_details can be null, and its category too: a refusal is still a refusal.
+    const bare = sse.replace(/,"stop_details":\{[^}]*\}/, ',"stop_details":null');
+    expect(done(await all(parseAnthropic(streamFromString(bare, 50))))!).toMatchObject({ stop: 'refusal', refusal: { category: null } });
+  });
+
   test('anthropic: a per-message effort change is an empty system message, sent with its beta header', () => {
     const raised: Message[] = [...history, { role: 'effort', effort: 'high' }];
     const b = anthropicBody(req('opus', raised)) as any;

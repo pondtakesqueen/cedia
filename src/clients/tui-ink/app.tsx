@@ -1390,6 +1390,8 @@ export function App({ args }: { args: TuiArgs }): React.ReactElement {
       setSpent((prev) => prev + resultCost);
       if (typeof result.timing?.outputTokPerSec === 'number') setLastRate(result.timing.outputTokPerSec);
       push(rowMsg(doneRow({ subtype: result.subtype, ms: Date.now() - turnStart, tools: turnRef.current.tools, files: turnRef.current.files.size, costUsd: result.costUsd }), { role: 'system' }));
+      // A classifier refusal streams no text: the result names the model and the category it fired on.
+      if (result.failure?.cause === 'refusal' && result.result.trim()) push({ role: 'system', text: result.result.trim() });
       // A run that ended asking waits for the owner: surface the question with its options, answered by the
       // next prompt. (The PermissionDialog overlay stays for a future binding; text carries it for now.)
       if (result.subtype === 'asked' && result.question) {

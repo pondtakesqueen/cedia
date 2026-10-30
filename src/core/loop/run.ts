@@ -41,6 +41,7 @@ import {
   type Question,
   type PrivacyLevel,
   type Provider,
+  type Refusal,
   type ResultSubtype,
   type Timing,
   type SessionEvent,
@@ -255,7 +256,7 @@ export function rebuildRequest(events: SessionEvent[], requestIndex: number, mod
   };
 }
 
-type Collected = { ok: true; blocks: AssistantBlock[]; stop: StopReason; usage: Usage } | { ok: false; error: AttemptError } | { ok: 'aborted' };
+type Collected = { ok: true; blocks: AssistantBlock[]; stop: StopReason; usage: Usage; refusal?: Refusal } | { ok: false; error: AttemptError } | { ok: 'aborted' };
 
 async function collect(provider: Provider, req: WireRequest, signal: AbortSignal, onStream?: (e: StreamEvent) => void, timing: { ttftMs?: number; ms?: number } = {}, onToolCall?: (block: Extract<AssistantBlock, { type: 'tool_use' }>) => void): Promise<Collected> {
   const start = performance.now();
@@ -283,7 +284,7 @@ async function collect(provider: Provider, req: WireRequest, signal: AbortSignal
         }
       }
       if (ev.type === 'error') return { ok: false, error: ev.error };
-      if (ev.type === 'done') return ev.stop === 'aborted' ? { ok: 'aborted' } : { ok: true, blocks: ev.blocks, stop: ev.stop, usage: ev.usage };
+      if (ev.type === 'done') return ev.stop === 'aborted' ? { ok: 'aborted' } : { ok: true, blocks: ev.blocks, stop: ev.stop, usage: ev.usage, ...(ev.refusal ? { refusal: ev.refusal } : {}) };
       if (signal.aborted) return { ok: 'aborted' };
     }
   } catch (err) {
@@ -647,7 +648,7 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
 
     const turnFrom = log.events.length;
     const turnCost = costUsd(model, got.usage, now());
-    log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: got.blocks, stop: got.stop, usage: got.usage, costUsd: turnCost });
+    log.append({ kind: 'assistant', wire: provider.wire, model: model.ref, blocks: got.blocks, stop: got.stop, usage: got.usage, costUsd: turnCost, ...(got.refusal ? { refusal: got.refusal } : {}) });
     usage = addUsage(usage, got.usage);
     peakContext = Math.max(peakContext, contextSize(got.usage));
     cost += turnCost;
@@ -793,7 +794,13 @@ export async function runPrompt(opts: RunOptions, prompt: string): Promise<Headl
       continue;
     }
     // A refusal ends the run as a failure, whatever the ledger holds.
-    if (got.stop === 'refusal') return fail({ cause: 'refusal' }, text || `${model.ref} declined to go on with this task`);
+    // A classifier's refusal (one the provider explains) discards any partial text: its category says whether
+    // the prompt or the task drew it.
+    if (got.stop === 'refusal') {
+      const r = got.refusal;
+      const why = r?.category ? ` (${r.category})${r.explanation ? `: ${r.explanation}` : ''}` : '';
+      return fail({ cause: 'refusal', ...(r?.category ? { category: r.category } : {}) }, (!r && text) || `${model.ref} declined${why || ' to go on with this task'}`);
+    }
     if (!text.trim()) {
       if (emptyNudged) return fail({ cause: 'empty_reply' }, `${model.ref} ended its turn twice without a reply`);
       emptyNudged = true;
