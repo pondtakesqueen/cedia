@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { costUsd, resolveModel } from "../src/core/providers/catalog.ts";
 import { isQuotaText } from "../src/core/providers/http.ts";
+import { countsTowardRate, overallCurve, taskCurves, type TaskCurve } from "./score.ts";
 
 export type Task = {
   id: string;
@@ -531,11 +532,14 @@ export type Summary = {
   model: string | null;
   tasks: number;
   runs: number;
-  pass1: number; // mean pass rate over all runs
-  passAll: number; // share of tasks that passed every run (pass^k)
+  pass1: number; // passes / scored runs. Invalid rows are not in the denominator.
+  passAll: number; // share of scored tasks that passed every scored trial. Printed as all-trials. Not pass^k.
   falseDone: number; // share of runs that claimed done and failed verify
   refused: number; // share of runs the done gate refused
   infraErrors: number; // runs left out because the provider failed (see providerFailed)
+  invalid: number; // nonzero agent exit or a quota/limit message. Not a pass, and not in the means.
+  curves: TaskCurve[];
+  overall: { k: number; tasks: number; passAt: number; passCaret: number }[];
   avgMs: number;
   costUsd?: number;
   costPerPass?: number;
@@ -553,11 +557,12 @@ export type Summary = {
 };
 
 export function summarize(all: Result[]): Summary {
-  const results = all.filter((r) => !r.infraError);
+  const results = all.filter((r) => countsTowardRate(r));
   const byTask = new Map<string, Result[]>();
   for (const r of results) byTask.set(r.id, [...(byTask.get(r.id) ?? []), r]);
   const n = results.length;
   const passes = results.filter((r) => r.passed).length;
+  const curves = taskCurves(results);
   const costs = results.map((r) => r.reported.costUsd).filter((c): c is number => typeof c === "number");
   const tok = results.map((r) => r.reported.tokens).filter((t) => t !== undefined);
   const input = tok.reduce((a, t) => a + t!.input, 0);
@@ -572,7 +577,10 @@ export function summarize(all: Result[]): Summary {
     passAll: byTask.size ? [...byTask.values()].filter((rs) => rs.every((r) => r.passed)).length / byTask.size : 0,
     falseDone: n ? results.filter((r) => r.falseDone).length / n : 0,
     refused: n ? results.filter((r) => r.refusedClaim).length / n : 0,
-    infraErrors: all.length - n,
+    infraErrors: all.filter((r) => r.infraError).length,
+    invalid: all.filter((r) => !r.infraError && !countsTowardRate(r)).length,
+    curves,
+    overall: overallCurve(curves),
     avgMs: n ? Math.round(results.reduce((a, r) => a + r.wallMs, 0) / n) : 0,
     ...(costUsd !== undefined ? { costUsd, ...(passes ? { costPerPass: costUsd / passes } : {}) } : {}),
     ...(tok.length ? { tokens: { input, output: tok.reduce((a, t) => a + t!.output, 0) }, cacheHitRatio: input ? cacheRead / input : 0 } : {}),
@@ -670,9 +678,17 @@ function pct(x: number) {
 }
 
 export function formatSummary(s: Summary): string {
+  const leftOut = [
+    s.infraErrors ? `${s.infraErrors} left out for provider errors` : "",
+    s.invalid ? `${s.invalid} invalid (nonzero exit or a limit message)` : "",
+  ].filter(Boolean).join(", ");
+  const curve = (name: "passAt" | "passCaret", label: string) =>
+    s.overall.length ? `  ${label} ${s.overall.map((point) => `k=${point.k} ${pct(point[name])}`).join("  ")}` : "";
   return [
-    `${s.harness}${s.model ? ` (${s.model})` : ""}: ${s.tasks} tasks, ${s.runs} scored runs${s.infraErrors ? `, ${s.infraErrors} left out for provider errors` : ""}`,
-    `  pass@1 ${pct(s.pass1)}  pass^k ${pct(s.passAll)}  false-done ${pct(s.falseDone)}  refused claims ${pct(s.refused)}`,
+    `${s.harness}${s.model ? ` (${s.model})` : ""}: ${s.tasks} tasks, ${s.runs} scored runs${leftOut ? `, ${leftOut}` : ""}`,
+    `  pass@1 ${pct(s.pass1)}  all-trials ${pct(s.passAll)}  false-done ${pct(s.falseDone)}  refused claims ${pct(s.refused)}`,
+    curve("passAt", "pass@k"),
+    curve("passCaret", "pass^k"),
     `  avg ${(s.avgMs / 1000).toFixed(1)}s per run` +
       (s.tokens ? `, ${Math.round(s.tokens.input / s.runs)} input / ${Math.round(s.tokens.output / s.runs)} output tokens per run, cache hit ${pct(s.cacheHitRatio ?? 0)}` : ""),
     ...(s.context ? [`  peak context ${Math.round(s.context.meanPeak / 1000)}k mean, ${Math.round(s.context.maxPeak / 1000)}k max, ${s.context.over100k} of ${s.runs} runs past 100k; ${s.context.handoffs} handoffs, ${s.context.subthreads} sub-threads${s.context.work !== undefined ? ` (${s.context.work} work, ${s.context.subHandoffs} handoffs in them, peak ${Math.round((s.context.subPeak ?? 0) / 1000)}k)` : ""}`] : []),
@@ -682,7 +698,7 @@ export function formatSummary(s: Summary): string {
       : []),
     ...(s.speed ? [`  speed ${s.speed.outputTokPerSec} output tok/s, ${(s.speed.ttftMs / 1000).toFixed(2)}s to first token per call; model ${pct(s.speed.modelShare)} of time, cedia ${pct(s.speed.harnessShare)}`] : []),
     s.costUsd !== undefined ? `  cost $${s.costUsd.toFixed(4)} total, ${s.costPerPass !== undefined ? `$${s.costPerPass.toFixed(4)} per passed run` : "no passes"}` : "  cost not reported",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 async function main(argv: string[]): Promise<number> {
