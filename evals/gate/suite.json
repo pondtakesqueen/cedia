@@ -1,9 +1,10 @@
 {
   "name": "gate",
+  "role": "regression",
   "tasks": [
     "bugfix-multifile", "bugfix-simple", "feature-module", "feature-simple", "longrunning", "migrate-registry",
     "multifile", "multistep-orders", "refactor-extract", "refactor-rename", "tb-argmax", "tb-dedup",
-    "hard-deny-list", "hard-edit-tiers", "hard-injection", "hard-ledger", "hard-redact-bugs", "hard-shell-split", "hard-sse",
+    "hard-deny-list", "hard-edit-tiers", "hard-injection", "hard-ledger", "hard-shell-split", "hard-sse",
     "long-migrate", "wide-bug-hunt", "wide-deprecate", "wide-three-features",
     "real-slop-guard", "real-three-delegated"
   ],

@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { baselinePath, baselineRefusal, compare, DEFAULT_SUITE, expectedCost, fisherLower, listCost, loadSuite, taskHash, type Baseline, type Thresholds } from "../evals/gate.ts";
-import { HARNESSES, type Result, type Task } from "../evals/run.ts";
+import { baselinePath, baselineRefusal, compare, DEFAULT_SUITE, expectedCost, fisherLower, listCost, loadSuite, taskFreshness, taskHash, type Baseline, type Thresholds } from "../evals/gate.ts";
+import { HARNESSES, loadTasks, type Result, type Task } from "../evals/run.ts";
 
 const th: Thresholds = { passP: 0.1, costRise: 0.15, timeRise: 0.2, totalRise: 0.4 };
 
@@ -101,8 +101,25 @@ describe("regression gate", () => {
     expect(lost.verdict).toBe("inconclusive");
   });
 
+  test("one failure regresses a suite that fails on any drop", () => {
+    const one = compare(set(), set((id, run) => ({ passed: !(id === "t0" && run === 1) })), { thresholds: th, failOnAnyDrop: true });
+    expect(status(one, "pass@1")).toBe("regressed");
+    expect(one.verdict).toBe("regressed");
+    expect(one.checks.find((x) => x.name === "pass@1")!.note).toContain("any drop fails this suite");
+  });
+
+  test("a nonzero exit is left out of the pass rate even when the row says passed", () => {
+    const limit = "You've hit your 5-hour limit · resets 5am (UTC)";
+    const cand = set().map((r) => (r.id === "t0" && r.run === 1 ? { ...r, exitCode: 1, output: limit, passed: true } : r));
+    const c = compare(set(), cand, { thresholds: th, failOnAnyDrop: true });
+    expect(c.verdict).toBe("pass");
+    expect(c.checks.find((x) => x.name === "pass@1")!.candidate).toContain("23/23");
+  });
+
   test("the gate suite names existing tasks once, with thresholds and a spend cap", () => {
     const { suite, tasks } = loadSuite(DEFAULT_SUITE);
+    expect(suite.role).toBe("regression");
+    expect(suite.tasks).not.toContain("hard-redact-bugs");
     expect(new Set(suite.tasks).size).toBe(suite.tasks.length);
     expect(tasks.map((t) => t.id)).toEqual(suite.tasks);
     expect(suite.runs).toBeGreaterThanOrEqual(2);
@@ -115,9 +132,39 @@ describe("regression gate", () => {
     const { suite, tasks } = loadSuite(path);
     expect(tasks.map((t) => t.id)).toEqual(suite.tasks);
     expect(suite.runs).toBeGreaterThanOrEqual(4);
+    expect(suite.role).toBe("capability");
+    expect(suite.tasks).toContain("hard-redact-bugs");
     expect(suite.baselineDir).toBe("frontier-baseline");
-    // The gate never runs these: they are meant to fail some runs, which would make the gate noisy.
-    expect(loadSuite(DEFAULT_SUITE).suite.tasks.filter((t) => t.startsWith("frontier-"))).toEqual([]);
+    const gate = new Set(loadSuite(DEFAULT_SUITE).suite.tasks);
+    expect(suite.tasks.filter((id) => gate.has(id))).toEqual([]);
+  });
+
+  test("regression membership is every task the gate model passed, and a stored hash that moved is stale", () => {
+    const { suite } = loadSuite(DEFAULT_SUITE);
+    const baseline = JSON.parse(readFileSync(join(import.meta.dir, "..", "evals/gate/baseline/opencode-go_claude-haiku-5-5.json"), "utf8")) as Baseline;
+    const rates = new Map<string, { n: number; p: number }>();
+    for (const row of baseline.results) {
+      if (row.infraError) continue;
+      const cell = rates.get(row.id) ?? { n: 0, p: 0 };
+      cell.n++;
+      if (row.passed) cell.p++;
+      rates.set(row.id, cell);
+    }
+    for (const id of suite.tasks) expect(rates.get(id)).toEqual({ n: 2, p: 2 });
+    expect(rates.get("hard-redact-bugs")).toEqual({ n: 2, p: 0 });
+    const all = loadTasks(join(import.meta.dir, "..", "evals/tasks"));
+    const injection = all.find((task) => task.id === "hard-injection")!;
+    const pool = all.find((task) => task.id === "hard-pool")!;
+    expect(baseline.taskHashes["hard-injection"]).toBe("81e7463d715b9103");
+    expect(taskHash(injection)).not.toBe("81e7463d715b9103");
+    expect(baseline.taskHashes["hard-pool"]).toBeUndefined();
+    expect(taskHash(pool)).not.toBe("a592e8eebafb9a56");
+    const fresh = taskFreshness([injection, pool], [{ label: "opencode-go_claude-haiku-5-5.json", taskHashes: baseline.taskHashes }]);
+    expect(fresh.find((row) => row.id === "hard-injection")?.kind).toBe("stale");
+    expect(fresh.find((row) => row.id === "hard-pool")?.kind).toBe("unstored");
+    const compared = compare(baseline.results, baseline.results, { thresholds: th, staleTasks: ["hard-injection"], failOnAnyDrop: true });
+    expect(compared.checks[0]?.note).toContain("hard-injection");
+    expect(compared.checks[0]?.note).toContain("not compared");
   });
 
   test("expected cost comes from the baseline's spend, then earlier results, then the token estimate", () => {

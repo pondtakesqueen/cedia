@@ -3,6 +3,8 @@
 //                          [--estimate] [--update-baseline [--allow-dirty] [--accept-regression]] [--only id,id]
 //                          [--cedia-arg=<flag>]...
 //        bun evals/gate.ts --compare <results.jsonl> [--against <results.jsonl|baseline.json>]
+//        bun evals/gate.ts --stale
+
 //
 // The regression gate. Runs the suite's tasks on each model, records pass rate, false-done, cost and time, and
 // compares them with the baseline stored for that model in evals/gate/baseline/. Exit 0 when no model got worse,
@@ -19,6 +21,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { ALIASES, CATALOG } from "../src/core/providers/catalog.ts";
+import { countsTowardRate } from "./score.ts";
 import { estimateCost, formatSummary, loadTasks, missingVerifyTools, providerFailed, REPO_ROOT, runAll, summarize, type Result, type Task } from "./run.ts";
 
 export type Thresholds = {
@@ -33,6 +36,8 @@ export type Thresholds = {
 
 export type Suite = {
   name: string;
+  // regression: expected to pass, and any pass-rate drop fails the gate. capability: a hill to climb, not a merge gate.
+  role?: "regression" | "capability";
   tasks: string[];
   runs: number;
   // Runs at once. Stored with the baseline: wall time measured at another concurrency is not compared.
@@ -113,6 +118,27 @@ export function taskHash(t: Task): string {
     .slice(0, 16);
 }
 
+export type Freshness = {
+  id: string;
+  hash: string;
+  kind: "current" | "stale" | "unstored";
+  stored: { baseline: string; hash: string }[];
+};
+
+/** A task whose stored hash differs is stale and must not be scored. A task in no baseline is unstored, also not scored. */
+export function taskFreshness(tasks: Task[], baselines: { label: string; taskHashes: Record<string, string> }[]): Freshness[] {
+  return tasks.map((task) => {
+    const hash = taskHash(task);
+    const stored = baselines.flatMap((baseline) => {
+      const kept = baseline.taskHashes[task.id];
+      return kept ? [{ baseline: baseline.label, hash: kept }] : [];
+    });
+    const mismatches = stored.filter((item) => item.hash !== hash);
+    const kind = stored.length === 0 ? "unstored" : mismatches.length ? "stale" : "current";
+    return { id: task.id, hash, kind, stored: kind === "stale" ? mismatches : stored };
+  });
+}
+
 // P(X <= k) for X hypergeometric: `draws` runs taken from `total`, of which `good` passed.
 function hypergeomCdf(k: number, total: number, good: number, draws: number): number {
   const lf = (n: number) => {
@@ -174,11 +200,11 @@ export function listCost(model: string): ((r: Result) => number | undefined) | u
 export function compare(
   baseAll: Result[],
   candAll: Result[],
-  opts: { thresholds: Thresholds; planned?: number; staleTasks?: string[]; sameJobs?: boolean; model?: string; hiddenTasks?: string[] },
+  opts: { thresholds: Thresholds; planned?: number; staleTasks?: string[]; sameJobs?: boolean; model?: string; hiddenTasks?: string[]; failOnAnyDrop?: boolean; scoreBlocks?: boolean },
 ): Comparison {
   const { thresholds: th } = opts;
   const stale = new Set(opts.staleTasks ?? []);
-  const scored = (rs: Result[]) => rs.filter((r) => !r.infraError && !stale.has(r.id));
+  const scored = (rs: Result[]) => rs.filter((r) => countsTowardRate(r) && !stale.has(r.id));
   const candTasks = new Set(scored(candAll).map((r) => r.id));
   const baseTasks = new Set(scored(baseAll).map((r) => r.id));
   const base = scored(baseAll).filter((r) => candTasks.has(r.id));
@@ -202,8 +228,10 @@ export function compare(
     name: "pass@1",
     baseline: `${pct(bp / base.length)} (${bp}/${base.length})`,
     candidate: `${pct(cp / cand.length)} (${cp}/${cand.length})`,
-    status: lower ? (p < th.passP ? "regressed" : "worse") : cp / cand.length > bp / base.length ? "better" : "ok",
-    ...(lower ? { note: `p = ${p.toFixed(3)}${p < th.passP ? "" : `, not below ${th.passP}: rerun with more --runs to tell it from noise`}` } : {}),
+    status: lower ? (opts.failOnAnyDrop || p < th.passP ? "regressed" : "worse") : cp / cand.length > bp / base.length ? "better" : "ok",
+    ...(lower
+      ? { note: opts.failOnAnyDrop ? `any drop fails this suite (Fisher p = ${p.toFixed(3)})` : `p = ${p.toFixed(3)}${p < th.passP ? "" : `, not below ${th.passP}: rerun with more --runs to tell it from noise`}` }
+      : {}),
   });
 
   // A task that passed every baseline run and failed every candidate run is a regression on its own.
@@ -257,6 +285,14 @@ export function compare(
   const turns = paired(bt, ct, (r) => r.reported.turns);
   if (turns) checks.push({ name: "turns", baseline: turns.base.toFixed(0), candidate: turns.cand.toFixed(0), status: "ok", note: `${nTasks} tasks, not gated` });
 
+  if (opts.scoreBlocks === false) {
+    for (const check of checks) {
+      if (check.status === "regressed" && check.name !== "false-done") {
+        check.status = "worse";
+        check.note = `${check.note ? `${check.note}; ` : ""}capability suite, not a merge gate`;
+      }
+    }
+  }
   return { model, verdict: checks.some((c) => c.status === "regressed") ? "regressed" : "pass", checks };
 }
 
@@ -301,7 +337,7 @@ export function loadSuite(path: string): { suite: Suite; tasks: Task[] } {
 // Expected spend per task: the baseline's own mean cost, else the mean of that model's earlier result files, else
 // the token estimate.
 export function expectedCost(model: string, tasks: Task[], runs: number, baseline?: Baseline, history: Result[] = []): { usd: number; basis: string } {
-  const costed = (rs: Result[]) => byTask(rs.filter((r) => typeof r.reported.costUsd === "number" && !r.infraError));
+  const costed = (rs: Result[]) => byTask(rs.filter((r) => typeof r.reported.costUsd === "number" && countsTowardRate(r)));
   const fromBase = costed(baseline?.results ?? []);
   const fromHistory = costed(history);
   let usd = 0;
@@ -368,6 +404,7 @@ async function main(argv: string[]): Promise<number> {
   let acceptRegression = false;
   let comparePath: string | undefined;
   let againstPath: string | undefined;
+  let staleReport = false;
   let only: string[] | undefined;
   const cediaArgs: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -384,6 +421,7 @@ async function main(argv: string[]): Promise<number> {
     else if (a === "--allow-dirty") allowDirty = true;
     else if (a === "--accept-regression") acceptRegression = true;
     else if (a === "--compare") comparePath = argv[++i]!;
+    else if (a === "--stale") staleReport = true;
     else if (a === "--against") againstPath = argv[++i]!;
     else if (a === "--only") only = argv[++i]!.split(",");
     else if (a === "--cedia-arg" || a.startsWith("--cedia-arg=")) cediaArgs.push(a.includes("=") ? a.slice("--cedia-arg=".length) : argv[++i]!);
@@ -397,16 +435,35 @@ async function main(argv: string[]): Promise<number> {
   const hiddenTasks = tasks.filter((t) => Object.keys(t.hidden ?? {}).length).map((t) => t.id);
   const hashes = Object.fromEntries(tasks.map((t) => [t.id, taskHash(t)]));
   const staleOf = (b: Baseline) => (Object.keys(b.taskHashes).length ? tasks.filter((t) => b.taskHashes[t.id] && b.taskHashes[t.id] !== hashes[t.id]).map((t) => t.id) : []);
+  const failOnAnyDrop = suite.role === "regression";
+  const scoreBlocks = suite.role !== "capability";
+
+  if (staleReport) {
+    const dir = baselineDir;
+    const files = readdirSync(dir).filter((name) => name.endsWith(".json")).sort();
+    const baselines = files.map((name) => {
+      const parsed = JSON.parse(readFileSync(join(dir, name), "utf8")) as Baseline;
+      return { label: name, taskHashes: parsed.taskHashes ?? {} };
+    });
+    const all = loadTasks(resolve(import.meta.dir, "tasks"));
+    const rows = taskFreshness(all, baselines).filter((row) => row.kind !== "current");
+    for (const row of rows) {
+      if (row.kind === "unstored") console.log(`${row.id}  unstored  ${row.hash}  not compared`);
+      else console.log(`${row.id}  stale  now ${row.hash}  ${row.stored.map((item) => `${item.baseline} stored ${item.hash}`).join(", ")}  not compared`);
+    }
+    return 0;
+  }
 
   if (comparePath) {
-    const cand = readRows(comparePath);
-    const model = cand[0]?.model ?? "";
+    const ids = new Set(tasks.map((t) => t.id));
+    const cand = readRows(comparePath).filter((row) => ids.has(row.id));
+    const model = cand[0]?.model ?? readRows(comparePath)[0]?.model ?? "";
     const base = readBaseline(againstPath ?? baselinePath(model, baselineDir));
     if (!base) {
       console.error(`no baseline for ${model} at ${baselinePath(model, baselineDir)}`);
       return 3;
     }
-    const c = compare(base.results, cand, { thresholds: suite.thresholds, staleTasks: staleOf(base), model, hiddenTasks });
+    const c = compare(base.results.filter((row) => ids.has(row.id)), cand, { thresholds: suite.thresholds, staleTasks: staleOf(base), model, hiddenTasks, failOnAnyDrop, scoreBlocks });
     console.log(formatComparison(c));
     return c.verdict === "pass" ? 0 : c.verdict === "regressed" ? 1 : 3;
   }
@@ -472,6 +529,8 @@ async function main(argv: string[]): Promise<number> {
         sameJobs: base.jobs === jobs,
         model: m,
         hiddenTasks,
+        failOnAnyDrop,
+        scoreBlocks,
       });
       if (JSON.stringify(base.cediaArgs) !== JSON.stringify(args)) c.checks.unshift({ name: "setup", baseline: base.cediaArgs.join(" ") || "defaults", candidate: args.join(" ") || "defaults", status: "skipped", note: "cedia flags differ from the baseline's" });
       verdict = c.verdict;

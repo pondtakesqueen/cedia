@@ -1,5 +1,6 @@
 {
   "name": "frontier",
+  "role": "capability",
   "tasks": ["frontier-semver", "frontier-cron", "hard-redact-bugs"],
   "runs": 4,
   "jobs": 4,

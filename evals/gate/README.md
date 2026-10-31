@@ -6,13 +6,14 @@ bun evals/gate.ts                     # run the suite on every model in suite.js
 bun evals/gate.ts -m opencode-go/claude-haiku-5-5   # one model
 bun evals/gate.ts --update-baseline   # run, compare, then store the new numbers as the baseline (committed tree, no regression)
 bun evals/gate.ts --compare evals/results/<file>.jsonl [--against <rows.jsonl|baseline.json>]   # re-score, free
+bun evals/gate.ts --stale          # tasks whose hash moved, and tasks no baseline stores
 ```
 
 Exit 0: no model got worse. 1: a model regressed. 3: no comparison could be made (no baseline, fewer than 80% of runs scored, the budget stopped the run, or the estimate is above `maxUsd`).
 
 ## What it runs
 
-`suite.json`: 25 tasks, 2 runs each, 4 at a time, on Haiku 5.5 and DeepSeek V4.1 Flash, both through OpenCode Go, so a gate run spends the Go plan's quota instead of API credit (since 2026-10-22; the same Haiku model, at the same list price). A change that only the Claude API carries, such as `--handoff compact`, is gated with `-m anthropic/claude-haiku-5-5`, against `baseline/anthropic_claude-haiku-5-5.json`, the Claude API baseline kept from before (still at `medium`, from before Haiku started at `low`; re-record it with API credit before it judges anything). The 12 pi-era floor tasks, the 7 hard tasks, the 4 wide and long tasks, `real-slop-guard`, the cheapest real-repository task, and `real-three-delegated`, which hands three real commits to one work sub-thread: on Haiku that sub-thread passes the 90k handoff point in every run, so the gate checks that sub-thread handoff triggers and the work still passes (about $0.06 a run on Haiku, 5 to 6 minutes). `real-threads` and `real-subthreads` are left out: they cost $0.3 to $0.5 a run on Haiku and hit the 1200 s limit when handoff is on, so they belong in a measured experiment, not a gate. The tasks need `python3 -m pytest` and the full git history (`fetch-depth: 0`).
+`suite.json` is the regression suite: 24 tasks, 2 runs each, 4 at a time, on Haiku 5.5 and DeepSeek V4.1 Flash, both through OpenCode Go, so a gate run spends the Go plan's quota instead of API credit (since 2026-10-22; the same Haiku model, at the same list price). A change that only the Claude API carries, such as `--handoff compact`, is gated with `-m anthropic/claude-haiku-5-5`, against `baseline/anthropic_claude-haiku-5-5.json`, the Claude API baseline kept from before (still at `medium`, from before Haiku started at `low`; re-record it with API credit before it judges anything). The 12 pi-era floor tasks, the 6 hard tasks that the gate model passed in both stored runs, the 4 wide and long tasks, `real-slop-guard`, the cheapest real-repository task, and `real-three-delegated`, which hands three real commits to one work sub-thread: on Haiku that sub-thread passes the 90k handoff point in every run, so the gate checks that sub-thread handoff triggers and the work still passes (about $0.06 a run on Haiku, 5 to 6 minutes). `real-threads` and `real-subthreads` are left out: they cost $0.3 to $0.5 a run on Haiku and hit the 1200 s limit when handoff is on, so they belong in a measured experiment, not a gate. The tasks need `python3 -m pytest` and the full git history (`fetch-depth: 0`). `hard-redact-bugs` left this suite because the OpenCode Go Haiku baseline is 0/2. It stays on the capability suite.
 
 Each run writes its rows to `evals/results/<date>-gate-<model>-<commit>-<time>.jsonl`. A baseline is `baseline/<model>.json`: the commit, date, runs, jobs and cedia flags it was made with, a hash of each task, and the rows.
 
@@ -24,7 +25,7 @@ Each run writes its rows to `evals/results/<date>-gate-<model>-<commit>-<time>.j
 - `frontier-cron`: the next time a 5-field cron expression fires (steps from a value, names, Sunday as 7, the day-of-month/day-of-week rule, leap days, validation); 127 answers from cron-parser 4.9.0 and 15 invalid expressions.
 - `hard-redact-bugs`, the gate task that Haiku 5.5 through OpenCode Go failed in both runs of its baseline.
 
-Each reference solution was checked against its library on random cases with no difference: 110,000 for semver, 24,000 for cron. Calibration on `anthropic/claude-haiku-5-5` (2026-10-28, 8 runs of semver, 4 of cron): semver 7/8, cron 3/4. The misses were single edge cases (a hyphen range with a prerelease lower bound; a time with milliseconds just before a new minute), the kind of defect the gate tasks no longer catch. It is 4 runs a task, not 2, because at these pass rates 2 runs cannot tell a change from noise. Its baselines live in `frontier-baseline/` (`baselineDir` in the suite), apart from the gate's, and it is not a merge requirement: run it on a change meant to make cedia write better code, and read pass@1 beside the gate's verdict.
+Each reference solution was checked against its library on random cases with no difference: 110,000 for semver, 24,000 for cron. Calibration on `anthropic/claude-haiku-5-5` (2026-10-28, 8 runs of semver, 4 of cron): semver 7/8, cron 3/4. The misses were single edge cases (a hyphen range with a prerelease lower bound; a time with milliseconds just before a new minute), the kind of defect the gate tasks no longer catch. It is 4 runs a task, not 2, because at these pass rates 2 runs cannot tell a change from noise. Its baselines live in `frontier-baseline/` (`baselineDir` in the suite), apart from the gate's. `role` is `capability`. A pass-rate, cost, or time drop here does not block a merge. Run it on a change meant to make cedia write better code, and read pass@1 beside the gate's verdict. `bun evals/gate.ts --stale` names a task whose hash moved, and a task no baseline stores, and says those rows are not compared.
 
 ## How it decides
 
@@ -32,7 +33,7 @@ Over the tasks both runs have, with provider-error runs left out:
 
 | Check | Fails the gate when |
 |---|---|
-| pass@1 | lower, and a one-sided Fisher exact test gives p < `passP` (0.1). Lower but not significant is shown as `~` |
+| pass@1 | on the regression suite, any lower scored pass rate. Fisher p is printed and does not decide. On a suite without `role: regression`, lower fails only when a one-sided Fisher exact test gives p < `passP` (0.1). Lower but not significant is shown as `~`. A nonzero agent exit, or a quota or limit message, is invalid and is left out of this rate, and out of the cost and time means, even when verify exited 0 |
 | tasks broken | a task passed every baseline run and fails every candidate run (at least 2) |
 | false-done | its rate is higher at all: it is the trust guarantee failing. Tasks with hidden tests are left out of this check: there the run's own checks passed and a spec it could not see failed, which is a failed run, counted above |
 | cost | the typical task's cost (geometric mean of per-task ratios) rises by more than `costRise` (15%), or the whole set's (sum of per-task means) by more than `totalRise` (40%); either way by more than $0.002. A model with an off-peak price (DeepSeek) is compared at its standard price, from each run's tokens: the Flash gate run of 2026-10-22 started at peak hours and read +63% against an off-peak baseline, +3% at one price |
@@ -95,6 +96,10 @@ Effort arms on Haiku 5.5 (2026-10-22, one gate run each, against the 32774a7 bas
 | `low`, escalate on a refused claim or a check failing after a change | 46/48 | -21% | -36% | `hard-redact-bugs` refused twice: after the failed-check note ("cedia raised your effort level") Haiku stopped sooner. That trigger was dropped |
 | `low`, escalate on a refused claim (the default) | 48/48 | -21% | -35% | rerun with `--update-baseline`: 48/48, -14%, -36% |
 | same, with keep-working, real-check and scope lines from the 5.5 prompting guides in `BASE_SYSTEM` | 47/48 | -16% | -32% | no gain on Haiku; DeepSeek ran at peak-hour prices, so its cost could not be read. Not adopted |
+
+## Moving a task from capability to regression
+
+A capability task moves to `suite.json`, and leaves `frontier.json`, when the regression model's committed baseline shows every stored run of that task passed, at the regression suite's run count, and `taskHashes` for that id equals `taskHash` of the task as it is now. A perfect frontier baseline is not enough. `frontier-cron` is 4/4 on both frontier baselines and stays capability, because the regression baseline has no row for it. `hard-redact-bugs` stays capability because the OpenCode Go Haiku baseline, the model in `suite.json`, is 0/2. Names are not a reason to move a task.
 
 ## When to update the baseline
 
