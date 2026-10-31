@@ -191,21 +191,17 @@ export type TrialFields = {
   reported?: { costUsd?: number };
 };
 
-export type InvalidBecause = "exit" | "limit";
+export type InvalidBecause = "limit";
 
-/** A scored trial. Provider errors, a nonzero agent exit, and a limit message are left out. */
+/** A scored trial. Provider errors and a short limit or quota message are left out. A nonzero exit is not, by itself, evidence of either. */
 export function countsTowardRate(row: { exitCode: number; output: string; infraError?: boolean }): boolean {
   if (row.infraError) return false;
-  if (row.exitCode !== 0) return false;
   if (isLimitMessage(row.output ?? "")) return false;
   return true;
 }
 
-export function invalidBecause(row: { exitCode: number; output: string }): InvalidBecause[] {
-  const reasons: InvalidBecause[] = [];
-  if (row.exitCode !== 0) reasons.push("exit");
-  if (isLimitMessage(row.output ?? "")) reasons.push("limit");
-  return reasons;
+export function invalidBecause(row: { output: string }): InvalidBecause[] {
+  return isLimitMessage(row.output ?? "") ? ["limit"] : [];
 }
 
 export function binomial(n: number, k: number): number {
@@ -321,7 +317,14 @@ export function formatTrialReport(report: TrialReport): string {
 }
 
 export function readTrials(path: string): TrialFields[] {
-  return readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as TrialFields);
+  const text = readFileSync(path, "utf8").trim();
+  const lines = () => text.split("\n").filter(Boolean).map((line) => JSON.parse(line) as TrialFields);
+  try {
+    const parsed = JSON.parse(text) as { results?: TrialFields[] };
+    return Array.isArray(parsed.results) ? parsed.results : lines();
+  } catch {
+    return lines();
+  }
 }
 
 function parseAt(value: string | undefined): number[] {
@@ -356,7 +359,8 @@ function main(argv: string[]): number {
     console.log(formatTrialReport(report));
     const cc2 = new Set(["hard-injection", "hard-ledger", "hard-memo-async", "hard-pool", "hard-sse", "wide-bug-hunt", "wide-three-features"]);
     const slice = report.scored.filter((row) => cc2.has(row.id));
-    if (slice.length && slice.length !== report.scored.length) {
+    const present = new Set(report.scored.map((row) => row.id));
+    if ([...cc2].every((id) => present.has(id)) && slice.length !== report.scored.length) {
       const meanMs = slice.reduce((sum, row) => sum + row.wallMs, 0) / slice.length;
       const costs = slice.map((row) => row.reported?.costUsd).filter((cost): cost is number => typeof cost === "number");
       const meanUsd = costs.reduce((sum, cost) => sum + cost, 0) / costs.length;

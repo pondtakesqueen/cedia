@@ -67,7 +67,7 @@ describe("trial grade", () => {
       "hard-csv-stream#2",
       "hard-csv-stream#3",
     ]);
-    expect(report.invalid.every((row) => row.because.includes("exit") && row.because.includes("limit"))).toBe(true);
+    expect(report.invalid.every((row) => row.because.join("+") === "limit")).toBe(true);
     expect(report.scored).toHaveLength(27);
     expect(report.meanMs / 1000).toBeCloseTo(140.0, 0);
     expect(report.meanUsd!).toBeCloseTo(0.5125, 3);
@@ -80,6 +80,30 @@ describe("trial grade", () => {
     expect(meanMs / 1000).toBeCloseTo(141.5, 1);
     expect(meanUsd).toBeCloseTo(0.5224, 4);
     expect(report.pass1).toBe(1);
+  });
+
+  test("a limit message is invalid, and a bare nonzero exit stays scored", () => {
+    const row = (over: Partial<ReturnType<typeof readTrials>[number]>): ReturnType<typeof readTrials>[number] => ({
+      id: "t", run: 1, wallMs: 1000, exitCode: 0, output: "done", passed: true, infraError: false, reported: { costUsd: 0.1 }, ...over,
+    });
+    const limit = trialReport([row({ exitCode: 1, output: "You've hit your 5-hour limit · resets 5am (UTC)", passed: true })]);
+    expect(limit.invalid.map((item) => item.because)).toEqual([["limit"]]);
+    expect(limit.scored).toHaveLength(0);
+
+    const miss = trialReport([row({ exitCode: 1, output: "bun test failed: 2 fail", passed: false })]);
+    expect(miss.invalid).toHaveLength(0);
+    expect(miss.scored.map((item) => item.passed)).toEqual([false]);
+    expect(miss.pass1).toBe(0);
+
+    const ok = trialReport([row({ exitCode: 0, output: "done", passed: true })]);
+    expect(ok.invalid).toHaveLength(0);
+    expect(ok.pass1).toBe(1);
+    expect(ok.scored).toHaveLength(1);
+
+    const kept = trialReport([row({ exitCode: 1, output: "done", passed: true })]);
+    expect(kept.invalid).toHaveLength(0);
+    expect(kept.pass1).toBe(1);
+    expect(kept.scored).toHaveLength(1);
   });
 });
 
