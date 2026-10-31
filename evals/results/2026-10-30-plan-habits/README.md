@@ -12,10 +12,11 @@ bun evals/run.ts --harness cedia --model anthropic/claude-haiku-5-5 --review cla
 ```
 
 - Tuning tasks (10 × 3 runs) were compared with Claude Code Opus at effort xhigh: `cc-xhigh/runs.jsonl`, 30 of 30 passed. These are the same diffs every arm's tuning panel judged. `claude-effort-xhigh.sh` is the `CEDIA_EVAL_CLAUDE_BIN` wrapper, and the runs used `CEDIA_EVAL_RUN_BUDGET=3 --harness claude --model opus`. The subscription's limit cut the first run short (`cc.log`), so the failed tasks were run again (`cc2.log`), and only passed runs are kept. Held-out tasks (8 × 2 runs) were compared with Claude Code Opus high: `2026-10-29-opus-high/held-out/cc.jsonl`.
-- `judge.py` judges each pair twice with A and B swapped. A pair is a win only when both orders agree, and is a split otherwise. Two panels ran, Sonnet and Opus (`JUDGE_MODEL=opus`).
-- `tally.py <dir> <arm>` gives the tally with every score. `notx.py <dir> <arm>` picks each pair's winner by the sum of the scores without `tests`.
+- `judge.py` in this folder is the prompt those verdicts were asked. It is not re-run. The next panel's prompt is `evals/judge/tpl6-claude-p/judge.py`. It scores correctness, quality, scope, and security, ignores tests, and may answer `unknown`.
+- `tally.py <dir> <arm>` is the tally of the judge's `winner` field, tests included. A pair counts when both orders agree.
+- `bun evals/score.ts pair` is the tally without tests. It sums correctness, quality, scope, and security. A margin under the threshold is a tie for that order. A pair is a win only when both orders on both panels give the same side a lead of at least the threshold, and `winner` names that side. A disagreement is a tie and is flagged. The headline threshold is 3.
 
-The tally without tests is the one that decides. Claude Code Opus xhigh added tests in 15 of 30 tuning runs, and cedia added them in 30 of 30. On the 15 pairs where Claude Code wrote none, cedia won 29 of 30 judgements. Where both wrote tests, the judgements were close: 17-13 (Sonnet) and 16-14 (Opus). There Claude Code scored higher on correctness (8.53 against 8.27, and 8.97 against 8.53), on quality and on scope.
+The tally without tests is the one that decides. On the committed main-versus-xhigh verdicts it is cedia 0 / xhigh 1 / tie 29. The one loss is hard-pool run 1. Threshold 2 is 1 / 2 / 27. Threshold 4 is 0 / 0 / 30. The older per-panel figure, any lead above 0 and one panel at a time, was 4-10 and 4-10. That rule is not the one that decides. Claude Code Opus xhigh added tests in 15 of 30 tuning runs, and cedia added them in 30 of 30. On the 15 pairs where Claude Code wrote none, cedia won 29 of 30 judgements. Where both wrote tests, the judgements were close: 17-13 (Sonnet) and 16-14 (Opus). There Claude Code scored higher on correctness (8.53 against 8.27, and 8.97 against 8.53), on quality and on scope.
 
 ## Results
 
@@ -23,13 +24,13 @@ Wins and losses for cedia, Sonnet panel / Opus panel. Splits are left out.
 
 | Arm | Tuning, with tests | Tuning, without tests | Held-out, with tests | Held-out, without tests |
 |---|---|---|---|---|
-| main (plan on Opus medium) | 19-9 / 18-10 | **4-10 / 4-10** | 9-4 / 10-3 | **6-2 / 8-4** |
+| main (plan on Opus medium) | 19-9 / 18-10 | **0 / 1 / 29 combined** | 9-4 / 10-3 | **6-2 / 8-4** |
 | narrowed habits (`sc`, `hsc`) | 17-9 / 14-11 | 2-12 / 1-16 | 9-3 / 8-4 | 4-6 / 5-7 |
 | narrowed habits + planner probes (`pp`, `hpp`) | 21-5 / 20-5 | 2-12 / 0-13 | 7-6 / 7-6 | 3-9 / 3-8 |
 | tests where needed (`nt`, `hnt`) | 13-15 / 10-16 | 3-9 / 2-12 | 6-8 / 4-9 | 7-5 / 3-6 |
 | planner probes alone (`po`, `hpo`) | 20-8 / 16-10 | 4-10 / 3-13 | 10-4 / 10-5 | 4-4 / 4-5 |
 
-For main against xhigh on the tuning tasks, the cedia runs are `2026-10-29-opus-high/auto-planmed.jsonl` and the verdicts are `main/judge` and `main/opus` here. Main's held-out row is from `2026-10-29-opus-high/held-out/judge-planmed` and `judge-opus/held-out-planmed`, which compare against Claude Code high. Every row is re-tallied with `notx.py`. Main's tuning panel in `2026-10-29-opus-high/judge-planmed` compares against Claude Code high, not xhigh, so its tally differs from the one here.
+For main against xhigh on the tuning tasks, the cedia runs are `2026-10-29-opus-high/auto-planmed.jsonl` and the verdicts are `main/judge` and `main/opus` here. The without-tests cell for main is the combined tally at threshold 3 (`bun evals/score.ts pair` on those two files). The other without-tests cells are the older per-panel tally, any lead above 0, and were not re-tallied. Main's held-out row is from `2026-10-29-opus-high/held-out/judge-planmed` and `judge-opus/held-out-planmed`, which compare against Claude Code high. Main's tuning panel in `2026-10-29-opus-high/judge-planmed` compares against Claude Code high, not xhigh, so its tally differs from the one here.
 
 Tuning runs, per passed run:
 
