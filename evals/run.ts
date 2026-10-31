@@ -680,7 +680,7 @@ function pct(x: number) {
 export function formatSummary(s: Summary): string {
   const leftOut = [
     s.infraErrors ? `${s.infraErrors} left out for provider errors` : "",
-    s.invalid ? `${s.invalid} invalid (nonzero exit or a limit message)` : "",
+    s.invalid ? `${s.invalid} invalid (a limit message)` : "",
   ].filter(Boolean).join(", ");
   const curve = (name: "passAt" | "passCaret", label: string) =>
     s.overall.length ? `  ${label} ${s.overall.map((point) => `k=${point.k} ${pct(point[name])}`).join("  ")}` : "";

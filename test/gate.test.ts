@@ -108,12 +108,16 @@ describe("regression gate", () => {
     expect(one.checks.find((x) => x.name === "pass@1")!.note).toContain("any drop fails this suite");
   });
 
-  test("a nonzero exit is left out of the pass rate even when the row says passed", () => {
+  test("a limit message is left out, and a bare nonzero exit stays a scored miss", () => {
     const limit = "You've hit your 5-hour limit · resets 5am (UTC)";
-    const cand = set().map((r) => (r.id === "t0" && r.run === 1 ? { ...r, exitCode: 1, output: limit, passed: true } : r));
-    const c = compare(set(), cand, { thresholds: th, failOnAnyDrop: true });
-    expect(c.verdict).toBe("pass");
-    expect(c.checks.find((x) => x.name === "pass@1")!.candidate).toContain("23/23");
+    const dropped = set().map((r) => (r.id === "t0" && r.run === 1 ? { ...r, exitCode: 1, output: limit, passed: true } : r));
+    const quiet = compare(set(), dropped, { thresholds: th, failOnAnyDrop: true });
+    expect(quiet.verdict).toBe("pass");
+    expect(quiet.checks.find((x) => x.name === "pass@1")!.candidate).toContain("23/23");
+    const miss = set().map((r) => (r.id === "t0" && r.run === 1 ? { ...r, exitCode: 1, output: "bun test failed", passed: false } : r));
+    const loud = compare(set(), miss, { thresholds: th, failOnAnyDrop: true });
+    expect(loud.verdict).toBe("regressed");
+    expect(loud.checks.find((x) => x.name === "pass@1")!.candidate).toContain("23/24");
   });
 
   test("the gate suite names existing tasks once, with thresholds and a spend cap", () => {
