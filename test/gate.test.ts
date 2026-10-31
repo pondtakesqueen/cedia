@@ -137,6 +137,28 @@ describe("regression gate", () => {
     expect(taskHash(t)).not.toBe(taskHash({ ...t, setup: { "f.txt": "y" } }));
   });
 
+  test("a task's hash ignores path order and path spelling", () => {
+    const t: Task = {
+      id: "a",
+      category: "c",
+      prompt: "p",
+      verify: "true",
+      setup: { "README.md": "r", "stats.ts": "s", "stats.test.ts": "t" },
+      hidden: { "h/a.ts": "1", "h/b.ts": "2" },
+      executable: ["stats.ts", "h/a.ts"],
+    };
+    const reordered: Task = {
+      ...t,
+      setup: { "stats.test.ts": "t", "README.md": "r", "stats.ts": "s" },
+      hidden: { "h/b.ts": "2", "h/a.ts": "1" },
+      executable: ["h/a.ts", "stats.ts"],
+    };
+    expect(taskHash(t)).toBe(taskHash(reordered));
+    expect(taskHash(t)).toBe(taskHash({ ...t, setup: { "README.md": "r", "stats.ts": "s", "./stats.test.ts": "t" } }));
+    expect(taskHash({ ...t, setup: { "dir/file.ts": "x" } })).toBe(taskHash({ ...t, setup: { "dir\\file.ts": "x" } }));
+    expect(taskHash(t)).not.toBe(taskHash({ ...t, setup: { ...t.setup!, "stats.ts": "changed" } }));
+  });
+
   test("stores a baseline, passes against it, and fails a broken harness, offline with the faux model", () => {
     const dir = mkdtempSync(join(tmpdir(), "cedia-gate-"));
     mkdirSync(join(dir, "tasks"));
