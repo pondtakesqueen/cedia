@@ -211,7 +211,7 @@ describe("regression gate", () => {
     mkdirSync(join(dir, "tasks"));
     writeFileSync(join(dir, "tasks", "t.json"), JSON.stringify({ id: "t", category: "c", prompt: "make f.txt say good", setup: { "f.txt": "bad\n" }, verify: "grep -q good f.txt" }));
     const suitePath = join(dir, "suite.json");
-    writeFileSync(suitePath, JSON.stringify({ name: "mini", tasks: ["t"], runs: 2, jobs: 2, models: ["faux"], maxUsd: 1, thresholds: th, tasksDir: "tasks" }));
+    writeFileSync(suitePath, JSON.stringify({ name: "mini", role: "regression", tasks: ["t"], runs: 2, jobs: 2, models: ["faux"], maxUsd: 1, thresholds: th, tasksDir: "tasks" }));
     const script = join(dir, "script.json");
     const call = (id: string, command: string) => ({ blocks: [{ type: "tool_use", id, name: "bash", input: { command } }] });
     const say = (word: string) => writeFileSync(script, JSON.stringify([call("c1", `echo ${word} > f.txt`), call("c2", "grep -q good f.txt"), { blocks: [{ type: "text", text: "fixed" }] }]));
@@ -283,7 +283,7 @@ describe("regression gate", () => {
     mkdirSync(join(dir, "tasks"));
     writeFileSync(join(dir, "tasks", "t.json"), JSON.stringify({ id: "t", category: "c", prompt: "p", setup: {}, verify: "true" }));
     const suitePath = join(dir, "suite.json");
-    writeFileSync(suitePath, JSON.stringify({ name: "cap", tasks: ["t"], runs: 2, jobs: 1, models: ["anthropic/claude-opus-5-5"], maxUsd: 0.0001, thresholds: th, tasksDir: "tasks" }));
+    writeFileSync(suitePath, JSON.stringify({ name: "cap", role: "regression", tasks: ["t"], runs: 2, jobs: 1, models: ["anthropic/claude-opus-5-5"], maxUsd: 0.0001, thresholds: th, tasksDir: "tasks" }));
     const p = Bun.spawnSync(["bun", "evals/gate.ts", "--suite", suitePath, "--baseline-dir", join(dir, "base")], { cwd: join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" });
     expect(p.exitCode).toBe(3);
     expect(p.stderr.toString()).toContain("pass --budget");

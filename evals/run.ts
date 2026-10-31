@@ -532,12 +532,12 @@ export type Summary = {
   model: string | null;
   tasks: number;
   runs: number;
-  pass1: number; // passes / scored runs. Invalid rows are not in the denominator.
-  passAll: number; // share of scored tasks that passed every scored trial. Printed as all-trials. Not pass^k.
+  pass1: number;
+  allTrials: number;
   falseDone: number; // share of runs that claimed done and failed verify
   refused: number; // share of runs the done gate refused
   infraErrors: number; // runs left out because the provider failed (see providerFailed)
-  invalid: number; // nonzero agent exit or a quota/limit message. Not a pass, and not in the means.
+  invalid: number;
   curves: TaskCurve[];
   overall: { k: number; tasks: number; passAt: number; passCaret: number }[];
   avgMs: number;
@@ -574,7 +574,7 @@ export function summarize(all: Result[]): Summary {
     tasks: byTask.size,
     runs: n,
     pass1: n ? passes / n : 0,
-    passAll: byTask.size ? [...byTask.values()].filter((rs) => rs.every((r) => r.passed)).length / byTask.size : 0,
+    allTrials: byTask.size ? [...byTask.values()].filter((rs) => rs.every((r) => r.passed)).length / byTask.size : 0,
     falseDone: n ? results.filter((r) => r.falseDone).length / n : 0,
     refused: n ? results.filter((r) => r.refusedClaim).length / n : 0,
     infraErrors: all.filter((r) => r.infraError).length,
@@ -686,7 +686,7 @@ export function formatSummary(s: Summary): string {
     s.overall.length ? `  ${label} ${s.overall.map((point) => `k=${point.k} ${pct(point[name])}`).join("  ")}` : "";
   return [
     `${s.harness}${s.model ? ` (${s.model})` : ""}: ${s.tasks} tasks, ${s.runs} scored runs${leftOut ? `, ${leftOut}` : ""}`,
-    `  pass@1 ${pct(s.pass1)}  all-trials ${pct(s.passAll)}  false-done ${pct(s.falseDone)}  refused claims ${pct(s.refused)}`,
+    `  pass@1 ${pct(s.pass1)}  all-trials ${pct(s.allTrials)}  false-done ${pct(s.falseDone)}  refused claims ${pct(s.refused)}`,
     curve("passAt", "pass@k"),
     curve("passCaret", "pass^k"),
     `  avg ${(s.avgMs / 1000).toFixed(1)}s per run` +

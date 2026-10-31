@@ -1,17 +1,11 @@
 #!/usr/bin/env bun
-// Re-score committed eval artifacts. No model calls.
-//
-//   bun evals/score.ts pair <sonnet.json> <opus.json> [--at 3,2,4]
-//   bun evals/score.ts trials <runs.jsonl>
-//
-// pair: the no-tests tally. trials: pass, invalid, pass@k, and pass^k.
-
 import { readFileSync } from "node:fs";
 
 export const AXES = ["correctness", "quality", "scope", "security"] as const;
 
 export type Side = "cedia" | "xhigh";
-export type AxisSide = Side | "tie";
+type FileSide = "cedia" | "claude";
+export type AxisSide = FileSide | "tie";
 export type WinnerSide = AxisSide | "unknown";
 
 type ScoreBlock = Record<string, unknown>;
@@ -27,7 +21,7 @@ export type VerdictRow = {
 export type OrderView = {
   order: number;
   cedia: number;
-  xhigh: number;
+  claude: number;
   margin: number;
   axis: AxisSide;
   winner: string;
@@ -46,7 +40,8 @@ export type CombinedPair = PanelPair & { panels: Record<string, PanelPair> };
 
 export type TallyCounts = { cedia: number; xhigh: number; tie: number; flagged: number };
 
-const OTHER: Record<Side, Side> = { cedia: "xhigh", xhigh: "cedia" };
+const DISPLAY: Record<FileSide, Side> = { cedia: "cedia", claude: "xhigh" };
+const OTHER: Record<FileSide, FileSide> = { cedia: "claude", claude: "cedia" };
 
 function sumAxes(block: ScoreBlock, where: string): number {
   let total = 0;
@@ -58,26 +53,24 @@ function sumAxes(block: ScoreBlock, where: string): number {
   return total;
 }
 
-/** Four-axis sums. `claude` in the file is the xhigh arm. `tests` is ignored. */
-export function axisSums(row: VerdictRow): { cedia: number; xhigh: number } {
+export function axisSums(row: VerdictRow): { cedia: number; claude: number } {
   if (row.a !== "cedia" && row.a !== "claude") throw new Error(`bad a=${JSON.stringify(row.a)} in ${row.task}#${row.run}`);
   const hidden = row.a === "cedia" ? "claude" : "cedia";
   const raw: Record<string, number> = {
     [row.a]: sumAxes(row.verdict.A, `${row.task}#${row.run}`),
     [hidden]: sumAxes(row.verdict.B, `${row.task}#${row.run}`),
   };
-  return { cedia: raw.cedia!, xhigh: raw.claude! };
+  return { cedia: raw.cedia!, claude: raw.claude! };
 }
 
-export function axisSide(sums: { cedia: number; xhigh: number }): AxisSide {
-  if (sums.cedia > sums.xhigh) return "cedia";
-  if (sums.xhigh > sums.cedia) return "xhigh";
+export function axisSide(sums: { cedia: number; claude: number }): AxisSide {
+  if (sums.cedia > sums.claude) return "cedia";
+  if (sums.claude > sums.cedia) return "claude";
   return "tie";
 }
 
-/** The side the winner letter names. `tie` and `unknown` are not a lead. The letter never replaces the axis side. */
 export function winnerSide(row: VerdictRow): WinnerSide {
-  const shown: Side = row.a === "cedia" ? "cedia" : "xhigh";
+  const shown: FileSide = row.a === "cedia" ? "cedia" : "claude";
   const winner = row.verdict.winner;
   if (winner === "tie") return "tie";
   if (winner === "unknown") return "unknown";
@@ -88,11 +81,11 @@ export function winnerSide(row: VerdictRow): WinnerSide {
 
 export function orderView(row: VerdictRow): OrderView {
   const sums = axisSums(row);
-  const lead = sums.cedia - sums.xhigh;
+  const lead = sums.cedia - sums.claude;
   return {
     order: row.order,
     cedia: sums.cedia,
-    xhigh: sums.xhigh,
+    claude: sums.claude,
     margin: Math.abs(lead),
     axis: axisSide(sums),
     winner: row.verdict.winner,
@@ -115,11 +108,6 @@ function groupPairs(rows: VerdictRow[]): Map<string, VerdictRow[]> {
   return pairs;
 }
 
-/**
- * One panel. A lead is a margin of at least `threshold` on the four-axis sums.
- * Both orders must name the same side. A winner side that is not the four-axis side on either order
- * forces a tie and a flag. The four-axis side ignores the threshold. Equal sums are a tie.
- */
 export function panelPair(orders: VerdictRow[], threshold: number): PanelPair {
   const views = orders.map(orderView);
   const reasons: string[] = [];
@@ -133,8 +121,9 @@ export function panelPair(orders: VerdictRow[], threshold: number): PanelPair {
   const decided = views.map((view) => (view.margin >= threshold && view.axis !== "tie" ? view.axis : "tie"));
   const left = decided[0] ?? "tie";
   const right = decided[1] ?? "tie";
-  let result: Side | "tie" = left === right && left !== "tie" ? left : "tie";
-  if (flagged) result = "tie";
+  let fileResult: FileSide | "tie" = left === right && left !== "tie" ? left : "tie";
+  if (flagged) fileResult = "tie";
+  const result: Side | "tie" = fileResult === "tie" ? "tie" : DISPLAY[fileResult];
   return { task: orders[0]!.task, run: orders[0]!.run, result, flagged, reasons };
 }
 
@@ -144,7 +133,6 @@ export function countOutcomes(results: Iterable<Side | "tie">): { cedia: number;
   return counts;
 }
 
-/** Both panels. A win only when each panel has that same win. A flag on either panel flags the pair. */
 export function combinePanels(panels: Record<string, Map<string, VerdictRow[]>>, threshold: number): CombinedPair[] {
   const names = Object.keys(panels);
   const keys = [...panels[names[0]!]!.keys()].sort();
@@ -184,12 +172,12 @@ export function formatTally(threshold: number, counts: TallyCounts, wins: Combin
   return lines.join("\n");
 }
 
-// A quota or limit message is the model's output, not a mention inside a long diff.
 const LIMIT_MESSAGE = /you'?ve hit your \S+ limit|5-hour limit|limit reached|out of credits|insufficient (?:balance|credits?|funds)|\bquota\b/i;
+const LIMIT_MESSAGE_MAX_CHARS = 400;
 
 export function isLimitMessage(output: string): boolean {
   const text = output.trim();
-  return text.length > 0 && text.length <= 400 && LIMIT_MESSAGE.test(text) && !/\bno usage limit\b/i.test(text);
+  return text.length > 0 && text.length <= LIMIT_MESSAGE_MAX_CHARS && LIMIT_MESSAGE.test(text) && !/\bno usage limit\b/i.test(text);
 }
 
 export type TrialFields = {
@@ -263,7 +251,6 @@ export function taskCurves(rows: { id: string; passed: boolean }[]): TaskCurve[]
   }));
 }
 
-/** Mean of per-task estimators, over tasks with at least k scored trials. */
 export function overallCurve(curves: TaskCurve[]): { k: number; tasks: number; passAt: number; passCaret: number }[] {
   const maxK = curves.reduce((max, curve) => Math.max(max, curve.n), 0);
   const points = [];

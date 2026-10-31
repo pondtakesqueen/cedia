@@ -3,7 +3,6 @@
 //                          [--estimate] [--update-baseline [--allow-dirty] [--accept-regression]] [--only id,id]
 //                          [--cedia-arg=<flag>]...
 //        bun evals/gate.ts --compare <results.jsonl> [--against <results.jsonl|baseline.json>]
-//        bun evals/gate.ts --stale
 
 //
 // The regression gate. Runs the suite's tasks on each model, records pass rate, false-done, cost and time, and
@@ -36,8 +35,7 @@ export type Thresholds = {
 
 export type Suite = {
   name: string;
-  // regression: expected to pass, and any pass-rate drop fails the gate. capability: a hill to climb, not a merge gate.
-  role?: "regression" | "capability";
+  role: "regression" | "capability";
   tasks: string[];
   runs: number;
   // Runs at once. Stored with the baseline: wall time measured at another concurrency is not compared.
@@ -125,7 +123,6 @@ export type Freshness = {
   stored: { baseline: string; hash: string }[];
 };
 
-/** A task whose stored hash differs is stale and must not be scored. A task in no baseline is unstored, also not scored. */
 export function taskFreshness(tasks: Task[], baselines: { label: string; taskHashes: Record<string, string> }[]): Freshness[] {
   return tasks.map((task) => {
     const hash = taskHash(task);
@@ -323,6 +320,7 @@ function readBaseline(path: string): Baseline | undefined {
 
 export function loadSuite(path: string): { suite: Suite; tasks: Task[] } {
   const suite = JSON.parse(readFileSync(path, "utf8")) as Suite;
+  if (suite.role !== "regression" && suite.role !== "capability") throw new Error(`suite ${suite.name}: role must be regression or capability`);
   const tasksDir = suite.tasksDir ? resolve(dirname(path), suite.tasksDir) : resolve(import.meta.dir, "tasks");
   const all = new Map(loadTasks(tasksDir).map((t) => [t.id, t]));
   const tasks = suite.tasks.map((id) => {

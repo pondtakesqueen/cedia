@@ -39,13 +39,12 @@ export async function runPool<T>(tasks: Array<() => Promise<T> | T>, limit: numb
   if (!(typeof limit === "number" && (limit === Infinity || (Number.isInteger(limit) && limit >= 1)))) throw new RangeError(`limit must be a whole number of at least 1, got ${shown(limit)}`);
   if (!(typeof retries === "number" && Number.isInteger(retries) && retries >= 0)) throw new RangeError(`retries must be a whole number of at least 0, got ${shown(retries)}`);
 
-  // Lines 9-10 and rule 2: one settled result per task that was passed, in that order. Later writes to the caller's array are not new input.
-  const queue = tasks.slice();
-  const results: Settled<T>[] = new Array(queue.length);
+  const snapshot = tasks.slice();
+  const results: Settled<T>[] = new Array(snapshot.length);
   const signal = opts.signal;
   let next = 0;
   let running = 0;
-  let left = queue.length;
+  let left = snapshot.length;
 
   return new Promise((resolve) => {
     if (left === 0) return resolve(results);
@@ -57,10 +56,10 @@ export async function runPool<T>(tasks: Array<() => Promise<T> | T>, limit: numb
 
     const launch = () => {
       if (signal?.aborted) {
-        while (next < queue.length) settle(next++, { status: "rejected", reason: signal.reason, attempts: 0 });
+        while (next < snapshot.length) settle(next++, { status: "rejected", reason: signal.reason, attempts: 0 });
         return;
       }
-      while (running < limit && next < queue.length) {
+      while (running < limit && next < snapshot.length) {
         running++;
         attempt(next++, 1);
       }
@@ -74,7 +73,7 @@ export async function runPool<T>(tasks: Array<() => Promise<T> | T>, limit: numb
       };
       let p: Promise<T>;
       try {
-        p = Promise.resolve(queue[index]!());
+        p = Promise.resolve(snapshot[index]!());
       } catch (err) {
         p = Promise.reject(err);
       }

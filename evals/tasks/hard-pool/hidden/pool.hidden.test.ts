@@ -179,8 +179,6 @@ test("a Symbol limit rejects with RangeError before any task starts", async () =
   expect(started).toBe(0);
 });
 
-// files/pool.ts lines 9-10 and rule 2 (lines 15-16): one settled result per passed task, in input order,
-// counting how many of that input are left to run. A write to the caller's array after the call is not a new task.
 test("mutating the caller array after the call does not change what runs", async () => {
   let release!: (value: string) => void;
   const first = new Promise<string>((resolve) => { release = resolve; });

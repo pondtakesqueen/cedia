@@ -146,7 +146,7 @@ describe("evals runner", () => {
         reported: { costUsd: cost, tokens: { input: 1000, cacheRead: 900, output: 10 } }, claimedDone: claimed, refusedClaim: !claimed, infraError: false, attempts: 1, passed, falseDone: claimed && !passed });
     const outage = { ...r("b", 3, false, false, 0), infraError: true };
     const s = summarize([r("a", 1, true, true, 0.01), r("a", 2, true, true, 0.01), r("b", 1, true, true, 0.01), r("b", 2, false, true, 0.01), outage]);
-    expect(s).toMatchObject({ tasks: 2, runs: 4, pass1: 0.75, passAll: 0.5, falseDone: 0.25, refused: 0, infraErrors: 1, cacheHitRatio: 0.9 });
+    expect(s).toMatchObject({ tasks: 2, runs: 4, pass1: 0.75, allTrials: 0.5, falseDone: 0.25, refused: 0, infraErrors: 1, cacheHitRatio: 0.9 });
     expect(s.costPerPass).toBeCloseTo(0.04 / 3);
     expect(s.speed).toBeUndefined();
 
