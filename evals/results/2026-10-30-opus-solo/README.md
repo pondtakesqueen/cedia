@@ -4,12 +4,12 @@ The question: does cedia's harness make Opus on its own as good as Claude Code a
 
 - Run: `bun evals/run.ts --harness cedia --model anthropic/claude-opus-5-5 --runs 1 --jobs 2 --only <the 10 tuning tasks>`, cedia at 8eb3486, no plan or review, sandbox unavailable in the container (bash unsandboxed), Opus at its default effort (medium) with `OPUS_PROMPT`. Run 1 did all 10 tasks; run 2 stopped after 7 when the $3 owner budget was nearly spent (`cedia-opus-med-r{1,2}.*`).
 - Baseline: the 30 Claude Code Opus xhigh runs from `../2026-10-30-plan-habits/cc-xhigh/` (PR #207), run i against Claude Code run i.
-- Panels: `judge/judge.py` (Sonnet) and `judge/opus/` (`JUDGE_MODEL=opus`), each pair judged twice with sides swapped. `notx.py` decides without the tests score.
+- Panels: `judge/judge.py` (Sonnet) and `judge/opus/` (`JUDGE_MODEL=opus`), each pair judged twice with sides swapped. The auto row below uses `bun evals/score.ts pair` on the plan-habits verdicts. This folder's own 17 pairs were not re-tallied.
 
 | 17 pairs vs Claude Code Opus xhigh | pass | without tests (cedia / CC / split or tie) | with tests | correctness (cedia / CC) | time per task | API spend per task |
 |---|---|---|---|---|---|---|
 | **cedia, Opus medium alone** | 17/17 | Sonnet 5 / 3 / 9, Opus 3 / 7 / 7 | Sonnet 6 / 7 / 4, Opus 4 / 9 / 4 | 8.44 / 8.56, 8.35 / 8.76 | 56 s | $0.16 |
-| `-m auto` (30 pairs, `../2026-10-30-plan-habits/main/`) | 30/30 | 4 / 10 / 16 both panels | 19-9, 18-10 | 8.62 / 8.42, 8.67 / 8.72 | 158 s | $0.012 (+ plan and review on the subscription) |
+| `-m auto` (30 pairs, `../2026-10-30-plan-habits/main/`) | 30/30 | 0 / 1 / 29 combined, threshold 3 | 19-9, 18-10 | 8.62 / 8.42, 8.67 / 8.72 | 158 s | $0.012 (+ plan and review on the subscription) |
 | Claude Code Opus xhigh | 30/30 | | | | 142 s | ~$0.52 at list price |
 
 The code itself, checked by running probes on every side (`probes/`, saved as `.ts.txt` so `tsc` skips them; rename and run `bun <probe> <patched dir>`):

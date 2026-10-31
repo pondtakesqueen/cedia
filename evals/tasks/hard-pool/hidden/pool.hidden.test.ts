@@ -172,6 +172,28 @@ test("abort stops a pending retry", async () => {
   expect(out).toEqual([{ status: "rejected", reason: "halt", attempts: 1 }]);
 });
 
+test("a Symbol limit rejects with RangeError before any task starts", async () => {
+  let started = 0;
+  const tasks = [() => { started++; return 1; }];
+  await expect(runPool(tasks, Symbol("limit") as unknown as number)).rejects.toBeInstanceOf(RangeError);
+  expect(started).toBe(0);
+});
+
+test("mutating the caller array after the call does not change what runs", async () => {
+  let release!: (value: string) => void;
+  const first = new Promise<string>((resolve) => { release = resolve; });
+  const tasks = [() => first, () => "b"];
+  const pending = runPool(tasks, 1);
+  tasks[1] = () => "replaced";
+  tasks.push(() => "c");
+  release("a");
+  const out = await pending;
+  expect(out).toEqual([
+    { status: "fulfilled", value: "a", attempts: 1 },
+    { status: "fulfilled", value: "b", attempts: 1 },
+  ]);
+});
+
 test("an already aborted signal starts nothing", async () => {
   const ac = new AbortController();
   ac.abort("early");

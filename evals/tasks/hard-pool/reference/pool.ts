@@ -24,16 +24,27 @@ export interface PoolOptions {
  *    no task starts.
  * 6. The returned promise resolves once every task has settled; it never rejects except for rule 1.
  */
+function shown(value: unknown): string {
+  if (typeof value === "symbol") return value.toString();
+  try {
+    return String(value);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
 export async function runPool<T>(tasks: Array<() => Promise<T> | T>, limit: number, opts: PoolOptions = {}): Promise<Settled<T>[]> {
   const retries = opts.retries ?? 0;
-  if (!(limit === Infinity || (Number.isInteger(limit) && limit >= 1))) throw new RangeError(`limit must be a whole number of at least 1, got ${limit}`);
-  if (!(Number.isInteger(retries) && retries >= 0)) throw new RangeError(`retries must be a whole number of at least 0, got ${retries}`);
+  // Rule 1. A Symbol fails Number.isInteger without throwing, and interpolating it into the message throws TypeError.
+  if (!(typeof limit === "number" && (limit === Infinity || (Number.isInteger(limit) && limit >= 1)))) throw new RangeError(`limit must be a whole number of at least 1, got ${shown(limit)}`);
+  if (!(typeof retries === "number" && Number.isInteger(retries) && retries >= 0)) throw new RangeError(`retries must be a whole number of at least 0, got ${shown(retries)}`);
 
-  const results: Settled<T>[] = new Array(tasks.length);
+  const snapshot = tasks.slice();
+  const results: Settled<T>[] = new Array(snapshot.length);
   const signal = opts.signal;
   let next = 0;
   let running = 0;
-  let left = tasks.length;
+  let left = snapshot.length;
 
   return new Promise((resolve) => {
     if (left === 0) return resolve(results);
@@ -45,10 +56,10 @@ export async function runPool<T>(tasks: Array<() => Promise<T> | T>, limit: numb
 
     const launch = () => {
       if (signal?.aborted) {
-        while (next < tasks.length) settle(next++, { status: "rejected", reason: signal.reason, attempts: 0 });
+        while (next < snapshot.length) settle(next++, { status: "rejected", reason: signal.reason, attempts: 0 });
         return;
       }
-      while (running < limit && next < tasks.length) {
+      while (running < limit && next < snapshot.length) {
         running++;
         attempt(next++, 1);
       }
@@ -62,7 +73,7 @@ export async function runPool<T>(tasks: Array<() => Promise<T> | T>, limit: numb
       };
       let p: Promise<T>;
       try {
-        p = Promise.resolve(tasks[index]());
+        p = Promise.resolve(snapshot[index]!());
       } catch (err) {
         p = Promise.reject(err);
       }
